@@ -118,7 +118,7 @@ def load_plant_model(checkpoint_path: str, plant_planT_path: str, device: str = 
 class ShardedCarlPlantDataset(Dataset):
     """
     Fast-loading Dataset that reads from pre-sharded .pt files produced by
-    shard_plant2_pt.py. Each shard contains stacked numpy arrays for 256 steps.
+    scripts/agents/train/shard_plant2_pt.py. Each shard contains stacked numpy arrays for 256 steps.
     Shards are loaded on demand — no full dataset in RAM.
 
     For DDP, pass rank/world_size so each process owns a distinct slice of shards.
@@ -619,6 +619,13 @@ def main():
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--device", type=str, default=None)
+    parser.add_argument(
+        "--devices",
+        type=str,
+        default=None,
+        help="Comma-separated CUDA indices for Lightning Trainer devices (e.g. 0,1,2,3). "
+        "Default 1. When --sharded runs multi-GPU DDP, all visible GPUs are used instead.",
+    )
     parser.add_argument("--speed-loss-weight", type=float, default=1.0, help="Weight for pred_speed vs target_speed (two-hot CE)")
     parser.add_argument(
         "--no-csv-log",
@@ -675,6 +682,16 @@ def main():
     use_ddp = args.sharded and n_gpus > 1
     rank = int(os.environ.get("LOCAL_RANK", 0))
     world_size = n_gpus if use_ddp else 1
+
+    if use_ddp:
+        n_trainer_devices = n_gpus
+    elif args.devices:
+        n_trainer_devices = max(
+            1, len([p for p in args.devices.split(",") if p.strip() != ""])
+        )
+    else:
+        n_trainer_devices = 1
+    print(f"  Lightning devices: {n_trainer_devices}  (sharded DDP={use_ddp})", flush=True)
 
     sharded_dataset = (
         ShardedCarlPlantDataset(args.data_dir, rank=rank, world_size=world_size, split="train")
@@ -747,7 +764,7 @@ def main():
     trainer = pl.Trainer(
         max_epochs=args.epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
-        devices=n_gpus if use_ddp else 1,
+        devices=n_trainer_devices,
         strategy="ddp_find_unused_parameters_true" if use_ddp else "auto",
         use_distributed_sampler=False,   # we partition shards by rank manually
         gradient_clip_val=1.0,
