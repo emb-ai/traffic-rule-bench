@@ -82,7 +82,7 @@ For CaRL and the PlanT2 pretrain weights, follow the download instructions in ea
 
 ### Scenes & test manifests
 
-SUMO road layouts (`.net.xml`) and per-sign test manifests (`.jsonl`) live in the  HuggingFace dataset [emb-ai/traffic-rule-bench](https://huggingface.co/datasets/emb-ai/traffic-rule-bench). Download both into `pdd-bench/`:
+SUMO road layouts (`.net.xml`) and per-sign test manifests (`.jsonl`) live in the HuggingFace dataset [emb-ai/traffic-rule-bench](https://huggingface.co/datasets/emb-ai/traffic-rule-bench). Download both into `pdd-bench/`:
 
 ```bash
 huggingface-cli download emb-ai/traffic-rule-bench \
@@ -95,14 +95,14 @@ This produces:
 ```
 pdd-bench/
 ├── scenes/{sign_code}/sign_NNNNNN/*.net.xml
-└── manifests/by_sign/{sign_code}/*.jsonl
+└── test/{sign_code}/*.jsonl
 ```
 
-Pass a manifest to the runner via `--manifest pdd-bench/manifests/by_sign/<sign>/<file>.jsonl`. Scripts default to `pdd-bench/scenes` for `--scenes-root`.
+Pass a manifest to the runner via `--manifest pdd-bench/test/<sign>/<file>.jsonl`. Scripts default to `pdd-bench/scenes` for `--scenes-root`.
 
 ### Run Evaluation
 
-Each manifest in `pdd-bench/manifests/by_sign/<sign>/<file>.jsonl` is a self-contained set of scenes for one sign. Run a baseline against any manifest with `run_benchmark_mini.py`. Each run produces `episodes_<policy>.jsonl` plus per-episode `replay.json` sidecars (needed for the metrics pipeline).
+Each manifest in `pdd-bench/test/<sign>/<file>.jsonl` is a self-contained set of scenes for one sign. Run a baseline against any manifest with `run_benchmark_mini.py`. Each run produces `episodes_<policy>.jsonl` plus per-episode `replay.json` sidecars (needed for the metrics pipeline).
 
 #### 1. One baseline on one sign
 
@@ -112,7 +112,7 @@ cd pdd-bench/scripts/per_sign_bench
 python run_benchmark_mini.py \
     --policy   idm \
     --run-name idm_2_5 \
-    --manifest ../../manifests/by_sign/2_5/real_manifest.jsonl \
+    --manifest ../../test/2_5/real_manifest.jsonl \
     --emit-replay-sidecar
 ```
 
@@ -122,7 +122,7 @@ Models that require checkpoints (`carl`, `plant2`, `*_rule`) need `--model-path`
 python run_benchmark_mini.py \
     --policy     plant2 \
     --run-name   plant2_2_5 \
-    --manifest   ../../manifests/by_sign/2_5/real_manifest.jsonl \
+    --manifest   ../../test/2_5/real_manifest.jsonl \
     --model-path ../../checkpoints/plant2/epoch%3D029_final_3.ckpt \
     --emit-replay-sidecar
 ```
@@ -132,7 +132,7 @@ python run_benchmark_mini.py \
 ```bash
 cd pdd-bench/scripts/per_sign_bench
 
-for f in ../../manifests/by_sign/*/*.jsonl; do
+for f in ../../test/*/*.jsonl; do
     sign=$(basename "$(dirname "$f")")
     src=$(basename "$f" .jsonl)
     python run_benchmark_mini.py \
