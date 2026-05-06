@@ -26,6 +26,7 @@ dist/
 *.pkl
 *lock
 *.lock
+nohup.out
 
 ### Local data symlinks (e.g. benchmark_mini -> smirnova benchmark_output/mini)
 pdd-bench/data/
