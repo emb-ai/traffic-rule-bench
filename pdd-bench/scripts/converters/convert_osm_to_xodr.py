@@ -31,8 +31,8 @@ def main():
         "secondary", "secondary_link",
         "tertiary", "tertiary_link",
         "unclassified", "residential",
-        "service",               # <-- добавить
-        "living_street" ,         # <-- опционально
+        "service",
+        "living_street" ,
     ])
 
     # Convert to .xodr

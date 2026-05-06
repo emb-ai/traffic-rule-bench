@@ -53,7 +53,7 @@ class NoEntrySign(BaseTrafficSign):
 
 
     def get_rule_description(self) -> str:
-        return "Въезд запрещён (знак 3.1) — запрещён въезд всех ТС в данном направлении"
+        return "No entry (sign 3.1) — entry forbidden for all vehicles in this direction"
 
     @property
     def top_down_color(self):

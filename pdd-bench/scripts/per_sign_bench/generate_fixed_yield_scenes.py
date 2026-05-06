@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fixed scene generator for sign 2.4 (Yield / Уступите дорогу).
+Fixed scene generator for sign 2.4 (Yield).
 
 This script generates deterministic scenes with:
 - Zero traffic density (no NPC vehicles)
@@ -937,7 +937,7 @@ Sign placement coordinates:
     summary = {
         "pdd_code": "2.4",
         "sign_type": "yield",
-        "sign_name_ru": "Уступите дорогу",
+        "sign_name": "Yield",
         "total_scenes": len(results),
         "valid_scenes": valid_count,
         "invalid_scenes": invalid_count,

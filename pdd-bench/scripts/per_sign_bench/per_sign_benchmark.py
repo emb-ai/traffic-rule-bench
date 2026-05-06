@@ -81,8 +81,8 @@ PDD_CODE_ALIASES: Dict[str, str] = {
 }
 
 UNSUPPORTED_TABLE_CODES: Dict[str, str] = {
-    "3.21": "Конец зоны запрета обгона: no implementation/sign class yet",
-    "5.4": "Конец дороги для автомобилей: no implementation/sign class yet",
+    "3.21": "End of no-overtaking zone: no implementation/sign class yet",
+    "5.4": "End of motor-vehicles-only road: no implementation/sign class yet",
 }
 
 

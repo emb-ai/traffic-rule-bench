@@ -1,9 +1,9 @@
 """
-Вариант 1: Дообучение PPO агента с отрисовкой знаков STOP в существующем BEV канале
+Variant 1: Fine-tune a PPO agent with STOP signs rendered into the existing BEV channel.
 
-Модули:
-- env_wrapper: TopDownMetaDriveWithStopSigns - окружение с поддержкой знаков
-- reward_wrapper: CustomRewardWrapper - wrapper для кастомных reward
+Modules:
+- env_wrapper: TopDownMetaDriveWithStopSigns — environment with sign support
+- reward_wrapper: CustomRewardWrapper — wrapper for custom rewards
 """
 from metadrive_core.ppo_w_stop_sign_6ch.env_wrapper import TopDownMetaDriveWithStopSigns
 

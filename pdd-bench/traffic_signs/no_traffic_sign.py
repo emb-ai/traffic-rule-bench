@@ -40,7 +40,7 @@ class NoTrafficSign(BaseTrafficSign):
 
 
     def get_rule_description(self) -> str:
-        desc = "Движение запрещено (знак 3.2) – запрещено движение всех ТС"
+        desc = "Closed to all vehicles (sign 3.2) – no entry for any vehicle"
         return desc
 
     @property

@@ -210,8 +210,8 @@ class OneWayEntrySign(BaseTrafficSign):
         return False
 
     def get_rule_description(self) -> str:
-        side = "направо" if self.not_allowed_direction == 'l' else "налево"
-        return f"Выезд на дорогу с односторонним движением {side}."
+        side = "right" if self.not_allowed_direction == 'l' else "left"
+        return f"Exit onto a one-way road, turn {side}."
     
 class OneWayEntrySignL(OneWayEntrySign):
     def __init__(self, lane, **kwargs):

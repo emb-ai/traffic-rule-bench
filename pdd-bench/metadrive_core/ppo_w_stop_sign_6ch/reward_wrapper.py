@@ -1,7 +1,7 @@
 """
 CustomRewardWrapper:
 - STOP sign penalty 
-- Reward за progress
+- Reward for progress
 """
 import sys
 from pathlib import Path
@@ -92,7 +92,7 @@ class CustomRewardWrapper(gym.RewardWrapper):
     
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
-        self._last_observation = obs  # Сохраняем observation
+        self._last_observation = obs
         modified_reward = self.reward(reward)
         
         info['stop_sign_violations'] = self.episode_violations

@@ -104,25 +104,24 @@ def load_runs(run_dirs, jsonl_files):
     for rd in run_dirs:
         f = Path(rd) / "all_runs.jsonl"
         loaded = load_jsonl(f)
-        print(f"  {f}: {len(loaded)} строк")
+        print(f"  {f}: {len(loaded)} rows")
         rows.extend(loaded)
     for jf in jsonl_files:
         loaded = load_jsonl(jf)
-        print(f"  {jf}: {len(loaded)} строк")
+        print(f"  {jf}: {len(loaded)} rows")
         rows.extend(loaded)
     return rows
 
 
 def is_compliant(r, target_class):
-    """Compliance по конкретному классу target-знака."""
+    """Compliance for the specific target-sign class."""
     vbc = r.get("violations_by_class") or {}
     return int(vbc.get(target_class, 0) or 0) == 0
 
 
 def recompute_dest(r, target_sign, target_class, horizon=HORIZON_DEFAULT):
-    """Шаг 1: пересчёт dest_rate."""
+    """Step 1: recompute dest_rate."""
     arr_prev = bool(r.get("arrived_dest"))
-    # 1.1 — no-entry знаки: если compliance — засчитываем как успех
     if target_sign in NO_ENTRY_SIGNS and is_compliant(r, target_class):
         return True
     # fs = int(r.get("final_step") or 0)
@@ -154,7 +153,6 @@ def passes_filter(r, target_sign, target_class, horizon=HORIZON_DEFAULT,
     fs = int(r.get("final_step") or 0)
     if fs == horizon:
         return True
-    # No classical indicator → fallback на soft success 
     if min_route_completion > 0.0:
         rc = float(r.get("route_completion") or 0.0)
         if rc >= min_route_completion:
@@ -180,7 +178,7 @@ def time_eff(r, scene_min_step, scene_max_step=None, formula="min_over_final"):
 
       'absolute'
           time_eff = (horizon - final) / horizon ∈ [0, 1]
-          0.0 = полный horizon, 1.0 
+          0.0 = full horizon, 1.0 = instant
     """
     fs = max(1, int(r.get("final_step") or 1))
 
@@ -454,7 +452,7 @@ def print_summary(picks, scene_groups, filter_records, signs, beta, horizon):
         print(f"{pol:<28} {s['total']:>6} {s['pass']:>5} {rate:>6.1%} "
               f"{s['compl']:>6} {s['arr_prev']:>5} {s['arr_new']:>6} "
               f"{s['crash']:>6} {s['oor']:>5}")
-    print("\n  legend: arr=arrived_dest, arr_n=dest_rate_new (после правил 1.1/1.2)")
+    print("\n  legend: arr=arrived_dest, arr_n=dest_rate_new (after rules 1.1/1.2)")
 
     # 3) Pick distribution per sign
     pick_count = defaultdict(lambda: defaultdict(int))
@@ -640,7 +638,7 @@ def main():
         args.idm_pick = "speed"
 
     if not (args.run_dir or args.jsonl):
-        print("ERROR: укажи --run-dir или --jsonl", file=sys.stderr)
+        print("ERROR: specify --run-dir or --jsonl", file=sys.stderr)
         sys.exit(1)
 
     print("Inputs:")

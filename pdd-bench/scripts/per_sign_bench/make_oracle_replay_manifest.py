@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Build oracle replay manifest from select_experts.py output.
 
-Берёт experts_selected.jsonl (один winner на сцену) и для каждого пика
-читает его sidecar (replay.json), достаёт source_row + env_config_summary
-+ метаданные эксперта, и пишет oracle_replay_manifest.jsonl — формат,
-готовый к feed'у обратно в expert_replay.py для воспроизведения сцен.
+Takes experts_selected.jsonl (one winner per scene); for each pick it reads
+the sidecar (replay.json), pulls source_row + env_config_summary +
+expert metadata, and writes oracle_replay_manifest.jsonl — a format ready
+to feed back into expert_replay.py to reproduce the scenes.
 
-Каждая строка содержит:
-  - все поля source_row (net_path, seed, sign_type, road_id, lane_num,
+Each row contains:
+  - all source_row fields (net_path, seed, sign_type, road_id, lane_num,
     spawn_velocity_ms, sign_spawn_distance, pdd_code, ...)
-  - winner_policy / winner_variant + метрики (f1, time_eff, comfort)
-  - pkl_path / gif_path / sidecar_path — пути к записанной траектории
+  - winner_policy / winner_variant + metrics (f1, time_eff, comfort)
+  - pkl_path / gif_path / sidecar_path — paths to the recorded trajectory
   - env_config_summary (horizon, traffic_density, seed)
 
 Usage:
@@ -39,7 +39,7 @@ def load_jsonl(path):
 
 
 def build_replay_row(pick: dict) -> dict | None:
-    """Объединяет source_row из sidecar + winner-метаданные."""
+    """Merge source_row from sidecar with winner metadata."""
     sc_path = pick.get("sidecar_path")
     if not sc_path or not Path(sc_path).exists():
         print(f"[warn] sidecar missing for {pick['sign']}/{pick['scene_id']}: "
@@ -55,23 +55,19 @@ def build_replay_row(pick: dict) -> dict | None:
     env_cfg = sidecar.get("env_config_summary") or {}
     metrics = sidecar.get("metrics") or {}
 
-    # База — копия source_row (всё что нужно для materialize+env)
     out = dict(src)
 
-    # Гарантируем ключевые поля для replay (если отсутствуют в source_row)
     out.setdefault("scene_id", pick["scene_id"])
     out.setdefault("sign_code", pick["sign"])
     out.setdefault("seed", env_cfg.get("seed"))
     if "horizon" not in out:
         out["horizon"] = env_cfg.get("horizon", 600)
 
-    # Параметры env (из env_config_summary)
     for k in ("road_id", "spawn_lane_num", "block_sequence",
               "lane_num", "lane_width", "traffic_density"):
         if k not in out and k in env_cfg:
             out[k] = env_cfg[k]
 
-    # Метрики итоговой записанной траектории
     out["initial_speed_mps"] = metrics.get("initial_speed_mps") or out.get("spawn_velocity_ms") or 0.0
     out["recorded_final_step"] = metrics.get("final_step")
     out["recorded_total_violations"] = metrics.get("total_violations")
@@ -81,7 +77,6 @@ def build_replay_row(pick: dict) -> dict | None:
     out["recorded_total_reward"] = metrics.get("total_reward")
     out["recorded_frame_smooth_ratio"] = metrics.get("frame_smooth_ratio")
 
-    # Oracle-метаданные (нужны для аналитики, не для env)
     out["oracle_winner_policy"] = pick["winner_policy"]
     out["oracle_winner_variant"] = pick["winner_variant"]
     out["oracle_best_idm_variant"] = pick.get("best_idm_variant")
@@ -92,7 +87,6 @@ def build_replay_row(pick: dict) -> dict | None:
     out["oracle_beta"] = pick.get("beta", 0.25)
     out["oracle_passing_candidates_n"] = pick.get("passing_candidates_n")
 
-    # Пути к артефактам записанной траектории
     out["pkl_path"] = pick.get("pkl_path")
     out["gif_path"] = pick.get("gif_path")
     out["sidecar_path"] = pick.get("sidecar_path")
@@ -106,11 +100,11 @@ def main():
         description=__doc__,
     )
     p.add_argument("--picks", required=True,
-                   help="experts_selected.jsonl от select_experts.py")
+                   help="experts_selected.jsonl from select_experts.py")
     p.add_argument("--output", default="oracle_replay_manifest.jsonl",
-                   help="выходной jsonl для replay")
+                   help="output jsonl manifest for replay")
     p.add_argument("--require-pkl", action="store_true",
-                   help="пропускать пики, у которых pkl-файл отсутствует")
+                   help="skip picks whose pkl file is missing")
     args = p.parse_args()
 
     picks = load_jsonl(args.picks)
@@ -157,7 +151,7 @@ def main():
             winners[w] = winners.get(w, 0) + 1
         wstr = ", ".join(f"{k}×{v}" for k, v in sorted(winners.items(),
                                                          key=lambda kv: -kv[1]))
-        print(f"  {sign:<10}: {len(items):>3} sceneз  ({wstr})")
+        print(f"  {sign:<10}: {len(items):>3} scenes  ({wstr})")
 
 
 if __name__ == "__main__":

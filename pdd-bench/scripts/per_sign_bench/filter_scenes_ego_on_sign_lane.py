@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""filter_scenes_ego_on_sign_lane.py — для указанных знаков пройтись по
-манифестам, dry-init каждую сцену, и оставить только те где ego спавнится
-на полосе со знаком.
+"""filter_scenes_ego_on_sign_lane.py — for the given signs, walk over the
+manifests, dry-init each scene, and keep only those where ego spawns on the
+lane that carries the sign.
 
-Output: <out>/<preset>/<sign_slug>/<manifest>.jsonl — структура совместима с
+Output: <out>/<preset>/<sign_slug>/<manifest>.jsonl — layout compatible with
         run_benchmark_mini.py --benchmark-output <out> --preset <preset>.
 
 Usage:
   python3 filter_scenes_ego_on_sign_lane.py \
-    --src /Users/victoria_s/sdc_new_signs/full_test_250_x10 \
+    --src /path/to/full_test_250_x10 \
     --signs 5.11.1 5.11.2 5.13.1 5.13.2 5.13.3 5.13.4 5.14.1 5.14.2 4.2.1 4.2.2 4.2.3 \
-    --scenes-root /Users/victoria_s/sdc_new_signs/sdc/pdd-bench/scenes \
-    --out /Users/victoria_s/sdc_new_signs/sdc/pdd-bench/scripts/per_sign_bench/benchmark_filtered \
+    --scenes-root /path/to/pdd-bench/scenes \
+    --out /path/to/pdd-bench/scripts/per_sign_bench/benchmark_filtered \
     --preset mini \
     --backends sumo,pgmap,paired,citymap \
     --report /tmp/filter_report.json
@@ -64,7 +64,7 @@ def get_sign_lanes(env):
 
 
 def is_ego_on_sign_lane(row: dict, backend: str, scenes_root: Path) -> tuple[bool, str | None]:
-    """Возвращает (ego_on_sign_lane, error_str_or_None)."""
+    """Returns (ego_on_sign_lane, error_str_or_None)."""
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
     try:
         if backend in ("pgmap", "paired", "citymap"):
@@ -96,8 +96,6 @@ def is_ego_on_sign_lane(row: dict, backend: str, scenes_root: Path) -> tuple[boo
         sign_lanes = get_sign_lanes(base_env)
         if ego_lane is None or not sign_lanes:
             return False, "no_lane_info"
-        # Сравниваем НОМЕР полосы (последний элемент lane.index tuple),
-        # а не road_id целиком. То есть «ego на полосе 0 + знак на полосе 0».
         def _lane_num(idx):
             if isinstance(idx, (list, tuple)) and idx:
                 return idx[-1]
@@ -125,27 +123,27 @@ def find_sumo_manifest(sign_dir: Path) -> Path | None:
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--src", required=True,
-                   help="full_test_250_x10 со знаками (2_1/, 4_2_1/, …)")
+                   help="full_test_250_x10 with sign subdirs (2_1/, 4_2_1/, …)")
     p.add_argument("--signs", nargs="+", required=True,
-                   help="Sign codes (с точками): 5.11.1 4.2.1 ...")
+                   help="Sign codes (dotted form): 5.11.1 4.2.1 ...")
     p.add_argument("--scenes-root", required=True,
-                   help="Папка с net_path для sumo (pdd-bench/scenes)")
+                   help="Directory with net_path files for sumo (pdd-bench/scenes)")
     p.add_argument("--out", required=True,
-                   help="Output dir — будет создано <out>/<preset>/<sign>/...")
+                   help="Output dir — <out>/<preset>/<sign>/... will be created")
     p.add_argument("--preset", default="mini")
     p.add_argument("--backends", default="sumo,pgmap,paired,citymap")
     p.add_argument("--report", default=None,
-                   help="Куда писать сводный JSON отчёт (опционально)")
+                   help="Where to write the summary JSON report (optional)")
     p.add_argument("--all-kept-json", default=None,
-                   help="Куда писать JSON со ВСЕМИ отобранными сценами (полные "
-                        "строки манифеста + sign_code + backend). По умолчанию "
-                        "не пишется. Например: /tmp/all_kept_scenes.json")
+                   help="Where to write JSON listing ALL kept scenes (full "
+                        "manifest rows + sign_code + backend). Not written by "
+                        "default. Example: /tmp/all_kept_scenes.json")
     p.add_argument("--limit-per-sign", type=int, default=None,
-                   help="Ограничить число обработанных строк per (sign, backend)")
+                   help="Cap the number of processed rows per (sign, backend)")
     p.add_argument("--early-stop-per-scene-id", action="store_true", default=True,
-                   help="Как только нашёлся вариант с ego_on_sign_lane=True для "
-                        "scene_id — остальные варианты этой сцены не проверяются "
-                        "(default: True). Отключить: --no-early-stop")
+                   help="Once a variant with ego_on_sign_lane=True is found for a "
+                        "scene_id, skip the remaining variants of that scene "
+                        "(default: True). Disable with --no-early-stop")
     p.add_argument("--no-early-stop", dest="early_stop_per_scene_id",
                    action="store_false")
     args = p.parse_args()
@@ -162,20 +160,17 @@ def main():
     backends = [b.strip() for b in args.backends.split(",") if b.strip()]
     target_signs = set(args.signs)
 
-    # Стаистика
     stats = defaultdict(lambda: defaultdict(lambda: {
         "in": 0, "kept": 0, "dropped": 0, "errors": 0,
         "skipped_by_early_stop": 0,
         "error_types": defaultdict(int),
     }))
-    # Все отобранные строки (для --all-kept-json) — копия row + meta
     all_kept_global: list = []
 
-    # Перебор папок знаков
     sign_dirs = sorted([d for d in src.iterdir()
                         if d.is_dir() and d.name[:1].isdigit()])
     sign_dirs = [d for d in sign_dirs if _slug_to_code(d.name) in target_signs]
-    print(f"Найдено папок: {len(sign_dirs)} (из {len(target_signs)} запрошенных)",
+    print(f"Found {len(sign_dirs)} sign dirs (out of {len(target_signs)} requested)",
           file=sys.stderr)
 
     for sign_dir in sign_dirs:
@@ -188,7 +183,6 @@ def main():
             if backend == "sumo":
                 manifest = find_sumo_manifest(sign_dir)
                 out_name = manifest.name if manifest else None
-                # для sumo возможно вложенная папка sumo/
                 if manifest and "sumo" in manifest.parts:
                     out_path = out_sign_dir / "sumo" / manifest.name
                     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -210,16 +204,14 @@ def main():
             s["in"] = len(rows)
 
             kept_rows = []
-            covered_scene_ids: set = set()    # scene_id'ы где уже нашли подходящий вариант
+            covered_scene_ids: set = set()
             n_skipped_by_early_stop = 0
             for i, row in enumerate(rows):
                 if "valid" in row and not row["valid"]:
                     continue
-                # Дополнить полем sign_type если нет (нужно для _place_pgmap_sign)
                 if backend in ("pgmap", "paired", "citymap") and not row.get("sign_type"):
                     row["sign_type"] = sign_code
 
-                # Early-stop: если для этого scene_id уже нашли подходящий вариант — пропустить
                 sid = row.get("scene_id")
                 if (args.early_stop_per_scene_id and sid is not None
                         and sid in covered_scene_ids):
@@ -236,7 +228,6 @@ def main():
                     kept_rows.append(row)
                     if sid is not None:
                         covered_scene_ids.add(sid)
-                    # Глобальный список — добавим row + метаданные
                     all_kept_global.append({
                         **row,
                         "_sign_code": sign_code,
@@ -253,7 +244,6 @@ def main():
                           file=sys.stderr)
             s["skipped_by_early_stop"] = n_skipped_by_early_stop
 
-            # Записать отфильтрованный манифест (или удалить если пусто)
             if kept_rows:
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(out_path, "w", encoding="utf-8") as f:
@@ -267,7 +257,6 @@ def main():
                       f"0/{s['in']} kept (none on sign lane)",
                       file=sys.stderr)
 
-    # === Финальный отчёт ===
     print(f"\n{'sign':<10} {'backend':<8} {'in':>5} {'kept':>5} {'drop':>5} {'err':>4} {'skip':>5} {'%kept':>6}",
           file=sys.stderr)
     total_in = total_kept = total_drop = total_err = total_skip = 0

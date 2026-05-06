@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""diag_scene_fields.py — показывает какие поля у каждого backend в манифестах
-и какие поля можно использовать для дедупликации сцен.
+"""diag_scene_fields.py — shows which fields each backend uses in its manifests
+and which fields can be used to deduplicate scenes.
 
 Usage:
   python3 diag_scene_fields.py --root /path/to/benchmark_root
@@ -37,7 +37,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--root", required=True)
     p.add_argument("--sample", type=int, default=3,
-                   help="Сколько строк показать как пример per backend")
+                   help="How many rows to print as a sample per backend")
     args = p.parse_args()
 
     root = Path(args.root)
@@ -67,7 +67,6 @@ def main():
             sid = r.get("scene_id")
             if sid:
                 b["scene_id_unique"].add(str(sid))
-                # формат scene_id (по prefix до первой цифры/точки)
                 fmt = "<empty>"
                 s = str(sid)
                 if "_" in s:
@@ -76,7 +75,6 @@ def main():
                     fmt = "<numeric>" if s.isdigit() else "<other>"
                 b["scene_id_formats"][fmt] += 1
 
-            # Уникальность по разным ключам:
             for key_name, key_fn in [
                 ("scene_id",                lambda r: r.get("scene_id")),
                 ("seed",                    lambda r: r.get("seed") or r.get("deterministic_seed")),
@@ -94,27 +92,27 @@ def main():
     for be in ("pgmap", "paired", "citymap", "sumo"):
         b = by_be.get(be)
         if not b or b["rows"] == 0:
-            print(f"\n=== {be}: НЕТ данных ===")
+            print(f"\n=== {be}: NO DATA ===")
             continue
 
-        print(f"\n=== {be}: {b['rows']} строк ===")
-        print(f"  scene_id формат:")
+        print(f"\n=== {be}: {b['rows']} rows ===")
+        print(f"  scene_id format:")
         for fmt, n in b["scene_id_formats"].most_common(5):
             print(f"    {fmt:20s} {n}")
 
-        print(f"  Уникальных по разным ключам:")
+        print(f"  Unique by various keys:")
         for key_name, vals in b["key_fields_unique"].items():
             if vals:
                 print(f"    {key_name:35s} {len(vals)}")
 
-        print(f"\n  ВСЕ поля (count=сколько раз встречаются):")
+        print(f"\n  ALL fields (count = number of occurrences):")
         for k, n in sorted(b["field_counts"].items()):
             pct = 100 * n / b["rows"]
             mark = "*" if pct < 100 else " "
             print(f"   {mark}{k:30s} {n} ({pct:.0f}%)")
-        print(f"  (* = поле не во всех строках)")
+        print(f"  (* = field missing in some rows)")
 
-        print(f"\n  Примеры (первые {args.sample} строк):")
+        print(f"\n  Samples (first {args.sample} rows):")
         for s in b["samples"]:
             keys_short = {k: v for k, v in s.items()
                           if k in ("scene_id", "seed", "deterministic_seed", "map_seed",

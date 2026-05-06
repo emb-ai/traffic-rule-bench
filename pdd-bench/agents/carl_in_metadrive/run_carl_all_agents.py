@@ -56,7 +56,6 @@ def run_carl_all_agents(
     os.makedirs(output_dir, exist_ok=True)
     
     # Environment configuration for multi-agent
-    # Map: Roundabout (кольцо) - one roundabout block
     from metadrive.component.map.base_map import BaseMap
     from metadrive.component.algorithm.BIG import BigGenerateMethod
     
@@ -69,11 +68,10 @@ def run_carl_all_agents(
         "traffic_density": 0.0,  # No automatic traffic, we control all agents
         "allow_respawn": False,  # Don't respawn agents automatically
         
-        # Map configuration for roundabout (кольцо)
         # "O" = Roundabout block
         "map_config": {
             BaseMap.GENERATE_TYPE: BigGenerateMethod.BLOCK_SEQUENCE,
-            BaseMap.GENERATE_CONFIG: "O",  # One Roundabout block (кольцо)
+            BaseMap.GENERATE_CONFIG: "O",
             "exit_length": 50,  # Exit length for roundabout
         },
         

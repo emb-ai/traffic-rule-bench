@@ -40,7 +40,7 @@ class AsyncOSMDownloader:
         await self.session.close()
     
     async def download_osm_fragment(self, lat, lon, output_path, delta=0.002):
-        """Асинхронная загрузка OSM фрагмента"""
+        """Asynchronous download of an OSM fragment"""
         bbox = f"{lat - delta},{lon - delta},{lat + delta},{lon + delta}"
         query = f"""
         [out:xml][timeout:60];
@@ -79,28 +79,27 @@ class BatchSignProcessor:
         self.existing_counts = {} 
         
     def load_data(self):
-        """Загрузка CSV с данными знаков"""
+        """Load the CSV with sign data"""
         
         self.df = pd.read_csv(self.csv_path, sep=";", low_memory=False)
         self.df["ID"] = self.df["ID"].astype(int)
         
     def filter_signs(self, sign_types):
-        """Фильтрация знаков по нескольким типам"""
+        """Filter signs by one or more types"""
         if isinstance(sign_types, str):
             sign_types = [sign_types]
         
         pattern = "|".join([f"^{st}" for st in sign_types])
         filtered = self.df[self.df["SignType"].str.contains(pattern, na=False, regex=True)]
         
-        # Сортируем по ID и ограничиваем
         filtered = filtered.sort_values(by="ID", ascending=True)
         
         return filtered
     
     def collect_existing_counts(self):
         """
-        Возвращает словарь: {sign_type: количество уже существующих сцен}
-        и множество существующих sign_id (для пропуска дубликатов).
+        Returns a dict: {sign_type: number of already existing scenes}
+        and a set of existing sign_ids (to skip duplicates).
         """
         existing_counts = {}
         existing_ids = set()
@@ -129,7 +128,7 @@ class BatchSignProcessor:
         return existing_counts, existing_ids
     
     def collect_existing_signs(self):
-        """Сбор уже существующих знаков"""
+        """Collect already existing signs"""
         for sign_type_dir in self.scenes_dir.iterdir():
             if sign_type_dir.is_dir():
                 for scene_dir in sign_type_dir.iterdir():
@@ -144,7 +143,7 @@ class BatchSignProcessor:
                                 continue
     
     async def process_sign(self, sign_row, sign_type):
-        """Асинхронная обработка одного знака"""
+        """Asynchronous processing of a single sign"""
         sign_id = sign_row["ID"]
         lat = float(sign_row["Latitude_WGS84"])
         lon = float(sign_row["Longitude_WGS84"])
@@ -459,9 +458,9 @@ class BatchSignProcessor:
             existing = self.existing_counts.get(st, 0)
             needed = max_signs_per_type - existing
             if needed <= 0:
-                print(f"Тип {st}: уже есть {existing} сцен (лимит {max_signs_per_type}), новых не требуется.")
+                print(f"Type {st}: already have {existing} scenes (limit {max_signs_per_type}), no new ones needed.")
             else:
-                print(f"Тип {st}: уже есть {existing}, нужно создать ещё {needed} (всего {max_signs_per_type})")
+                print(f"Type {st}: already have {existing}, need to create {needed} more (total {max_signs_per_type})")
             targets[st] = max_signs_per_type
             remaining_to_collect[st] = needed
     
@@ -486,7 +485,7 @@ class BatchSignProcessor:
                 try:
                     idx, row = next(it)
                     task = asyncio.create_task(run_with_semaphore(row, sign_type))
-                    tasks.append((task, sign_type, row))  # храним задачу, тип и строку
+                    tasks.append((task, sign_type, row))
                 except StopIteration:
                     break
 
@@ -505,7 +504,7 @@ class BatchSignProcessor:
                         success_count[st] += 1
                         collected = self.existing_counts.get(st, 0) + success_count[st]
                         target = targets[st]
-                        print(f" {st}: прогресс {collected}/{target} (осталось {target - collected})")
+                        print(f" {st}: progress {collected}/{target} ({target - collected} remaining)")
                     if success_count[st] < remaining_to_collect[st]:
                         try:
                             next_idx, next_row = next(iterators[st])

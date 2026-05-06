@@ -170,7 +170,7 @@ def main():
     print(f"  trajectories (valid replay.pkl): {grand_total:>8}")
     print(f"  invalid / partial dirs:          {grand_invalid:>8}")
     print(f"  unique scenarios covered:        {total_unique_scenes:>8}"
-          + (f"  / {manifest_total_rows} в манифесте"
+          + (f"  / {manifest_total_rows} in manifest"
               if manifest_total_rows else ""))
     print(f"  signs with data:                 {n_signs_with_data:>8}")
     if manifest_per_sign:

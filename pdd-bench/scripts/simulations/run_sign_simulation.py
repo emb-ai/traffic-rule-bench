@@ -28,7 +28,6 @@ import random
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 
-# Глобальные настройки
 OVERPASS_URLS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.openstreetmap.fr/api/interpreter",
@@ -60,7 +59,6 @@ def download_osm_fragment(lat, lon, output_path, delta=DELTA):
     out meta;
     """
 
-    # Добавим небольшую случайную задержку, чтобы избежать "ровного" спама
     jitter = random.uniform(1.0, 3.0)
     print(f"Sleeping for {jitter:.1f}s before Overpass request...")
     time.sleep(jitter)
@@ -74,24 +72,23 @@ def download_osm_fragment(lat, lon, output_path, delta=DELTA):
             response = session.post(
                 url,
                 data={"data": query},
-                timeout=30  # увеличим — иногда нужно больше 30 сек
+                timeout=30
             )
             response.raise_for_status()
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(response.text)
             print("OSM fragment downloaded successfully.")
-            return  # успех — выходим
+            return
         except Exception as e:
             print(f"Failed on {url}: {e}")
             last_exception = e
-            time.sleep(5)  # пауза перед следующим зеркалом
+            time.sleep(5)
 
-    # Если все зеркала провалились
     raise RuntimeError(f"All Overpass endpoints failed. Last error: {last_exception}")
 
 def find_closest_way_and_distance(osm_path, sign_lat, sign_lon):
     """
-    Возвращает (way_id, distance_from_start) для ближайшей дороги в OSM.
+    Returns (way_id, distance_from_start) for the nearest road in the OSM file.
     """
     tree = ET.parse(osm_path)
     root = tree.getroot()
@@ -108,14 +105,11 @@ def find_closest_way_and_distance(osm_path, sign_lat, sign_lon):
     distance_from_start = None
 
     for way in root.findall("way"):
-        # Проверяем, что это дорога (имеет highway)
         if not any(tag.get("k") == "highway" for tag in way.findall("tag")):
             continue
-        # Исключаем пешеходные
         if any(tag.get("v") in ("footway", "steps") for tag in way.findall("tag")):
             continue
 
-        # Собираем координаты way
         coords = []
         for nd in way.findall("nd"):
             nid = nd.get("ref")
@@ -134,7 +128,6 @@ def find_closest_way_and_distance(osm_path, sign_lat, sign_lon):
         if dist < min_dist:
             min_dist = dist
             closest_way_id = way.get("id")
-            # Вычисляем расстояние от начала way до ближайшей точки
             nearest_on_road = nearest_points(line, sign_point)[0]
             dist_along = 0.0
             line_coords = list(line.coords)
@@ -182,15 +175,13 @@ def collect_existing_sign_ids(scenes_dir):
     return existing_ids, existing_sign_ids
 
 def get_edge_length(edge):
-    """Возвращает длину edge, вычисляя её при необходимости из shape (своего или lane)."""
+    """Returns the edge length, computing it from shape (own or lane) if needed."""
     length = edge.get("length")
     if length is not None:
         return float(length)
     
-    # Пробуем взять shape из самого edge
     # shape_str = edge.get("shape")
     # if not shape_str:
-    #     # Если нет, ищем первый lane с shape
     shape_str = None
     lane = edge.find("lane")
     if lane is not None:
@@ -209,20 +200,16 @@ def find_edge_and_offset_in_sumo_by_way_id(net_path, way_id, target_distance):
     tree = ET.parse(net_path)
     root = tree.getroot()
     
-    # Вариант 1: edge_id = way_id (без #)
-    # Вариант 2: edge_id = way_id#N (с #)
     
     edges = []
     
     for edge in root.findall("edge"):
         edge_id = edge.get("id")
         
-        # Проверяем точное совпадение
         if edge_id == str(way_id):
             length = get_edge_length(edge)
             edges.append((0, edge_id, length))
         
-        # Проверяем префикс с #
         elif edge_id.startswith(f"{way_id}#"):
             suffix = edge_id[len(f"{way_id}#"):]
             try:
@@ -235,7 +222,7 @@ def find_edge_and_offset_in_sumo_by_way_id(net_path, way_id, target_distance):
     if not edges:
         raise ValueError(f"No edges with way_id '{way_id}' found in {net_path}")
 
-    edges.sort(key=lambda x: x[0])  # сортируем по индексу сегмента
+    edges.sort(key=lambda x: x[0])
 
     cumulative_sum = 0.0
     for idx, edge_id, length in edges:
@@ -317,7 +304,6 @@ def main():
             way_id, distance_from_start = find_closest_way_and_distance(osm_raw, lat, lon)
             print("way_id, distance_from_start: ", way_id, distance_from_start)
 
-            # Прямая конвертация OSM -> SUMO .net.xml с сохранением переходов
             net_output_path = MAPS_DIR / net_file
             print("Converting OSM directly to SUMO .net.xml with crossings...")
             subprocess.run([
@@ -345,7 +331,7 @@ def main():
                 "sign_type": args.sign_type,
                 "latitude": lat,
                 "longitude": lon,
-                "osm_way_id": way_id,      # сохраняем исходный way_id
+                "osm_way_id": way_id,
                 "road_id": road_id,         # SUMO edge id
                 "distance_from_start": s_offset,
                 "net_file": net_file

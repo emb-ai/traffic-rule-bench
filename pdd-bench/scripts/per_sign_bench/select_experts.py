@@ -100,11 +100,11 @@ def load_runs(run_dirs, jsonl_files):
     for rd in run_dirs:
         f = Path(rd) / "all_runs.jsonl"
         loaded = load_jsonl(f)
-        print(f"  {f}: {len(loaded)} строк")
+        print(f"  {f}: {len(loaded)} rows")
         rows.extend(loaded)
     for jf in jsonl_files:
         loaded = load_jsonl(jf)
-        print(f"  {jf}: {len(loaded)} строк")
+        print(f"  {jf}: {len(loaded)} rows")
         rows.extend(loaded)
     return rows
 
@@ -132,14 +132,14 @@ def passes_filter(r, target_sign, target_class, horizon=HORIZON_DEFAULT):
 
 
 def time_eff(r, scene_min_step):
-    """Шаг 3: relative time_eff = scene_min_step / final_step ∈ (0, 1].
+    """Step 3: relative time_eff = scene_min_step / final_step ∈ (0, 1].
     """
     fs = max(1, int(r.get("final_step") or 1))
     return scene_min_step / fs
 
 
 def comfort(r):
-    """Шаг 4."""
+    """Step 4."""
     return float(r.get("frame_smooth_ratio") or 0.0)
 
 
@@ -333,7 +333,7 @@ def print_summary(picks, scene_groups, filter_records, signs, beta, horizon):
         print(f"{pol:<28} {s['total']:>6} {s['pass']:>5} {rate:>6.1%} "
               f"{s['compl']:>6} {s['arr_prev']:>5} {s['arr_new']:>6} "
               f"{s['crash']:>6} {s['oor']:>5}")
-    print("\n  legend: arr=arrived_dest, arr_n=dest_rate_new (после правил 1.1/1.2)")
+    print("\n  legend: arr=arrived_dest, arr_n=dest_rate_new (after rules 1.1/1.2)")
 
     # 3) Pick distribution per sign
     pick_count = defaultdict(lambda: defaultdict(int))

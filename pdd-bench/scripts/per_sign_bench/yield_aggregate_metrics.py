@@ -225,7 +225,7 @@ def main() -> int:
     p.add_argument("--runs-dir", required=True,
                    help="Path to <bench>/benchmark_output/<preset>/policy_eval")
     p.add_argument("--include", default=None,
-                   help="Comma-separated list of run_name'ов (default: все)")
+                   help="Comma-separated list of run_names (default: all)")
     p.add_argument("--out-md", default=None, help=" out markdown report ")
     p.add_argument("--out-json", default=None,
                    help="(default: <runs-dir>/cumulative_speed_detour.json)")
@@ -257,7 +257,7 @@ def main() -> int:
         print(f"\n[consolidate] {name}")
         consolidated, n_written = _consolidate_one(runs_dir, name)
         if n_written == 0:
-            print(f"  [skip] {name}: no replay.json sidecars (нужен --emit-replay-sidecar)")
+            print(f"  [skip] {name}: no replay.json sidecars (needs --emit-replay-sidecar)")
             continue
         rows = _load_jsonl(consolidated)
         per_run_metrics[name] = _aggregate_replays(rows)
@@ -268,7 +268,7 @@ def main() -> int:
               f"compliance={'present' if comp else 'absent'}")
 
     if not per_run_metrics:
-        print("no usable runs (все без replays sidecars)")
+        print("no usable runs (none have replay sidecars)")
         return 1
 
     # ----- stdout -----

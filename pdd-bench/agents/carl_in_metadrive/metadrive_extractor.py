@@ -11,7 +11,7 @@ from metadrive.component.vehicle.base_vehicle import BaseVehicle
 from metadrive.component.traffic_participants.base_traffic_participant import BaseTrafficParticipant
 from metadrive.component.lane.abs_lane import AbstractLane
 from metadrive.component.road_network.node_road_network import NodeRoadNetwork
-from metadrive.component.road_network.edge_road_network import EdgeRoadNetwork  # Добавлен импорт EdgeRoadNetwork
+from metadrive.component.road_network.edge_road_network import EdgeRoadNetwork
 from metadrive.constants import Decoration, MetaDriveType
 from metadrive.scenario.scenario_description import ScenarioDescription
 

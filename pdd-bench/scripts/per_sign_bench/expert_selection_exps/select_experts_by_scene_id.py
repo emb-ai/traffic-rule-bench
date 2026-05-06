@@ -21,7 +21,6 @@ from select_experts import (    # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# Selection — агрегация по scene_id
 # ---------------------------------------------------------------------------
 def select_expert_per_scene_id(rows, signs, beta=BETA_DEFAULT,
                                   horizon=HORIZON_DEFAULT,

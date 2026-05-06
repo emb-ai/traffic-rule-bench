@@ -1204,7 +1204,7 @@ def run_batch_multi_variant(
     # run_all_experts_parallel.sh after a tmux/nohup kill).
     resume_mode = os.environ.get("PDD_BENCH_RESUME", "0") == "1"
     if resume_mode:
-        print(f"[resume] PDD_BENCH_RESUME=1 — пропуск уже записанных эпизодов",
+        print(f"[resume] PDD_BENCH_RESUME=1 — skipping already-recorded episodes",
               flush=True)
 
     with open(all_runs_path, "a") as ao:

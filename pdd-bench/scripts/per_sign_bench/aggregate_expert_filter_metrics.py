@@ -290,7 +290,7 @@ def _make_markdown(pol_stats: dict, sign_total: dict, sign_passing: dict,
     # ---- Coverage per sign ----
     lines.append("## Coverage per sign")
     lines.append("")
-    lines.append("Сколько сцен проходят filter (хотя бы одним baseline) из общего числа.")
+    lines.append("How many scenes pass the filter (by at least one baseline) out of the total.")
     lines.append("")
     lines.append("| Sign | Scenes | Passing | Coverage |")
     lines.append("|---|---:|---:|---:|")

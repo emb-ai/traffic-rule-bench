@@ -585,7 +585,7 @@ class EndMainRoadSmartSign(YieldSign):
             )
             
     def get_top_down_icon_poses(self):
-        """Рисуем иконку только на lane, где размещен знак"""
+        """Draw the icon only on the lane where the sign is placed."""
         road_network = getattr(getattr(self.engine, "current_map", None), "road_network", None)
         if road_network is None or self.lane is None:
             return []

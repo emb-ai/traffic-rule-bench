@@ -220,25 +220,25 @@ def main() -> None:
         description=__doc__,
     )
     p.add_argument("--run-dir", action="append", default=[],
-                   help="каталог с all_runs.jsonl (можно повторять)")
+                   help="directory with all_runs.jsonl (may be repeated)")
     p.add_argument("--jsonl", action="append", default=[],
-                   help="прямой путь к all_runs.jsonl (можно повторять)")
+                   help="direct path to an all_runs.jsonl (may be repeated)")
     p.add_argument("--signs", nargs="*", default=None,
-                   help="знаки для отбора; default: автоматически из данных")
+                   help="signs to select; default: inferred from the data")
     p.add_argument("--required-agents", nargs="+",
                    default=list(DEFAULT_REQUIRED_AGENTS),
                    help="required agent labels for a complete scene")
     p.add_argument("--count-invalid-runs", action="store_true",
-                   help="считать invalid rows как наличие проезда для coverage")
+                   help="count invalid rows as a successful pass for coverage")
     p.add_argument("--beta", type=float, default=BETA_DEFAULT)
     p.add_argument("--horizon", type=int, default=HORIZON_DEFAULT)
     p.add_argument("--max-per-sign", type=int, default=None,
-                   help="оставить только топ-N сцен на знак по f1_score")
+                   help="keep only the top-N scenes per sign by f1_score")
     p.add_argument("--output", default="experts_selected_complete8.jsonl")
     args = p.parse_args()
 
     if not (args.run_dir or args.jsonl):
-        print("ERROR: укажи --run-dir или --jsonl", file=sys.stderr)
+        print("ERROR: specify --run-dir or --jsonl", file=sys.stderr)
         sys.exit(1)
 
     print("Inputs:")

@@ -1093,7 +1093,6 @@ class TrafficSignSumoEnv(BaseEnv):
             if lane is None:
                 continue
 
-            # только главные полосы
             if self._lane_priority_flag(lane) is not True:
                 continue
 
@@ -1103,7 +1102,6 @@ class TrafficSignSumoEnv(BaseEnv):
             if junction_id is None:
                 continue
 
-            # Проверяем, есть ли на этом перекрёстке второстепенная полоса
             has_secondary = False
             for other_key, other_info in road_network.graph.items():
                 other_lane = getattr(other_info, "lane", None)
@@ -1121,7 +1119,6 @@ class TrafficSignSumoEnv(BaseEnv):
             if not has_secondary:
                 continue
 
-            # Проверяем наличие манёвров (знак должен быть осмысленным)
             turns = getattr(info, "turns", None) or []
             exit_lanes = set(getattr(info, "exit_lanes", None) or [])
             maneuver_targets = set()
@@ -1237,7 +1234,6 @@ class TrafficSignSumoEnv(BaseEnv):
                     sign_lane = priority_lane
                     lane_source = "priority_topology"
             elif self.sign_type == "2.3.1" or self.sign_type == "2.3.2" or self.sign_type == "2.3.3":
-                # Находим главные полосы перекрёстков со второстепенной дорогой
                 secondary_lane, secondary_keys = self._pick_secondary_road_candidates(
                     road_network, preferred_road_id
                 )
@@ -1347,8 +1343,6 @@ class TrafficSignSumoEnv(BaseEnv):
                 ]
             if len(start_entry_lanes) > 0:
                 spawn_lane = road_network.get_lane(start_entry_lanes[0])
-            # ==== Очистка зоны от трафика перед респавном эго ====
-            # Вычисляем будущую позицию эго (аналогично _spawn_ego_on_lane)
             spawn_long = min(2.0, max(0.2, spawn_lane.length * 0.05))
             ego_spawn_pos = spawn_lane.position(spawn_long, 0.0)
             
@@ -1357,7 +1351,7 @@ class TrafficSignSumoEnv(BaseEnv):
                 to_remove = []
                 for v in list(traffic_mgr.traffic_vehicles):
                     dist = np.linalg.norm(np.array(v.position) - np.array(ego_spawn_pos))
-                    if dist < 15.0:   # радиус очистки (можно уменьшить до 10–12 м)
+                    if dist < 15.0:
                         to_remove.append(v)
                 for v in to_remove:
                     traffic_mgr.clear_objects([v.id])

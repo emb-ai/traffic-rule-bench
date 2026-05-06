@@ -84,18 +84,18 @@ SIGN_SEMANTICS = {
 }
 
 _SIGN_DESCRIPTIONS = {
-    "5.11.1": "Знак 5.11.1 «Дорога с полосой для маршрутных ТС» — выделенная полоса встречного направления, въезд запрещён",
-    "5.11.2": "Знак 5.11.2 «Дорога с полосой для велосипедистов» — выделенная полоса встречного направления, въезд запрещён",
-    "5.12.1": "Знак 5.12.1 «Конец дороги с полосой для маршрутных ТС»",
-    "5.12.2": "Знак 5.12.2 «Конец дороги с полосой для велосипедистов»",
-    "5.13.1": "Знак 5.13.1 «Выезд на дорогу с полосой для маршрутных ТС» — на перекрёстке запрещён поворот налево",
-    "5.13.2": "Знак 5.13.2 «Выезд на дорогу с полосой для маршрутных ТС» — на перекрёстке запрещён поворот направо",
-    "5.13.3": "Знак 5.13.3 «Выезд на дорогу с полосой для велосипедистов» — на перекрёстке запрещён поворот налево",
-    "5.13.4": "Знак 5.13.4 «Выезд на дорогу с полосой для велосипедистов» — на перекрёстке запрещён поворот направо",
-    "5.14.1": "Знак 5.14.1 «Полоса для маршрутных ТС» — попутная выделенная полоса, движение запрещено для прочих ТС",
-    "5.14.2": "Знак 5.14.2 «Полоса для велосипедистов» — попутная выделенная полоса, движение запрещено для прочих ТС",
-    "5.14.3": "Знак 5.14.3 «Конец полосы для маршрутных ТС»",
-    "5.14.4": "Знак 5.14.4 «Конец полосы для велосипедистов»",
+    "5.11.1": "Sign 5.11.1 'Road with bus lane' — dedicated lane in the opposite direction, entry forbidden",
+    "5.11.2": "Sign 5.11.2 'Road with bicycle lane' — dedicated lane in the opposite direction, entry forbidden",
+    "5.12.1": "Sign 5.12.1 'End of road with bus lane'",
+    "5.12.2": "Sign 5.12.2 'End of road with bicycle lane'",
+    "5.13.1": "Sign 5.13.1 'Exit onto road with bus lane' — left turn forbidden at the intersection",
+    "5.13.2": "Sign 5.13.2 'Exit onto road with bus lane' — right turn forbidden at the intersection",
+    "5.13.3": "Sign 5.13.3 'Exit onto road with bicycle lane' — left turn forbidden at the intersection",
+    "5.13.4": "Sign 5.13.4 'Exit onto road with bicycle lane' — right turn forbidden at the intersection",
+    "5.14.1": "Sign 5.14.1 'Bus lane' — co-directional dedicated lane, other vehicles forbidden",
+    "5.14.2": "Sign 5.14.2 'Bicycle lane' — co-directional dedicated lane, other vehicles forbidden",
+    "5.14.3": "Sign 5.14.3 'End of bus lane'",
+    "5.14.4": "Sign 5.14.4 'End of bicycle lane'",
 }
 
 
@@ -397,7 +397,7 @@ class RestrictedLaneSign(BaseTrafficSign):
         return True
 
     def get_rule_description(self) -> str:
-        return _SIGN_DESCRIPTIONS.get(self.SIGN_CODE, f"Знак {self.SIGN_CODE}")
+        return _SIGN_DESCRIPTIONS.get(self.SIGN_CODE, f"Sign {self.SIGN_CODE}")
 
     @property
     def top_down_color(self):
@@ -692,7 +692,7 @@ class IntersectionRestrictedLaneSign(BaseTrafficSign):
         return _get_vehicle_lane_index(vehicle)
 
     def get_rule_description(self) -> str:
-        return _SIGN_DESCRIPTIONS.get(self.SIGN_CODE, f"Знак {self.SIGN_CODE}")
+        return _SIGN_DESCRIPTIONS.get(self.SIGN_CODE, f"Sign {self.SIGN_CODE}")
 
     @property
     def top_down_color(self):
@@ -734,7 +734,7 @@ class EndOfRestrictedLaneSign(BaseTrafficSign):
         return False
 
     def get_rule_description(self) -> str:
-        return _SIGN_DESCRIPTIONS.get(self.SIGN_CODE, f"Знак {self.SIGN_CODE}")
+        return _SIGN_DESCRIPTIONS.get(self.SIGN_CODE, f"Sign {self.SIGN_CODE}")
 
     @property
     def top_down_color(self):

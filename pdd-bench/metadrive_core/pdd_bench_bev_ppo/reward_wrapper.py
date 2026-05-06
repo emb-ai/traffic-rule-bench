@@ -1,7 +1,7 @@
 """
 CustomRewardWrapper:
--  STOP sign penalty
-- Reward за progress
+- STOP sign penalty
+- Reward for progress
 """
 import sys
 from pathlib import Path
@@ -23,8 +23,8 @@ from traffic_signs.stop_sign import StopSign
 class CustomRewardWrapper(gym.RewardWrapper):
     """
     Params:
-        custom_reward_weight: вес для кастомных reward (по умолчанию 1.0)
-        stop_sign_penalty: штраф за нарушение знака STOP (по умолчанию -10.0)
+        custom_reward_weight: weight for custom rewards (default 1.0)
+        stop_sign_penalty: penalty for violating a STOP sign (default -10.0)
     """
     
     def __init__(self, env, custom_reward_weight=1.0, stop_sign_penalty=-10.0):

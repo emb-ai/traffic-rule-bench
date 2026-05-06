@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""compute_carl_metrics.py — метрики carl vs carl_rule на основе sidecars.
+"""compute_carl_metrics.py — carl vs carl_rule metrics from sidecars.
 
-Использует те же функции что и select_from_replays.py:
-  - parse_sidecar_to_row из select_from_replays
-  - passes_filter, recompute_dest, comfort, f1_score, time_eff из select_experts
+Uses the same functions as select_from_replays.py:
+  - parse_sidecar_to_row from select_from_replays
+  - passes_filter, recompute_dest, comfort, f1_score, time_eff from select_experts
   - SIGN_CLASS_MAP
 
-Но в отличие от select_from_replays.py НЕ требует наличия 8 экспертов и
-не делает selection — просто агрегирует raw метрики по двум политикам.
+Unlike select_from_replays.py, this does NOT require the full set of 8 experts
+and does no selection — it just aggregates raw metrics across the two policies.
 
 Usage:
   python3 compute_carl_metrics.py --root <ROOT> [--output report.md]
@@ -36,9 +36,9 @@ POLICIES = ("carl", "carl_rule")
 
 
 def collect_rows(root: Path, policies=POLICIES):
-    """Сканирует replays/<sign>/by_sign/<sign>/by_scene/<uid>/<expert>/replay.json
-    в $ROOT/runs/chunk_*/{policy}/replays/ для каждой политики из списка.
-    Возвращает dict[policy] -> list of rows.
+    """Scan replays/<sign>/by_sign/<sign>/by_scene/<uid>/<expert>/replay.json
+    under $ROOT/runs/chunk_*/{policy}/replays/ for each policy in the list.
+    Returns dict[policy] -> list of rows.
     """
     by_policy = {p: [] for p in policies}
     for policy in policies:
@@ -55,8 +55,8 @@ def collect_rows(root: Path, policies=POLICIES):
 
 
 def metrics_for_rows(rows, args, scene_minmax=None):
-    """То же что compute_oracle_metrics::metrics_for_rows из select_from_replays,
-    но без зависимости от полного oracle-pipeline."""
+    """Same as compute_oracle_metrics::metrics_for_rows from select_from_replays,
+    but without depending on the full oracle pipeline."""
     n = len(rows)
     if n == 0:
         return {"n": 0}
@@ -114,8 +114,8 @@ def metrics_for_rows(rows, args, scene_minmax=None):
 
 
 def compute_scene_minmax(by_policy, args):
-    """Считает min/max final_step среди passing trajectories per-scene_id —
-    для time_eff нормализации."""
+    """Compute min/max final_step across passing trajectories per scene_id —
+    used for time_eff normalization."""
     mm = defaultdict(lambda: [10**9, 0])
     for rows in by_policy.values():
         for r in rows:
@@ -141,7 +141,7 @@ def render_markdown(by_policy, args, signs_filter=None):
             return [r for r in rows if r.get("sign_code") in signs_filter]
         return rows
 
-    out.append("# Метрики carl vs carl_rule\n")
+    out.append("
     out.append(f"_horizon={args.horizon}, beta={args.beta}, "
                f"min_route_completion={args.min_route_completion}, "
                f"min_final_step={args.min_final_step}, "
@@ -214,8 +214,8 @@ def render_markdown(by_policy, args, signs_filter=None):
         common = {k for k in common if k[0] in signs_filter}
 
     if common:
-        out.append("## Head-to-head на общих сценах\n")
-        out.append(f"_общих (sign_code, scene_id): **{len(common):,}**_\n")
+        out.append("
+        out.append(f"_common (sign_code, scene_id): **{len(common):,}**_\n")
 
         c_common = [c_by_key[k] for k in common]
         r_common = [r_by_key[k] for k in common]
@@ -247,12 +247,12 @@ def render_markdown(by_policy, args, signs_filter=None):
             < (r_by_key[k].get("violations_by_class") or {}).get(SIGN_CLASS_MAP.get(k[0]), 0))
 
         out.append("### Wins / losses\n")
-        out.append("| Сценарий | Кол-во |")
+        out.append("| Scenario | Count |")
         out.append("| --- | --- |")
-        out.append(f"| rule arrived, carl нет | {rule_wins_dest} ({100*rule_wins_dest/len(common):.1f}%) |")
-        out.append(f"| carl arrived, rule нет | {carl_wins_dest} ({100*carl_wins_dest/len(common):.1f}%) |")
-        out.append(f"| rule меньше target violations | {rule_better_viol} ({100*rule_better_viol/len(common):.1f}%) |")
-        out.append(f"| carl меньше target violations | {carl_better_viol} ({100*carl_better_viol/len(common):.1f}%) |")
+        out.append(f"| rule arrived, carl did not | {rule_wins_dest} ({100*rule_wins_dest/len(common):.1f}%) |")
+        out.append(f"| carl arrived, rule did not | {carl_wins_dest} ({100*carl_wins_dest/len(common):.1f}%) |")
+        out.append(f"| rule fewer target violations | {rule_better_viol} ({100*rule_better_viol/len(common):.1f}%) |")
+        out.append(f"| carl fewer target violations | {carl_better_viol} ({100*carl_better_viol/len(common):.1f}%) |")
         out.append("")
 
     return "\n".join(out)
@@ -261,11 +261,11 @@ def render_markdown(by_policy, args, signs_filter=None):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--root", required=True,
-                   help="Папка с runs/ внутри (например benchmark_carl_only)")
+                   help="Directory containing runs/ (e.g. benchmark_carl_only)")
     p.add_argument("--output", default=None,
-                   help="Куда писать markdown. По умолчанию stdout.")
+                   help="Where to write the markdown report. Default: stdout.")
     p.add_argument("--signs", nargs="*", default=None,
-                   help="Фильтр по знакам. Пусто = все.")
+                   help="Filter by sign codes. Empty = all signs.")
     p.add_argument("--horizon", type=int, default=HORIZON_DEFAULT)
     p.add_argument("--beta", type=float, default=BETA_DEFAULT)
     p.add_argument("--min-route-completion", type=float, default=MIN_ROUTE_COMPLETION)
@@ -277,7 +277,7 @@ def main():
 
     root = Path(args.root).resolve()
     if not root.is_dir():
-        print(f"ERROR: {root} не существует", file=sys.stderr)
+        print(f"ERROR: {root} does not exist", file=sys.stderr)
         sys.exit(1)
 
     print(f"=== Scanning {root}/runs/chunk_*/ ===", file=sys.stderr)

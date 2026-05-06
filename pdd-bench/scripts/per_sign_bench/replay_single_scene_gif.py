@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""replay_single_scene_gif.py — проиграть ОДНУ сцену знака с записью GIF.
+"""replay_single_scene_gif.py — replay ONE sign scene and record a GIF.
 
 Usage:
-  # 1. конкретная сцена (по scene_id из манифеста)
   python3 replay_single_scene_gif.py \
     --sign 2.4 \
     --scene-id sumo_2.4_75912 \
@@ -13,7 +12,6 @@ Usage:
     --scenes-root /home/jovyan/.../pdd-bench/scenes \
     --model-path /home/jovyan/.../carl_checkpoint.pth
 
-  # 2. первая попавшаяся сцена этого знака
   python3 replay_single_scene_gif.py \
     --sign 2.4 --backend pgmap --policy carl \
     --out /tmp/replay.gif \
@@ -82,12 +80,10 @@ def find_row(src: Path, sign_code: str, backend: str, scene_id: str | None) -> d
     if scene_id:
         for r in rows:
             if r.get("scene_id") == scene_id:
-                # дополним sign_type если нет (для _place_pgmap_sign)
                 if backend in ("pgmap", "paired", "citymap") and not r.get("sign_type"):
                     r["sign_type"] = sign_code
                 return r
         raise SystemExit(f"scene_id {scene_id} not found in {manifest}")
-    # иначе — первая
     r = rows[0]
     if backend in ("pgmap", "paired", "citymap") and not r.get("sign_type"):
         r["sign_type"] = sign_code
@@ -106,22 +102,22 @@ def make_idm_policy(policy_type: str):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--sign", required=True, help="код знака, например 2.4")
+    p.add_argument("--sign", required=True, help="sign code, e.g. 2.4")
     p.add_argument("--backend", required=True, choices=["sumo", "pgmap", "paired", "citymap"])
     p.add_argument("--scene-id", default=None,
-                   help="конкретный scene_id (если не указан — первая сцена)")
+                   help="specific scene_id (if omitted — the first scene)")
     p.add_argument("--policy", required=True,
                    choices=["idm", "modified_idm", "comprehensive_rule_expert",
                             "rule_compliant", "ppo_5ch", "ppo_lidar",
                             "carl", "carl_rule", "plant2", "plant2_rule"])
     p.add_argument("--model-path", default=None,
-                   help="нужен для carl/carl_rule/plant2/plant2_rule/ppo_5ch")
-    p.add_argument("--out", required=True, help="путь к выходному .gif")
+                   help="required for carl/carl_rule/plant2/plant2_rule/ppo_5ch")
+    p.add_argument("--out", required=True, help="output .gif path")
     p.add_argument("--src", required=True, help="full_test_250_x10")
-    p.add_argument("--scenes-root", required=True, help="pdd-bench/scenes (для sumo)")
+    p.add_argument("--scenes-root", required=True, help="pdd-bench/scenes (for sumo)")
     p.add_argument("--max-steps", type=int, default=600)
     p.add_argument("--gif-duration-ms", type=int, default=40,
-                   help="длительность кадра в gif (ms)")
+                   help="gif frame duration (ms)")
     p.add_argument("--screen-size", type=int, default=800)
     p.add_argument("--scaling", type=float, default=12.0)
     args = p.parse_args()
@@ -133,16 +129,13 @@ def main():
     out_gif = Path(args.out).resolve()
     out_gif.parent.mkdir(parents=True, exist_ok=True)
 
-    # 1. найти строку манифеста
     row = find_row(src, args.sign, args.backend, args.scene_id)
     print(f"Scene: {row.get('scene_id')}")
     print(f"  seed={row.get('seed')}  var_idx={row.get('var_idx')}")
     print(f"  sign_type={row.get('sign_type')}  backend={args.backend}")
 
-    # 2. загрузить policy
     models = _load_policy_models(args.policy, args.model_path)
 
-    # 3. построить env
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
     np.random.seed(seed); torch.manual_seed(seed)
 
@@ -169,7 +162,6 @@ def main():
             print("ERROR: failed to place pgmap sign")
             sys.exit(2)
 
-    # 5. policy_obj для idm-family
     idm_cls = make_idm_policy(args.policy)
     policy_obj = None
     if idm_cls is not None:
@@ -184,7 +176,6 @@ def main():
     if args.policy == "carl" and models["carl_model"] is not None:
         models["carl_model"].reset()
 
-    # 6. step loop с screen_record
     print(f"Recording {args.max_steps} steps...")
     total_reward = 0.0
     steps_done = 0
@@ -204,7 +195,6 @@ def main():
         total_reward += float(reward)
         steps_done = step + 1
 
-        # запись кадра
         try:
             env.render(
                 mode="top_down",
@@ -228,7 +218,6 @@ def main():
 
     print(f"Done: steps={steps_done}  arrived={arrived}  crashed={crashed}  reward={total_reward:.2f}")
 
-    # 7. сохранить gif
     try:
         if hasattr(env, "top_down_renderer") and env.top_down_renderer is not None:
             env.top_down_renderer.generate_gif(str(out_gif), duration=args.gif_duration_ms)

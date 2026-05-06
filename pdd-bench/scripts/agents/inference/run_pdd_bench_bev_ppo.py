@@ -386,7 +386,7 @@ def run_model_and_visualize(
                 text=text_info
             )
         except Exception as e:
-            pass  # Игнорируем ошибки рендеринга
+            pass
 
         total_reward = 0.0
         cumulative_reward = 0.0
@@ -509,7 +509,7 @@ def run_model_and_visualize(
                     text=text_info
                 )
             except Exception as e:
-                pass  # Игнорируем ошибки рендеринга
+                pass
 
             if save_bev_input and step % 10 == 0:
                 visualize_channels_at_step(obs, step, episode + 1, signs_count, save_dir)

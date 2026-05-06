@@ -40,7 +40,6 @@ class TopDownMultiChannelWithSigns(TopDownMultiChannel):
                         
                         position = [*self.canvas_road_network.pos2pix(sign.position[0], sign.position[1])]
                         
-                        # (like в ObjectGraphics.display)
                         heading = sign.heading_theta if hasattr(sign, 'heading_theta') else 0
                         angle = -np.rad2deg(heading)
                         
