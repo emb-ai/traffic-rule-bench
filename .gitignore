@@ -61,7 +61,6 @@ traj_all_experts*/
 **/*detour_speed*/
 *.zip
 
-*.sh
 *.csv
 full_test_250_x10/
 full_test_250_x10_by_var_idx/
@@ -72,5 +71,4 @@ pdd-bench/scripts/per_sign_bench/expert_picks_todo.jsonl
 pdd-bench/scripts/per_sign_bench/report_cumulative.md
 pdd-bench/scripts/per_sign_bench/optim/
 
-pdd-bench/scripts/per_sign_bench/*.sh
 pdd-bench/scripts/per_sign_bench/merge_and_report_2node.py
