@@ -8,19 +8,18 @@ ego action (``len(expert_actions)``), until the episode terminates or truncates.
 Logs metadrive_obs_to_plant2_batch per step, then adds ego_pos_world_future_4 /
 ego_pos_world_future_4_s3 using the same logic as collect_metadrive_carl_plant2_trajectories.py.
 
-Requires --sdc-root to a checkout that contains pdd-bench/scripts/per_sign_bench/
-(e.g. smirnova/sdc). For SUMO scenes recorded on another machine, use
---remap-net-path OLD:NEW so source_row[\"net_path\"] resolves (e.g. map
-/Users/.../sdc -> .../arbelyaev/sdc).
+Requires --sdc-root to a checkout that contains pdd-bench/scripts/per_sign_bench/.
+For SUMO scenes recorded on another machine, use --remap-net-path OLD:NEW so
+source_row["net_path"] resolves.
 
 Example::
 
   export SDL_VIDEODRIVER=dummy
   python repack_benchmark_expert_pkl_to_plant2_pt.py \\
-    --benchmark-root .../benchmark_output/mini \\
+    --benchmark-root pdd-bench/scripts/per_sign_bench/benchmark_output/mini \\
     --output-dir ./plant2_pt \\
-    --sdc-root .../smirnova/sdc \\
-    --remap-net-path /Users/victoria_s/sdc_new_signs/sdc:/home/you/arbelyaev/sdc \\
+    --sdc-root . \\
+    --remap-net-path /old/sdc:/new/sdc \\
     --num-workers 4
 """
 from __future__ import annotations

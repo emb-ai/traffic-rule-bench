@@ -9,7 +9,7 @@ and reports per-sign-type counts of:
   - missing destination
 
 Usage:
-  python3 pdd-bench/scripts/audit_scenes.py /home/jovyan/shares/SR006.nfs2/smirnova/sdc/pdd-bench/scripts/per_sign_bench/benchmark_output/mini
+  python3 pdd-bench/scripts/audit_scenes.py pdd-bench/scripts/per_sign_bench/benchmark_output/mini
 
 Env-vars:
   SCENES_ROOT  : where net_path resolves (default: <repo>/pdd-bench/scenes)

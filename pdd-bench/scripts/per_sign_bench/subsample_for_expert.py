@@ -12,10 +12,15 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import random
 import shutil
 from collections import defaultdict
 from pathlib import Path
+
+# Repo root (traffic-rule-bench/), overridable via REPO_ROOT env var.
+REPO_ROOT = Path(os.environ.get("REPO_ROOT", Path(__file__).resolve().parents[3]))
+_BENCH_OUT = REPO_ROOT / "pdd-bench/scripts/per_sign_bench/benchmark_output"
 
 # ---------------------------------------------------------------------------
 # Per-sign caps
@@ -38,11 +43,11 @@ CAPS: dict[str, int] = {
 }
 
 SOURCE_DIRS = [
-    Path("/home/jovyan/shares/SR006.nfs2/smirnova/sdc/pdd-bench/scripts/per_sign_bench/benchmark_output/full_arbelyaev_250_metadrive"),
-    Path("/home/jovyan/shares/SR006.nfs2/smirnova/sdc/pdd-bench/scripts/per_sign_bench/benchmark_output/additional_signs_for_full"),
+    _BENCH_OUT / "full_arbelyaev_250_metadrive",
+    _BENCH_OUT / "additional_signs_for_full",
 ]
 
-DEFAULT_OUTPUT = Path("/home/jovyan/shares/SR006.nfs2/smirnova/sdc/pdd-bench/scripts/per_sign_bench/benchmark_output/sampled_for_expert")
+DEFAULT_OUTPUT = _BENCH_OUT / "sampled_for_expert"
 
 
 def _vel_key(row: dict) -> int:

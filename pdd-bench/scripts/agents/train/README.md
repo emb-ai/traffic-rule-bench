@@ -1,7 +1,7 @@
 # Plant2 Training Pipeline
 
 All scripts assume the `**plant2**` conda env and run from the repo root
-(`/home/jovyan/shares/SR006.nfs2/arbelyaev/sdc`).
+(`traffic-rule-bench/`).
 
 ---
 
@@ -29,8 +29,7 @@ Needs `pdd-bench/data/benchmark_mini` symlink pointing at the mini dataset.
 
 ```bash
 tmux new -s plant2_ft
-export SDC_AR=/home/jovyan/shares/SR006.nfs2/arbelyaev/sdc
-export INIT_CKPT=$SDC_AR/../plant2/models/epoch%3D029_final_3.ckpt
+export INIT_CKPT=plant2/models/epoch%3D029_final_3.ckpt
 bash pdd-bench/scripts/agents/train/run_plant2_mini_repack_train_eval.sh
 ```
 
@@ -75,7 +74,7 @@ python pdd-bench/scripts/agents/train/shard_plant2_pt.py \
 
 ```bash
 # 4 GPUs, 30 epochs (edit CUDA_VISIBLE_DEVICES / EPOCHS / BATCH_PER_GPU as needed)
-export CKPT=/home/jovyan/shares/SR006.nfs2/arbelyaev/sdc/epoch%3D029_final_3.ckpt
+export CKPT=epoch%3D029_final_3.ckpt
 export DATA_DIR=pdd-bench/outputs/benchmark_sign_trajectories_v5
 
 bash pdd-bench/scripts/agents/train/run_plant2_train_benchmark_v5.sh

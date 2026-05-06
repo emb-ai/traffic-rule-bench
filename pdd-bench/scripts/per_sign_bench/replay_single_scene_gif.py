@@ -8,16 +8,16 @@ Usage:
     --backend sumo \
     --policy carl \
     --out /tmp/replay_2.4.gif \
-    --src /home/jovyan/.../full_test_250_x10 \
-    --scenes-root /home/jovyan/.../pdd-bench/scenes \
-    --model-path /home/jovyan/.../carl_checkpoint.pth
+    --src /path/to/full_test_250_x10 \
+    --scenes-root pdd-bench/scenes \
+    --model-path /path/to/carl_checkpoint.pth
 
   python3 replay_single_scene_gif.py \
     --sign 2.4 --backend pgmap --policy carl \
     --out /tmp/replay.gif \
-    --src /home/jovyan/.../full_test_250_x10 \
-    --scenes-root /home/jovyan/.../pdd-bench/scenes \
-    --model-path /home/jovyan/.../carl_checkpoint.pth
+    --src /path/to/full_test_250_x10 \
+    --scenes-root pdd-bench/scenes \
+    --model-path /path/to/carl_checkpoint.pth
 """
 from __future__ import annotations
 

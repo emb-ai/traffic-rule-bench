@@ -55,7 +55,7 @@ def _find_pairs(replays_dir: Path) -> list[tuple[str, Path, Path]]:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sign-code", default="2.5")
-    ap.add_argument("--mini-new-root", default="/Users/victoria_s/sdc_new_signs/mini_new")
+    ap.add_argument("--mini-new-root", default="mini_new")
     ap.add_argument("--max-steps", type=int, default=600)
     ap.add_argument("--limit", type=int, default=None,
                     help="Max scenes to replay (default: all pairs)")

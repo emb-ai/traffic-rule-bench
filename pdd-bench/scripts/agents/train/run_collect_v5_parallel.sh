@@ -19,7 +19,7 @@
 #
 # Tunables:
 #   N_WORKERS         (default 8)
-#   PY                (default /home/jovyan/.mlspace/envs/plant2/bin/python)
+#   PY                (default: python on PATH)
 #   SAMPLED_DIR       (default benchmark_output/sampled_for_expert_v2)
 #   OUTPUT_DIR        (default pdd-bench/outputs/benchmark_sign_trajectories_v5)
 #   MAX_STEPS         (default 600)
@@ -33,14 +33,11 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ARBELYAEV_SDC="$(cd "$SCRIPT_DIR/../../.." && pwd)"   # arbelyaev/sdc/pdd-bench
-
-PY="${PY:-/home/jovyan/.mlspace/envs/plant2/bin/python}"
+PY="${PY:-python}"
 N_WORKERS="${N_WORKERS:-8}"
 
-SAMPLED_DIR="${SAMPLED_DIR:-$ARBELYAEV_SDC/scripts/per_sign_bench/benchmark_output/sampled_for_expert_v2}"
-OUTPUT_DIR="${OUTPUT_DIR:-$ARBELYAEV_SDC/outputs/benchmark_sign_trajectories_v5}"
+SAMPLED_DIR="${SAMPLED_DIR:-pdd-bench/scripts/per_sign_bench/benchmark_output/sampled_for_expert_v2}"
+OUTPUT_DIR="${OUTPUT_DIR:-pdd-bench/outputs/benchmark_sign_trajectories_v5}"
 MAX_STEPS="${MAX_STEPS:-600}"
 GIFS_PER_SIGN="${GIFS_PER_SIGN:-3}"
 TRAFFIC_DENSITY="${TRAFFIC_DENSITY:-0.1}"
@@ -103,7 +100,7 @@ for ((w=0; w<N_WORKERS; w++)); do
   echo "[shard $w] codes=[$shard]  shuffle_seed=$shuffle_seed -> $log_path"
   (
     set -e
-    cd "$ARBELYAEV_SDC/.."   # /home/jovyan/.../arbelyaev/sdc
+    # script assumes CWD = repo root
     echo "=== shard $w start $(date) codes=$shard ===" >> "$log_path"
     SDL_VIDEODRIVER=dummy CUDA_VISIBLE_DEVICES= \
       "$PY" pdd-bench/scripts/agents/train/collect_benchmark_sign_trajectories.py \

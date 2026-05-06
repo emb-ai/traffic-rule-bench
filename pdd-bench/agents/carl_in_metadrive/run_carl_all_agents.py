@@ -15,17 +15,16 @@ import numpy as np
 import cv2
 from typing import Dict, List
 
-# Paths to CaRL and MetaDrive
-CARL_BASE_PATH = "/home/jovyan/shares/SR006.nfs2/smirnova/CaRL/nuPlan"  # Parent directory containing carl_nuplan
-CARL_NUPLAN_PATH = os.path.join(CARL_BASE_PATH, "carl_nuplan")  # Actual carl_nuplan module directory
-METADRIVE_PATH = "/home/gbuhtuev/airi/pdd/sdc/metadrive"
+# Repo root: traffic-rule-bench/ (this file lives in pdd-bench/agents/carl_in_metadrive/)
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
-# automatic -- i tried to make it more flexible
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  
-ADAPTER_PATH = os.path.dirname(os.path.abspath(__file__))               
-# Alternative paths (commented out)
-# CARL_BASE_PATH = os.path.join(BASE_DIR, "CaRL", "nuPlan")
-# METADRIVE_PATH = os.path.join(BASE_DIR, "metadrive")
+# Paths to CaRL and MetaDrive (overridable via env vars)
+CARL_BASE_PATH = os.environ.get("CARL_CKPT_DIR", os.path.join(REPO_ROOT, "CaRL", "nuPlan"))
+CARL_NUPLAN_PATH = os.path.join(CARL_BASE_PATH, "carl_nuplan")  # Actual carl_nuplan module directory
+METADRIVE_PATH = os.environ.get("METADRIVE_PATH", os.path.join(REPO_ROOT, "metadrive"))
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ADAPTER_PATH = os.path.dirname(os.path.abspath(__file__))
 
 # Path to checkpoint (checkpoints are typically in the parent directory, not in carl_nuplan)
 DEFAULT_CHECKPOINT = os.path.join(

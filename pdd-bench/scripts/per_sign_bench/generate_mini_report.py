@@ -147,7 +147,7 @@ def main():
     parser.add_argument(
         "--results-dir",
         type=Path,
-        default=Path("/home/gbuhtuev/sdc/pdd-bench/scripts/per_sign_bench/benchmark_output/mini/policy_eval"),
+        default=Path("pdd-bench/scripts/per_sign_bench/benchmark_output/mini/policy_eval"),
         help="Directory containing mini_all_policies_*/summary_*.json",
     )
     parser.add_argument("--output", type=Path, default=None, help="Optional path to write markdown report")

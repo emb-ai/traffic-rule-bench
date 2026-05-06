@@ -12,7 +12,7 @@ Usage (from a catalog):
 
 Usage (build catalog inline):
     python -m sumo_space.sumo_pipeline \
-        --scenes-root /Users/victoria_s/sdc_new_signs/sdc/pdd-bench/scenes \
+        --scenes-root pdd-bench/scenes \
         --n-per-category 250 --n-variations 10 \
         --n-workers 16 --output-dir benchmark_sumo
 """

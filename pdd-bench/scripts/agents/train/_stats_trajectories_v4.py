@@ -29,8 +29,7 @@ def main() -> int:
     v4 = (
         sys.argv[1]
         if len(sys.argv) > 1
-        else "/home/jovyan/shares/SR006.nfs2/arbelyaev/sdc/pdd-bench/"
-        "outputs/benchmark_sign_trajectories_v4"
+        else "pdd-bench/outputs/benchmark_sign_trajectories_v4"
     )
     files = sorted(glob.glob(os.path.join(v4, "*.pt")))
     print(f"Directory: {v4}")

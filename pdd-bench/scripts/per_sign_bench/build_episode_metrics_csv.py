@@ -13,8 +13,8 @@ The output CSV is the source of truth for downstream aggregations.
 
 Usage:
   python3 build_episode_metrics_csv.py \
-      --runs-root /Users/victoria_s/sdc_new_signs/benchmark_2node_eval/runs \
-      --out       /Users/victoria_s/sdc_new_signs/benchmark_2node_eval/metrics_per_episode.csv
+      --runs-root benchmark_2node_eval/runs \
+      --out       benchmark_2node_eval/metrics_per_episode.csv
 """
 from __future__ import annotations
 

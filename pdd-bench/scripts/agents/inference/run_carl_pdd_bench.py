@@ -15,12 +15,6 @@ import numpy as np
 import cv2
 from pathlib import Path
 
-#  paths be like
-# ADAPTER_PATH = os.path.dirname(os.path.abspath(__file__))
-# CARL_PATH = "/home/gbuhtuev/airi/pdd/sdc/CaRL/nuPlan"
-# METADRIVE_PATH = "/home/gbuhtuev/airi/pdd/sdc/metadrive"
-# PDD_BENCH_PATH = "/home/gbuhtuev/airi/pdd/sdc/pdd-bench"
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 PDD_BENCH_DIR = SCRIPT_DIR.parents[2]
 SDC_ROOT = PDD_BENCH_DIR.parent

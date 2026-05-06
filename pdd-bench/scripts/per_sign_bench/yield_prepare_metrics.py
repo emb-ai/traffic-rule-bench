@@ -11,8 +11,8 @@ Usage:
     python yield_prepare_metrics.py --manifest manifest.jsonl --out-dir output --dry-run
     python yield_prepare_metrics.py --manifest manifest.jsonl --out-dir output --baselines idm_default,carl
     python yield_prepare_metrics.py \
-    --manifest /home/jovyan/shares/SR006.nfs2/smirnova/sdc/pdd-bench/scripts/per_sign_bench/benchmark_output/fixed/2_4/pgmap_materialized.jsonl \
-    --out-dir /home/jovyan/shares/SR006.nfs2/smirnova/sdc/pdd-bench/scripts/per_sign_bench/benchmark_output/fixed/2_4 \
+    --manifest pdd-bench/scripts/per_sign_bench/benchmark_output/fixed/2_4/pgmap_materialized.jsonl \
+    --out-dir pdd-bench/scripts/per_sign_bench/benchmark_output/fixed/2_4 \
     --rerun-failed \
     --emit-replay-sidecar
 
@@ -53,10 +53,22 @@ SDC_ROOT = PDD_BENCH_DIR.parent
 
 RUN_BENCH_SCRIPT = BENCHMARK_DIR / "yield_run_benchmark_mini.py"
 
+import os
+
+# Checkpoint paths — relative to repo root by default, overridable via env vars.
 # PATH_PPO_EXPERT = ""
-PATH_CARL = "/home/jovyan/shares/SR006.nfs2/smirnova/sdc/CaRL/nuPlan/checkpoints/nuplan_51479_1B/model_best.pth"
-PATH_PLANT2 = "/home/jovyan/shares/SR006.nfs2/smirnova/sdc/pdd-bench/checkpoints/epoch%3D029_final_3.ckpt"
-PATH_ARTEM = "/home/jovyan/shares/SR006.nfs2/smirnova/sdc/expert_selection/plant2_training_out/plant2_supervised_2nd_final.pt"
+PATH_CARL = os.environ.get(
+    "CARL_CKPT",
+    str(SDC_ROOT / "CaRL/nuPlan/checkpoints/nuplan_51479_1B/model_best.pth"),
+)
+PATH_PLANT2 = os.environ.get(
+    "PLANT2_CKPT",
+    str(PDD_BENCH_DIR / "checkpoints/epoch%3D029_final_3.ckpt"),
+)
+PATH_ARTEM = os.environ.get(
+    "PLANT2_CKPT_FINETUNE",
+    str(SDC_ROOT / "expert_selection/plant2_training_out/plant2_supervised_2nd_final.pt"),
+)
 
 # =============================================================================
 # Baseline Configuration

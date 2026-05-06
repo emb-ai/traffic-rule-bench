@@ -8,12 +8,11 @@
 # - Override: BATCH_FIRST, LR (fixed for all attempts), BASE_LR, BASE_LR_REF_BS, BATCH_FALLBACK.
 set -euo pipefail
 
-SDC="${SDC:-/home/jovyan/shares/SR006.nfs2/arbelyaev/sdc}"
-PY="${PY:-/home/jovyan/.mlspace/envs/plant2/bin/python}"
-DATA_DIR="${DATA_DIR:-$SDC/pdd-bench/outputs/benchmark_sign_trajectories_v4}"
-CKPT="${CKPT:-$SDC/epoch%3D029_final_3.ckpt}"
-OUT_DIR="${OUT_DIR:-$SDC/pdd-bench/outputs/plant2_supervised_benchmark_v4}"
-SCRIPT="${SCRIPT:-$SDC/pdd-bench/scripts/agents/train/train_plant2_from_carl_trajectories.py}"
+PY="${PY:-python}"
+DATA_DIR="${DATA_DIR:-pdd-bench/outputs/benchmark_sign_trajectories_v4}"
+CKPT="${CKPT:-epoch%3D029_final_3.ckpt}"
+OUT_DIR="${OUT_DIR:-pdd-bench/outputs/plant2_supervised_benchmark_v4}"
+SCRIPT="${SCRIPT:-pdd-bench/scripts/agents/train/train_plant2_from_carl_trajectories.py}"
 LOG="${LOG:-$OUT_DIR/train_console.log}"
 
 export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}"
@@ -21,7 +20,7 @@ export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-2,3,4,5,6,7}"
 
 mkdir -p "$OUT_DIR"
-cd "$SDC"
+# script assumes CWD = repo root
 
 BASE_LR="${BASE_LR:-1e-5}"
 BASE_LR_REF_BS="${BASE_LR_REF_BS:-128}"

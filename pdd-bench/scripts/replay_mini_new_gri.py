@@ -593,7 +593,7 @@ def _print_summary(episode_results: list[dict], summary: dict) -> None:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sign-code", default="2.5")
-    ap.add_argument("--mini-new-root", default="/Users/victoria_s/sdc_new_signs/mini_new")
+    ap.add_argument("--mini-new-root", default="mini_new")
     ap.add_argument("--scenes-root", default=None,
                     help="Root folder containing SUMO .net.xml files referenced by net_path "
                          "in the manifest (default: pdd-bench/scenes next to this script)")

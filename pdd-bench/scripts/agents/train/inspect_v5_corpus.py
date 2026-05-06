@@ -65,8 +65,7 @@ def _load_sample(fp: str):
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("corpus_dir", nargs="?",
-                   default="/home/jovyan/shares/SR006.nfs2/arbelyaev/sdc/"
-                           "pdd-bench/outputs/benchmark_sign_trajectories_v5")
+                   default="pdd-bench/outputs/benchmark_sign_trajectories_v5")
     p.add_argument("--sample-per-sign", type=int, default=1,
                    help="how many sample .pt to load per sign (loaded "
                         "sequentially, IO-friendly)")

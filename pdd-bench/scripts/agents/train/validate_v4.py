@@ -13,7 +13,7 @@ Verifies:
 
 Usage:
   python validate_v4.py \\
-      --data-dir /home/jovyan/shares/SR006.nfs2/arbelyaev/sdc/pdd-bench/outputs/benchmark_sign_trajectories_v4 \\
+      --data-dir pdd-bench/outputs/benchmark_sign_trajectories_v4 \\
       [--per-sign-sample 3]
 """
 import argparse

@@ -8,16 +8,18 @@ python generate_gifs.py --num-scenes 10 --dry-run
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 SIGN = "3.20"
 
-PDD_ROOT = Path("/home/jovyan/shares/SR006.nfs2/smirnova/sdc")
-MANIFEST = PDD_ROOT / f"full_test_250_x10/{SIGN.replace('.', '_')}/pgmap_materialized.jsonl"
-RUN_BENCH = PDD_ROOT / "pdd-bench/scripts/per_sign_bench/run_benchmark_mini.py"
-GIF_DIR = PDD_ROOT / f"pdd-bench/gifs/{SIGN}"
+# Repo root (traffic-rule-bench/), overridable via REPO_ROOT env var
+REPO_ROOT = Path(os.environ.get("REPO_ROOT", Path(__file__).resolve().parents[3]))
+MANIFEST = REPO_ROOT / f"full_test_250_x10/{SIGN.replace('.', '_')}/pgmap_materialized.jsonl"
+RUN_BENCH = REPO_ROOT / "pdd-bench/scripts/per_sign_bench/run_benchmark_mini.py"
+GIF_DIR = REPO_ROOT / f"pdd-bench/gifs/{SIGN}"
 
 
 def iter_rows(path: Path):

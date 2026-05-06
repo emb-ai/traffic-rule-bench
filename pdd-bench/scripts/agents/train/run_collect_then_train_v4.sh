@@ -16,11 +16,8 @@
 
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ARBELYAEV_SDC="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-
-PY="${PY:-/home/jovyan/.mlspace/envs/plant2/bin/python}"
-OUTPUT_DIR="${OUTPUT_DIR:-$ARBELYAEV_SDC/outputs/benchmark_sign_trajectories_v4}"
+PY="${PY:-python}"
+OUTPUT_DIR="${OUTPUT_DIR:-pdd-bench/outputs/benchmark_sign_trajectories_v4}"
 CHECK_INTERVAL_SECS="${CHECK_INTERVAL_SECS:-60}"
 MIN_EXPECTED_PT="${MIN_EXPECTED_PT:-9000}"
 EPOCHS="${EPOCHS:-20}"

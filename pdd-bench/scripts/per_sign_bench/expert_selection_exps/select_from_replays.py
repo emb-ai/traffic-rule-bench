@@ -561,7 +561,7 @@ def write_strategy_outputs(picks, out_dir, jsonl_dir, full_coverage_pairs):
 
 def compute_oracle_metrics(all_rows, picks, args, full_coverage_pairs=None):
     """Per-sign x per-expert raw metrics + ORACLE column.
-    The output format mirrors /Users/victoria_s/sdc_new_signs/oracle_metrics_summary.md.
+    The output format mirrors oracle_metrics_summary.md.
 
     Returns: dict[sign_code or "__all__"] -> dict[expert] -> dict[metric] -> value
     """

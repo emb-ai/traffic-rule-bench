@@ -872,7 +872,6 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
         PlainCarlPolicy.set_checkpoint(model_path, device=device)
         policy_cls = PlainCarlPolicy
     elif policy == "plant2":
-        # model_path = "/home/jovyan/shares/SR006.nfs2/smirnova/sdc/pdd-bench/checkpoints/epoch%3D029_final_3.ckpt"
         if not model_path:
             raise ValueError("--model-path is required for --policy plant2")
         PLANT2_PATH = SDC_ROOT / "plant2"

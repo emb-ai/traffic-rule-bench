@@ -617,8 +617,12 @@ def main():
         if not args.model_path:
             raise ValueError("--model-path is required for --policy carl")
         try:
-            CARL_PATH = "/home/gbuhtuev/airi/pdd/CaRL/nuPlan"
-            CARL_ADAPTER_PATH = "/home/gbuhtuev/airi/pdd/sdc/carl_in_metadrive"
+            _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+            CARL_PATH = os.environ.get("CARL_PATH", os.path.join(_repo_root, "CaRL", "nuPlan"))
+            CARL_ADAPTER_PATH = os.environ.get(
+                "CARL_ADAPTER_PATH",
+                os.path.join(_repo_root, "pdd-bench", "agents", "carl_in_metadrive"),
+            )
             for path in [CARL_PATH, CARL_ADAPTER_PATH]:
                 if path not in sys.path:
                     sys.path.insert(0, path)

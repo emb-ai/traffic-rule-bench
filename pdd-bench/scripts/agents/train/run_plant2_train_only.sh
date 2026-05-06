@@ -6,17 +6,16 @@
 #
 set -euo pipefail
 
-SDC_AR="${SDC_AR:-/home/jovyan/shares/SR006.nfs2/arbelyaev/sdc}"
-PLANT2_PY="${PLANT2_PY:-/home/jovyan/.mlspace/envs/plant2/bin/python}"
-DATA_DIR="${DATA_DIR:-$SDC_AR/pdd-bench/outputs/plant2_repack_mini}"
-INIT_CKPT="${INIT_CKPT:-$SDC_AR/../plant2/models/epoch%3D029_final_3.ckpt}"
-TRAIN_OUT="${TRAIN_OUT:-$SDC_AR/pdd-bench/outputs/plant2_supervised_from_mini}"
+PLANT2_PY="${PLANT2_PY:-python}"
+DATA_DIR="${DATA_DIR:-pdd-bench/outputs/plant2_repack_mini}"
+INIT_CKPT="${INIT_CKPT:-plant2/models/epoch%3D029_final_3.ckpt}"
+TRAIN_OUT="${TRAIN_OUT:-pdd-bench/outputs/plant2_supervised_from_mini}"
 EPOCHS="${EPOCHS:-10}"
 BATCH_SIZE="${BATCH_SIZE:-32}"
 # Default LR as decimal — safe for bash; override with export LR=1e-5 if desired
 LR="${LR:-0.00001}"
 
-TRAIN_SCRIPT="$SDC_AR/pdd-bench/scripts/agents/train/train_plant2_from_carl_trajectories.py"
+TRAIN_SCRIPT="pdd-bench/scripts/agents/train/train_plant2_from_carl_trajectories.py"
 LOG_FILE="${LOG_FILE:-$TRAIN_OUT/train_console.log}"
 
 mkdir -p "$TRAIN_OUT"

@@ -178,7 +178,7 @@ def run_carl_with_right_turn_verifier(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", type=str, default="/home/jovyan/shares/SR006.nfs2/smirnova/carl_exps/residual/checkpoints/rt_finetuned_from_default_sparse_style.pth") #DEFAULT_CHECKPOINT)
+    parser.add_argument("--checkpoint", type=str, default=DEFAULT_CHECKPOINT)
     parser.add_argument("--output", type=str, default=f"{DEFAULT_OUTPUT_DIR}_new__from_default_sparse_style")
     parser.add_argument("--episodes", type=int, default=1)
     parser.add_argument("--max-steps", type=int, default=500)

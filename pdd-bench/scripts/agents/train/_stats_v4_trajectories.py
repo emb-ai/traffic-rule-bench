@@ -5,12 +5,12 @@ from __future__ import annotations
 import sys
 
 # Episodes were pickled with references to `traffic_signs` / MetaDrive; match
-# collector sys.path so torch.load can resolve classes.
-_SDC_S = "/home/jovyan/shares/SR006.nfs2/smirnova/sdc"
+# collector sys.path so torch.load can resolve classes (assumes script is run
+# from the repo root).
 for _p in (
-    f"{_SDC_S}/pdd-bench",
-    f"{_SDC_S}/metadrive",
-    f"{_SDC_S}/pdd-bench/scripts/per_sign_bench",
+    "pdd-bench",
+    "metadrive",
+    "pdd-bench/scripts/per_sign_bench",
 ):
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -22,10 +22,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-ROOT = Path(
-    "/home/jovyan/shares/SR006.nfs2/arbelyaev/sdc/pdd-bench/outputs/"
-    "benchmark_sign_trajectories_v4"
-)
+ROOT = Path("pdd-bench/outputs/benchmark_sign_trajectories_v4")
 EXPECTED = [
     "2.1", "2.2", "2.3.1", "2.3.2", "2.3.3", "2.4",
     "3.1", "3.2", "3.18.2", "3.19", "3.20", "3.24", "3.25", "3.27", "3.31",

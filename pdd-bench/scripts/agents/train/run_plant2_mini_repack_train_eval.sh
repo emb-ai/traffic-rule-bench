@@ -12,32 +12,28 @@
 #
 set -euo pipefail
 
-PLANT2_PY="${PLANT2_PY:-/home/jovyan/.mlspace/envs/plant2/bin/python}"
-if [[ ! -x "$PLANT2_PY" ]]; then
-  echo "Set PLANT2_PY to plant2 python (default: ~/.mlspace/envs/plant2/bin/python)" >&2
+PLANT2_PY="${PLANT2_PY:-python}"
+if ! command -v "$PLANT2_PY" >/dev/null 2>&1 && [[ ! -x "$PLANT2_PY" ]]; then
+  echo "Set PLANT2_PY to the plant2 conda env python (default: python on PATH)" >&2
   exit 1
 fi
 
-SDC_AR="${SDC_AR:-/home/jovyan/shares/SR006.nfs2/arbelyaev/sdc}"
-SDC_SM="${SDC_SM:-/home/jovyan/shares/SR006.nfs2/smirnova/sdc}"
-# Default benchmark root: symlink under this repo ($SDC_AR/pdd-bench/data/benchmark_mini -> smirnova .../mini).
-# Same files as canonical mini; use a different path so tools/logs do not depend on the long smirnova path.
-# Override with BENCH_MINI=... or export BENCH_MINI="$SDC_SM/.../benchmark_output/mini" for the canonical path.
-BENCH_MINI="${BENCH_MINI:-$SDC_AR/pdd-bench/data/benchmark_mini}"
+# Default benchmark root: symlink under this repo (pdd-bench/data/benchmark_mini).
+BENCH_MINI="${BENCH_MINI:-pdd-bench/data/benchmark_mini}"
 # Maps old absolute paths in sidecars to this checkout's pdd-bench tree
-REMAP_OLD="${REMAP_OLD:-/Users/victoria_s/sdc_new_signs/sdc}"
+REMAP_OLD="${REMAP_OLD:-/old/sdc}"
 
-OUT_PT="${OUT_PT:-$SDC_AR/pdd-bench/outputs/plant2_repack_mini}"
-INIT_CKPT="${INIT_CKPT:-$SDC_AR/../plant2/models/epoch%3D029_final_3.ckpt}"
-TRAIN_OUT="${TRAIN_OUT:-$SDC_AR/pdd-bench/outputs/plant2_supervised_from_mini}"
-SCENES_DIR="${SCENES_DIR:-$SDC_AR/pdd-bench/scenes}"
-BENCH_V2_OUT="${BENCH_V2_OUT:-$SDC_AR/pdd-bench/outputs/benchmark_v2_after_mini_ft}"
+OUT_PT="${OUT_PT:-pdd-bench/outputs/plant2_repack_mini}"
+INIT_CKPT="${INIT_CKPT:-plant2/models/epoch%3D029_final_3.ckpt}"
+TRAIN_OUT="${TRAIN_OUT:-pdd-bench/outputs/plant2_supervised_from_mini}"
+SCENES_DIR="${SCENES_DIR:-pdd-bench/scenes}"
+BENCH_V2_OUT="${BENCH_V2_OUT:-pdd-bench/outputs/benchmark_v2_after_mini_ft}"
 
-REPACK_SCRIPT="$SDC_AR/pdd-bench/scripts/agents/train/repack_benchmark_expert_pkl_to_plant2_pt.py"
-TRAIN_SCRIPT="$SDC_AR/pdd-bench/scripts/agents/train/train_plant2_from_carl_trajectories.py"
-EVAL_SCRIPT="$SDC_AR/pdd-bench/scripts/run_benchmark_v2.py"
+REPACK_SCRIPT="pdd-bench/scripts/agents/train/repack_benchmark_expert_pkl_to_plant2_pt.py"
+TRAIN_SCRIPT="pdd-bench/scripts/agents/train/train_plant2_from_carl_trajectories.py"
+EVAL_SCRIPT="pdd-bench/scripts/run_benchmark_v2.py"
 
-LOG="${LOG:-$SDC_AR/pdd-bench/outputs/plant2_mini_pipeline.log}"
+LOG="${LOG:-pdd-bench/outputs/plant2_mini_pipeline.log}"
 mkdir -p "$(dirname "$LOG")" "$OUT_PT" "$TRAIN_OUT" "$BENCH_V2_OUT"
 exec > >(tee -a "$LOG") 2>&1
 
@@ -59,8 +55,8 @@ echo "--- repack ---"
 "$PLANT2_PY" "$REPACK_SCRIPT" \
   --benchmark-root "$BENCH_MINI" \
   --output-dir "$OUT_PT" \
-  --sdc-root "$SDC_SM" \
-  --remap-net-path "$REMAP_OLD:$SDC_AR" \
+  --sdc-root "." \
+  --remap-net-path "$REMAP_OLD:." \
   --num-workers "$REPACK_NUM_WORKERS" \
   "${REPACK_EXTRA[@]}"
 
