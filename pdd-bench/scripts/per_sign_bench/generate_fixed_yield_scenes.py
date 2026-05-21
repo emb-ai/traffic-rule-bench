@@ -47,7 +47,7 @@ METADRIVE_DIR = SDC_ROOT / "metadrive"
 DEFAULT_OUTPUT_BASE_DIR = (
     SDC_ROOT / "pdd-bench/scripts/per_sign_bench/benchmark_output/fixed/2_4"
 )
-RUN_BENCH_SCRIPT = BENCHMARK_DIR / "run_benchmark_mini.py"
+RUN_BENCH_SCRIPT = BENCHMARK_DIR / "run_benchmark.py"
 
 for _p in (PDD_BENCH_DIR, METADRIVE_DIR, BENCHMARK_DIR):
     _ps = str(_p)
@@ -650,7 +650,7 @@ def render_gifs_from_manifest(
         (rendered_count, failed_count)
     """
     if not RUN_BENCH_SCRIPT.is_file():
-        print(f"[GIF] run_benchmark_mini.py not found at {RUN_BENCH_SCRIPT}", file=sys.stderr)
+        print(f"[GIF] run_benchmark.py not found at {RUN_BENCH_SCRIPT}", file=sys.stderr)
         return 0, 1
     
     if not manifest_path.is_file():
@@ -813,7 +813,7 @@ Sign placement coordinates:
     # GIF rendering options
     parser.add_argument(
         "--save-gifs", action="store_true",
-        help="Render and save GIFs for generated scenes via run_benchmark_mini.py"
+        help="Render and save GIFs for generated scenes via run_benchmark.py"
     )
     parser.add_argument(
         "--gif-dir", type=str, default=None,

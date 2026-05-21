@@ -215,7 +215,7 @@ _patch_record_manager_once()
 
 
 # ---------------------------------------------------------------------------
-# Smoothness — port of run_benchmark_mini._compute_smoothness, applied per
+# Smoothness — port of run_benchmark._compute_smoothness, applied per
 # episode to ego step_vars (long_acc, lat_acc, yaw_rate, yaw_acc, long_jerk,
 # jerk_mag). Frame thresholds are nuPlan p95 envelopes for safe driving.
 # ---------------------------------------------------------------------------
@@ -723,7 +723,7 @@ def record_expert_replay(
                 pass
 
             # Smoothness step_vars: long_acc/lat_acc/yaw_rate/yaw_acc/long_jerk/jerk_mag
-            # Mirrors run_benchmark_mini.py:757-883. dt comes from physics step size.
+            # Mirrors run_benchmark.py:757-883. dt comes from physics step size.
             try:
                 import math as _math
                 dt = float(env.engine.global_config.get("physics_world_step_size", 0.02))

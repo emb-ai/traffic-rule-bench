@@ -102,14 +102,14 @@ Pass a manifest to the runner via `--manifest pdd-bench/test/<sign>/<file>.jsonl
 
 ### Run Evaluation
 
-Each manifest in `pdd-bench/test/<sign>/<file>.jsonl` is a self-contained set of scenes for one sign. Run a baseline against any manifest with `run_benchmark_mini.py`. Each run produces `episodes_<policy>.jsonl` plus per-episode `replay.json` sidecars (needed for the metrics pipeline).
+Each manifest in `pdd-bench/test/<sign>/<file>.jsonl` is a self-contained set of scenes for one sign. Run a baseline against any manifest with `run_benchmark.py`. Each run produces `episodes_<policy>.jsonl` plus per-episode `replay.json` sidecars (needed for the metrics pipeline).
 
 #### 1. One baseline on one sign
 
 ```bash
 cd pdd-bench/scripts/per_sign_bench
 
-python run_benchmark_mini.py \
+python run_benchmark.py \
     --policy   idm \
     --run-name idm_2_5 \
     --manifest ../../test/2_5/real_manifest.jsonl \
@@ -119,7 +119,7 @@ python run_benchmark_mini.py \
 Models that require checkpoints (`carl`, `plant2`, `*_rule`) need `--model-path`:
 
 ```bash
-python run_benchmark_mini.py \
+python run_benchmark.py \
     --policy     plant2 \
     --run-name   plant2_2_5 \
     --manifest   ../../test/2_5/real_manifest.jsonl \
@@ -135,7 +135,7 @@ cd pdd-bench/scripts/per_sign_bench
 for f in ../../test/*/*.jsonl; do
     sign=$(basename "$(dirname "$f")")
     src=$(basename "$f" .jsonl)
-    python run_benchmark_mini.py \
+    python run_benchmark.py \
         --policy   idm \
         --run-name "idm_${sign}_${src}" \
         --manifest "$f" \
