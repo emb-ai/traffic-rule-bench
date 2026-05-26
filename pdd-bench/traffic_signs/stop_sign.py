@@ -7,7 +7,7 @@ class StopSign(BaseTrafficSign):
     APPROACH_BEFORE_LINE_M = 7.5
 
     def __init__(self, lane, zone_length=None, **kwargs):
-        super().__init__(lane, icon_path="stop_sign.png", **kwargs)
+        super().__init__(lane, icon_path="2.5.png", **kwargs)
         self._vehicle_states_stop = {}
         
         # Zone of action: small zone around the sign (not to end of lane)

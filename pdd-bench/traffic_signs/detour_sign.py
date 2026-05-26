@@ -201,6 +201,9 @@ class DetourSign(BaseTrafficSign):
         # correctly. No per-step "compliance credit" is granted to vehicles
         # that haven't yet performed the prescribed lane change.
         return state["entered_zone"] and not state["changed_correctly"]
+    
+    def get_rule_description(self) -> str:
+        raise "DetourSign"
 
     @property
     def violation_events(self) -> int:
@@ -221,7 +224,7 @@ class DetourRightSign(DetourSign):
     allowed_directions = {"right"}
 
     def __init__(self, lane, **kwargs):
-        kwargs.setdefault("icon_path", "sign_4_2_1.png")
+        kwargs.setdefault("icon_path", "4.2.1.png")
         super().__init__(lane, **kwargs)
 
 
@@ -232,7 +235,7 @@ class DetourLeftSign(DetourSign):
     allowed_directions = {"left"}
 
     def __init__(self, lane, **kwargs):
-        kwargs.setdefault("icon_path", "sign_4_2_2.png")
+        kwargs.setdefault("icon_path", "4.2.2.png")
         super().__init__(lane, **kwargs)
 
 
@@ -242,7 +245,7 @@ class DetourEitherSign(DetourSign):
     allowed_directions = {"left", "right"}
 
     def __init__(self, lane, **kwargs):
-        kwargs.setdefault("icon_path", "sign_4_2_3.png")
+        kwargs.setdefault("icon_path", "4.2.3.png")
         super().__init__(lane, **kwargs)
 
 

@@ -511,19 +511,19 @@ def run_single_episode(
                     _draw_pred_path_on_frame(
                         frame, pred_path_viz, RENDER_SCALING, SCREEN_SIZE,
                     )
-            # else:
-                # env.unwrapped.render(
-                #     mode="topdown",
-                #     text=text_dict,
-                #     screen_record=False,
-                #     film_size=(10000, 10000),
-                #     scaling=RENDER_SCALING,
-                #     screen_size=SCREEN_SIZE,
-                #     semantic_map=True,
-                #     semantic_broken_line=True,
-                #     draw_target_vehicle_trajectory=True,
-                #     target_agent_heading_up=True,
-                # )
+            else:
+                env.unwrapped.render(
+                    mode="topdown",
+                    text=text_dict,
+                    screen_record=False,
+                    film_size=(10000, 10000),
+                    scaling=RENDER_SCALING,
+                    screen_size=SCREEN_SIZE,
+                    semantic_map=True,
+                    semantic_broken_line=True,
+                    draw_target_vehicle_trajectory=True,
+                    target_agent_heading_up=True,
+                )
 
             if done:
                 print("Max step:    ", step)

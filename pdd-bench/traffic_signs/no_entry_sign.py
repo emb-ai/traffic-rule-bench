@@ -5,7 +5,7 @@ import numpy as np
 class NoEntrySign(BaseTrafficSign):
     
     def __init__(self, lane, zone_length=None, **kwargs):
-        super().__init__(lane, icon_path="no_entry_sign.jpg", **kwargs)
+        super().__init__(lane, icon_path="3.1.jpg", **kwargs)
         self._vehicle_states_local = {}
         self.sign_line_position = float(self.placement_long)
         

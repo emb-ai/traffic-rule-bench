@@ -10,7 +10,7 @@ class BusStationSign(BaseTrafficSign):
     def __init__(self, lane, zone_length=5.0, min_zero_speed_duration=0.01, zone_start=None, zone_end=None, **kwargs):
         kwargs.pop("zone_start", None)
         kwargs.pop("zone_end", None)
-        super().__init__(lane, icon_path="bus_station.png", **kwargs)
+        super().__init__(lane, icon_path="5.16.png", **kwargs)
         self.zone_length = float(zone_length)
         self.min_zero_speed_duration = float(min_zero_speed_duration)
         if zone_start is not None and zone_end is not None:
