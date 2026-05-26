@@ -3,7 +3,7 @@ from traffic_signs.base_traffic_sign import BaseTrafficSign, same_road_check
 class NoTrafficSign(BaseTrafficSign):
 
 
-    def __init__(self, lane, icon_path="no_traffic_sign.png", zone_length=None, **kwargs):
+    def __init__(self, lane, icon_path="3.2.png", zone_length=None, **kwargs):
         super().__init__(lane, icon_path=icon_path, **kwargs)
         self.sign_line_position = float(self.placement_long)
         

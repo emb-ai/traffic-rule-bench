@@ -13,7 +13,7 @@ class MainRoadSign(BaseTrafficSign):
     ):
         super().__init__(
             lane, 
-            icon_path="main_road.png", 
+            icon_path="2.1.png", 
             **kwargs
         )
         self.intersection_name = intersection_name
@@ -44,7 +44,7 @@ class EndMainRoadSign(BaseTrafficSign):
     ):
         super().__init__(
             lane, 
-            icon_path="end_main_road.png", 
+            icon_path="2.2.png", 
             **kwargs
         )
         self.intersection_name = intersection_name
@@ -80,9 +80,10 @@ class YieldSign(BaseTrafficSign):
         auto_detect_main_roads: bool = True,
         **kwargs,
     ):
+        icon_path = kwargs.pop("icon_path", "2.4.png")
         super().__init__(
             lane, 
-            icon_path="yield_sign.png", 
+            icon_path=icon_path,
             **kwargs
         )
         self.intersection_name = intersection_name
@@ -490,7 +491,7 @@ class SecondaryRoadSign(BaseTrafficSign):
     """Sign 2.3.1 – Intersection with a secondary road (X crossroad variant)."""
 
     def __init__(self, lane, intersection_name: str = None, **kwargs):
-        super().__init__(lane, icon_path="secondary_road.png", **kwargs)
+        super().__init__(lane, icon_path="2.3.1.png", **kwargs)
         self.intersection_name = intersection_name
         self.is_priority_sign = True
         self.priority_type = "secondary_road_ahead"
@@ -514,7 +515,7 @@ class SecondaryRoadLeftSign(BaseTrafficSign):
     """Sign 2.3.2 – Secondary road on the left (T crossroad variant)."""
 
     def __init__(self, lane, intersection_name: str = None, **kwargs):
-        super().__init__(lane, icon_path="secondary_road_left.png", **kwargs)
+        super().__init__(lane, icon_path="2.3.3.png", **kwargs)
         self.intersection_name = intersection_name
         self.is_priority_sign = True
         self.priority_type = "secondary_road_left"
@@ -538,7 +539,7 @@ class SecondaryRoadRightSign(BaseTrafficSign):
     """Sign 2.3.3 – Secondary road on the right (T crossroad variant)."""
 
     def __init__(self, lane, intersection_name: str = None, **kwargs):
-        super().__init__(lane, icon_path="secondary_road_right.png", **kwargs)
+        super().__init__(lane, icon_path="2.3.2.png", **kwargs)
         self.intersection_name = intersection_name
         self.is_priority_sign = True
         self.priority_type = "secondary_road_right"
@@ -566,12 +567,13 @@ class EndMainRoadSmartSign(YieldSign):
 
     def __init__(self, lane, intersection_name: str = None, debug_priority: bool = True, **kwargs):
         tl_speed_factor = kwargs.get("tl_speed_factor", 1.0)
+        icon_path = kwargs.pop("icon_path", "2.2.png")
         super().__init__(
             lane,
             intersection_name=intersection_name,
             main_road_lanes=None,
             debug_priority=debug_priority,
-            icon_path="end_main_road.png",
+            icon_path=icon_path,
             **kwargs,
         )
         self.priority_type = "end_main_smart"

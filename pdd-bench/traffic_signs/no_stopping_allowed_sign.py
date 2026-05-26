@@ -5,7 +5,7 @@ class NoStoppingAllowedSign(BaseTrafficSign):
     LENGTH = 0.15
     WIDTH = 0.8
     def __init__(self, lane, zone_length=None, **kwargs):
-        super().__init__(lane, icon_path="no_stopping_allowed.png", **kwargs)
+        super().__init__(lane, icon_path="3.27.png", **kwargs)
         if not zone_length:
             self.zone_length = self.lane.length - self.placement_long
         else:
