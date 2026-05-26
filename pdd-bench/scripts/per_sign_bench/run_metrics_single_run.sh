@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compute metrics for a single run produced by run_benchmark_mini.py.
+# Compute metrics for a single run produced by run_benchmark.py.
 #
 # Usage:
 #   bash run_metrics_single_run.sh \

@@ -88,7 +88,7 @@ def _extract_violations(m: dict) -> dict:
 
     Sources, in priority:
       1. metrics.violations_by_class.<bucket>     — 3-bucket per-step counter
-         {sign, traffic_light, crosswalk}. Always populated by run_benchmark_mini.
+         {sign, traffic_light, crosswalk}. Always populated by run_benchmark.
       2. metrics.<bucket>_violations              — older flat field name.
       3. metrics.total_violations                 — last-resort for `sign` only,
          so sign_compliance_sr reflects *some* violation signal.
@@ -96,7 +96,7 @@ def _extract_violations(m: dict) -> dict:
     NOTE: metrics.violations_by_class_step is intentionally NOT used. Despite
     the similar name, its keys are sign class-names (StopSign, TrafficLightSign,
     MainRoadSign, ...) — incompatible with this 3-bucket lookup. See
-    run_benchmark_mini.py:_violation_bucket for the bucket mapping.
+    run_benchmark.py:_violation_bucket for the bucket mapping.
 
     Per-episode binarization (>0 step-count → violated) is done in _agg.
     """

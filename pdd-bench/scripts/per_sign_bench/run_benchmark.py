@@ -975,7 +975,7 @@ def run_one_episode(
         crosswalk_violations = 0
         # Per-step per-class counter (NEW): {StopSign: 50, TrafficLightSign: 5}
         # — counts every step a sign of that class is violating. Combines
-        # run_benchmark_mini-style step granularity with expert_replay-style
+        # run_benchmark-style step granularity with expert_replay-style
         # per-class breakdown.
         violations_by_class_step: dict[str, int] = {}
         # Per-step in-zone tracking: how many steps ego was inside (or approaching
@@ -1257,7 +1257,7 @@ def run_one_episode(
                     "final_step": int(steps),
                     # Per-step counts (frames where any sign was violating)
                     "total_violations": int(violations),
-                    # 3-bucket per-step (run_benchmark_mini-style):
+                    # 3-bucket per-step (run_benchmark-style):
                     "violations_by_class": {
                         "sign": int(sign_violations),
                         "traffic_light": int(traffic_light_violations),
@@ -1367,7 +1367,7 @@ def run_one_episode(
             "distance_travelled_m": float(distance_travelled_m),
             "variant": ego_variant,
             "ego_params": sampled_ego_params,
-            # Per-class per-step counts (granular run_benchmark_mini-style)
+            # Per-class per-step counts (granular run_benchmark-style)
             "violations_by_class_step": dict(violations_by_class_step),
             # Edge-counted violations (expert_replay style)
             "violations_event_count": int(violations_event_count),
@@ -1420,7 +1420,7 @@ def aggregate_results(results: list[dict]) -> dict:
             for cls, cnt in (x.get("violations_by_class_event") or {}).items():
                 violations_by_class_event_total[cls] = (
                     violations_by_class_event_total.get(cls, 0) + int(cnt))
-        # Per-class per-step (run_benchmark_mini-style, granular).
+        # Per-class per-step (run_benchmark-style, granular).
         violations_by_class_step_total: dict[str, int] = {}
         for x in runs:
             for cls, cnt in (x.get("violations_by_class_step") or {}).items():

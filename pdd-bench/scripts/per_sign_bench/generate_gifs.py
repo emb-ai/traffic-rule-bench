@@ -2,7 +2,7 @@
 """
 Generate GIFs for sign 3.20 on pgmap:
 pick 10 scenes with distinct scene_id (and their seeds) from the manifest
-and call run_benchmark_mini.py with --save-gifs.
+and call run_benchmark.py with --save-gifs.
 
 python generate_gifs.py --num-scenes 10 --dry-run
 """
@@ -18,7 +18,7 @@ SIGN = "3.20"
 # Repo root (traffic-rule-bench/), overridable via REPO_ROOT env var
 REPO_ROOT = Path(os.environ.get("REPO_ROOT", Path(__file__).resolve().parents[3]))
 MANIFEST = REPO_ROOT / f"full_test_250_x10/{SIGN.replace('.', '_')}/pgmap_materialized.jsonl"
-RUN_BENCH = REPO_ROOT / "pdd-bench/scripts/per_sign_bench/run_benchmark_mini.py"
+RUN_BENCH = REPO_ROOT / "pdd-bench/scripts/per_sign_bench/run_benchmark.py"
 GIF_DIR = REPO_ROOT / f"pdd-bench/gifs/{SIGN}"
 
 
@@ -33,7 +33,7 @@ def iter_rows(path: Path):
 
 def main(num_scenes: int = 10, dry_run: bool = False) -> int:
     if not RUN_BENCH.is_file():
-        print(f"run_benchmark_mini.py not found at {RUN_BENCH}", file=sys.stderr)
+        print(f"run_benchmark.py not found at {RUN_BENCH}", file=sys.stderr)
         return 1
 
     GIF_DIR.mkdir(parents=True, exist_ok=True)
