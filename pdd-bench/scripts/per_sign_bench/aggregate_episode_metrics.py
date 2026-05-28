@@ -31,7 +31,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(SCRIPT_DIR / "expert_selection_exps"))
+sys.path.insert(0, str(SCRIPT_DIR))
 
 from select_experts import (  # noqa: E402
     BETA_DEFAULT,
@@ -313,7 +313,7 @@ def aggregate(rows: list[dict], beta: float = BETA_DEFAULT,
             continue
         sid = r["scene_id"]
         mm = scene_minmax.get(sid, [1, 1])
-        t = time_eff(r, mm[0], mm[1], formula="min_over_final")
+        t = time_eff(r, mm[0])  # min_over_final = scene_min_step / final_step
         c = float(r["comfort"])
         sum_te += t
         sum_f1 += f1_score(t, c, beta)

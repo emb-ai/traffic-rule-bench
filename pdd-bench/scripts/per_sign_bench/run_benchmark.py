@@ -48,9 +48,6 @@ from stable_baselines3 import PPO
 from agents.policies.comprehensive_rule_expert import ComprehensiveRuleExpertPolicy
 from agents.policies.rule_compliant_expert import RuleCompliantExpertPolicy
 
-from metadrive_core.bev_cnn import CustomBEVCNN as CustomBEVCNN_5ch
-from metadrive_core.observation_wrappers import AddStateObservationWrapper as AddStateObservationWrapper_5ch
-from metadrive_core.ppo_w_o_stop_sign.wrappers import EnsureSuccessInfoWrapper
 from factorized_space.ego_defaults import apply_ego_defaults, apply_ego_sampled, sample_ego_params
 
 
@@ -433,16 +430,6 @@ def _resolve_sign_spawn_distance(row: dict, scenes_root: Path) -> float:
 
 
 def _wrap_for_policy(env, policy_type: str):
-    if policy_type == "ppo_5ch":
-        wrapped = AddStateObservationWrapper_5ch(
-            env,
-            debug=False,
-            add_stop_signs=False,
-            stop_sign_probability=0.0,
-            stop_sign_min_lane_length=15.0,
-        )
-        wrapped = EnsureSuccessInfoWrapper(wrapped)
-        return wrapped
     return env
 
 def _format_violation(sign, vehicle):
@@ -790,23 +777,12 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
     """Load model checkpoints and resolve the BasePolicy class to instantiate.
 
     Returns dict with:
-      "policy_cls":   BasePolicy subclass (or None for ppo_5ch which uses
-                      direct sb3 invocation); set as agent_policy in env config
+      "policy_cls":   BasePolicy subclass; set as agent_policy in env config
                       OR instantiated manually for IDM-family.
-      "ppo_model":    sb3 PPO instance (only for ppo_5ch, legacy direct path).
     """
-    ppo_model = None
     policy_cls = None
 
-    if policy == "ppo_5ch":
-        if not model_path:
-            raise ValueError("--model-path is required for --policy ppo_5ch")
-        ppo_model = PPO.load(
-            model_path,
-            device="cpu",
-            custom_objects={"policy_kwargs": dict(features_extractor_class=CustomBEVCNN_5ch)},
-        )
-    elif policy == "carl":
+    if policy == "carl":
         if not model_path:
             raise ValueError("--model-path is required for --policy carl")
         CARL_ADAPTER_PATH = SDC_ROOT / "carl_in_metadrive"
@@ -854,7 +830,6 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
         policy_cls = PlanT2SignCompliantPolicy
 
     return {
-        "ppo_model": ppo_model,
         "policy_cls": policy_cls,
     }
 
@@ -895,9 +870,9 @@ def run_one_episode(
     env = _wrap_for_policy(env, policy_type)
 
     # Resolve the BasePolicy class to instantiate on the ego vehicle. All policies
-    # except ppo_5ch (which uses sb3's own .predict on observations) implement the
-    # uniform BasePolicy.act(name) interface — including PlainCarl/PlainPlanT2 (raw
-    # NN) and CarlSignCompliantPolicy/PlanT2SignCompliantPolicy (NN + rule overlay).
+    # implement the uniform BasePolicy.act(name) interface — including
+    # PlainCarl/PlainPlanT2 (raw NN) and CarlSignCompliantPolicy/PlanT2SignCompliantPolicy
+    # (NN + rule overlay).
     policy_cls = None
     if policy_type == "idm":
         policy_cls = IDMPolicy
@@ -924,14 +899,6 @@ def run_one_episode(
             env_seed = seed
         obs, info = env.reset(seed=env_seed)
         base_env = _unwrap_base_env(env)
-        # Override engine.np_random with row.seed (NOT env_seed). MetaDrive's
-        # env.reset(seed=env_seed) only accepts seed < num_scenarios (100000 for
-        # SUMO), so env_seed is a truncated hash of (sign_id + var_idx). After
-        # reset we replace engine.np_random with a RandomState(row.seed) so NPC
-        # traffic / spawn / scenario randomness shares the same seed as the rest
-        # of the per-episode RNGs (np.random/random/torch — all seeded with seed
-        # at line 811). This guarantees the "surrounding traffic" the user
-        # specified via row.seed is reproducible across processes.
         try:
             if hasattr(base_env, "engine") and hasattr(base_env.engine, "np_random"):
                 base_env.engine.np_random = np.random.RandomState(seed)
@@ -1020,9 +987,7 @@ def run_one_episode(
         last_info: dict = {}
 
         for step in range(max_steps):
-            if policy_type == "ppo_5ch":
-                action, _ = models["ppo_model"].predict(obs, deterministic=True)
-            elif policy_obj is not None:
+            if policy_obj is not None:
                 action = policy_obj.act(base_env.vehicle.name)
             else:
                 action = [0.0, 0.0]
@@ -1522,11 +1487,11 @@ def main():
     parser = argparse.ArgumentParser(description="Run policies on per_sign_bench full manifests")
     parser.add_argument("--policy", required=True,
                         choices=["idm", "modified_idm", "comprehensive_rule_expert",
-                                 "rule_compliant", "ppo_5ch", "ppo_lidar",
+                                 "rule_compliant", "ppo_lidar",
                                  "carl", "carl_rule",
                                  "plant2", "plant2_rule"])
     parser.add_argument("--model-path", type=str, default=None,
-                        help="Required for ppo_5ch/carl/plant2")
+                        help="Required for carl/plant2")
     parser.add_argument("--run-name", type=str, required=True)
     parser.add_argument("--preset", type=str, default="full", choices=["full", "full_last"])
     parser.add_argument("--benchmark-output", type=str, default="benchmark_output",
