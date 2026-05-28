@@ -164,7 +164,8 @@ def build_records(rows: list[dict], signs: list[str] | None,
 
         target_viol = int((row.get("violations_by_class") or {})
                           .get(target_class, 0) or 0)
-        passed = passes_filter(row, sign, target_class, horizon)
+        # min_final_step=0: anti-bug filter is for expert_selection, NOT metric compute.
+        passed = passes_filter(row, sign, target_class, horizon, min_final_step=0)
         records.append({
             "row": row,
             "sign": sign,

@@ -68,7 +68,8 @@ NO_ENTRY_SIGNS = {"3.1", "3.2", "3.18.1", "3.18.2", "3.19"}
 HORIZON_DEFAULT = 600
 BETA_DEFAULT = 0.25
 NON_IDM_POLICIES = {"rule_compliant", "carl", "plant2"}
-
+MIN_FINAL_STEP = 30
+MIN_ROUTE_COMPLETION = 0.0
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -121,13 +122,25 @@ def recompute_dest(r, target_sign, target_class, horizon=HORIZON_DEFAULT):
     return arr_prev
 
 
-def passes_filter(r, target_sign, target_class, horizon=HORIZON_DEFAULT):
+def passes_filter(r, target_sign, target_class, horizon=HORIZON_DEFAULT,
+                  min_final_step=MIN_FINAL_STEP,
+                  min_route_completion=MIN_ROUTE_COMPLETION):
     if not r.get("valid"):
         return False
     if r.get("crashed") or r.get("out_of_road"):
         return False
     if not is_compliant(r, target_class):
         return False
+    # Anti-bug for min_step_episodes; use for expert_selection not metric compute
+    # (metric compute passes min_final_step=0 to disable)
+    if min_final_step > 0:
+        fs = int(r.get("final_step") or 0)
+        if fs < min_final_step:
+            return False
+    # route_completion soft-success (off by default, min_route_completion=0.0)
+    if min_route_completion > 0.0:
+        if float(r.get("route_completion") or 0.0) >= min_route_completion:
+            return True
     return recompute_dest(r, target_sign, target_class, horizon)
 
 
@@ -143,22 +156,44 @@ def comfort(r):
     return float(r.get("frame_smooth_ratio") or 0.0)
 
 
-def pick_best_idm(idm_eps):
+def pick_best_idm(idm_eps, scene_min_step, beta=BETA_DEFAULT, strategy="f1"):
+    """Pre-select the best comprehensive IDM variant.
+
+    strategy:
+      'f1'    (default) — by F1(time_eff, comfort); ties prefer 'default', then faster.
+      'speed' (legacy)  — by min(final_step).
+    """
     if not idm_eps:
         return None, None
-    default = next((r for r in idm_eps if r.get("variant") == "default"), None)
-    samples = [r for r in idm_eps if r.get("variant") != "default"]
-    if default is None:
+
+    if strategy == "speed":
+        default = next((r for r in idm_eps if r.get("variant") == "default"), None)
+        samples = [r for r in idm_eps if r.get("variant") != "default"]
+        if default is None:
+            if not samples:
+                return None, None
+            winner = min(samples, key=lambda r: int(r.get("final_step") or 10**9))
+            return winner, winner.get("variant")
         if not samples:
-            return None, None
-        winner = min(samples, key=lambda r: int(r.get("final_step") or 10**9))
-        return winner, winner.get("variant")
-    if not samples:
+            return default, "default"
+        best_sample = min(samples, key=lambda r: int(r.get("final_step") or 10**9))
+        if int(best_sample.get("final_step") or 10**9) < int(default.get("final_step") or 10**9):
+            return best_sample, best_sample.get("variant")
         return default, "default"
-    best_sample = min(samples, key=lambda r: int(r.get("final_step") or 10**9))
-    if int(best_sample.get("final_step") or 10**9) < int(default.get("final_step") or 10**9):
-        return best_sample, best_sample.get("variant")
-    return default, "default"
+
+    # F1-strategy (default)
+    scored = []
+    for r in idm_eps:
+        t = time_eff(r, scene_min_step)
+        c = comfort(r)
+        scored.append((f1_score(t, c, beta), r))
+    scored.sort(key=lambda x: (
+        -x[0],
+        0 if x[1].get("variant") == "default" else 1,
+        int(x[1].get("final_step") or 10**9),
+    ))
+    winner = scored[0][1]
+    return winner, winner.get("variant")
 
 
 def f1_score(t, c, beta=BETA_DEFAULT):
@@ -173,8 +208,16 @@ def f1_score(t, c, beta=BETA_DEFAULT):
 # ---------------------------------------------------------------------------
 def select_expert_per_scene(rows, signs, beta=BETA_DEFAULT,
                               horizon=HORIZON_DEFAULT,
-                              max_per_sign=None):
-
+                              max_per_sign=None,
+                              min_route_completion=MIN_ROUTE_COMPLETION,
+                              min_final_step=MIN_FINAL_STEP,
+                              idm_pick_strategy="f1",
+                              top_n=1):
+    """Returns (picks, scene_groups, filter_records).
+      picks          — list[dict] (top_n per scene, ranked 1..top_n)
+      scene_groups   — dict[(sign,scene)] -> all valid rows
+      filter_records — dict[(sign,scene)] -> list[(row, passes_bool)]
+    """
     sign_set = set(normalize_sign(s) for s in signs)
     scene_groups = defaultdict(list)
     filter_records = defaultdict(list)
@@ -185,25 +228,31 @@ def select_expert_per_scene(rows, signs, beta=BETA_DEFAULT,
         sign = normalize_sign(r.get("sign_code") or r.get("sign_slug"))
         if sign not in sign_set:
             continue
-         scene_key = r.get("scene_uid") or r.get("scene_id")
+        scene_key = r.get("scene_uid") or r.get("scene_id")
         if not scene_key:
             continue
         target_class = SIGN_CLASS_MAP.get(sign)
         if target_class is None:
             continue
         scene_groups[(sign, scene_key)].append(r)
-        ok = passes_filter(r, sign, target_class, horizon)
+        ok = passes_filter(r, sign, target_class, horizon,
+                           min_final_step, min_route_completion)
         filter_records[(sign, scene_key)].append((r, ok))
 
     picks = []
     for (sign, scene_key), eps in scene_groups.items():
         target_class = SIGN_CLASS_MAP[sign]
-        passing = [r for r in eps if passes_filter(r, sign, target_class, horizon)]
+        passing = [r for r in eps
+                   if passes_filter(r, sign, target_class, horizon,
+                                    min_final_step, min_route_completion)]
         if not passing:
             continue
 
         idm_eps = [r for r in passing if r.get("policy") == "comprehensive"]
-        best_idm, best_idm_variant = pick_best_idm(idm_eps)
+        best_idm, best_idm_variant = pick_best_idm(
+            idm_eps,
+            max(1, min(int(r.get("final_step") or 10**9) for r in passing)),
+            beta=beta, strategy=idm_pick_strategy)
 
         candidates = []
         if best_idm is not None:
@@ -223,51 +272,63 @@ def select_expert_per_scene(rows, signs, beta=BETA_DEFAULT,
             c = comfort(r)
             scored.append((f1_score(t, c, beta), r, t, c))
         scored.sort(key=lambda x: -x[0])
-        win_score, winner, win_t, win_c = scored[0]
 
-        picks.append({
-            "sign": sign,
-            "scene_id": winner.get("scene_id"),
-            "scene_uid": winner.get("scene_uid") or scene_key,
-            "scene_key": scene_key,
-            "winner_policy": winner.get("policy"),
-            "winner_variant": winner.get("variant"),
-            "best_idm_variant": best_idm_variant,
-            "final_step": int(winner.get("final_step") or 0),
-            "time_eff": round(win_t, 6),
-            "comfort": round(win_c, 6),
-            "f1_score": round(win_score, 6),
-            "beta": beta,
-            "horizon": horizon,
-            "scene_min_step": scene_min_step,
-            "passing_candidates_n": len(candidates),
-            "all_passing_n": len(passing),
-            "all_attempts_n": len(eps),
-            "pkl_path": winner.get("pkl_path"),
-            "gif_path": winner.get("gif_path"),
-            "sidecar_path": winner.get("sidecar_path"),
-            "initial_speed_mps": float(winner.get("initial_speed_mps") or 0.0),
-            "all_candidates": [
-                {
-                    "policy": r.get("policy"),
-                    "variant": r.get("variant"),
-                    "final_step": int(r.get("final_step") or 0),
-                    "time_eff": round(t, 4),
-                    "comfort": round(c, 4),
-                    "f1": round(s, 4),
-                }
-                for s, r, t, c in scored
-            ],
-        })
+        n_emit = min(top_n, len(scored))
+        for rank in range(1, n_emit + 1):
+            win_score, winner, win_t, win_c = scored[rank - 1]
+            picks.append({
+                "sign": sign,
+                "scene_id": winner.get("scene_id"),
+                "scene_uid": winner.get("scene_uid") or scene_key,
+                "scene_key": scene_key,
+                "rank": rank,
+                "n_emitted_per_scene": n_emit,
+                "winner_policy": winner.get("policy"),
+                "winner_variant": winner.get("variant"),
+                "best_idm_variant": best_idm_variant,
+                "final_step": int(winner.get("final_step") or 0),
+                "route_completion": float(winner.get("route_completion") or 0.0),
+                "time_eff": round(win_t, 6),
+                "comfort": round(win_c, 6),
+                "f1_score": round(win_score, 6),
+                "beta": beta,
+                "horizon": horizon,
+                "scene_min_step": scene_min_step,
+                "passing_candidates_n": len(candidates),
+                "all_passing_n": len(passing),
+                "all_attempts_n": len(eps),
+                "pkl_path": winner.get("pkl_path"),
+                "gif_path": winner.get("gif_path"),
+                "sidecar_path": winner.get("sidecar_path"),
+                "initial_speed_mps": float(winner.get("initial_speed_mps") or 0.0),
+                "all_candidates": [
+                    {
+                        "policy": r.get("policy"),
+                        "variant": r.get("variant"),
+                        "final_step": int(r.get("final_step") or 0),
+                        "time_eff": round(t, 4),
+                        "comfort": round(c, 4),
+                        "f1": round(s, 4),
+                    }
+                    for s, r, t, c in scored
+                ],
+            })
 
     if max_per_sign is not None:
-        by_sign = defaultdict(list)
+        by_sign = defaultdict(lambda: defaultdict(list))
         for p in picks:
-            by_sign[p["sign"]].append(p)
+            by_sign[p["sign"]][p["scene_key"]].append(p)
         limited = []
-        for sign, items in by_sign.items():
-            items.sort(key=lambda x: (-x["f1_score"], x["scene_id"]))
-            limited.extend(items[:max_per_sign])
+        for sign, scenes in by_sign.items():
+            scene_keys_sorted = sorted(
+                scenes.keys(),
+                key=lambda k: (
+                    -max(p["f1_score"] for p in scenes[k] if p["rank"] == 1),
+                    k,
+                ),
+            )
+            for sk in scene_keys_sorted[:max_per_sign]:
+                limited.extend(sorted(scenes[sk], key=lambda p: p["rank"]))
         picks = limited
 
     return picks, scene_groups, filter_records
@@ -368,6 +429,87 @@ def print_summary(picks, scene_groups, filter_records, signs, beta, horizon):
 
 
 # ---------------------------------------------------------------------------
+# Self-tests
+# ---------------------------------------------------------------------------
+def run_self_tests():
+    print("=== Self-tests ===")
+
+    # f1_score
+    assert abs(f1_score(1.0, 1.0, 1.0) - 1.0) < 1e-9
+    assert f1_score(1.0, 0.0, 0.25) == 0.0
+    assert f1_score(0.0, 1.0, 0.25) == 0.0
+    assert abs(f1_score(0.5, 0.5, 1.0) - 0.5) < 1e-9
+    assert f1_score(1.0, 0.5, 0.25) > f1_score(0.5, 1.0, 0.25)
+    print("  f1_score:        ok")
+
+    # time_eff (relative): scene_min_step / final_step
+    assert time_eff({"final_step": 100}, 100) == 1.0   # fastest
+    assert time_eff({"final_step": 200}, 100) == 0.5   # 2x slower
+    assert time_eff({"final_step": 1}, 1) == 1.0
+    print("  time_eff:        ok")
+
+    # recompute_dest: NO_ENTRY+compliant -> True; else arrived_dest.
+    # NOTE: final_step == horizon is NOT counted as success (by design).
+    r = {"arrived_dest": False, "violations_by_class": {"NoEntrySign": 0}}
+    assert recompute_dest(r, "3.1", "NoEntrySign", horizon=600) is True
+    r = {"arrived_dest": False, "violations_by_class": {"NoEntrySign": 1}}
+    assert recompute_dest(r, "3.1", "NoEntrySign", horizon=600) is False
+    r = {"arrived_dest": True, "violations_by_class": {}}
+    assert recompute_dest(r, "2.5", "StopSign", horizon=600) is True
+    r = {"arrived_dest": False, "final_step": 600, "violations_by_class": {}}
+    assert recompute_dest(r, "2.5", "StopSign", horizon=600) is False  # horizon != success
+    print("  recompute_dest:  ok")
+
+    # passes_filter
+    base = {"valid": True, "crashed": False, "out_of_road": False,
+            "violations_by_class": {"StopSign": 0}, "arrived_dest": True,
+            "final_step": 100}
+    assert passes_filter(dict(base), "2.5", "StopSign", horizon=600) is True
+    bad = dict(base); bad["violations_by_class"] = {"StopSign": 1}
+    assert passes_filter(bad, "2.5", "StopSign", horizon=600) is False
+    midrun = dict(base); midrun["arrived_dest"] = False; midrun["final_step"] = 100
+    assert passes_filter(midrun, "2.5", "StopSign", horizon=600) is False
+    # horizon is NOT success here either
+    hz = dict(base); hz["arrived_dest"] = False; hz["final_step"] = 600
+    assert passes_filter(hz, "2.5", "StopSign", horizon=600) is False
+    # anti-bug: short episode rejected when min_final_step>0
+    short = dict(base); short["final_step"] = 5
+    assert passes_filter(short, "2.5", "StopSign", horizon=600, min_final_step=30) is False
+    assert passes_filter(short, "2.5", "StopSign", horizon=600, min_final_step=0) is True
+    # route_completion soft-success (opt-in)
+    rc = {"valid": True, "crashed": False, "out_of_road": False,
+          "violations_by_class": {"StopSign": 0}, "arrived_dest": False,
+          "final_step": 100, "route_completion": 0.9}
+    assert passes_filter(rc, "2.5", "StopSign", horizon=600,
+                         min_final_step=0, min_route_completion=0.8) is True
+    assert passes_filter(rc, "2.5", "StopSign", horizon=600,
+                         min_final_step=0, min_route_completion=0.0) is False
+    print("  passes_filter:   ok")
+
+    # pick_best_idm — speed strategy (deterministic by min final_step)
+    eps = [{"variant": "default", "final_step": 100},
+           {"variant": "s1", "final_step": 80}]
+    _, v = pick_best_idm(eps, scene_min_step=80, strategy="speed")
+    assert v == "s1", f"expected s1 (faster), got {v}"
+    eps = [{"variant": "default", "final_step": 80},
+           {"variant": "s1", "final_step": 100}]
+    _, v = pick_best_idm(eps, scene_min_step=80, strategy="speed")
+    assert v == "default", f"expected default (faster), got {v}"
+    eps = [{"variant": "default", "final_step": 80},
+           {"variant": "s1", "final_step": 80}]
+    _, v = pick_best_idm(eps, scene_min_step=80, strategy="speed")
+    assert v == "default", "default wins ties"
+    # f1 strategy — default ties broken toward 'default'
+    eps = [{"variant": "default", "final_step": 100, "frame_smooth_ratio": 1.0},
+           {"variant": "s1", "final_step": 100, "frame_smooth_ratio": 1.0}]
+    _, v = pick_best_idm(eps, scene_min_step=100, strategy="f1")
+    assert v == "default", f"f1 ties should prefer default, got {v}"
+    print("  pick_best_idm:   ok")
+
+    print("All self-tests passed.")
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def main():
@@ -391,6 +533,17 @@ def main():
     p.add_argument("--max-per-sign", type=int, default=None,
                    help="keep only the top-N scenes per sign "
                         "(by f1_score; default: no limit)")
+    p.add_argument("--idm-pick", type=str, default="f1", choices=["f1", "speed"],
+                   help="IDM pre-selection strategy: 'f1' (default, by F1) or "
+                        "'speed' (legacy, by min final_step)")
+    p.add_argument("--top-n", type=int, default=1,
+                   help="emit top-N experts per scene (ranked 1..N; default: 1)")
+    p.add_argument("--min-final-step", type=int, default=MIN_FINAL_STEP,
+                   help=f"anti-bug: drop episodes shorter than this (default={MIN_FINAL_STEP}; "
+                        "set 0 to disable, e.g. for raw metric compute)")
+    p.add_argument("--min-route-completion", type=float, default=MIN_ROUTE_COMPLETION,
+                   help=f"soft-success if route_completion >= this "
+                        f"(default={MIN_ROUTE_COMPLETION}=off)")
     p.add_argument("--self-test", action="store_true",
                    help="run formula sanity checks and exit")
     args = p.parse_args()
@@ -415,7 +568,11 @@ def main():
 
     picks, scene_groups, filter_records = select_expert_per_scene(
         rows, args.signs, args.beta, args.horizon,
-        max_per_sign=args.max_per_sign)
+        max_per_sign=args.max_per_sign,
+        min_route_completion=args.min_route_completion,
+        min_final_step=args.min_final_step,
+        idm_pick_strategy=args.idm_pick,
+        top_n=args.top_n)
 
     out_path = Path(args.output)
     with open(out_path, "w") as f:

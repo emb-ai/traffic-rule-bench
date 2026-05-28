@@ -1,6 +1,6 @@
 """Plain PlanT2 policy — raw PlanT2 transformer without sign-compliance overlay.
 
-Used by `--policy plant2` in run_benchmark_mini.py to evaluate the bare
+Used by `--policy plant2` in run_benchmark.py to evaluate the bare
 PlanT2 network. For the sign-compliant variant (`--policy plant2_rule`),
 see `plant2_sign_compliant.PlanT2SignCompliantPolicy` (this is its parent).
 """

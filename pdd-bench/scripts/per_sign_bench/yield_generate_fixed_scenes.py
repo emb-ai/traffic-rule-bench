@@ -650,7 +650,7 @@ def render_gifs_from_manifest(
         (rendered_count, failed_count)
     """
     if not RUN_BENCH_SCRIPT.is_file():
-        print(f"[GIF] run_benchmark_mini.py not found at {RUN_BENCH_SCRIPT}", file=sys.stderr)
+        print(f"[GIF] yield_run_benchmark_mini.py not found at {RUN_BENCH_SCRIPT}", file=sys.stderr)
         return 0, 1
     
     if not manifest_path.is_file():
@@ -813,7 +813,7 @@ Sign placement coordinates:
     # GIF rendering options
     parser.add_argument(
         "--save-gifs", action="store_true",
-        help="Render and save GIFs for generated scenes via run_benchmark_mini.py"
+        help="Render and save GIFs for generated scenes via yield_run_benchmark_mini.py"
     )
     parser.add_argument(
         "--gif-dir", type=str, default=None,

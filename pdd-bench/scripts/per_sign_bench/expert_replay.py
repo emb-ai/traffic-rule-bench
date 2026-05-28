@@ -1199,9 +1199,7 @@ def run_batch_multi_variant(
     valid_count = 0
     skipped_existing = 0
 
-    # Resume mode: skip episodes whose pkl + sidecar are already on disk and
-    # non-empty. Activated via env var PDD_BENCH_RESUME=1 (set by callers like
-    # run_all_experts_parallel.sh after a tmux/nohup kill).
+    # Resume mode    
     resume_mode = os.environ.get("PDD_BENCH_RESUME", "0") == "1"
     if resume_mode:
         print(f"[resume] PDD_BENCH_RESUME=1 — skipping already-recorded episodes",
@@ -1467,28 +1465,6 @@ def main():
         print("Need --manifest or --code", file=sys.stderr)
         sys.exit(1)
 
-    if args.policy is None:
-        # Legacy single-policy (comprehensive) batch — preserves the old layout
-        # (output_dir/replays/, output_dir/expert_replays.jsonl, etc.) so existing
-        # callers like run_expert_5xx.sh keep working bit-for-bit.
-        if args.output_dir:
-            output_dir = Path(args.output_dir)
-        elif args.code:
-            code_dir = _resolve_code_dir(args.code, args.preset)
-            output_dir = code_dir / "expert"
-        else:
-            output_dir = manifest_path.parent / "expert"
-
-        print(f"Manifest: {manifest_path}")
-        print(f"Backend:  {backend}")
-        print(f"Output:   {output_dir}")
-        run_batch(manifest_path, backend, output_dir,
-                  count=args.count, start=args.start,
-                  max_steps=args.max_steps, save_gifs=args.save_gifs,
-                  sample_ego_velocity=args.sample_ego_spawn_velocity)
-        return
-
-    # New multi-variant mode: --policy was specified.
     if args.policy == "carl":
         if not args.carl_model_path:
             print("ERROR: --policy carl requires --carl-model-path <checkpoint>",
