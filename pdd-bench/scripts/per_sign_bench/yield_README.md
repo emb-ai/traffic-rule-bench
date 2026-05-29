@@ -14,10 +14,8 @@ python yield_prepare_metrics.py \
 3. Metrics computation
 ```
 python yield_aggregate_metrics.py \
-    --runs-dir benchmark_output/fixed/2_4 \
-    --out-md benchmark_output/fixed/2_4/report_cumulative.md
+    --runs-dir benchmark_output/fixed/2_4/2026-05-28_17-37-38 \
+    --out-md benchmark_output/fixed/2_4/2026-05-28_17-37-38/report_cumulative.md
 
-bash yield_run_metrics.sh \
-    --runs-dir benchmark_output/fixed/2_4  \
-    --out-dir benchmark_output/fixed/2_4/reports
+bash yield_run_metrics.sh --runs-dir benchmark_output/fixed/2_4/2026-05-28_17-37-38 --out-dir benchmark_output/fixed/2_4/2026-05-28_17-37-38/reports
 ```
