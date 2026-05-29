@@ -230,7 +230,7 @@ def _place_pgmap_sign(env: TrafficSignEnv, row: dict, seed: int) -> bool:
         _pick_route_lane,
         _spawn_cyclists_on_lane,
     )
-    from scripts.per_sign_bench.yield_sign.generate_syntetic_scenes import _pick_route_lane as _pick_priority_lane
+    from scripts.per_sign_bench.yield_sign.generate_synthetic_scenes import _pick_route_lane as _pick_priority_lane
     from scripts.per_sign_bench.factorized_space.space_definition import BIKE_RELATED_SIGNS
     from traffic_signs.detour_obstacle import spawn_detour_obstacle
 

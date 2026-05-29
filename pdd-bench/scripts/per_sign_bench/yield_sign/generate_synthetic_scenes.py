@@ -8,9 +8,9 @@ This script generates deterministic PG maps scenes with:
 - Output to benchmark_output/fixed/2_4 directory
 
 Usage:
-    python yield_sign/generate_syntetic_scenes.py --n-scenes 10
-    python yield_sign/generate_syntetic_scenes.py --dry-run
-    python yield_sign/generate_syntetic_scenes.py --n-scenes 5 --save-gifs
+    python yield_sign/generate_synthetic_scenes.py --n-scenes 10
+    python yield_sign/generate_synthetic_scenes.py --dry-run
+    python yield_sign/generate_synthetic_scenes.py --n-scenes 5 --save-gifs
 """
 
 from __future__ import annotations
