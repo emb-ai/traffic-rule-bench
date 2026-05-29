@@ -33,6 +33,7 @@ pdd-bench/data/
 
 ### Checkpoints
 pdd-bench/checkpoints/
+pdd-bench/scenes/
 
 ### pdd-bench runtime outputs (top-level)
 pdd-bench/database_signs
