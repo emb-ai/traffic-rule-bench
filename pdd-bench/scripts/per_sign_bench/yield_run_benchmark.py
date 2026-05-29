@@ -23,12 +23,12 @@ def _find_pdd_bench_root(start: Path) -> Path:
 
 SCRIPT_PATH = Path(__file__).resolve()
 BENCH_DIR = SCRIPT_PATH.parent
-SCRIPTS_DIR = BENCH_DIR.parent
+PER_SIGN_BENCH_DIR = BENCH_DIR.parent
 PDD_BENCH_DIR = _find_pdd_bench_root(SCRIPT_PATH)
 SDC_ROOT = PDD_BENCH_DIR.parent
 METADRIVE_DIR = SDC_ROOT / "metadrive"
 
-for p in (PDD_BENCH_DIR, METADRIVE_DIR, BENCH_DIR):
+for p in (PDD_BENCH_DIR, METADRIVE_DIR, PER_SIGN_BENCH_DIR, BENCH_DIR):
     ps = str(p)
     if ps not in sys.path:
         sys.path.insert(0, ps)
@@ -51,13 +51,8 @@ from agents.policies.rule_compliant_expert import RuleCompliantExpertPolicy
 from factorized_space.ego_defaults import apply_ego_defaults, apply_ego_sampled, sample_ego_params
 
 # Import main road traffic manager for yield sign scenarios
-try:
-    from yield_main_road_traffic import add_main_road_traffic
-    _MAIN_ROAD_TRAFFIC_AVAILABLE = True
-    print("[Import] yield_main_road_traffic module loaded successfully")
-except ImportError as e:
-    _MAIN_ROAD_TRAFFIC_AVAILABLE = False
-    print(f"[Import] yield_main_road_traffic module NOT available: {e}")
+from yield_main_road_traffic import add_main_road_traffic
+_MAIN_ROAD_TRAFFIC_AVAILABLE = True
 
 
 _SUMO_SIGN_DISTANCE_CACHE: dict[Path, float] = {}
@@ -1708,8 +1703,8 @@ def main():
         raise ValueError(f"Benchmark output not found: {benchmark_output_dir}")
 
     scenes_root = Path(args.scenes_root).resolve()
-    if not scenes_root.exists():
-        raise ValueError(f"Scenes root not found: {scenes_root}")
+    # if not scenes_root.exists():
+    #     raise ValueError(f"Scenes root not found: {scenes_root}")
 
     backends = [b.strip() for b in args.backends.split(",") if b.strip()]
     allowed = {"sumo", "pgmap", "paired", "citymap"}

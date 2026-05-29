@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Aggregate yield-benchmark metrics from replay sidecars under a runs directory."""
 
 from __future__ import annotations
 

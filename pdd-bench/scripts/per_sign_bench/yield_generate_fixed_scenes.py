@@ -7,8 +7,6 @@ This script generates deterministic scenes with:
 - Controlled yield sign placement with detailed logging
 - Output to benchmark_output/fixed/2_4 directory
 
-Self-contained: no external space_definition.py dependency.
-
 Usage:
     python yield_generate_fixed_scenes.py --n-scenes 10
     python yield_generate_fixed_scenes.py --dry-run
@@ -47,7 +45,7 @@ METADRIVE_DIR = SDC_ROOT / "metadrive"
 DEFAULT_OUTPUT_BASE_DIR = (
     SDC_ROOT / "pdd-bench/scripts/per_sign_bench/benchmark_output/fixed/2_4"
 )
-RUN_BENCH_SCRIPT = BENCHMARK_DIR / "yield_run_benchmark_mini.py"
+RUN_BENCH_SCRIPT = BENCHMARK_DIR / "yield_run_benchmark.py"
 
 for _p in (PDD_BENCH_DIR, METADRIVE_DIR, BENCHMARK_DIR):
     _ps = str(_p)

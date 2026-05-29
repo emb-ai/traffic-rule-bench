@@ -17,11 +17,12 @@ SCRIPT_PATH = Path(__file__).resolve()
 BENCHMARK_DIR = SCRIPT_PATH.parent.parent
 SCRIPTS_DIR = BENCHMARK_DIR.parent
 PDD_BENCH_DIR = SCRIPTS_DIR.parent
-SDC_ROOT = PDD_BENCH_DIR.parent
-REPO_ROOT = SDC_ROOT.parent
-NUPLAN_STATS_DIR = str(REPO_ROOT / "nuplan_statistics")
+SDC_ROOT = PDD_BENCH_DIR.parent  # traffic-rule-bench
+REPO_ROOT = SDC_ROOT
+NUPLAN_DIR = SDC_ROOT / "nuPlan"
+NUPLAN_STATS_DIR = str(NUPLAN_DIR / "nuplan_statistics")
 
-for _p in (PDD_BENCH_DIR, REPO_ROOT):
+for _p in (PDD_BENCH_DIR, REPO_ROOT, NUPLAN_DIR):
     _ps = str(_p)
     if _ps not in sys.path:
         sys.path.insert(0, _ps)
