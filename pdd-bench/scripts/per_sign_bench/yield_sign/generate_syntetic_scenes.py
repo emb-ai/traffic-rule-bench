@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Fixed scene generator for sign 2.4 (Yield).
+Fixed PG maps scene generator for sign 2.4 (Yield).
 
-This script generates deterministic scenes with:
+This script generates deterministic PG maps scenes with:
 - Zero traffic density (no NPC vehicles)
 - Controlled yield sign placement with detailed logging
 - Output to benchmark_output/fixed/2_4 directory
 
 Usage:
-    python yield_generate_fixed_scenes.py --n-scenes 10
-    python yield_generate_fixed_scenes.py --dry-run
-    python yield_generate_fixed_scenes.py --n-scenes 5 --save-gifs
+    python yield_sign/generate_syntetic_scenes.py --n-scenes 10
+    python yield_sign/generate_syntetic_scenes.py --dry-run
+    python yield_sign/generate_syntetic_scenes.py --n-scenes 5 --save-gifs
 """
 
 from __future__ import annotations
@@ -31,27 +31,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 
-# =============================================================================
-# Path Configuration
-# =============================================================================
-
-SCRIPT_PATH = Path(__file__).resolve()
-BENCHMARK_DIR = SCRIPT_PATH.parent
-SCRIPTS_DIR = BENCHMARK_DIR.parent
-PDD_BENCH_DIR = SCRIPTS_DIR.parent
-SDC_ROOT = PDD_BENCH_DIR.parent
-METADRIVE_DIR = SDC_ROOT / "metadrive"
-
-DEFAULT_OUTPUT_BASE_DIR = (
-    SDC_ROOT / "pdd-bench/scripts/per_sign_bench/benchmark_output/fixed/2_4"
-)
-RUN_BENCH_SCRIPT = BENCHMARK_DIR / "yield_run_benchmark.py"
-
-for _p in (PDD_BENCH_DIR, METADRIVE_DIR, BENCHMARK_DIR):
-    _ps = str(_p)
-    if _ps not in sys.path:
-        sys.path.insert(0, _ps)
-
+RUN_BENCH_SCRIPT = Path(__file__).parent / "run_benchmark.py"
 
 # =============================================================================
 # Road Topology Definitions (Yield Sign Compatible)
@@ -647,6 +627,9 @@ def render_gifs_from_manifest(
     Returns:
         (rendered_count, failed_count)
     """
+    manifest_path = Path(__file__).parent.parent / manifest_path
+    gif_dir = Path(__file__).parent.parent / gif_dir
+
     if not RUN_BENCH_SCRIPT.is_file():
         print(f"[GIF] yield_run_benchmark_mini.py not found at {RUN_BENCH_SCRIPT}", file=sys.stderr)
         return 0, 1
@@ -686,10 +669,8 @@ def render_gifs_from_manifest(
     
     rendered = 0
     failed = 0
-    
     for i, row in enumerate(rows, start=1):
         scene_uid = f"{backend}:{row['scene_id']}:{row['pdd_code']}:{row['seed']}"
-        
         cmd = [
             sys.executable,
             str(RUN_BENCH_SCRIPT),
@@ -758,8 +739,8 @@ Sign placement coordinates:
         help="Number of scenes to generate (default: 10)"
     )
     parser.add_argument(
-        "--output-dir", type=str, default=str(DEFAULT_OUTPUT_BASE_DIR),
-        help="Base output directory (default: .../benchmark_output/fixed/2_4)"
+        "--output-dir", type=str, default="yield_sign/benchmark_output/pgmaps/2_4",
+        help="Base output directory"
     )
     parser.add_argument(
         "--run-name", type=str, default=None,

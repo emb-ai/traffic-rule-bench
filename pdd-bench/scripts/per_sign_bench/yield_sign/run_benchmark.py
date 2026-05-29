@@ -5,55 +5,33 @@ import json
 import logging
 import math
 import random
-import sys
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 import torch
-
-
-def _find_pdd_bench_root(start: Path) -> Path:
-    current = start if start.is_dir() else start.parent
-    for parent in (current, *current.parents):
-        if (parent / "envs").is_dir() and (parent / "traffic_signs").is_dir():
-            return parent
-    raise RuntimeError("Could not locate pdd-bench root")
-
-
-SCRIPT_PATH = Path(__file__).resolve()
-BENCH_DIR = SCRIPT_PATH.parent
-PER_SIGN_BENCH_DIR = BENCH_DIR.parent
-PDD_BENCH_DIR = _find_pdd_bench_root(SCRIPT_PATH)
-SDC_ROOT = PDD_BENCH_DIR.parent
-METADRIVE_DIR = SDC_ROOT / "metadrive"
-
-for p in (PDD_BENCH_DIR, METADRIVE_DIR, PER_SIGN_BENCH_DIR, BENCH_DIR):
-    ps = str(p)
-    if ps not in sys.path:
-        sys.path.insert(0, ps)
-
-CARL_NUPLAN_DIR = SDC_ROOT / "CaRL" / "nuPlan"
-if CARL_NUPLAN_DIR.exists():
-    carl_path = str(CARL_NUPLAN_DIR)
-    if carl_path not in sys.path:
-        sys.path.insert(0, carl_path)
+from stable_baselines3 import PPO
 
 from envs.sumo_env import TrafficSignSumoEnv
 from envs.sumo_traffic_manager import SumoTrafficManager
 from envs.traffic_sign_env import TrafficSignEnv
-from metadrive.policy.idm_policy import IDMPolicy, ModifiedIDMPolicy
-from metadrive.policy.expert_policy import ExpertPolicy
-from stable_baselines3 import PPO
 from agents.policies.comprehensive_rule_expert import ComprehensiveRuleExpertPolicy
 from agents.policies.rule_compliant_expert import RuleCompliantExpertPolicy
+from metadrive.policy.idm_policy import IDMPolicy, ModifiedIDMPolicy
+from metadrive.policy.expert_policy import ExpertPolicy
+from scripts.per_sign_bench.factorized_space.ego_defaults import (
+    apply_ego_defaults,
+    apply_ego_sampled,
+    sample_ego_params,
+)
+from scripts.per_sign_bench.yield_sign.main_road_traffic import add_main_road_traffic
 
-from factorized_space.ego_defaults import apply_ego_defaults, apply_ego_sampled, sample_ego_params
-
-# Import main road traffic manager for yield sign scenarios
-from yield_main_road_traffic import add_main_road_traffic
 _MAIN_ROAD_TRAFFIC_AVAILABLE = True
 
+BENCH_DIR = Path(__file__).resolve().parent
+PER_SIGN_BENCH_DIR = BENCH_DIR.parent
+PDD_BENCH_DIR = PER_SIGN_BENCH_DIR.parent.parent
+SDC_ROOT = PDD_BENCH_DIR.parent
 
 _SUMO_SIGN_DISTANCE_CACHE: dict[Path, float] = {}
 _PROFILE_KEYS = (
@@ -100,7 +78,7 @@ def _apply_manifest_profile_to_npcs(row: dict) -> None:
     profile = _manifest_profile(row)
     if not profile:
         return
-    from factorized_space.agent_profile_bank import apply_profile_to_idm_class
+    from scripts.per_sign_bench.factorized_space.agent_profile_bank import apply_profile_to_idm_class
 
     apply_profile_to_idm_class(profile)
 
@@ -237,7 +215,7 @@ def _build_pgmap_env(row: dict, max_steps: int) -> TrafficSignEnv:
 
 
 def _place_pgmap_sign(env: TrafficSignEnv, row: dict, seed: int) -> bool:
-    from factorized_space.benchmark_runner import (
+    from scripts.per_sign_bench.factorized_space.benchmark_runner import (
         BEGIN_TO_END,
         DETOUR_KEYS,
         LANE_CHANGE_KEYS,
@@ -249,12 +227,11 @@ def _place_pgmap_sign(env: TrafficSignEnv, row: dict, seed: int) -> bool:
         _pick_detour_lane,
         _pick_lane_for_lane_change,
         _pick_rightmost_lane,
-        # _pick_priority_lane,
         _pick_route_lane,
         _spawn_cyclists_on_lane,
     )
-    from yield_generate_fixed_scenes import _pick_route_lane as _pick_priority_lane
-    from factorized_space.space_definition import BIKE_RELATED_SIGNS
+    from scripts.per_sign_bench.yield_sign.generate_syntetic_scenes import _pick_route_lane as _pick_priority_lane
+    from scripts.per_sign_bench.factorized_space.space_definition import BIKE_RELATED_SIGNS
     from traffic_signs.detour_obstacle import spawn_detour_obstacle
 
     if row.get("sign_type") is None and row.get("sign_type_start") and row.get("sign_type_end"):
@@ -836,8 +813,6 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
             raise ValueError("--model-path is required for --policy carl")
         CARL_ADAPTER_PATH = SDC_ROOT / "carl_in_metadrive"
         aps = str(CARL_ADAPTER_PATH)
-        if aps not in sys.path:
-            sys.path.insert(0, aps)
         from agents.policies.plain_carl_policy import PlainCarlPolicy
         device = "cuda" if torch.cuda.is_available() else "cpu"
         PlainCarlPolicy.set_checkpoint(model_path, device=device)
@@ -846,8 +821,6 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
         if not model_path:
             raise ValueError("--model-path is required for --policy plant2")
         PLANT2_PATH = SDC_ROOT / "plant2"
-        if str(PLANT2_PATH) not in sys.path:
-            sys.path.insert(0, str(PLANT2_PATH))
         from agents.policies.plain_plant2_policy import PlainPlanT2Policy
         device = "cuda" if torch.cuda.is_available() else "cpu"
         PlainPlanT2Policy.set_checkpoint(
@@ -857,10 +830,6 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
     elif policy == "carl_rule":
         if not model_path:
             raise ValueError("--model-path is required for --policy carl_rule")
-        CARL_ADAPTER_PATH = SDC_ROOT / "carl_in_metadrive"
-        aps = str(CARL_ADAPTER_PATH)
-        if aps not in sys.path:
-            sys.path.insert(0, aps)
         from agents.policies.carl_sign_compliant import CarlSignCompliantPolicy
         device = "cuda" if torch.cuda.is_available() else "cpu"
         CarlSignCompliantPolicy.set_checkpoint(model_path, device=device)
@@ -869,8 +838,6 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
         if not model_path:
             raise ValueError("--model-path is required for --policy plant2_rule")
         PLANT2_PATH = SDC_ROOT / "plant2"
-        if str(PLANT2_PATH) not in sys.path:
-            sys.path.insert(0, str(PLANT2_PATH))
         from agents.policies.plant2_sign_compliant import PlanT2SignCompliantPolicy
         device = "cuda" if torch.cuda.is_available() else "cpu"
         PlanT2SignCompliantPolicy.set_checkpoint(
@@ -1729,7 +1696,7 @@ def main():
         print(f"  - Trigger distance: {args.main_road_trigger_distance}m from yield sign")
 
     if args.manifest:
-        manifest_path = Path(args.manifest).resolve()
+        manifest_path = Path(args.manifest)
         if not manifest_path.exists():
             raise FileNotFoundError(f"--manifest not found: {manifest_path}")
         # Per-row `_backend` is preferred; fall back to single value from --backends
