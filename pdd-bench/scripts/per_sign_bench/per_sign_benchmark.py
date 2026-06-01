@@ -182,6 +182,7 @@ def _collect_real_rows(scenes_root: str, pdd_code: str, target: int,
         brake_delay_s=float(brake_cfg.get("brake_delay", 1.0)),
         brake_margin_m=float(brake_cfg.get("brake_margin", 5.0)),
         v0_min_excess_mps=float(brake_cfg.get("v0_min_excess", 2.0)),
+        v0_max_kmh=float(brake_cfg.get("v0_max_kmh", 80.0)),
     )
     for r in rows:
         r["pdd_code"] = pdd_code
@@ -397,6 +398,8 @@ def main():
                         help="Safety margin (m) added to required distance.")
     parser.add_argument("--v0-min-excess", type=float, default=2.0,
                         help="Minimum amount (m/s) ego v0 must exceed the sign limit.")
+    parser.add_argument("--v0-max-kmh", type=float, default=80.0,
+                        help="Upper cap (km/h) on sampled ego v0.")
     parser.add_argument("--only-codes", type=str, default=None,
                         help="Comma-separated PDD codes to process (default: all in plan).")
     parser.add_argument("--dry-run", action="store_true",
@@ -451,6 +454,7 @@ def main():
         "brake_delay": args.brake_delay,
         "brake_margin": args.brake_margin,
         "v0_min_excess": args.v0_min_excess,
+        "v0_max_kmh": args.v0_max_kmh,
     }
 
     plans: List[dict] = []

@@ -144,18 +144,22 @@ def sample_spawn_velocity(seed: int) -> float:
 
 
 def sample_spawn_velocity_above_limit(seed: int, v_limit_mps: float,
-                                      min_excess: float = 2.0) -> float:
+                                      min_excess: float = 2.0,
+                                      max_v: float | None = None) -> float:
     """Sample an ego spawn velocity (m/s) that exceeds the sign limit by a
     realistic, nuPlan-shaped margin.
 
     v0 = v_limit + Δ, where Δ is drawn from the nuPlan initial_speed distribution
     (so the *exceedance* over the limit has a realistic spread, not a fixed +2),
-    floored at `min_excess` so v0 is always strictly above the limit. There is NO
-    upper cap on v0 — high draws are kept (e.g. for testing hard braking).
+    floored at `min_excess` so v0 is always strictly above the limit, and capped
+    at `max_v` (m/s) when given (e.g. 80 km/h ≈ 22.22 m/s).
     """
     delta = sample_spawn_velocity(seed)          # nuPlan-shaped spread (m/s)
     delta = max(float(delta), float(min_excess))
-    return float(v_limit_mps) + delta
+    v0 = float(v_limit_mps) + delta
+    if max_v is not None:
+        v0 = min(v0, float(max_v))
+    return v0
 
 
 def braking_required_distance(v0_mps: float, v_target_mps: float,

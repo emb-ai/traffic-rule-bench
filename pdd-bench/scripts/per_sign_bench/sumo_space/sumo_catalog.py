@@ -104,6 +104,7 @@ def build_catalog(
     brake_delay_s: float = BRAKE_DELAY_S_DEFAULT,
     brake_margin_m: float = BRAKE_MARGIN_M_DEFAULT,
     v0_min_excess_mps: float = V0_MIN_EXCESS_MPS_DEFAULT,
+    v0_max_kmh: float = 80.0,
     # Deprecated params — kept for backward compat with older callers.
     n_velocity_samples: int = 1,
     spawn_velocities: Optional[List[float]] = None,
@@ -193,7 +194,9 @@ def build_catalog(
                 v_target_mps = v_target_kmh / 3.6
                 for v_idx in range(max(1, n_v0_samples)):
                     vseed = stable_hash(scene.scene_id, spawn_lane_num, var_idx, "v0", v_idx)
-                    v0 = _v0_sampler(vseed, v_target_mps, min_excess=v0_min_excess_mps)
+                    v0 = _v0_sampler(vseed, v_target_mps,
+                                     min_excess=v0_min_excess_mps,
+                                     max_v=float(v0_max_kmh) / 3.6)
                     if v0 <= v_target_mps + 1e-6:   # never with the floored sampler
                         insufficient_v0 += 1
                         continue
