@@ -51,13 +51,24 @@ class BaseTrafficSign(TrafficObject, ABC):
         random_seed=None,
         show_model=True,
         icon_path=None,
+        longitudinal_from_start=False,
         **kwargs
     ):
         self.lane = lane
         self._show_model = show_model
         self._vehicle_states = {}
 
-        target_long = lane.length + longitudinal_offset
+        # `longitudinal_offset` convention:
+        #   longitudinal_from_start=False (default, legacy): offset measured from
+        #     the lane END (target_long = lane.length + offset). Used by Stop,
+        #     MinSpeed, restricted-lane and other approach-style signs.
+        #   longitudinal_from_start=True: offset IS the distance from lane START
+        #     (target_long = offset). Used by speed/zone/end-of-zone signs so a
+        #     start sign and its end sign share one coordinate frame.
+        if longitudinal_from_start:
+            target_long = longitudinal_offset
+        else:
+            target_long = lane.length + longitudinal_offset
         # self.placement_long = np.clip(target_long, 0.1, lane.length - 0.1)
         self.placement_long = np.maximum(target_long, 0.1)
 
@@ -378,6 +389,40 @@ class BaseTrafficSign(TrafficObject, ABC):
         else:
             raise ValueError(f"Invalid allowed directions: {allowed_directions}")
         return lane_road == sign_road and lane_dir in allowed_directions
+
+    def _vehicle_edge_and_s(self, vehicle):
+        """Return (directed SUMO edge id, longitudinal s) of the vehicle on its
+        CURRENT lane. Edge id keeps direction/segment (e.g. '-787071935#2') so it
+        can be matched against an ordered multi-edge zone path."""
+        edge = self._sumo_edge_id_from_lane_index(getattr(vehicle, "lane_index", None))
+        s = None
+        lane = getattr(vehicle, "lane", None)
+        if lane is not None:
+            try:
+                s = float(lane.local_coordinates(vehicle.position)[0])
+            except Exception:
+                s = None
+        return edge, s
+
+    def _in_multi_edge_zone(self, vehicle):
+        """Membership for a zone spanning several connected edges.
+
+        Uses `self.zone_edges` (ordered list of directed edge ids from the start
+        sign's edge to the end sign's edge), `self.zone_start` (offset on the
+        first edge) and `self.zone_end_s` (offset on the last edge). Returns
+        True/False, or None when this sign has no multi-edge zone configured (so
+        the caller falls back to the single-lane check)."""
+        edges = getattr(self, "zone_edges", None)
+        if not edges:
+            return None
+        edge, s = self._vehicle_edge_and_s(vehicle)
+        if edge is None or edge not in edges or s is None:
+            return False
+        if edge == edges[0] and s < float(self.zone_start) - self.LONGITUDINAL_TOLERANCE:
+            return False
+        if edge == edges[-1] and s > float(self.zone_end_s) + self.LONGITUDINAL_TOLERANCE:
+            return False
+        return True
 
     def _heading_aligned(self, agent, tolerance_rad: float = 1.1):
         """

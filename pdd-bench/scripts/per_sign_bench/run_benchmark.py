@@ -248,6 +248,7 @@ def _place_pgmap_sign(env: TrafficSignEnv, row: dict, seed: int) -> bool:
         _spawn_cyclists_on_lane,
     )
     from factorized_space.space_definition import BIKE_RELATED_SIGNS
+    from factorized_space.sign_placement import zone_pair_offsets
     from traffic_signs.detour_obstacle import spawn_detour_obstacle
 
     if row.get("sign_type") is None and row.get("sign_type_start") and row.get("sign_type_end"):
@@ -259,7 +260,7 @@ def _place_pgmap_sign(env: TrafficSignEnv, row: dict, seed: int) -> bool:
             return False
 
         zone_length = float(row.get("zone_length_m", 20.0))
-        min_lane = 8.0 + zone_length + 4.0
+        start_long, end_long, min_lane = zone_pair_offsets(zone_length)
         lane = _pick_route_lane(route_lanes, min_length=min_lane, road_network=env.current_map.road_network)
         if lane is None:
             return False
@@ -271,27 +272,24 @@ def _place_pgmap_sign(env: TrafficSignEnv, row: dict, seed: int) -> bool:
 
         sign_mgr = env.engine.traffic_sign_manager
         half_w = lane.width_at(0) / 2 + 0.8
-        start_long = 5.0
-        end_long = start_long + zone_length
-        # MetaDrive expects longitudinal offset from lane end.
-        md_start = start_long - lane.length
-        md_end = end_long - lane.length
-
+        # Offsets are meters from the lane START (longitudinal_from_start).
         try:
             sign_mgr.add_sign(
                 sign_start_cls,
                 lane=lane,
-                longitudinal_offset=md_start,
+                longitudinal_offset=start_long,
                 lateral_offset=half_w,
                 use_random_lane=False,
             )
             sign_mgr.add_sign(
                 sign_end_cls,
                 lane=lane,
-                longitudinal_offset=md_end,
+                longitudinal_offset=end_long,
                 lateral_offset=half_w,
                 use_random_lane=False,
             )
+            # Truncate the start zone at the end sign (otherwise no effect).
+            sign_mgr.build_zones()
             return True
         except Exception:
             return False

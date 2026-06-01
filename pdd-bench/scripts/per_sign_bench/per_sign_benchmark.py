@@ -163,19 +163,25 @@ def _collect_citymap_plan(pdd_code: str, target_citymap: int, seed: int) -> dict
 
 def _collect_real_rows(scenes_root: str, pdd_code: str, target: int,
                        n_variations: int, n_velocity_samples: int,
-                       seed: int) -> List[dict]:
+                       seed: int, brake_cfg: Optional[dict] = None) -> List[dict]:
     """Build the SUMO catalog rows for a single PDD code.
 
     n_per_category = min(target, available) — enforced by stratified_sample
-    inside build_sumo_catalog.
+    inside build_sumo_catalog. `brake_cfg` carries the braking-spawn parameters
+    (used only for codes in BRAKING_SPAWN_CODES, e.g. 3.24).
     """
+    brake_cfg = brake_cfg or {}
     rows = build_sumo_catalog(
         scenes_root=scenes_root,
         n_per_category=target,
         n_variations=n_variations,
-        n_velocity_samples=n_velocity_samples,
         sign_categories=[pdd_code],
         seed=seed,
+        n_v0_samples=int(brake_cfg.get("n_v0_samples", n_velocity_samples)),
+        brake_decel_mps2=float(brake_cfg.get("brake_decel", 2.5)),
+        brake_delay_s=float(brake_cfg.get("brake_delay", 1.0)),
+        brake_margin_m=float(brake_cfg.get("brake_margin", 5.0)),
+        v0_min_excess_mps=float(brake_cfg.get("v0_min_excess", 2.0)),
     )
     for r in rows:
         r["pdd_code"] = pdd_code
@@ -216,6 +222,7 @@ def _plan_for_sign(
     n_variations: int,
     n_velocity_samples: int,
     seed: int,
+    brake_cfg: Optional[dict] = None,
 ) -> dict:
     """Assemble the per-sign plan (without materializing CityMap scenes).
 
@@ -232,6 +239,7 @@ def _plan_for_sign(
             n_variations=n_variations,
             n_velocity_samples=n_velocity_samples,
             seed=seed,
+            brake_cfg=brake_cfg,
         )
 
     has_synthetic_source = bool(
@@ -377,6 +385,18 @@ def main():
     parser.add_argument("--n-variations", type=int, default=10)
     parser.add_argument("--n-velocity-samples", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
+    # Braking-spawn (3.24): ego starts above the limit, placed d_required before
+    # the sign so braking is actually tested. See sumo_catalog / sumo_env.
+    parser.add_argument("--n-v0-samples", type=int, default=10,
+                        help="v0 draws per scene for braking codes (default: 10).")
+    parser.add_argument("--brake-decel", type=float, default=2.5,
+                        help="Assumed comfortable deceleration (m/s²) for required distance.")
+    parser.add_argument("--brake-delay", type=float, default=1.0,
+                        help="Reaction/latency time (s) added to required distance.")
+    parser.add_argument("--brake-margin", type=float, default=5.0,
+                        help="Safety margin (m) added to required distance.")
+    parser.add_argument("--v0-min-excess", type=float, default=2.0,
+                        help="Minimum amount (m/s) ego v0 must exceed the sign limit.")
     parser.add_argument("--only-codes", type=str, default=None,
                         help="Comma-separated PDD codes to process (default: all in plan).")
     parser.add_argument("--dry-run", action="store_true",
@@ -425,6 +445,14 @@ def main():
     codec = FactorizedSpaceCodec()
     pcodec = PairedSpaceCodec()
 
+    brake_cfg = {
+        "n_v0_samples": args.n_v0_samples if args.n_v0_samples is not None else args.n_velocity_samples,
+        "brake_decel": args.brake_decel,
+        "brake_delay": args.brake_delay,
+        "brake_margin": args.brake_margin,
+        "v0_min_excess": args.v0_min_excess,
+    }
+
     plans: List[dict] = []
     for code in codes:
         source = DEFAULT_SOURCE_PLAN[code]
@@ -437,6 +465,7 @@ def main():
             n_variations=args.n_variations,
             n_velocity_samples=args.n_velocity_samples,
             seed=args.seed,
+            brake_cfg=brake_cfg,
         )
         plans.append(plan)
         if not args.dry_run:

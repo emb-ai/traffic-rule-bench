@@ -78,7 +78,7 @@ from traffic_signs.restricted_lane_sign import (
 from .space_definition import N_SPAWN_VELOCITY_SAMPLES, BIKE_RELATED_SIGNS
 from .agent_profile_bank import sample_one_profile, sample_spawn_velocity
 from .ego_defaults import apply_ego_defaults
-from .sign_placement import compute_placement, PlacementContext
+from .sign_placement import compute_placement, PlacementContext, zone_pair_offsets
 
 # Sign key → class mapping
 SIGN_CLASS_MAP = {
@@ -223,7 +223,7 @@ def place_pgmap_sign_from_row(env, row: dict, *, seed: int | None = None) -> tup
                            f"end={row['sign_type_end']!r}")
 
         zone_length = float(row.get("zone_length_m", 20.0))
-        min_lane = 8.0 + zone_length + 4.0
+        start_long, end_long, min_lane = zone_pair_offsets(zone_length)
         lane = _pick_route_lane(route_lanes, min_length=min_lane,
                                  road_network=env.current_map.road_network)
         if lane is None:
@@ -231,20 +231,19 @@ def place_pgmap_sign_from_row(env, row: dict, *, seed: int | None = None) -> tup
 
         sign_mgr = env.engine.traffic_sign_manager
         half_w = lane.width_at(0) / 2 + 0.8
-        start_long = 5.0
-        end_long = start_long + zone_length
-        # MetaDrive expects longitudinal offset from lane end (negative).
-        md_start = start_long - lane.length
-        md_end = end_long - lane.length
+        # Offsets are meters from the lane START; speed/zone/end signs use the
+        # unified longitudinal_from_start convention, so pass them directly.
         try:
             sign_mgr.add_sign(sign_start_cls, lane=lane,
-                               longitudinal_offset=md_start,
+                               longitudinal_offset=start_long,
                                lateral_offset=half_w,
                                use_random_lane=False)
             sign_mgr.add_sign(sign_end_cls, lane=lane,
-                               longitudinal_offset=md_end,
+                               longitudinal_offset=end_long,
                                lateral_offset=half_w,
                                use_random_lane=False)
+            # Truncate the start zone at the end sign (otherwise no effect).
+            sign_mgr.build_zones()
         except Exception as exc:
             return False, f"add_sign(paired): {type(exc).__name__}: {exc}"
         return True, None
@@ -907,7 +906,7 @@ def generate_paired_scene(spec: dict, v_idx: int = 0,
             return result
 
         zone_length = float(spec["zone_length_m"])
-        min_lane = 8.0 + zone_length + 4.0       # 5 start_off + zone + 5 tail buffer
+        start_long, end_long, min_lane = zone_pair_offsets(zone_length)
         lane = _pick_route_lane(route_lanes, min_length=min_lane,
                                  road_network=env.current_map.road_network)
         if lane is None:
@@ -922,21 +921,18 @@ def generate_paired_scene(spec: dict, v_idx: int = 0,
         sign_mgr = env.engine.traffic_sign_manager
 
         half_w = lane.width_at(0) / 2 + 0.8
-        start_long = 5.0
-        end_long = start_long + zone_length
-        # MetaDrive convention: longitudinal_offset counted from lane end.
-        md_start = start_long - lane.length
-        md_end = end_long - lane.length
-
+        # Offsets are meters from the lane START (longitudinal_from_start).
         try:
             sign_mgr.add_sign(sign_start_cls, lane=lane,
-                              longitudinal_offset=md_start,
+                              longitudinal_offset=start_long,
                               lateral_offset=half_w,
                               use_random_lane=False)
             sign_mgr.add_sign(sign_end_cls, lane=lane,
-                              longitudinal_offset=md_end,
+                              longitudinal_offset=end_long,
                               lateral_offset=half_w,
                               use_random_lane=False)
+            # Truncate the start zone at the end sign (otherwise no effect).
+            sign_mgr.build_zones()
         except Exception as exc:
             result["valid"] = False
             result["failure_reason"] = f"sign_placement: {exc}"

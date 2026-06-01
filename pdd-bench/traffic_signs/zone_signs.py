@@ -23,28 +23,39 @@ class ZoneSpeedLimitSign(BaseTrafficSign):
             self.speed_limit = speed_limit
         lane.speed_limit = self.speed_limit
 
-        base_longitudinal_offset = -lane.length + longitudinal_offset
         super().__init__(
-            lane, 
-            longitudinal_offset=base_longitudinal_offset, 
-            icon_path=f'5.31_{int(self.speed_limit)}.png', 
+            lane,
+            longitudinal_offset=longitudinal_offset,
+            longitudinal_from_start=True,
+            icon_path=f'5.31_{int(self.speed_limit)}.png',
             **kwargs
         )
         self.zone_start = self.placement_long
-        self.zone_length = float('inf') 
+        self.zone_length = float('inf')
         self.zone_end = float('inf')
-        self._is_active = True 
+        self._is_active = True
+        # Multi-edge zone (combined SUMO pairs). None = single-lane.
+        self.zone_edges = None
+        self.zone_end_s = None
+
+    def configure_multi_edge_zone(self, zone_edges, zone_start, zone_end_s):
+        """Configure a zone spanning connected edges (see SpeedLimitSign)."""
+        self.zone_edges = list(zone_edges)
+        self.zone_start = float(zone_start)
+        self.zone_end_s = float(zone_end_s)
 
     def _create_visual_model(self):
         pass
 
-    def _is_violating(self, vehicle) -> bool:
+    def is_vehicle_in_zone(self, vehicle) -> bool:
+        multi = self._in_multi_edge_zone(vehicle)
+        if multi is not None:
+            return multi
         veh_long = self.lane.local_coordinates(vehicle.position)[0]
+        return self.zone_start <= veh_long <= self.zone_end
 
-        return (
-            self.zone_start <= veh_long <= self.zone_end 
-            and vehicle.speed_km_h > self.speed_limit
-        )
+    def _is_violating(self, vehicle) -> bool:
+        return self.is_vehicle_in_zone(vehicle) and vehicle.speed_km_h > self.speed_limit
 
     def get_rule_description(self) -> str:
         return f"Exceeding the zone speed limit ({self.speed_limit} km/h)"

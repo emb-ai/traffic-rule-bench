@@ -42,11 +42,15 @@ def _build_env(catalog_row: dict, profile: dict):
     # immediate collision; NPCs spawn directly within the agent's lane
     # segment so traffic interactions start from step 0.
     SumoTrafficManager.EGO_SAFE_RADIUS = 15
-    sign_spawn_distance = max(
-        float(catalog_row.get("sign_spawn_distance",
-                              catalog_row.get("distance_from_start", 0.0)) or 0.0),
-        30.0,
-    )
+    _raw_ssd = float(catalog_row.get("sign_spawn_distance",
+                                     catalog_row.get("distance_from_start", 0.0)) or 0.0)
+    if catalog_row.get("braking_spawn"):
+        # Braking scenes (3.24): keep the sign at its REAL distance_from_start.
+        # Approach runway comes from spawning ego upstream along the road graph,
+        # not from the legacy 30 m floor (which displaced the sign).
+        sign_spawn_distance = _raw_ssd
+    else:
+        sign_spawn_distance = max(_raw_ssd, 30.0)
 
     config = dict(
         use_render=False,
@@ -71,12 +75,30 @@ def _build_env(catalog_row: dict, profile: dict):
     import os as _os
     if _os.environ.get("PER_SIGN_USE_DESTINATION") == "1" and catalog_row.get("destination_lane_id"):
         config["vehicle_config"]["destination"] = catalog_row["destination_lane_id"]
+    # Combined zone pair: force the destination to the end-sign edge so the route
+    # passes through BOTH signs (start zone -> ... -> end sign).
+    if catalog_row.get("is_paired") and catalog_row.get("destination_lane_id"):
+        config["vehicle_config"]["destination"] = catalog_row["destination_lane_id"]
 
     # Spawn on a specific lane of the chosen road. Catalog entries for SUMO
     # enumerate all lanes per scene (§11.5); pass `spawn_lane_num` through
     # config so sumo_env's reset() teleports ego onto it.
     if "spawn_lane_num" in catalog_row:
         config["spawn_lane_num"] = int(catalog_row["spawn_lane_num"])
+
+    # Braking-spawn (3.24): ego starts above the limit, placed d_required before
+    # the sign (resolved up the road graph in sumo_env). Pass the spec through.
+    if catalog_row.get("braking_spawn"):
+        config["ego_braking_spawn"] = True
+        config["ego_spawn_v0_ms"] = float(catalog_row.get("spawn_velocity_ms", 0.0) or 0.0)
+        config["ego_brake_d_required"] = float(catalog_row.get("d_required_m", 0.0) or 0.0)
+        config["ego_v_target_kmh"] = float(catalog_row.get("v_target_kmh", 0.0) or 0.0)
+        config["ego_brake_decel"] = float(catalog_row.get("brake_decel_mps2", 2.5) or 2.5)
+        config["ego_brake_delay"] = float(catalog_row.get("brake_delay_s", 1.0) or 1.0)
+        config["ego_brake_margin"] = float(catalog_row.get("brake_margin_m", 5.0) or 5.0)
+        # Route forward through the sign toward the recorded destination.
+        if catalog_row.get("destination_lane_id"):
+            config["vehicle_config"]["destination"] = catalog_row["destination_lane_id"]
 
     class _EnvWithTraffic(TrafficSignSumoEnv):
         @classmethod
@@ -202,6 +224,25 @@ def materialize_sumo_scene(
     # 2. Apply IDM params to NPC policy class attrs (NPC-only)
     apply_profile_to_idm_class(profile)
 
+    # 2b. Rule-compliant NPCs: cap surrounding-traffic speed to the sign limit so
+    # they don't violate it (opt-in via PER_SIGN_COMPLIANT_NPC=1). SUMO NPCs use
+    # SumoTrajectoryIDMPolicy, which has its OWN NORMAL_SPEED — so we must cap it
+    # there (and on IDMPolicy) rather than rely on the sampled profile.
+    npc_speed_cap_kmh = None
+    import os as _os2
+    if _os2.environ.get("PER_SIGN_COMPLIANT_NPC") == "1":
+        v_lim = float(catalog_row.get("v_target_kmh", 0.0) or 0.0)
+        if v_lim > 0:
+            npc_speed_cap_kmh = v_lim
+            try:
+                from metadrive.policy.idm_policy import IDMPolicy
+                from envs.sumo_idm_policy import SumoTrajectoryIDMPolicy
+                for cls in (IDMPolicy, SumoTrajectoryIDMPolicy):
+                    cls.NORMAL_SPEED = min(float(getattr(cls, "NORMAL_SPEED", v_lim)), v_lim)
+                    cls.MAX_SPEED = v_lim
+            except Exception:
+                pass
+
     # 3. NPC vehicle type: use nuPlan-derived weights for PGTrafficManager.
     install_npc_vehicle_type_hook()
 
@@ -216,10 +257,12 @@ def materialize_sumo_scene(
         "sign_code": catalog_row["sign_code"],
         "road_id": catalog_row.get("road_id", ""),
         "net_path": catalog_row["net_path"],
-        "sign_spawn_distance": max(
+        "sign_spawn_distance": (
             float(catalog_row.get("sign_spawn_distance",
-                                  catalog_row.get("distance_from_start", 0.0)) or 0.0),
-            30.0,
+                                  catalog_row.get("distance_from_start", 0.0)) or 0.0)
+            if catalog_row.get("braking_spawn")
+            else max(float(catalog_row.get("sign_spawn_distance",
+                                           catalog_row.get("distance_from_start", 0.0)) or 0.0), 30.0)
         ),
         "distance_from_start": catalog_row.get("distance_from_start"),
         "destination_lane_id": catalog_row.get("destination_lane_id"),
@@ -236,6 +279,8 @@ def materialize_sumo_scene(
         "spawn_lane_num": catalog_row.get("spawn_lane_num", 0),
         "deterministic_seed": seed,
         "source": "sumo",
+        "npc_compliant": npc_speed_cap_kmh is not None,
+        "npc_speed_cap_kmh": npc_speed_cap_kmh,
         "valid": False,
         "failure_reason": None,
     }
@@ -280,6 +325,11 @@ def materialize_sumo_scene(
 
         # Capture fingerprint from reset state
         result["fingerprint"] = _capture_reset_state(env)
+        # Record the actual braking spawn (3.24): where ego was placed, achieved
+        # distance, final v0, and whether the runway was insufficient.
+        brake_info = getattr(env, "_braking_spawn_info", None)
+        if brake_info:
+            result.update(brake_info)
         result["valid"] = True
     except Exception as exc:
         result["valid"] = False

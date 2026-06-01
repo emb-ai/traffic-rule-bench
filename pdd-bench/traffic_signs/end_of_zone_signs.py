@@ -27,6 +27,7 @@ class BaseEndOfZoneSign(BaseTrafficSign):
             lane,
             icon_path=icon_path,
             longitudinal_offset=longitudinal_offset,
+            longitudinal_from_start=True,
             **kwargs
         )
     
