@@ -1,14 +1,8 @@
 #!/usr/bin/env python3
-"""Render a SUMO network (net.xml) as an image or GIF.
+"""Render a SUMO network (net.xml) as an image.
 
 Usage:
-    python run_single_sumo_scene.py \
-        --scene-dir scenes/check \
-        --out scenes/check/output.png
-
-    python run_single_sumo_scene.py \
-        --scene-dir scenes/savvinskaya_3 \
-        --out scenes/savvinskaya_3/output.png
+    python run_single_sumo_scene.py savvinskaya_3
 """
 from __future__ import annotations
 
@@ -21,8 +15,14 @@ import matplotlib.patches as mpatches
 from matplotlib.collections import LineCollection
 import numpy as np
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-SCENES_ROOT = SCRIPT_DIR / "scenes"
+SCENES_DIR_DEFAULT = Path(__file__).resolve().parent / "scenes"
+
+
+def resolve_scene_dir(scenes_dir: Path, scene_name: str) -> Path:
+    scene_dir = scenes_dir / scene_name
+    if not scene_dir.is_dir():
+        raise FileNotFoundError(f"Scene folder not found: {scene_dir}")
+    return scene_dir
 
 
 def load_scene_meta(scene_dir: Path) -> dict:
@@ -123,20 +123,33 @@ def render_network(edges, junctions, out_path: Path, figsize=(12, 12), dpi=150):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Render SUMO network as image")
-    parser.add_argument("--scene-dir", required=True, help="Path to scene folder")
-    parser.add_argument("--out", required=True, help="Output image path (png/jpg/pdf)")
+    parser = argparse.ArgumentParser(
+        description="Render SUMO network as image",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument("scene", help="Scene folder name under scenes/ (e.g. savvinskaya_3)")
+    parser.add_argument(
+        "--scenes-dir",
+        type=Path,
+        default=SCENES_DIR_DEFAULT,
+        help=f"Scenes root directory (default: {SCENES_DIR_DEFAULT})",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Output image path (default: scenes/<scene>/output.png)",
+    )
     parser.add_argument("--figsize", type=float, default=12, help="Figure size (default: 12)")
     parser.add_argument("--dpi", type=int, default=150, help="DPI (default: 150)")
     args = parser.parse_args()
 
-    scene_dir = Path(args.scene_dir)
-    if not scene_dir.is_absolute():
-        if (SCENES_ROOT / args.scene_dir).exists():
-            scene_dir = SCENES_ROOT / args.scene_dir
-    scene_dir = scene_dir.resolve()
+    scenes_dir = Path(args.scenes_dir)
+    scene_dir = resolve_scene_dir(scenes_dir, args.scene)
 
-    out_path = Path(args.out).resolve()
+    out_path = args.out if args.out is not None else scene_dir / "custom.png"
+    out_path = out_path.resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"Loading scene: {scene_dir}")

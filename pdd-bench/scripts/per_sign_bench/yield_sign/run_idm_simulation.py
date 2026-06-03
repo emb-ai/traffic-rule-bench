@@ -2,15 +2,8 @@
 """Run IDM vehicle simulation on a SUMO scene and save GIF.
 
 Usage:
-    python run_idm_simulation.py \
-        --scene-dir scenes/check \
-        --out scenes/check/simulation.gif
-
-    python run_idm_simulation.py \
-        --scene-dir scenes/check \
-        --max-steps 300 \
-        --traffic-density 0.2 \
-        --out scenes/check/simulation.gif
+    python run_idm_simulation.py savvinskaya_3
+    python run_idm_simulation.py savvinskaya_3 --max-steps 300 --traffic-density 0.2
 """
 from __future__ import annotations
 
@@ -25,11 +18,17 @@ import numpy as np
 # Path setup
 SCRIPT_DIR = Path(__file__).resolve().parent
 PDD_BENCH_DIR = SCRIPT_DIR.parent.parent.parent
-SDC_ROOT = PDD_BENCH_DIR.parent
-SCENES_ROOT = SCRIPT_DIR / "scenes"
+SCENES_DIR_DEFAULT = SCRIPT_DIR / "scenes"
 
 # Add paths for imports
 sys.path.insert(0, str(PDD_BENCH_DIR))
+
+
+def resolve_scene_dir(scenes_dir: Path, scene_name: str) -> Path:
+    scene_dir = scenes_dir / scene_name
+    if not scene_dir.is_dir():
+        raise FileNotFoundError(f"Scene folder not found: {scene_dir}")
+    return scene_dir
 
 
 def load_scene_meta(scene_dir: Path) -> dict:
@@ -159,9 +158,24 @@ def make_policy(policy_type: str, vehicle, seed: int):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run IDM simulation on SUMO scene and save GIF")
-    parser.add_argument("--scene-dir", required=True, help="Path to scene folder")
-    parser.add_argument("--out", required=True, help="Output GIF path")
+    parser = argparse.ArgumentParser(
+        description="Run IDM simulation on SUMO scene and save GIF",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument("scene", help="Scene folder name under scenes/ (e.g. savvinskaya_3)")
+    parser.add_argument(
+        "--scenes-dir",
+        type=Path,
+        default=SCENES_DIR_DEFAULT,
+        help=f"Scenes root directory (default: {SCENES_DIR_DEFAULT})",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Output GIF path (default: scenes/<scene>/simulation.gif)",
+    )
     parser.add_argument("--policy", default="idm",
                         choices=["idm", "modified_idm", "comprehensive_rule_expert", "rule_compliant"],
                         help="Ego policy (default: idm)")
@@ -176,15 +190,11 @@ def main():
 
     logging.getLogger().setLevel(logging.CRITICAL)
 
-    scene_dir = Path(args.scene_dir)
-    if not scene_dir.is_absolute():
-        if (SCENES_ROOT / args.scene_dir).exists():
-            scene_dir = SCENES_ROOT / args.scene_dir
-        elif (SCRIPT_DIR / args.scene_dir).exists():
-            scene_dir = SCRIPT_DIR / args.scene_dir
-    scene_dir = scene_dir.resolve()
+    scenes_dir = Path(args.scenes_dir)
+    scene_dir = resolve_scene_dir(scenes_dir, args.scene)
 
-    out_gif = Path(args.out).resolve()
+    out_gif = args.out if args.out is not None else scene_dir / "simulation.gif"
+    out_gif = out_gif.resolve()
     out_gif.parent.mkdir(parents=True, exist_ok=True)
 
     # Load scene
@@ -201,7 +211,7 @@ def main():
 
     # Build environment
     print(f"\nBuilding environment (traffic_density={args.traffic_density})...")
-    env = build_env(catalog_row, SCENES_ROOT, args.traffic_density, args.max_steps)
+    env = build_env(catalog_row, scenes_dir, args.traffic_density, args.max_steps)
 
     # Reset
     env_seed = (catalog_row["sign_id"] + args.var_idx) % 100000
