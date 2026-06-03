@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Build a single scene for a specific sign from CSV or custom OSM file.
-
-Mode 1: From CSV (requires sign coordinates in CSV)
-    python build_single_sign_scene.py \
-        --csv ../../../data/data-cleaned.csv \
-        --sign-id 449674 \
-        --scenes-dir ./scenes
-
-Mode 2: From custom OSM file (no CSV needed, provide coordinates manually)
+"""Build a single scene for custom OSM file. (provide coordinates manually)
     python build_single_sign_scene.py \
         --osm scenes/savvinskaya_3/map.osm \
         --lat 55.739375 \
         --lon 37.572461 \
         --sign-type 2.4 \
-        --name my_custom_scene \
+        --name savvinskaya_3 \
+        --scenes-dir ./scenes
+    
+    python build_single_sign_scene.py \
+        --osm scenes/check/map.osm \
+        --lat 55.73937484 \
+        --lon 37.57246089 \
+        --sign-type 2.4 \
+        --name check \
         --scenes-dir ./scenes
 """
 
@@ -370,94 +370,6 @@ def _find_netconvert() -> str:
     )
 
 
-def build_scene_for_sign(sign_row, sign_type, scenes_dir):
-    """Build a scene for a single sign."""
-    sign_id = int(sign_row["ID"])
-    lat = float(sign_row["Latitude_WGS84"])
-    lon = float(sign_row["Longitude_WGS84"])
-
-    print(f"\n{'=' * 60}")
-    print(f"Building scene for sign ID: {sign_id}")
-    print(f"  SignType: {sign_type}")
-    print(f"  Location: ({lat:.6f}, {lon:.6f})")
-    print(f"{'=' * 60}")
-
-    OSM_FRAG_DIR.mkdir(exist_ok=True)
-    MAPS_DIR.mkdir(exist_ok=True)
-
-    sign_type_dir = scenes_dir / sign_type
-    sign_type_dir.mkdir(parents=True, exist_ok=True)
-
-    base_name = f"sign_{sign_id}"
-    osm_raw = OSM_FRAG_DIR / f"{base_name}.osm"
-    net_file = f"{base_name}.net.xml"
-    scene_dir = sign_type_dir / base_name
-
-    print("   Downloading from Overpass API...")
-    download_osm_fragment(lat, lon, osm_raw)
-
-    print("\n2. Finding closest way and distance along it...")
-    way_id, distance_from_start = find_closest_way_and_distance(osm_raw, lat, lon)
-    print(f"   way_id: {way_id}")
-    print(f"   distance_from_start (normalized): {distance_from_start:.4f}")
-
-    net_output_path = MAPS_DIR / net_file
-    print("\n3. Converting OSM to SUMO .net.xml...")
-    if net_output_path.exists() and net_output_path.stat().st_size > 1000:
-        print(f"   SUMO net file already exists: {net_output_path}")
-    else:
-        # Use geo-boundary filter to ensure network stays within bbox
-        geo_boundary = f"{lon - DELTA},{lat - DELTA},{lon + DELTA},{lat + DELTA}"
-        subprocess.run([
-            _find_netconvert(),
-            "--osm-files", str(osm_raw),
-            "-o", str(net_output_path),
-            "--osm.sidewalks",
-            "--osm.crossings",
-            "--crossings.guess",
-            "--walkingareas",
-            "--keep-edges.in-geo-boundary", geo_boundary,
-        ], check=True)
-
-    print("\n4. Finding edge and offset in SUMO network...")
-    road_id, s_offset = find_edge_and_offset_in_sumo_by_way_id(
-        net_output_path, way_id, distance_from_start
-    )
-    print(f"   road_id (SUMO edge): {road_id}")
-    print(f"   s_offset: {s_offset:.2f}")
-
-    print("\n5. Saving scene...")
-    scene_dir.mkdir(exist_ok=True)
-    
-    # Save .net.xml
-    (scene_dir / net_file).write_bytes(net_output_path.read_bytes())
-    
-    # Save .osm file to scene directory
-    osm_file = f"{base_name}.osm"
-    (scene_dir / osm_file).write_bytes(osm_raw.read_bytes())
-
-    meta = {
-        "sign_id": sign_id,
-        "sign_type": sign_type,
-        "latitude": lat,
-        "longitude": lon,
-        "osm_way_id": way_id,
-        "road_id": road_id,
-        "distance_from_start": s_offset,
-        "net_file": net_file,
-        "osm_file": osm_file
-    }
-    with open(scene_dir / "meta.json", "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2, ensure_ascii=False)
-
-    print(f"\nScene saved to: {scene_dir}")
-    print(f"  meta.json: {scene_dir / 'meta.json'}")
-    print(f"  net.xml: {scene_dir / net_file}")
-    print(f"  osm: {scene_dir / osm_file}")
-
-    return scene_dir
-
-
 def build_scene_from_custom_osm(osm_path, lat, lon, sign_type, scene_name, scenes_dir):
     """Build a scene from a custom OSM file with manual coordinates.
     
@@ -475,26 +387,15 @@ def build_scene_from_custom_osm(osm_path, lat, lon, sign_type, scene_name, scene
     print(f"  Location: ({lat:.6f}, {lon:.6f})")
     print(f"{'=' * 60}")
 
-    OSM_FRAG_DIR.mkdir(exist_ok=True)
-    MAPS_DIR.mkdir(exist_ok=True)
-
-    sign_type_dir = scenes_dir / sign_type
-    sign_type_dir.mkdir(parents=True, exist_ok=True)
-
-    scene_dir = sign_type_dir / scene_name
+    scene_dir = scenes_dir / scene_name
     net_file = f"{scene_name}.net.xml"
     osm_file = f"{scene_name}.osm"
-
-    if scene_dir.exists():
-        print(f"Scene already exists: {scene_dir}")
-        print("Use --force to overwrite or choose a different --name")
-        return scene_dir
 
     print("\n1. Cropping custom OSM file to area around sign...")
     print(f"   Original OSM file: {osm_path} ({osm_path.stat().st_size / 1024:.1f} KB)")
     
     # Crop OSM to small area around the sign
-    cropped_osm_path = OSM_FRAG_DIR / f"{scene_name}_cropped.osm"
+    cropped_osm_path = scene_dir / f"{scene_name}_cropped.osm"
     crop_osm_to_bbox(osm_path, cropped_osm_path, lat, lon, delta=DELTA)
     print(f"   Cropped OSM file: {cropped_osm_path} ({cropped_osm_path.stat().st_size / 1024:.1f} KB)")
 
@@ -503,7 +404,7 @@ def build_scene_from_custom_osm(osm_path, lat, lon, sign_type, scene_name, scene
     print(f"   way_id: {way_id}")
     print(f"   distance_from_start (normalized): {distance_from_start:.4f}")
 
-    net_output_path = MAPS_DIR / net_file
+    net_output_path = scene_dir / net_file
     print("\n3. Converting cropped OSM to SUMO .net.xml...")
     
     # Use netconvert's geo-boundary filter to clip the network to the bbox
@@ -532,10 +433,7 @@ def build_scene_from_custom_osm(osm_path, lat, lon, sign_type, scene_name, scene
     print("\n5. Saving scene...")
     scene_dir.mkdir(exist_ok=True)
     
-    # Save .net.xml
     (scene_dir / net_file).write_bytes(net_output_path.read_bytes())
-    
-    # Save cropped .osm file to scene directory
     (scene_dir / osm_file).write_bytes(cropped_osm_path.read_bytes())
 
     meta = {
@@ -565,85 +463,34 @@ def build_scene_from_custom_osm(osm_path, lat, lon, sign_type, scene_name, scene
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Build a single scene for a sign (from CSV or custom OSM)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # From CSV:
-  python build_single_sign_scene.py --csv data.csv --sign-id 449674
-
-  # From custom OSM file:
-  python build_single_sign_scene.py --osm map.osm --lat 55.739 --lon 37.572 --sign-type 2.4 --name my_scene
-        """
+        description="Build a single scene for a sign",
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
+    parser.add_argument("--osm", help="Path to custom OSM file")
+    parser.add_argument("--lat", type=float, help="Latitude of sign location")
+    parser.add_argument("--lon", type=float, help="Longitude of sign location")
+    parser.add_argument("--name", help="Scene name")
     
-    # Mode 1: CSV-based
-    parser.add_argument("--csv", help="Path to CSV with signs (Mode 1)")
-    parser.add_argument("--sign-id", type=int, help="Sign ID to process (Mode 1)")
-    
-    # Mode 2: Custom OSM
-    parser.add_argument("--osm", help="Path to custom OSM file (Mode 2)")
-    parser.add_argument("--lat", type=float, help="Latitude of sign location (Mode 2)")
-    parser.add_argument("--lon", type=float, help="Longitude of sign location (Mode 2)")
-    parser.add_argument("--name", help="Scene name (Mode 2, default: derived from OSM filename)")
-    
-    # Common options
-    parser.add_argument("--sign-type", default="2.4",
-                        help='Sign type code (e.g. "2.4"). Auto-detected from CSV in Mode 1.')
+    parser.add_argument("--sign-type", default="2.4", help='Sign type code.')
     parser.add_argument("--scenes-dir", default="scenes", help="Path to scenes output directory")
     
     args = parser.parse_args()
     scenes_dir = Path(args.scenes_dir)
 
-    # Determine mode
-    if args.osm:
-        # Mode 2: Custom OSM file
-        if args.lat is None or args.lon is None:
-            print("Error: --lat and --lon are required when using --osm")
-            print("These specify where the sign is located within the OSM area.")
-            sys.exit(1)
-        
-        scene_name = args.name
-        if not scene_name:
-            scene_name = Path(args.osm).stem  # Use OSM filename without extension
-        
-        scene_dir = build_scene_from_custom_osm(
-            osm_path=args.osm,
-            lat=args.lat,
-            lon=args.lon,
-            sign_type=args.sign_type,
-            scene_name=scene_name,
-            scenes_dir=scenes_dir
-        )
-    
-    elif args.csv and args.sign_id:
-        # Mode 1: CSV-based
-        print(f"Loading CSV: {args.csv}")
-        df = pd.read_csv(args.csv, sep=";")
-        df["ID"] = df["ID"].astype(int)
-
-        sign_row = df[df["ID"] == args.sign_id]
-        if sign_row.empty:
-            print(f"Error: Sign ID {args.sign_id} not found in CSV")
-            sys.exit(1)
-
-        sign_row = sign_row.iloc[0]
-
-        if args.sign_type != "2.4":  # User explicitly provided sign type
-            sign_type = args.sign_type
-        else:
-            full_sign_type = sign_row["SignType"]
-            sign_type = full_sign_type.split()[0] if pd.notna(full_sign_type) else "unknown"
-
-        scene_dir = build_scene_for_sign(sign_row, sign_type, scenes_dir)
-    
-    else:
-        print("Error: Please specify either:")
-        print("  Mode 1: --csv and --sign-id")
-        print("  Mode 2: --osm, --lat, and --lon")
-        parser.print_help()
+    if args.lat is None or args.lon is None:
+        print("Error: --lat and --lon are required when using --osm")
+        print("These specify where the sign is located within the OSM area.")
         sys.exit(1)
-
+    
+    scene_dir = build_scene_from_custom_osm(
+        osm_path=args.osm,
+        lat=args.lat,
+        lon=args.lon,
+        sign_type=args.sign_type,
+        scene_name=args.name,
+        scenes_dir=scenes_dir
+    )
+    
     print(f"\n{'=' * 60}")
     print("SUCCESS!")
     print(f"Scene created at: {scene_dir}")

@@ -4,10 +4,15 @@
 Usage:
     # Run with IDM policy (simplest)
 
-     python run_single_sumo_scene.py \
-        --scene-dir scenes/2.4/my_custom_scene \
+    python run_single_sumo_scene.py \
+        --scene-dir scenes/savvinskaya_3 \
         --traffic-density 0.0 \
-        --out scenes/2.4/my_custom_scene/output.gif
+        --out scenes/savvinskaya_3/output.gif
+
+    python run_single_sumo_scene.py \
+        --scene-dir scenes/check \
+        --traffic-density 0.0 \
+        --out scenes/check/output.gif
 """
 from __future__ import annotations
 
@@ -25,11 +30,6 @@ PDD_BENCH_DIR = SCRIPT_DIR.parent.parent
 SDC_ROOT = PDD_BENCH_DIR.parent
 METADRIVE_DIR = SDC_ROOT / "metadrive"
 SCENES_ROOT = PDD_BENCH_DIR / "per_sign_bench/yield_sign/scenes"
-
-for _p in (PDD_BENCH_DIR, METADRIVE_DIR, SCRIPT_DIR):
-    _ps = str(_p)
-    if _ps not in sys.path:
-        sys.path.insert(0, _ps)
 
 
 def load_scene_meta(scene_dir: Path) -> dict:
@@ -56,7 +56,7 @@ def build_catalog_row(scene_dir: Path, meta: dict, var_idx: int = 0) -> dict:
             raise FileNotFoundError(f"No .net.xml file found in {scene_dir}")
     
     # Build relative path from scenes root
-    net_path = f"{sign_code}/{scene_dir.name}/{net_file}"
+    net_path = f"{scene_dir.name}/{net_file}"
     
     # Deterministic seed from sign_id + var_idx
     seed = (sign_id * 1000 + var_idx) % (2**32)
@@ -165,8 +165,7 @@ def make_policy(policy_type: str, vehicle, seed: int):
 
 def main():
     parser = argparse.ArgumentParser(description="Run a single SUMO scene and save GIF")
-    parser.add_argument("--scene-dir", required=True,
-                        help="Path to scene folder (e.g., scenes/2.4/sign_76209)")
+    parser.add_argument("--scene-dir", required=True, help="Path to scene folder")
     parser.add_argument("--out", required=True, help="Output GIF path")
     parser.add_argument("--policy", default="idm",
                         choices=["idm", "modified_idm", "comprehensive_rule_expert", "rule_compliant"],
@@ -182,7 +181,6 @@ def main():
 
     logging.getLogger().setLevel(logging.CRITICAL)
 
-    # Resolve paths
     scene_dir = Path(args.scene_dir)
     if not scene_dir.is_absolute():
         # Try relative to scenes root
