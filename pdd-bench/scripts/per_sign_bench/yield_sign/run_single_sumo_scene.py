@@ -3,12 +3,12 @@
 
 Usage:
     python run_single_sumo_scene.py \
-        --scene-dir scenes/savvinskaya_3 \
-        --out scenes/savvinskaya_3/output.png
-
-    python run_single_sumo_scene.py \
         --scene-dir scenes/check \
         --out scenes/check/output.png
+
+    python run_single_sumo_scene.py \
+        --scene-dir scenes/savvinskaya_3 \
+        --out scenes/savvinskaya_3/output.png
 """
 from __future__ import annotations
 

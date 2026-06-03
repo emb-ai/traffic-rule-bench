@@ -10,6 +10,14 @@ Usage:
 
     # Cropped to area around coordinates (~220m in each direction)
     python build_single_sign_scene.py \
+        --osm scenes/savvinskaya_3/map.osm \
+        --name savvinskaya_3 \
+        --lat 55.73966599 \
+        --lon 37.5712204 \
+        --delta 0.001 \
+        --scenes-dir ./scenes
+
+    python build_single_sign_scene.py \
         --osm scenes/check/map.osm \
         --name check \
         --lat 55.73937484 \
