@@ -287,8 +287,10 @@ def main():
     print(f"Scene created at: {scene_dir}")
     print("\nTo render static map:")
     print(f"  python run_single_sumo_scene.py {args.scene}")
-    print("\nTo run IDM simulation:")
-    print(f"  python run_idm_simulation.py {args.scene}")
+    print("\nTo run simulation (IDM/CARL/PLANT):")
+    print(f"  python run_simulation.py {args.scene}")
+    print(f"  python run_simulation.py {args.scene} --policy carl")
+    print(f"  python run_simulation.py {args.scene} --policy plant2")
     print(f"{'=' * 60}")
 
 
