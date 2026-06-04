@@ -81,6 +81,7 @@ def build_manifest_entry(
     spawn_velocity_ms: float = 5.0,
     traffic_density: float = 0.0,
     horizon: int = 600,
+    sign_distance_before_end: float = 20.0,
 ) -> Dict:
     """Build a single manifest entry for a scene."""
     scene_name = meta.get("scene_name", scene_dir.name)
@@ -101,6 +102,7 @@ def build_manifest_entry(
         "spawn_velocity_ms": spawn_velocity_ms,
         "traffic_density": traffic_density,
         "horizon": horizon,
+        "sign_distance_before_end": sign_distance_before_end,
         "valid": True,
         "latitude": meta.get("latitude"),
         "longitude": meta.get("longitude"),
@@ -132,6 +134,7 @@ def generate_manifest(
     spawn_velocity_ms: float = 5.0,
     traffic_density: float = 0.0,
     horizon: int = 600,
+    sign_distance_before_end: float = 20.0,
 ) -> List[Dict]:
     """Generate real_manifest.jsonl from discovered scenes."""
     scenes = discover_scenes(scenes_dir)
@@ -155,6 +158,7 @@ def generate_manifest(
                 spawn_velocity_ms=spawn_velocity_ms,
                 traffic_density=traffic_density,
                 horizon=horizon,
+                sign_distance_before_end=sign_distance_before_end,
             )
             entries.append(entry)
             
@@ -178,6 +182,7 @@ def generate_manifest(
         "spawn_velocity_ms": spawn_velocity_ms,
         "traffic_density": traffic_density,
         "horizon": horizon,
+        "sign_distance_before_end": sign_distance_before_end,
         "generated_at": datetime.now().isoformat(),
         "scenes": [s.name for s in scenes],
     }
@@ -192,6 +197,7 @@ def generate_manifest(
     print(f"\nResults:")
     print(f"  - Scenes processed: {len(scenes)}")
     print(f"  - Manifest entries: {len(entries)}")
+    print(f"  - Sign distance before lane end: {sign_distance_before_end}m")
     print(f"\nOutput files:")
     print(f"  - Manifest: {manifest_path}")
     print(f"  - Summary: {summary_path}")
@@ -326,7 +332,7 @@ def main():
         help="Number of seed variants per scene (default: 1)"
     )
     parser.add_argument(
-        "--spawn-velocity", type=float, default=5.0,
+        "--spawn-velocity", type=float, default=2.5,
         help="Spawn velocity in m/s (default: 5.0)"
     )
     parser.add_argument(
@@ -336,6 +342,10 @@ def main():
     parser.add_argument(
         "--horizon", type=int, default=600,
         help="Simulation horizon in steps (default: 600)"
+    )
+    parser.add_argument(
+        "--sign-distance", type=float, default=10.0,
+        help="Distance before lane end to place yield sign in meters (default: 20.0)"
     )
 
     # GIF rendering options
@@ -376,6 +386,7 @@ def main():
         spawn_velocity_ms=args.spawn_velocity,
         traffic_density=args.traffic_density,
         horizon=args.horizon,
+        sign_distance_before_end=args.sign_distance,
     )
     
     if args.save_gifs and entries:

@@ -23,6 +23,7 @@ from scripts.per_sign_bench.factorized_space.ego_defaults import (
     apply_ego_sampled,
     sample_ego_params,
 )
+from traffic_signs.priority_signs import YieldSign
 
 BENCH_DIR = Path(__file__).resolve().parent
 PER_SIGN_BENCH_DIR = BENCH_DIR.parent
@@ -599,6 +600,49 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
     }
 
 
+def _place_yield_sign_on_spawn_lane(env, distance_before_end: float = 20.0) -> bool:
+    """Place a YieldSign on the ego's current lane, `distance_before_end` meters before the lane end.
+    
+    Returns True if sign was successfully placed, False otherwise.
+    """
+    try:
+        vehicle = env.agent
+        if vehicle is None:
+            return False
+        
+        lane = vehicle.lane
+        if lane is None:
+            return False
+        
+        sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
+        if sign_mgr is None:
+            return False
+        
+        # Clear any existing signs first (sign_mgr.signs is a list)
+        sign_mgr.signs.clear()
+        
+        # Calculate longitudinal offset: negative from lane end
+        # longitudinal_offset is relative to lane end (negative = before end)
+        lane_length = lane.length
+        if lane_length < distance_before_end + 5.0:
+            # Lane too short, place at 5m from start
+            longitudinal_offset = -lane_length + 5.0
+        else:
+            longitudinal_offset = -distance_before_end
+        
+        # Place the yield sign
+        sign_mgr.add_sign(
+            YieldSign,
+            lane=lane,
+            longitudinal_offset=longitudinal_offset,
+            lateral_offset=lane.width_at(0) / 2 + 0.8,
+        )
+        return True
+    except Exception as e:
+        print(f"[YieldSign] Failed to place sign: {e}")
+        return False
+
+
 def run_one_episode(
     row: dict,
     policy_type: str,
@@ -654,6 +698,10 @@ def run_one_episode(
                 base_env.engine.np_random = np.random.RandomState(seed)
         except Exception:
             pass
+
+        # Place yield sign on ego's spawn lane, 20m before lane end
+        sign_distance = float(row.get("sign_distance_before_end", 20.0))
+        _place_yield_sign_on_spawn_lane(base_env, distance_before_end=sign_distance)
 
         policy_obj = None
         sampled_ego_params = None
