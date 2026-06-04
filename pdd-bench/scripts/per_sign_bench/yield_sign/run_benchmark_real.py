@@ -184,7 +184,7 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
     if row.get("destination_lane_id"):
         config["vehicle_config"]["destination"] = row["destination_lane_id"]
 
-    class _EnvWithTraffic(TrafficSignSumoEnv):
+    class _RealMapEnv(TrafficSignSumoEnv):
         @classmethod
         def default_config(cls):
             cfg = super().default_config()
@@ -196,9 +196,12 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
 
         def setup_engine(self):
             super().setup_engine()
-            self.engine.update_manager("traffic_manager", SumoTrafficManager())
+            # Only add SumoTrafficManager if traffic_density > 0
+            # Otherwise keep the default SimpleTrafficManager (no NPC spawning)
+            if self.config.get("traffic_density", 0.0) > 0:
+                self.engine.update_manager("traffic_manager", SumoTrafficManager())
 
-    return _EnvWithTraffic(config)
+    return _RealMapEnv(config)
 
 
 def _resolve_sign_spawn_distance(row: dict, scenes_root: Path) -> float:
