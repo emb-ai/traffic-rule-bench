@@ -40,6 +40,24 @@ NN_NEED_CHECKPOINT = {"carl", "carl_rule", "plant2", "plant2_rule"}
 NN_NO_CHECKPOINT = {"rule_compliant", "ppo_lidar"}
 ALL_POLICIES = IDM_FAMILY | NN_NEED_CHECKPOINT | NN_NO_CHECKPOINT
 
+DEFAULT_NET_FILE = "map.net.xml"
+
+
+def resolve_net_file(scene_dir: Path, meta: dict) -> str:
+    """Resolve SUMO net filename (neutral map.net.xml, with legacy fallback)."""
+    net_file = meta.get("net_file", DEFAULT_NET_FILE)
+    if (scene_dir / net_file).exists():
+        return net_file
+
+    net_files = sorted(scene_dir.glob("*.net.xml"))
+    if net_files:
+        return net_files[0].name
+
+    raise FileNotFoundError(
+        f"No .net.xml file found in {scene_dir} "
+        f"(expected {DEFAULT_NET_FILE} or net_file in meta.json)"
+    )
+
 # Default checkpoint paths
 DEFAULT_MODEL_PATHS = {
     "carl": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
@@ -78,14 +96,7 @@ def build_catalog_row(scene_dir: Path, meta: dict, var_idx: int = 0) -> dict:
     """Build a catalog row from scene meta.json."""
     scene_name = meta.get("scene_name", scene_dir.name)
     
-    # Find .net.xml file
-    net_file = meta.get("net_file")
-    if not net_file:
-        net_files = list(scene_dir.glob("*.net.xml"))
-        if net_files:
-            net_file = net_files[0].name
-        else:
-            raise FileNotFoundError(f"No .net.xml file found in {scene_dir}")
+    net_file = resolve_net_file(scene_dir, meta)
     
     # Build relative path from scenes root
     net_path = f"{scene_dir.name}/{net_file}"

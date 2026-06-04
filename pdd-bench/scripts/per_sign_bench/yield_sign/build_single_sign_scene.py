@@ -2,23 +2,52 @@
 """Convert OSM map to SUMO net.xml (main roads only, no signs/lights/railways).
 
 Each scene folder under scenes/ must contain:
-  - map.osm          — full OSM extract
+  - map.osm          — full OSM extract (input)
   - coordinates.json — crop center: {"lat": ..., "lon": ...}
 
+Build outputs (neutral names, same in every scene folder):
+  - map.net.xml      — SUMO network
+  - cropped.osm      — cropped OSM used for conversion
+  - meta.json        — scene metadata
+
 Usage:
-    python build_single_sign_scene.py savvinskaya_3 --delta 0.001
+    python build_single_sign_scene.py savvinskaya_3 --radius 200
     python build_single_sign_scene.py savvinskaya_3
 """
 
 import argparse
 import json
+import math
 import subprocess
 import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-DELTA_DEFAULT = 0.002  # ~200m in each direction
+RADIUS_DEFAULT = 200  # meters in each direction from center
+
+
+def meters_to_degrees(meters: float, lat: float) -> tuple[float, float]:
+    """Convert meters to degrees at a given latitude.
+
+    Returns (delta_lat, delta_lon) in degrees.
+    - 1 degree latitude ≈ 111,320 meters (constant)
+    - 1 degree longitude ≈ 111,320 * cos(lat) meters (varies with latitude)
+    """
+    meters_per_degree_lat = 111_320
+    meters_per_degree_lon = 111_320 * math.cos(math.radians(lat))
+
+    delta_lat = meters / meters_per_degree_lat
+    delta_lon = meters / meters_per_degree_lon
+
+    return delta_lat, delta_lon
+
+
 SCENES_DIR_DEFAULT = Path(__file__).resolve().parent / "scenes"
+
+# Neutral filenames inside each scene folder (folder name identifies the scene)
+NET_FILE = "map.net.xml"
+CROPPED_OSM_FILE = "cropped.osm"
+SOURCE_OSM_FILE = "map.osm"
 
 
 def _find_netconvert() -> str:
@@ -46,14 +75,14 @@ def load_scene_inputs(scenes_dir: Path, scene_name: str) -> tuple[Path, float, f
     if not scene_dir.is_dir():
         raise FileNotFoundError(f"Scene folder not found: {scene_dir}")
 
-    osm_path = scene_dir / "map.osm"
+    osm_path = scene_dir / SOURCE_OSM_FILE
     if not osm_path.exists():
         raise FileNotFoundError(f"OSM file not found: {osm_path}")
 
-    coords_path = scene_dir / "coordinates.json"
+    coords_path = scene_dir / "center.json"
     if not coords_path.exists():
         raise FileNotFoundError(
-            f"coordinates.json not found in {scene_dir}. "
+            f"center.json not found in {scene_dir}. "
             'Expected: {"lat": <float>, "lon": <float>}'
         )
 
@@ -70,52 +99,50 @@ def load_scene_inputs(scenes_dir: Path, scene_name: str) -> tuple[Path, float, f
     return osm_path, float(lat), float(lon)
 
 
-def crop_osm_to_bbox(input_osm_path, output_osm_path, lat, lon, delta):
+def crop_osm_to_bbox(input_osm_path, output_osm_path, lat, lon, delta_lat, delta_lon):
     """Crop an OSM file to a bounding box around the given coordinates.
 
-    Only keeps nodes within bbox and ways that have at least 2 nodes in bbox.
-    Roads extending outside the bbox are truncated at the boundary.
+    Keeps entire roads (all nodes) if they have at least one node within the bbox.
+    This prevents roads from being truncated at the boundary.
     """
     tree = ET.parse(input_osm_path)
     root = tree.getroot()
 
-    min_lat, max_lat = lat - delta, lat + delta
-    min_lon, max_lon = lon - delta, lon + delta
+    min_lat, max_lat = lat - delta_lat, lat + delta_lat
+    min_lon, max_lon = lon - delta_lon, lon + delta_lon
 
-    nodes_in_bbox = {}
+    # Build lookup of all nodes
+    all_nodes = {}
+    nodes_in_bbox = set()
     for node in root.findall("node"):
         node_id = node.get("id")
         node_lat = float(node.get("lat"))
         node_lon = float(node.get("lon"))
+        all_nodes[node_id] = node
         if min_lat <= node_lat <= max_lat and min_lon <= node_lon <= max_lon:
-            nodes_in_bbox[node_id] = node
+            nodes_in_bbox.add(node_id)
 
-    print(f"   Found {len(nodes_in_bbox)} nodes within bbox")
+    print(f"   Found {len(nodes_in_bbox)} nodes within bbox (total: {len(all_nodes)})")
 
-    truncated_ways = []
+    # Keep entire ways that have at least one node in the bbox
+    kept_ways = []
     for way in root.findall("way"):
         node_refs = [nd.get("ref") for nd in way.findall("nd")]
-        filtered_refs = [ref for ref in node_refs if ref in nodes_in_bbox]
+        
+        # Check if any node of this way is inside the bbox
+        has_node_in_bbox = any(ref in nodes_in_bbox for ref in node_refs)
+        
+        if has_node_in_bbox:
+            # Keep the entire way (all nodes), not just the truncated portion
+            kept_ways.append(way)
 
-        if len(filtered_refs) >= 2:
-            new_way = ET.Element("way")
-            new_way.set("id", way.get("id"))
-            for attr in ["visible", "version", "changeset", "timestamp", "user", "uid"]:
-                if way.get(attr):
-                    new_way.set(attr, way.get(attr))
+    print(f"   Keeping {len(kept_ways)} ways that touch bbox (full roads, not truncated)")
 
-            for ref in filtered_refs:
-                nd = ET.SubElement(new_way, "nd")
-                nd.set("ref", ref)
-
-            for tag in way.findall("tag"):
-                new_tag = ET.SubElement(new_way, "tag")
-                new_tag.set("k", tag.get("k"))
-                new_tag.set("v", tag.get("v"))
-
-            truncated_ways.append(new_way)
-
-    print(f"   Keeping {len(truncated_ways)} ways (truncated to bbox)")
+    # Collect all nodes used by kept ways
+    used_node_ids = set()
+    for way in kept_ways:
+        for nd in way.findall("nd"):
+            used_node_ids.add(nd.get("ref"))
 
     new_root = ET.Element("osm")
     new_root.set("version", root.get("version", "0.6"))
@@ -127,51 +154,52 @@ def crop_osm_to_bbox(input_osm_path, output_osm_path, lat, lon, delta):
     new_bounds.set("maxlat", str(max_lat))
     new_bounds.set("maxlon", str(max_lon))
 
-    used_nodes = set()
-    for way in truncated_ways:
-        for nd in way.findall("nd"):
-            used_nodes.add(nd.get("ref"))
+    # Add all nodes used by kept ways
+    for node_id in used_node_ids:
+        if node_id in all_nodes:
+            new_root.append(all_nodes[node_id])
 
-    for node_id in used_nodes:
-        if node_id in nodes_in_bbox:
-            new_root.append(nodes_in_bbox[node_id])
-
-    for way in truncated_ways:
+    # Add kept ways (full, not truncated)
+    for way in kept_ways:
         new_root.append(way)
 
     new_tree = ET.ElementTree(new_root)
     ET.indent(new_tree, space="  ")
     new_tree.write(output_osm_path, encoding="unicode", xml_declaration=True)
 
-    print(f"   Final: {len(used_nodes)} nodes, {len(truncated_ways)} ways")
+    print(f"   Final: {len(used_node_ids)} nodes, {len(kept_ways)} ways")
     return output_osm_path
 
 
-def convert_osm_to_sumo(osm_path, scene_name, scenes_dir, lat, lon, delta):
-    """Crop OSM around (lat, lon) and convert to SUMO net.xml."""
+def convert_osm_to_sumo(osm_path, scene_name, scenes_dir, lat, lon, radius):
+    """Crop OSM around (lat, lon) and convert to SUMO net.xml.
+    
+    Args:
+        radius: Crop radius in meters from the center point.
+    """
     osm_path = Path(osm_path)
     if not osm_path.exists():
         raise FileNotFoundError(f"OSM file not found: {osm_path}")
+
+    delta_lat, delta_lon = meters_to_degrees(radius, lat)
 
     print(f"\n{'=' * 60}")
     print("Converting OSM to SUMO network")
     print(f"  Input: {osm_path.name}")
     print(f"  Scene name: {scene_name}")
     print(f"  Crop center: ({lat:.6f}, {lon:.6f})")
-    print(f"  Crop delta: ±{delta} degrees (~{delta * 111:.0f}m)")
+    print(f"  Crop radius: {radius}m (±{delta_lat:.6f}° lat, ±{delta_lon:.6f}° lon)")
     print(f"{'=' * 60}")
 
     scene_dir = scenes_dir / scene_name
     scene_dir.mkdir(parents=True, exist_ok=True)
 
-    net_file = f"{scene_name}.net.xml"
-    osm_file = f"{scene_name}.osm"
-    net_output_path = scene_dir / net_file
+    net_output_path = scene_dir / NET_FILE
+    cropped_osm_path = scene_dir / CROPPED_OSM_FILE
 
     print(f"\n1. Cropping OSM to area around ({lat:.6f}, {lon:.6f})...")
     print(f"   Original: {osm_path} ({osm_path.stat().st_size / 1024:.1f} KB)")
-    cropped_osm_path = scene_dir / f"{scene_name}_cropped.osm"
-    crop_osm_to_bbox(osm_path, cropped_osm_path, lat, lon, delta)
+    crop_osm_to_bbox(osm_path, cropped_osm_path, lat, lon, delta_lat, delta_lon)
     print(f"   Cropped: {cropped_osm_path} ({cropped_osm_path.stat().st_size / 1024:.1f} KB)")
     osm_to_convert = cropped_osm_path
 
@@ -196,7 +224,7 @@ def convert_osm_to_sumo(osm_path, scene_name, scenes_dir, lat, lon, delta):
         "highway.track", "highway.bridleway", "highway.corridor",
     ]
 
-    geo_boundary = f"{lon - delta},{lat - delta},{lon + delta},{lat + delta}"
+    geo_boundary = f"{lon - delta_lon},{lat - delta_lat},{lon + delta_lon},{lat + delta_lat}"
     cmd = [
         _find_netconvert(),
         "--osm-files", str(osm_to_convert),
@@ -218,8 +246,6 @@ def convert_osm_to_sumo(osm_path, scene_name, scenes_dir, lat, lon, delta):
 
     print("\n3. Saving scene files...")
 
-    (scene_dir / osm_file).write_bytes(osm_to_convert.read_bytes())
-
     try:
         source_osm = osm_path.relative_to(scenes_dir.parent)
     except ValueError:
@@ -227,27 +253,27 @@ def convert_osm_to_sumo(osm_path, scene_name, scenes_dir, lat, lon, delta):
 
     meta = {
         "scene_name": scene_name,
-        "net_file": net_file,
-        "osm_file": osm_file,
+        "net_file": NET_FILE,
+        "osm_file": CROPPED_OSM_FILE,
         "source_osm": str(source_osm),
         "latitude": lat,
         "longitude": lon,
-        "crop_delta": delta,
+        "crop_radius_m": radius,
     }
     with open(scene_dir / "meta.json", "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)
 
     print(f"\nScene saved to: {scene_dir}")
     print(f"  meta.json: {scene_dir / 'meta.json'}")
-    print(f"  net.xml: {scene_dir / net_file}")
-    print(f"  osm: {scene_dir / osm_file}")
+    print(f"  net.xml: {scene_dir / NET_FILE}")
+    print(f"  osm: {scene_dir / CROPPED_OSM_FILE}")
 
     return scene_dir
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Build SUMO net from a scene folder (map.osm + coordinates.json)",
+        description="Build SUMO net from a scene folder (map.osm + center.json)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -262,10 +288,10 @@ def main():
         help=f"Scenes root directory (default: {SCENES_DIR_DEFAULT})",
     )
     parser.add_argument(
-        "--delta",
+        "--radius",
         type=float,
-        default=DELTA_DEFAULT,
-        help=f"Crop radius in degrees (default: {DELTA_DEFAULT}, ~{DELTA_DEFAULT * 111:.0f}m)",
+        default=RADIUS_DEFAULT,
+        help=f"Crop radius in meters from center (default: {RADIUS_DEFAULT}m)",
     )
 
     args = parser.parse_args()
@@ -279,14 +305,14 @@ def main():
         scenes_dir=scenes_dir,
         lat=lat,
         lon=lon,
-        delta=args.delta,
+        radius=args.radius,
     )
 
     print(f"\n{'=' * 60}")
     print("SUCCESS!")
     print(f"Scene created at: {scene_dir}")
     print("\nTo render static map:")
-    print(f"  python run_single_sumo_scene.py {args.scene}")
+    print(f"  python render_static_map.py {args.scene}")
     print("\nTo run simulation (IDM/CARL/PLANT):")
     print(f"  python run_simulation.py {args.scene}")
     print(f"  python run_simulation.py {args.scene} --policy carl")

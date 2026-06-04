@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Render a SUMO network (net.xml) as an image.
+"""Render a SUMO network (map.net.xml) as a static map image.
 
 Usage:
-    python run_single_sumo_scene.py savvinskaya_3
+    python render_static_map.py savvinskaya_3
+    python render_static_map.py savvinskaya_3 --out scenes/savvinskaya_3/custom.png
 """
 from __future__ import annotations
 
@@ -16,6 +17,23 @@ from matplotlib.collections import LineCollection
 import numpy as np
 
 SCENES_DIR_DEFAULT = Path(__file__).resolve().parent / "scenes"
+DEFAULT_NET_FILE = "map.net.xml"
+
+
+def resolve_net_file(scene_dir: Path, meta: dict) -> str:
+    """Resolve SUMO net filename (neutral map.net.xml, with legacy fallback)."""
+    net_file = meta.get("net_file", DEFAULT_NET_FILE)
+    if (scene_dir / net_file).exists():
+        return net_file
+
+    net_files = sorted(scene_dir.glob("*.net.xml"))
+    if net_files:
+        return net_files[0].name
+
+    raise FileNotFoundError(
+        f"No .net.xml file found in {scene_dir} "
+        f"(expected {DEFAULT_NET_FILE} or net_file in meta.json)"
+    )
 
 
 def resolve_scene_dir(scenes_dir: Path, scene_name: str) -> Path:
@@ -124,7 +142,7 @@ def render_network(edges, junctions, out_path: Path, figsize=(12, 12), dpi=150):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Render SUMO network as image",
+        description="Render a scene SUMO network as a static map image",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -139,7 +157,7 @@ def main():
         "--out",
         type=Path,
         default=None,
-        help="Output image path (default: scenes/<scene>/output.png)",
+        help="Output image path (default: scenes/<scene>/custom.png)",
     )
     parser.add_argument("--figsize", type=float, default=12, help="Figure size (default: 12)")
     parser.add_argument("--dpi", type=int, default=150, help="DPI (default: 150)")
@@ -155,14 +173,7 @@ def main():
     print(f"Loading scene: {scene_dir}")
     meta = load_scene_meta(scene_dir)
     
-    net_file = meta.get("net_file")
-    if not net_file:
-        net_files = list(scene_dir.glob("*.net.xml"))
-        if net_files:
-            net_file = net_files[0].name
-        else:
-            raise FileNotFoundError(f"No .net.xml file found in {scene_dir}")
-    
+    net_file = resolve_net_file(scene_dir, meta)
     net_path = scene_dir / net_file
     print(f"  net.xml: {net_path}")
 
