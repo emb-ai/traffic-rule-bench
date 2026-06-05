@@ -29,21 +29,27 @@ from .sumo_scene_enumerator import (
 BRAKING_SPAWN_CODES = {"3.24"}
 
 
-def bucket_limit_kmh(raw_kmh: float):
-    """Snap a raw OSM speed limit to the canonical 3.24 sign set {20,40,60}.
+def bucket_limit_kmh(raw_kmh: float, selector: Optional[int] = None):
+    """Snap a raw OSM speed limit to the canonical 3.24 sign set {20,40,50}.
 
-    <20 → 20 ; 20–40 → 40 ; 40–80 → 60 ; >80 → None (scene dropped).
-    Also fixes missing icons (no 3.24_80) and keeps v0 (cap 22 m/s) above limit.
+    <20 → 20 ; 20–40 → 40 ; 40–80 → 40 or 50 (split evenly) ; >80 → None (dropped).
+
+    The former 60 bucket is removed: its scenes are spread UNIFORMLY over 40 and 50
+    using the parity of `selector` (a stable per-scene hash). With no selector the
+    fallback is 50 (the higher of the pair). All targets have icons (3.24_40/50.png)
+    and keep v0 (cap 22 m/s) above the limit.
     """
     if raw_kmh > 80:
         return None
     if raw_kmh < 21:
         return 20
-    if raw_kmh <= 40 :
+    if raw_kmh <= 40:
         return 40
-    return 60
+    # was 60 → now an even 40/50 split keyed off the per-scene selector
+    if selector is None:
+        return 50
+    return 40 if (selector % 2 == 0) else 50
 
-# Defaults for the braking model (configurable via per_sign_benchmark CLI).
 BRAKE_DECEL_MPS2_DEFAULT = 2.5     # = ego DEACC_FACTOR (ego_defaults.py)
 BRAKE_DELAY_S_DEFAULT = 1.0        # reaction/latency
 BRAKE_MARGIN_M_DEFAULT = 5.0
@@ -153,7 +159,10 @@ def build_catalog(
         if is_braking:
             net_abs = str(scenes_root / scene.net_path)
             v_target_raw_kmh = round(edge_speed_mps(net_abs, scene.road_id) * 3.6)
-            bucketed = bucket_limit_kmh(v_target_raw_kmh)
+            # selector keyed on scene_id → even, reproducible 40/50 split of the
+            # former 60 bucket (independent of v0/var/lane axes).
+            bucketed = bucket_limit_kmh(v_target_raw_kmh,
+                                        selector=stable_hash(scene.scene_id, "limit40_50"))
             if bucketed is None:        # raw limit > 80 km/h → drop the scene
                 dropped_high_limit += 1
                 continue

@@ -1121,6 +1121,96 @@ class TrafficSignSumoEnv(BaseEnv):
         self._refresh_navigation_after_spawn(spawn_lane)
         return _route_has_sign()
 
+    def _restrict_npcs_to_zone_or_adjacent(self, corridor_lanes, sign_lane_index,
+                                           sign_s, lane_lat=2.0):
+        """Keep surrounding NPCs only on ADJACENT lanes or INSIDE the sign zone.
+
+        `corridor_lanes` are the lanes ego traverses from its braking spawn up to
+        the sign. An NPC is removed iff it sits on one of those lanes BEFORE the
+        sign:
+          - on an upstream corridor lane (not the sign's lane) → always before
+            the sign → remove;
+          - on the sign's own lane with longitudinal < sign_s → before sign →
+            remove; at/after sign_s it is in the zone → keep.
+        NPCs on any other (adjacent / non-corridor) lane are kept regardless of
+        position. Returns the number removed.
+
+        To preserve the sampled traffic_density, every NPC removed from the
+        corridor is RELOCATED: an equal number is respawned on allowed lanes
+        (corridor lanes excluded → adjacent lanes / elsewhere). Spawn/removal/
+        relocation counts are recorded in `self._npc_density_stats` so the
+        realized density can be reported in the manifest.
+
+        Lane membership is by local coordinates: |lateral| < `lane_lat` (half a
+        lane width) so a car one lane over (~3.5 m) is treated as adjacent.
+        """
+        try:
+            traffic_mgr = self.engine.traffic_manager
+            if not hasattr(traffic_mgr, "traffic_vehicles"):
+                return 0
+            n_before = len(traffic_mgr.traffic_vehicles)
+            sign_key = str(sign_lane_index)
+            # Dedup corridor lanes by index, drop None.
+            seen = set()
+            lanes = []
+            for ln in corridor_lanes:
+                if ln is None:
+                    continue
+                k = str(getattr(ln, "index", None))
+                if k in seen:
+                    continue
+                seen.add(k)
+                lanes.append(ln)
+            to_remove = []
+            for v in list(traffic_mgr.traffic_vehicles):
+                pos = np.asarray(v.position, dtype=np.float64)
+                drop = False
+                for ln in lanes:
+                    try:
+                        lng, lat = ln.local_coordinates(pos)
+                    except Exception:
+                        continue
+                    if not (0.0 <= lng <= float(getattr(ln, "length", 0.0)) and abs(lat) < lane_lat):
+                        continue  # not on this corridor lane
+                    # On a corridor lane. Keep only if it's the sign lane AND the
+                    # NPC is at/after the sign (already in the enforced zone).
+                    if str(getattr(ln, "index", None)) == sign_key and lng >= float(sign_s):
+                        drop = False
+                        break
+                    drop = True
+                    break
+                if drop:
+                    to_remove.append(v)
+            for v in to_remove:
+                traffic_mgr.clear_objects([v.id])
+                if v in getattr(traffic_mgr, "_traffic_vehicles", []):
+                    traffic_mgr._traffic_vehicles.remove(v)
+
+            # Relocate: respawn the same count on allowed lanes (corridor lanes
+            # excluded) so the realized density matches the sampled profile.
+            n_removed = len(to_remove)
+            relocated = 0
+            if n_removed > 0 and hasattr(traffic_mgr, "_try_respawn"):
+                corridor_keys = [str(getattr(ln, "index", None)) for ln in lanes]
+                try:
+                    relocated = int(traffic_mgr._try_respawn(
+                        n_removed, forbidden_keys=corridor_keys) or 0)
+                except Exception as exc:
+                    logging.warning(f"braking-spawn NPC relocation failed: {exc}")
+            n_after = len(traffic_mgr.traffic_vehicles)
+            self._npc_density_stats = {
+                "npc_before": int(n_before),
+                "npc_removed_corridor": int(n_removed),
+                "npc_relocated": int(relocated),
+                "npc_after": int(n_after),
+                "npc_density_preserved": bool(relocated >= n_removed),
+                "traffic_density": float(self.config.get("traffic_density", 0.0) or 0.0),
+            }
+            return n_removed
+        except Exception as exc:
+            logging.warning(f"braking-spawn NPC restriction failed: {exc}")
+            return 0
+
     def _spawn_ego_before_sign(self, sign_obj, road_network):
         """Place ego `d_required` UPSTREAM of the sign along the road graph at v0.
 
@@ -1158,6 +1248,12 @@ class TrafficSignSumoEnv(BaseEnv):
         cur = spawn_lane
         avail_here = min(sign_s, float(getattr(cur, "length", sign_s)))
         visited = {str(getattr(cur, "index", None))}
+        # Lanes ego traverses from spawn up to the sign — the braking corridor.
+        # NPCs on these (before the sign) get removed so ego, starting above the
+        # limit, doesn't rear-end a slower car it can't avoid. The sign lane is
+        # included but only its pre-sign part counts as corridor (the zone after
+        # the sign keeps its traffic).
+        corridor_lanes = [cur]
         insufficient = False
         spawn_long = None
         for _ in range(30):
@@ -1178,11 +1274,13 @@ class TrafficSignSumoEnv(BaseEnv):
             if remaining <= gap:
                 spawn_lane = pred
                 spawn_long = max(0.2, float(getattr(pred, "length", 1.0)) - 0.5)
+                corridor_lanes.append(pred)
                 remaining = 0.0
                 break
             remaining -= gap
             cur = pred
             visited.add(str(getattr(cur, "index", None)))
+            corridor_lanes.append(cur)
             avail_here = float(getattr(cur, "length", 0.0))
         if spawn_long is None:
             insufficient = True
@@ -1224,6 +1322,13 @@ class TrafficSignSumoEnv(BaseEnv):
                 self.vehicle.spawn_place = pos.copy()
             except Exception:
                 pass
+            # Restrict surrounding traffic: NPCs may only sit on ADJACENT lanes
+            # or already INSIDE the sign's zone (from the sign onward). Any NPC on
+            # ego's own braking-corridor lanes BEFORE the sign is removed — ego
+            # starts above the limit among slower (limit-capped) NPCs, so such a
+            # car is an unavoidable rear-end before ego can brake → spurious crash.
+            n_cleared = self._restrict_npcs_to_zone_or_adjacent(
+                corridor_lanes, getattr(sign_lane, "index", None), sign_s)
             routed = self._route_through_sign(spawn_lane, getattr(sign_lane, "index", None))
             try:
                 self.vehicle.set_velocity([float(v0), 0.0], in_local_frame=True)
@@ -1242,7 +1347,11 @@ class TrafficSignSumoEnv(BaseEnv):
             "insufficient_runway": bool(insufficient),
             "braking_invalid": bool(braking_invalid),
             "routed_through_sign": bool(routed),
+            "npc_cleared_corridor": int(n_cleared),
         }
+        # Density bookkeeping (spawn/removal/relocation) so the realized traffic
+        # density can be audited per scene.
+        info.update(getattr(self, "_npc_density_stats", {}) or {})
         self._braking_spawn_info = info
         return info
 

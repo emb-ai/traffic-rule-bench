@@ -348,35 +348,8 @@ def _write_sign(output_dir: Path, plan: dict) -> None:
 # CLI
 # ----------------------------------------------------------------------------
 
-PRESETS = {
-    # Mini: quick smoke on a laptop. A handful of scenes per sign, no multipliers.
-    "mini": dict(
-        target_per_sign=10,
-        min_synthetic_for_cp=5,
-        n_variations=1,
-        n_velocity_samples=2,
-        sumo_workers=2,
-        citymap_maps=4,
-        horizon=600,
-    ),
-    # Full: remote machine. Full 250 + multipliers.
-    "full": dict(
-        target_per_sign=250,
-        min_synthetic_for_cp=50,
-        n_variations=10,
-        n_velocity_samples=5,
-        sumo_workers=16,
-        citymap_maps=40,
-        horizon=1200,
-    ),
-}
-
-
 def main():
     parser = argparse.ArgumentParser(description="Per-sign benchmark orchestrator")
-    parser.add_argument("--preset", choices=list(PRESETS.keys()), default=None,
-                        help="mini (laptop smoke) / full (remote). Overrides the "
-                             "individual params below when set.")
     parser.add_argument("--output-dir", type=str, default="benchmark_output/per_sign")
     parser.add_argument("--scenes-root", type=str, default=DEFAULT_SCENES_ROOT)
     parser.add_argument("--target-per-sign", type=int, default=250)
@@ -411,18 +384,12 @@ def main():
                         help="Parallel workers for SUMO materialization.")
     parser.add_argument("--citymap-maps", type=int, default=40,
                         help="Number of CityMap seeds for prohibition-with-detour scenes.")
+    parser.add_argument("--horizon", type=int, default=1200,
+                        help="Episode horizon (max steps) used during materialization.")
     parser.add_argument("--skip-materialize", type=str, default="",
                         help="Comma-separated list of backends to skip in materialize step: "
                              "pgmap,paired,citymap,sumo")
     args = parser.parse_args()
-
-    if args.preset:
-        p = PRESETS[args.preset]
-        for k, v in p.items():
-            setattr(args, k, v)
-        print(f"[preset={args.preset}] target={args.target_per_sign} "
-              f"n_variations={args.n_variations} n_velocity_samples={args.n_velocity_samples} "
-              f"sumo_workers={args.sumo_workers} citymap_maps={args.citymap_maps}")
 
     codes = list(DEFAULT_SOURCE_PLAN.keys())
     if args.only_codes:

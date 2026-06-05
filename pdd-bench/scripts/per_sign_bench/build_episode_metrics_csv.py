@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""Build a single episode-level CSV from consolidated <baseline>_replays.jsonl.
+"""Build a single episode-level CSV — the source of truth for downstream aggregations.
 
-For each var (var_0..var_N) and each baseline file in
-  <runs-root>/var_<i>/<baseline>_replays.jsonl
-emit one CSV row per episode with all main fields from the replay's `metrics`
-plus precomputed flags (target compliance, recomputed dest, passes_filter)
-that are needed to reproduce scores from
+Two input modes (mutually exclusive):
+
+  --episodes-root  (PRIMARY)  <policy_eval>/<run_name>/episodes_*.jsonl
+      Built straight from the per-episode JSONL that run_benchmark ALWAYS writes.
+      No replay.json sidecar needed.
+
+  --runs-root      (legacy)   <runs-root>/var_<i>/<baseline>_replays.jsonl
+      Reads consolidated replays / replay.json sidecars.
+
+Either way, one CSV row per episode carries all `metrics` fields plus precomputed
+flags (target compliance, recomputed dest, passes_filter) needed by
   generate_cumulative_markdown_report.py
   expert_selection_exps/select_from_replays.py
 
-The output CSV is the source of truth for downstream aggregations.
-
 Usage:
   python3 build_episode_metrics_csv.py \
-      --runs-root benchmark_2node_eval/runs \
-      --out       benchmark_2node_eval/metrics_per_episode.csv
+      --episodes-root <out>/benchmark/policy_eval \
+      --out           <out>/metrics_per_episode.csv
 """
 from __future__ import annotations
 
@@ -114,6 +118,69 @@ def _bool(v) -> bool:
 
 def _ensure_dict(v) -> dict:
     return v if isinstance(v, dict) else {}
+
+
+def _episode_to_replay(ep: dict) -> dict:
+    """Normalize a run_benchmark `episodes_*.jsonl` row into the replay-shaped dict
+    that `_build_row` consumes.
+
+    This is what lets the metrics CSV be built from `episodes_*.jsonl` directly,
+    with NO replay.json sidecar needed. The episode row is flat (run_benchmark
+    schema); the sidecar nests metrics under `metrics`. The renames below mirror
+    run_benchmark's `sidecar_metrics` block one-to-one.
+    """
+    rc_pct = ep.get("route_completion_pct")
+    metrics = {
+        "arrived_dest": bool(ep.get("reached_dest")),
+        # sidecar `metrics.crashed` is info["crash"] alone (without OOR);
+        # run_benchmark exposes that as `crashed_raw`.
+        "crashed": bool(ep.get("crashed_raw", ep.get("crashed"))),
+        "crashed_ego_fault": bool(ep.get("crashed_ego_fault")),
+        "crashed_npc_fault": bool(ep.get("crashed_npc_fault")),
+        "out_of_road": bool(ep.get("out_of_road")),
+        "success": bool(ep.get("success")),
+        "final_step": ep.get("steps"),
+        "total_reward": ep.get("total_reward"),
+        "route_completion": (float(rc_pct) / 100.0) if rc_pct is not None else None,
+        "route_length_m": ep.get("route_length_m"),
+        "distance_travelled_m": ep.get("distance_travelled_m"),
+        "driving_score": ep.get("driving_score"),
+        "driving_efficiency": ep.get("driving_efficiency"),
+        "infraction_penalty": ep.get("infraction_penalty"),
+        "smoothness_ratio": ep.get("smoothness"),
+        "frame_smooth_ratio": ep.get("smoothness_frame_ratio"),
+        "smooth_segments": ep.get("smooth_segments"),
+        "total_segments": ep.get("smooth_total_segments"),
+        "min_ttc_sec": ep.get("min_ttc_sec"),
+        "mean_abs_lane_offset": ep.get("mean_abs_lane_offset"),
+        "mean_abs_steer_delta": ep.get("mean_abs_steer_delta"),
+        "hard_brake_count": ep.get("hard_brake_count"),
+        "hard_accel_count": ep.get("hard_accel_count"),
+        "total_violations": ep.get("violations"),
+        "violations_by_class": {
+            "sign": ep.get("sign_violations", 0),
+            "traffic_light": ep.get("traffic_light_violations", 0),
+            "crosswalk": ep.get("crosswalk_violations", 0),
+        },
+        "violations_by_class_step": ep.get("violations_by_class_step") or {},
+        "violations_by_class_event": ep.get("violations_by_class_event") or {},
+        "in_zone_total_steps": ep.get("in_zone_total_steps", 0),
+        "in_zone_by_class_step": ep.get("in_zone_by_class_step") or {},
+        "violations_event_count": ep.get("violations_event_count", 0),
+    }
+    pdd = ep.get("sign_type") or ep.get("pdd_code") or ""
+    return {
+        "scene_id": ep.get("scene_id"),
+        "scene_uid": ep.get("scene_uid"),
+        "backend": ep.get("backend") or "",
+        "pdd_code": pdd,
+        "sign_slug": ep.get("sign_slug") or (str(pdd).replace(".", "_") if pdd else ""),
+        "policy": ep.get("policy") or "",
+        "variant": ep.get("variant") or "",
+        "valid": bool(ep.get("ok", True)),
+        "source_row": {},
+        "metrics": metrics,
+    }
 
 
 def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
@@ -389,23 +456,94 @@ def _load_manifest_lookup(manifests_root: Path,
     return lookup
 
 
+def _write_csv(rows: list[dict], out_path: Path) -> None:
+    with out_path.open("w", encoding="utf-8", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=CSV_COLUMNS, extrasaction="ignore")
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+    print(f"[write] {out_path}  ({len(rows)} rows × {len(CSV_COLUMNS)} cols)")
+
+
+def _build_from_episodes(episodes_root: Path, out_path: Path,
+                          manifests_root_arg: str | None) -> None:
+    """Build the metrics CSV from run_benchmark `episodes_*.jsonl` (unified path).
+
+    Layout: <episodes_root>/<run_name>/episodes_*.jsonl, where <run_name> is
+    "<policy>_<variant>" (the baseline). Only ok=true episodes are emitted. All
+    episodes are treated as var_0 (eval_pipeline runs a single var).
+    """
+    if not episodes_root.is_dir():
+        print(f"ERROR: not a directory: {episodes_root}", file=sys.stderr)
+        sys.exit(2)
+
+    manifests_root = (Path(manifests_root_arg).resolve() if manifests_root_arg
+                      else (episodes_root.parent / "chunks").resolve())
+    manifest_lookup = _load_manifest_lookup(manifests_root, wanted_var_idxs={0})
+
+    seen: dict[tuple[int, str, str], dict] = {}
+    n_total = n_kept = n_dup = n_no_id = n_skip = 0
+    for run_dir in sorted(d for d in episodes_root.iterdir() if d.is_dir()):
+        baseline = run_dir.name
+        eps = sorted(run_dir.glob("episodes_*.jsonl"))
+        n_for_baseline = 0
+        for fp in eps:
+            for _, ep in _iter_jsonl(fp):
+                if not ep.get("ok"):
+                    n_skip += 1
+                    continue
+                n_total += 1
+                row = _build_row(_episode_to_replay(ep), "var_0", 0, baseline,
+                                 manifest_lookup)
+                if row is None:
+                    n_no_id += 1
+                    continue
+                key = (0, baseline, row["scene_uid"])
+                if key in seen:
+                    n_dup += 1
+                seen[key] = row
+                n_kept += 1
+                n_for_baseline += 1
+        if eps:
+            print(f"  [scan] {baseline}: {len(eps)} episodes file(s), "
+                  f"{n_for_baseline} episodes")
+
+    rows = list(seen.values())
+    print(f"[stats] read={n_total} kept={len(rows)} dups_overwritten={n_dup} "
+          f"no_scene_uid={n_no_id} skipped_not_ok={n_skip}")
+    _write_csv(rows, out_path)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--runs-root", required=True,
-                    help="Directory containing var_<i>/<baseline>_replays.jsonl")
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--episodes-root",
+                     help="policy_eval dir containing <run_name>/episodes_*.jsonl. "
+                          "PRIMARY path — builds the CSV straight from the per-episode "
+                          "JSONL that run_benchmark always writes (no sidecar needed).")
+    src.add_argument("--runs-root",
+                     help="Directory containing var_<i>/<baseline>_replays.jsonl. "
+                          "Legacy path — reads consolidated replays / replay.json sidecars.")
     ap.add_argument("--out", required=True,
                     help="Output CSV path (e.g. metrics_per_episode.csv)")
     ap.add_argument("--vars", default="all",
-                    help="Comma-separated var indices (e.g. '0,1,2') or 'all' (default)")
+                    help="Comma-separated var indices (e.g. '0,1,2') or 'all' (default). "
+                         "Only used with --runs-root.")
     ap.add_argument("--manifests-root", default=None,
                     help="Directory with var_<i>/var_<i>.jsonl manifests (for paired-scene "
                          "info: pdd_code_start/end/target). Default: <runs-root>/../chunks")
     args = ap.parse_args()
 
-    runs_root = Path(args.runs_root).resolve()
     out_path = Path(args.out).resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # --episodes-root: build directly from episodes_*.jsonl (unified path).
+    if args.episodes_root:
+        _build_from_episodes(Path(args.episodes_root).resolve(), out_path,
+                             args.manifests_root)
+        return
+
+    runs_root = Path(args.runs_root).resolve()
     if not runs_root.is_dir():
         print(f"ERROR: not a directory: {runs_root}", file=sys.stderr)
         sys.exit(2)
@@ -506,14 +644,7 @@ def main() -> None:
     rows = list(seen.values())
     print(f"[stats] read={n_total} (sidecars={n_sidecar_total}) "
           f"kept={len(rows)} dups_overwritten={n_dup} no_scene_uid={n_no_id}")
-
-    with out_path.open("w", encoding="utf-8", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=CSV_COLUMNS, extrasaction="ignore")
-        w.writeheader()
-        for r in rows:
-            w.writerow(r)
-
-    print(f"[write] {out_path}  ({len(rows)} rows × {len(CSV_COLUMNS)} cols)")
+    _write_csv(rows, out_path)
 
 
 if __name__ == "__main__":

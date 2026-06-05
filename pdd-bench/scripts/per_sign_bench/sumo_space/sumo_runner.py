@@ -42,15 +42,10 @@ def _build_env(catalog_row: dict, profile: dict):
     # immediate collision; NPCs spawn directly within the agent's lane
     # segment so traffic interactions start from step 0.
     SumoTrafficManager.EGO_SAFE_RADIUS = 15
-    _raw_ssd = float(catalog_row.get("sign_spawn_distance",
-                                     catalog_row.get("distance_from_start", 0.0)) or 0.0)
-    if catalog_row.get("braking_spawn"):
-        # Braking scenes (3.24): keep the sign at its REAL distance_from_start.
-        # Approach runway comes from spawning ego upstream along the road graph,
-        # not from the legacy 30 m floor (which displaced the sign).
-        sign_spawn_distance = _raw_ssd
-    else:
-        sign_spawn_distance = max(_raw_ssd, 30.0)
+    # Sign stays at its REAL distance_from_start — no minimum floor. For braking
+    # scenes the approach runway comes from spawning ego upstream along the graph.
+    sign_spawn_distance = float(catalog_row.get("sign_spawn_distance",
+                                                catalog_row.get("distance_from_start", 0.0)) or 0.0)
 
     config = dict(
         use_render=False,
@@ -257,13 +252,8 @@ def materialize_sumo_scene(
         "sign_code": catalog_row["sign_code"],
         "road_id": catalog_row.get("road_id", ""),
         "net_path": catalog_row["net_path"],
-        "sign_spawn_distance": (
-            float(catalog_row.get("sign_spawn_distance",
-                                  catalog_row.get("distance_from_start", 0.0)) or 0.0)
-            if catalog_row.get("braking_spawn")
-            else max(float(catalog_row.get("sign_spawn_distance",
-                                           catalog_row.get("distance_from_start", 0.0)) or 0.0), 30.0)
-        ),
+        "sign_spawn_distance": float(catalog_row.get("sign_spawn_distance",
+                              catalog_row.get("distance_from_start", 0.0)) or 0.0),
         "distance_from_start": catalog_row.get("distance_from_start"),
         "destination_lane_id": catalog_row.get("destination_lane_id"),
         "traffic_density": float(profile["traffic_density"]),
@@ -286,6 +276,23 @@ def materialize_sumo_scene(
     }
     for k, v in profile.items():
         result[f"profile_{k}"] = v
+
+    # Braking-spawn (3.24): carry the full spec into the manifest so the EVAL
+    # path (run_benchmark._build_sumo_env) can reconstruct the SAME upstream
+    # spawn + NPC corridor restriction. The env recomputes placement
+    # deterministically from (spawn_velocity_ms, d_required_m, v_target_kmh,
+    # brake params, sign_s), so eval matches materialization exactly.
+    if catalog_row.get("braking_spawn"):
+        result["braking_spawn"] = True
+        result["spawn_velocity_ms"] = float(catalog_row.get("spawn_velocity_ms", 0.0) or 0.0)
+        result["d_required_m"] = float(catalog_row.get("d_required_m", 0.0) or 0.0)
+        result["v_target_kmh"] = float(catalog_row.get("v_target_kmh", 0.0) or 0.0)
+        result["v_target_raw_kmh"] = float(catalog_row.get("v_target_raw_kmh", 0.0) or 0.0)
+        result["brake_decel_mps2"] = float(catalog_row.get("brake_decel_mps2", 2.5) or 2.5)
+        result["brake_delay_s"] = float(catalog_row.get("brake_delay_s", 1.0) or 1.0)
+        result["brake_margin_m"] = float(catalog_row.get("brake_margin_m", 5.0) or 5.0)
+        result["sign_s"] = float(catalog_row.get("sign_s",
+                                                 catalog_row.get("distance_from_start", 0.0)) or 0.0)
 
     env = None
     # Original run_benchmark.py uses seed=int(sign_id) for deterministic routing.
@@ -464,6 +471,16 @@ def _drive_episode(env, agent_policy: str, max_steps: int, save_gif: str | None)
 
         if save_gif:
             try:
+                lim = float(env.config.get("ego_v_target_kmh", 0.0) or 0.0)
+                text_dict = {
+                    "Step": step,
+                    "Speed": f"{veh.speed_km_h:.1f} km/h",
+                }
+                if lim > 0:
+                    text_dict["Limit"] = f"{lim:.0f} km/h"
+                    text_dict["Over"] = "YES" if veh.speed_km_h > lim else "no"
+                if n_violations > 0:
+                    text_dict["Violations"] = n_violations
                 env.render(
                     mode="top_down",
                     film_size=(2400, 2400),
@@ -475,6 +492,7 @@ def _drive_episode(env, agent_policy: str, max_steps: int, save_gif: str | None)
                     target_agent_heading_up=True,
                     screen_record=True,
                     window=False,
+                    text=text_dict,
                 )
             except Exception:
                 pass
