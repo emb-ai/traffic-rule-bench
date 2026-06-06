@@ -52,8 +52,9 @@ from sumo_scene_enumerator import enumerate_all_scenes, SumoScene  # noqa: E402
 
 # Which end code terminates which start code (scope: speed + zone limits).
 START_END_CODES = {
-    "3.24": "3.25",   # speed limit  -> end of speed limit
-    "5.31": "5.32",   # zone limit   -> end of zone limit
+    "3.24": "3.25",   # speed limit     -> end of speed limit
+    "5.31": "5.32",   # zone limit      -> end of zone limit
+    "5.21": "5.22",   # residential zone-> end of residential zone
 }
 
 # Geometry margins (meters). Mirror factorized_space.sign_placement defaults.
