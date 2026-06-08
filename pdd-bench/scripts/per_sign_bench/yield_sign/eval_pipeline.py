@@ -229,12 +229,12 @@ def main() -> None:
         run_name = f"{policy}_{variant}"
         replay_root = OUT / "runs" / "var_0" / run_name / "replays"
         cmd = [
-            sys.executable, str(BENCH_DIR / "run_benchmark.py"),
+            sys.executable, str(BENCH_DIR / "run_benchmark_real.py"),
             "--policy",           policy,
             "--run-name",         run_name,
             "--manifest",         str(input_manifest),
             "--scenes-root",      args.scenes_root,
-            "--backends",         args.backends,
+            # "--backends",         args.backends,
             "--ego-variant",      variant,
             "--benchmark-output", str(bench_root),
             "--emit-replay-sidecar",
