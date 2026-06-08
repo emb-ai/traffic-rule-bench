@@ -31,37 +31,45 @@ BRAKING_SPAWN_CODES = {"3.24", "5.21", "5.31"}
 
 
 def bucket_limit_kmh(raw_kmh: float, selector: Optional[int] = None):
-    """Snap a raw OSM speed limit to the canonical 3.24 sign set {20,40,50}.
+    """Snap a raw OSM speed limit to {20, 30, 50} for 3.24.
 
-    <20 → 20 ; 20–40 → 40 ; 40–80 → 40 or 50 (split evenly) ; >80 → None (dropped).
+    <20 → 20 ; 20–40 → 30 ; 40–80 → 30 or 50 (even split) ; >80 → None (dropped).
 
-    The former 60 bucket is removed: its scenes are spread UNIFORMLY over 40 and 50
-    using the parity of `selector` (a stable per-scene hash). With no selector the
-    fallback is 50 (the higher of the pair). All targets have icons (3.24_40/50.png)
-    and keep v0 (cap 22 m/s) above the limit.
+    Final targets are {20, 30}: low enough that an unaware ego can VIOLATE them at a
+    MODERATE, lane-holdable speed (≤40 km/h) — high speeds (needed to violate a 40
+    limit) made the ego fly off curvy OSM roads (OOR → low success). 50 is a MARKER:
+    the caller redistributes every former-50 scene EVENLY into 20/30 (round-robin).
     """
     if raw_kmh > 80:
         return None
     if raw_kmh < 21:
         return 20
     if raw_kmh <= 40:
-        return 40
-    # was 60 → now an even 40/50 split keyed off the per-scene selector
+        return 30
+    # was 60 → even 30/50 split keyed off the per-scene selector (50 = redistributed)
     if selector is None:
         return 50
-    return 40 if (selector % 2 == 0) else 50
+    return 30 if (selector % 2 == 0) else 50
 
-BRAKE_DECEL_MPS2_DEFAULT = 2.5     # = ego DEACC_FACTOR (ego_defaults.py) — ego's
-                                   # real max decel; do NOT raise (scene becomes
-                                   # physically infeasible and every policy fails).
-BRAKE_DELAY_S_DEFAULT = 0.5        # reaction/latency buffer (was 1.0 — too slack)
-BRAKE_MARGIN_M_DEFAULT = 2.0       # reach v_target this far before the sign (was 5.0)
+BRAKE_DECEL_MPS2_DEFAULT = 3.5     # assumed braking decel (firm but achievable;
+                                   # idm brakes harder than its 2.5 comfort decel).
+                                   # Higher -> shorter d_brake -> shorter approach.
+BRAKE_DELAY_S_DEFAULT = 0.5        # small reaction buffer (room to settle → fewer OOR/crashes)
+BRAKE_MARGIN_M_DEFAULT = 3.0       # small buffer: reach v_target ~3 m before the sign
 V0_MIN_EXCESS_MPS_DEFAULT = 2.0    # min amount v0 must exceed the limit
-# Cap how far above the limit ego may spawn. The braking-distance term
-# (v0²−v_t²)/(2·decel) dominates route length, so an uncapped v0 (up to 80) over a
-# 20 km/h limit yields a ~60 m+ approach where any policy brakes long before the
-# sign. Capping the excess keeps the approach short and the braking test sharp.
-V0_MAX_EXCESS_KMH = 15.0
+# Cap how far above the limit ego may spawn (km/h).
+V0_MAX_EXCESS_KMH = 30.0
+# Full braking distance (=1.0): a SIGN-AWARE agent has exactly enough room to
+# brake from v0 to v_target by the sign and comply; a SIGN-UNAWARE agent that
+# doesn't brake enters the zone at v0 > v_target and VIOLATES. This is the whole
+# point of the scene — discriminate aware vs unaware, not test braking strength.
+BRAKE_DIST_FACTOR = 1.0
+# Ego's IDM desired speed (= profile MAX_SPEED ~14.3 m/s ≈ 51 km/h). v0 above this
+# is shed instantly at spawn, so cap v0 here to keep the approach short & the entry
+# speed realistic. The zone limit (v_target, 20/40) sits BELOW this cruising speed,
+# so an unaware agent cruising at ~51 violates it.
+EGO_DESIRED_SPEED_MPS = 11.0   # ~40 km/h: spawn/approach speed matches ego cruise
+                               # (no spawn spike) and holds the lane (less OOR)
 SPAWN_VELOCITY_MAX_MPS = 22.0      # nuPlan clip upper bound
 
 
@@ -151,6 +159,7 @@ def build_catalog(
     rows: List[dict] = []
     insufficient_v0 = 0
     dropped_high_limit = 0
+    fifty_rr = 0   # round-robin counter: former-50 (3.24) scenes -> even 20/40
     for scene in sampled:
         n_lanes = count_lanes_on_road(scene.net_path, scene.road_id)
         if n_lanes <= 0:
@@ -172,14 +181,18 @@ def build_catalog(
                 net_abs = str(scenes_root / scene.net_path)
                 v_target_raw_kmh = round(edge_speed_mps(net_abs, scene.road_id) * 3.6)
                 if scene.sign_code == "3.24":
-                    # 3.24: reproducible 40/50 split of the former 60 bucket
-                    # (selector keyed on scene_id, independent of v0/var/lane axes).
                     bucketed = bucket_limit_kmh(
                         v_target_raw_kmh,
                         selector=stable_hash(scene.scene_id, "limit40_50"))
                     if bucketed is None:    # raw limit > 80 km/h → drop the scene
                         dropped_high_limit += 1
                         continue
+                    # 50 ≈ ego cruise → unaware agent wouldn't violate. Redistribute
+                    # every former-50 scene EVENLY into 20/40 (round-robin → exact
+                    # even split, deterministic in sampled-iteration order).
+                    if bucketed == 50:
+                        bucketed = 20 if (fifty_rr % 2 == 0) else 30
+                        fifty_rr += 1
                     v_target_kmh = bucketed
                 else:
                     # Zone-limit signs (5.31): brake to the real zone limit.
@@ -220,17 +233,24 @@ def build_catalog(
                 v_target_mps = v_target_kmh / 3.6
                 for v_idx in range(max(1, n_v0_samples)):
                     vseed = stable_hash(scene.scene_id, spawn_lane_num, var_idx, "v0", v_idx)
-                    # Cap v0 close to the limit so the braking approach stays short
-                    # and the test stays sharp (ego must brake near the sign).
-                    v0_cap_kmh = min(float(v0_max_kmh), v_target_kmh + V0_MAX_EXCESS_KMH)
+                    # Cap v0 at the ego's DESIRED speed (else it's shed instantly
+                    # at spawn) AND near the limit (short approach). The ego holds
+                    # this speed in, then must brake for the zone.
+                    v0_cap_mps = min(float(v0_max_kmh) / 3.6,
+                                     (v_target_kmh + V0_MAX_EXCESS_KMH) / 3.6,
+                                     EGO_DESIRED_SPEED_MPS)
                     v0 = _v0_sampler(vseed, v_target_mps,
                                      min_excess=v0_min_excess_mps,
-                                     max_v=v0_cap_kmh / 3.6)
+                                     max_v=v0_cap_mps)
                     if v0 <= v_target_mps + 1e-6:   # never with the floored sampler
                         insufficient_v0 += 1
                         continue
-                    d_req = _braking_dist(v0, v_target_mps, brake_decel_mps2,
-                                          brake_delay_s, brake_margin_m)
+                    # Spawn at a FRACTION of the full braking distance: baseline
+                    # (decel 2.5) can't reach v_target by the sign -> overshoots
+                    # into the zone (real violation); only harder braking complies.
+                    d_req = BRAKE_DIST_FACTOR * _braking_dist(
+                        v0, v_target_mps, brake_decel_mps2,
+                        brake_delay_s, brake_margin_m)
                     row = dict(base)
                     row["v_idx"] = v_idx
                     row["seed"] = vseed

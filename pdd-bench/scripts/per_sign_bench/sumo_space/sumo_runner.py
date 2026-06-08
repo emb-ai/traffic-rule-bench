@@ -353,6 +353,20 @@ def materialize_sumo_scene(
         try:
             drive_metrics = _drive_episode(env, agent_policy, max_steps, save_gif)
             result.update(drive_metrics)
+            # Drivability filter: a scene is only valid if the rule-aware REFERENCE
+            # driver completes it cleanly — reaches the destination, no crash, no
+            # off-road. Scenes where even the expert fails have bad geometry (sharp
+            # junctions / curves the ego can't hold) and are dropped from the bench.
+            drivable = (drive_metrics.get("arrived_dest")
+                        and not drive_metrics.get("crashed")
+                        and not drive_metrics.get("out_of_road"))
+            if not drivable:
+                result["valid"] = False
+                reasons = []
+                if not drive_metrics.get("arrived_dest"): reasons.append("no_dest")
+                if drive_metrics.get("crashed"): reasons.append("crash")
+                if drive_metrics.get("out_of_road"): reasons.append("off_road")
+                result["failure_reason"] = "undrivable:" + ",".join(reasons)
         except Exception as exc:
             result["drive_error"] = f"{type(exc).__name__}: {exc}"
         finally:

@@ -15,7 +15,10 @@ from typing import Any
 
 
 DEFAULT_EGO_PARAMS = {
-    "NORMAL_SPEED": 10.0,        # m/s (~36 km/h)
+    "NORMAL_SPEED": 11.0,        # m/s (~40 km/h) — above the 3.24 limits {20,30} so a
+                                 # sign-UNAWARE ego violates, but moderate enough to
+                                 # hold the lane on curvy OSM roads (50 km/h flew off
+                                 # → OOR; 40 km/h keeps success up while still violating).
     "MAX_SPEED": 15.0,           # m/s (~54 km/h)
     "CREEP_SPEED": 1.0,          # m/s
     "ACC_FACTOR": 1.5,           # m/s^2

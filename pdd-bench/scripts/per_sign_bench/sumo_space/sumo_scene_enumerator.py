@@ -183,7 +183,7 @@ def enumerate_all_scenes(scenes_root: str | Path) -> List[SumoScene]:
 
             try:
                 road_id = str(meta.get("road_id", ""))
-                dest_lane_id = _destination_lane_id(str(net_path), road_id, hops=1)
+                dest_lane_id = _destination_lane_id(str(net_path), road_id, hops=2)
                 scenes.append(SumoScene(
                     sign_code=sign_code,
                     sign_id=int(meta.get("sign_id", 0)),
