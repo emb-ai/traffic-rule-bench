@@ -1,6 +1,8 @@
 from traffic_signs.base_traffic_sign import BaseTrafficSign, same_road_check
 
 class TrafficLightSign(BaseTrafficSign):
+    ZONE_BEFORE = 30.0  # meters before lane end to start zone
+
     def __init__(self, lane, sim_step_duration=0.1, tl_speed_factor=1.0, **kwargs):
         self.lane = lane
         self.tl_signals = getattr(lane, 'tl_signals', [])
@@ -10,6 +12,10 @@ class TrafficLightSign(BaseTrafficSign):
         self.tl_speed_factor = tl_speed_factor
 
         self.current_states = {}  # to_lane -> current state
+
+        # Define zone for violation checking
+        self.zone_start = max(0.0, lane.length - self.ZONE_BEFORE)
+        self.zone_end = lane.length
 
         super().__init__(lane=lane, **kwargs)
 

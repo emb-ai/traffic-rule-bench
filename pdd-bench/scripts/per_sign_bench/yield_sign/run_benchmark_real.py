@@ -1296,6 +1296,9 @@ def main():
                         help="Record top-down GIF per episode")
     parser.add_argument("--gif-dir", type=str, default=None,
                         help="Directory for GIFs")
+    parser.add_argument("--output-dir", type=str, default=None,
+                        help="Write episodes/summary/gifs here directly "
+                             "(skips <benchmark-output>/<preset>/policy_eval/<run-name>)")
     parser.add_argument("--plant2-action-mode", type=str, default="pid",
                         choices=["pid", "wps_pure_pursuit"],
                         help="How PlanT2 converts pred_plan -> action")
@@ -1380,7 +1383,10 @@ def main():
         args.policy, args.model_path, plant2_action_mode=args.plant2_action_mode,
     )
 
-    out_dir = benchmark_output_dir / "policy_eval" / args.run_name
+    if args.output_dir:
+        out_dir = Path(args.output_dir).resolve()
+    else:
+        out_dir = benchmark_output_dir / "policy_eval" / args.run_name
     out_dir.mkdir(parents=True, exist_ok=True)
     episodes_path = out_dir / f"episodes_{args.policy}.jsonl"
 

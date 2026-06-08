@@ -21,7 +21,10 @@ python yield_sign/eval_pipeline.py \
 ```
 
 ### Real-world maps
-
+1. Scene generation 
+```
+ python generate_real_manifest.py --save-gifs
+```
 
 
 

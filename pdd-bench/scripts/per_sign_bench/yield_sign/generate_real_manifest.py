@@ -7,9 +7,11 @@ and generates real_manifest.jsonl for policy evaluation.
 
 Usage:
     python yield_sign/generate_real_manifest.py
-    python yield_sign/generate_real_manifest.py --output-dir benchmark_output/2_4
     python yield_sign/generate_real_manifest.py --save-gifs --gif-policy idm
     python yield_sign/generate_real_manifest.py --save-gifs --gif-dry-run
+
+Each run writes to benchmark_output/2_4/<YYYY-MM-DD_HH-MM-SS>/ so previous
+experiments are not overwritten.
 """
 
 from __future__ import annotations
@@ -26,11 +28,23 @@ from typing import Dict, List, Optional, Tuple
 
 SCRIPT_DIR = Path(__file__).parent
 DEFAULT_SCENES_DIR = SCRIPT_DIR / "scenes"
-DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "benchmark_output" / "2_4"
+DEFAULT_OUTPUT_BASE = SCRIPT_DIR / "benchmark_output" / "2_4"
 RUN_BENCH_SCRIPT = SCRIPT_DIR / "run_benchmark_real.py"
+EXPERIMENT_TIMESTAMP_FMT = "%Y-%m-%d_%H-%M-%S"
 
 PDD_CODE = "2.4"
 SIGN_TYPE = "yield"
+
+
+def make_experiment_dir(
+    output_base: Path,
+    experiment_name: str | None = None,
+) -> Path:
+    """Create a dated experiment directory under benchmark_output/2_4."""
+    name = experiment_name or datetime.now().strftime(EXPERIMENT_TIMESTAMP_FMT)
+    experiment_dir = output_base / name
+    experiment_dir.mkdir(parents=True, exist_ok=True)
+    return experiment_dir
 
 
 def _stable_seed(scene_name: str, variant: int = 0) -> int:
@@ -221,20 +235,22 @@ def _iter_jsonl_rows(path: Path):
 
 def render_gifs_from_manifest(
     manifest_path: Path,
-    gif_dir: Path,
+    experiment_dir: Path,
     scenes_root: Path,
     run_name: str,
     policy: str = "idm",
     max_scenes: Optional[int] = None,
     dry_run: bool = False,
+    gif_dir: Optional[Path] = None,
 ) -> Tuple[int, int]:
     """Render GIFs for scenes from a manifest file.
     
     Args:
         manifest_path: Path to real_manifest.jsonl
-        gif_dir: Output directory for GIFs
+        experiment_dir: Dated run directory under benchmark_output/2_4
         scenes_root: Root directory containing scene folders
         run_name: Name for the benchmark run
+        gif_dir: Optional GIF subdirectory (default: <experiment_dir>/gifs)
         policy: Driving policy for rendering
         max_scenes: Limit number of scenes to render
         dry_run: Print commands without executing
@@ -250,8 +266,10 @@ def render_gifs_from_manifest(
         print(f"[GIF] Manifest not found: {manifest_path}", file=sys.stderr)
         return 0, 1
     
+    if gif_dir is None:
+        gif_dir = experiment_dir / "gifs"
     gif_dir.mkdir(parents=True, exist_ok=True)
-    
+
     rows = []
     seen_scene_ids = set()
     
@@ -291,6 +309,7 @@ def render_gifs_from_manifest(
             "--scene-uid", scene_uid,
             "--manifest", str(manifest_path),
             "--save-gifs",
+            "--output-dir", str(experiment_dir),
             "--gif-dir", str(gif_dir),
             "--run-name", run_name,
             "--scenes-root", str(scenes_root),
@@ -324,8 +343,13 @@ def main():
         help=f"Directory containing scene subdirectories (default: {DEFAULT_SCENES_DIR})"
     )
     parser.add_argument(
-        "--output-dir", type=str, default=str(DEFAULT_OUTPUT_DIR),
-        help=f"Output directory for real_manifest.jsonl (default: {DEFAULT_OUTPUT_DIR})"
+        "--output-base", type=str, default=str(DEFAULT_OUTPUT_BASE),
+        help=f"Base directory for dated experiment folders (default: {DEFAULT_OUTPUT_BASE})"
+    )
+    parser.add_argument(
+        "--experiment-name", type=str, default=None,
+        help="Experiment folder name under output-base "
+             "(default: current timestamp YYYY-MM-DD_HH-MM-SS)"
     )
     parser.add_argument(
         "--n-variants", type=int, default=1,
@@ -344,18 +368,18 @@ def main():
         help="Simulation horizon in steps (default: 600)"
     )
     parser.add_argument(
-        "--sign-distance", type=float, default=10.0,
+        "--sign-distance", type=float, default=5.0,
         help="Distance before lane end to place yield sign in meters (default: 20.0)"
     )
 
     # GIF rendering options
     parser.add_argument(
         "--save-gifs", action="store_true",
-        help="Render and save GIFs for scenes via run_benchmark.py"
+        help="Render and save GIFs for scenes via run_benchmark_real.py"
     )
     parser.add_argument(
         "--gif-dir", type=str, default=None,
-        help="GIF output directory (default: <output-dir>/gifs)"
+        help="GIF output directory (default: <experiment-dir>/gifs)"
     )
     parser.add_argument(
         "--gif-policy", type=str, default="idm",
@@ -375,13 +399,15 @@ def main():
     )
     
     args = parser.parse_args()
-    
+
     scenes_dir = Path(args.scenes_dir)
-    output_dir = Path(args.output_dir)
-    
+    output_base = Path(args.output_base)
+    experiment_dir = make_experiment_dir(output_base, args.experiment_name)
+    print(f"\n[INFO] Experiment directory: {experiment_dir}")
+
     entries = generate_manifest(
         scenes_dir=scenes_dir,
-        output_dir=output_dir,
+        output_dir=experiment_dir,
         n_variants=args.n_variants,
         spawn_velocity_ms=args.spawn_velocity,
         traffic_density=args.traffic_density,
@@ -390,25 +416,28 @@ def main():
     )
     
     if args.save_gifs and entries:
-        manifest_path = output_dir / "real_manifest.jsonl"
-        gif_dir = Path(args.gif_dir) if args.gif_dir else (output_dir / "gifs")
-        run_name = args.run_name or f"real_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-        
-        print(f"\n[INFO] Rendering GIFs -> {gif_dir}")
+        manifest_path = experiment_dir / "real_manifest.jsonl"
+        gif_dir = Path(args.gif_dir) if args.gif_dir else None
+        run_name = args.run_name or experiment_dir.name
+
+        print(f"\n[INFO] Rendering GIFs into experiment: {experiment_dir}")
         gif_rendered, gif_failed = render_gifs_from_manifest(
             manifest_path=manifest_path,
-            gif_dir=gif_dir,
+            experiment_dir=experiment_dir,
             scenes_root=scenes_dir,
             run_name=run_name,
             policy=args.gif_policy,
             max_scenes=args.gif_max_scenes,
             dry_run=args.gif_dry_run,
+            gif_dir=gif_dir,
         )
-        
+
+        resolved_gif_dir = gif_dir or (experiment_dir / "gifs")
         print(f"\n[GIF RESULTS]")
         print(f"  - GIFs rendered: {gif_rendered}")
         print(f"  - GIF failures: {gif_failed}")
-        print(f"  - Output directory: {gif_dir}")
+        print(f"  - Experiment directory: {experiment_dir}")
+        print(f"  - GIF directory: {resolved_gif_dir}")
 
 
 if __name__ == "__main__":

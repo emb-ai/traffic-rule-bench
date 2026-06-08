@@ -456,6 +456,11 @@ class YieldSign(BaseTrafficSign):
             "last_violation_step": -1,
         }
         state = self._vehicle_states.setdefault(vehicle.id, default_state)
+        
+        # Ensure YieldSign-specific keys exist
+        state.setdefault("had_traffic_while_in_zone", False)
+        state.setdefault("last_violation_step", -1)
+        state.setdefault("last_violation_result", False)
 
         current_step = self.engine.episode_step
         if state["last_violation_step"] == current_step:        # cache violation result
@@ -469,7 +474,6 @@ class YieldSign(BaseTrafficSign):
 
         state["last_violation_step"] = current_step
         state["last_violation_result"] = violation
-        print(f"Violation: {violation}, in_zone_now: {in_zone_now}, has_traffic: {has_traffic}")
         return violation
 
     def get_rule_description(self) -> str:
