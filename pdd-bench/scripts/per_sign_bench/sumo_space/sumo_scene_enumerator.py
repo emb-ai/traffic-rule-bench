@@ -42,11 +42,29 @@ def _forward_connections(net_path: str) -> dict:
     return {k: list(dict.fromkeys(v)) for k, v in graph.items()}
 
 
-def _walk_forward_edge(net_path: str, sign_edge: str, hops: int = 3) -> Optional[str]:
+def _base_way(edge_id: str) -> str:
+    """OSM base way id of a SUMO edge: strip a leading '-' and the '#<seg>' suffix.
+    Edges '108888798#2' and '-108888798#0' share the base '108888798'."""
+    return edge_id.lstrip("-").split("#")[0]
+
+
+def _is_reverse(a: str, b: str) -> bool:
+    """True if b is the OPPOSITE-direction edge of the same OSM way as a.
+    SUMO marks reverse direction with a leading '-': '108888798#2' vs
+    '-108888798#0'. A same-direction continuation ('108888798#2' -> '108888798#3')
+    is NOT reverse and must stay allowed."""
+    return (_base_way(a) == _base_way(b)
+            and a.startswith("-") != b.startswith("-"))
+
+
+def _walk_forward_edge(net_path: str, sign_edge: str, hops: int = 1) -> Optional[str]:
     """Walk `hops` edges forward from sign_edge via SUMO connections.
 
-    Returns the edge_id reached, or None if unreachable (dead end).
-    Picks the first outgoing edge at each hop (sorted for determinism).
+    Returns the edge_id reached, or None if unreachable (dead end). Picks the
+    first outgoing edge at each hop (sorted for determinism), skipping only the
+    REVERSE-direction segment of the current way (a U-turn that would put the
+    destination behind the sign). A forward continuation of the same way is kept,
+    so the spawn->dest route passes forward through the sign (sign stays mid-route).
     """
     graph = _forward_connections(net_path)
     current = sign_edge
@@ -55,8 +73,10 @@ def _walk_forward_edge(net_path: str, sign_edge: str, hops: int = 3) -> Optional
         outs = graph.get(current)
         if not outs:
             break
-        # deterministic pick — alphabetical, skipping already-visited to avoid cycles
-        cand = sorted(e for e in outs if e not in visited)
+        # deterministic pick — alphabetical, skipping visited (cycles) and the
+        # reverse direction of the current edge (U-turn back onto the same road).
+        cand = sorted(e for e in outs
+                      if e not in visited and not _is_reverse(current, e))
         if not cand:
             break
         current = cand[0]
@@ -64,12 +84,14 @@ def _walk_forward_edge(net_path: str, sign_edge: str, hops: int = 3) -> Optional
     return current if current != sign_edge else None
 
 
-def _destination_lane_id(net_path: str, sign_road_id: str, hops: int = 3) -> Optional[str]:
+def _destination_lane_id(net_path: str, sign_road_id: str, hops: int = 1) -> Optional[str]:
     """Compute destination lane ID (the ID MetaDrive expects in
     nav.set_route / vehicle.config['destination']).
 
     MetaDrive wraps SUMO lane IDs as 'lane_<edge>_<laneNum>'. We walk forward
-    `hops` edges from sign_road_id and pick lane 0 of the reached edge.
+    `hops` edge past sign_road_id and pick lane 0 of the reached edge, so the
+    route is spawn -> sign -> destination (sign in the MIDDLE, just inside the
+    zone) and stays short. hops=1 keeps the route just past the sign.
     """
     dest_edge = _walk_forward_edge(net_path, sign_road_id, hops=hops)
     if dest_edge is None:
@@ -161,7 +183,7 @@ def enumerate_all_scenes(scenes_root: str | Path) -> List[SumoScene]:
 
             try:
                 road_id = str(meta.get("road_id", ""))
-                dest_lane_id = _destination_lane_id(str(net_path), road_id, hops=3)
+                dest_lane_id = _destination_lane_id(str(net_path), road_id, hops=1)
                 scenes.append(SumoScene(
                     sign_code=sign_code,
                     sign_id=int(meta.get("sign_id", 0)),

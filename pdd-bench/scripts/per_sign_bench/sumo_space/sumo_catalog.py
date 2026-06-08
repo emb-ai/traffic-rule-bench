@@ -51,10 +51,17 @@ def bucket_limit_kmh(raw_kmh: float, selector: Optional[int] = None):
         return 50
     return 40 if (selector % 2 == 0) else 50
 
-BRAKE_DECEL_MPS2_DEFAULT = 2.5     # = ego DEACC_FACTOR (ego_defaults.py)
-BRAKE_DELAY_S_DEFAULT = 1.0        # reaction/latency
-BRAKE_MARGIN_M_DEFAULT = 5.0
+BRAKE_DECEL_MPS2_DEFAULT = 2.5     # = ego DEACC_FACTOR (ego_defaults.py) — ego's
+                                   # real max decel; do NOT raise (scene becomes
+                                   # physically infeasible and every policy fails).
+BRAKE_DELAY_S_DEFAULT = 0.5        # reaction/latency buffer (was 1.0 — too slack)
+BRAKE_MARGIN_M_DEFAULT = 2.0       # reach v_target this far before the sign (was 5.0)
 V0_MIN_EXCESS_MPS_DEFAULT = 2.0    # min amount v0 must exceed the limit
+# Cap how far above the limit ego may spawn. The braking-distance term
+# (v0²−v_t²)/(2·decel) dominates route length, so an uncapped v0 (up to 80) over a
+# 20 km/h limit yields a ~60 m+ approach where any policy brakes long before the
+# sign. Capping the excess keeps the approach short and the braking test sharp.
+V0_MAX_EXCESS_KMH = 15.0
 SPAWN_VELOCITY_MAX_MPS = 22.0      # nuPlan clip upper bound
 
 
@@ -213,9 +220,12 @@ def build_catalog(
                 v_target_mps = v_target_kmh / 3.6
                 for v_idx in range(max(1, n_v0_samples)):
                     vseed = stable_hash(scene.scene_id, spawn_lane_num, var_idx, "v0", v_idx)
+                    # Cap v0 close to the limit so the braking approach stays short
+                    # and the test stays sharp (ego must brake near the sign).
+                    v0_cap_kmh = min(float(v0_max_kmh), v_target_kmh + V0_MAX_EXCESS_KMH)
                     v0 = _v0_sampler(vseed, v_target_mps,
                                      min_excess=v0_min_excess_mps,
-                                     max_v=float(v0_max_kmh) / 3.6)
+                                     max_v=v0_cap_kmh / 3.6)
                     if v0 <= v_target_mps + 1e-6:   # never with the floored sampler
                         insufficient_v0 += 1
                         continue

@@ -1484,7 +1484,6 @@ class TrafficSignSumoEnv(BaseEnv):
             explicit_destination = getattr(self.vehicle, "config", {}).get("destination", None)
             if explicit_destination is not None:
                 destination = explicit_destination
-            destination = None
             nav.set_route(spawn_lane.index, destination)
             nav.update_localization(self.vehicle)
         except Exception:
