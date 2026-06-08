@@ -9,6 +9,7 @@ Usage:
     python yield_sign/generate_real_manifest.py
     python yield_sign/generate_real_manifest.py --save-gifs --gif-policy idm
     python yield_sign/generate_real_manifest.py --save-gifs --gif-dry-run
+    python yield_sign/generate_real_manifest.py --save-gifs --hide-signs
 
 Each run writes to benchmark_output/2_4/<YYYY-MM-DD_HH-MM-SS>/ so previous
 experiments are not overwritten.
@@ -242,6 +243,7 @@ def render_gifs_from_manifest(
     max_scenes: Optional[int] = None,
     dry_run: bool = False,
     gif_dir: Optional[Path] = None,
+    hide_signs: bool = False,
 ) -> Tuple[int, int]:
     """Render GIFs for scenes from a manifest file.
     
@@ -254,6 +256,7 @@ def render_gifs_from_manifest(
         policy: Driving policy for rendering
         max_scenes: Limit number of scenes to render
         dry_run: Print commands without executing
+        hide_signs: If True, hide traffic sign visual models in rendered GIFs
         
     Returns:
         (rendered_count, failed_count)
@@ -315,6 +318,8 @@ def render_gifs_from_manifest(
             "--scenes-root", str(scenes_root),
             "--policy", policy,
         ]
+        if hide_signs:
+            cmd.append("--hide-signs")
         
         print(f"\n[GIF {i}/{len(rows)}] {scene_uid}")
         print("  " + " ".join(cmd))
@@ -394,6 +399,10 @@ def main():
         help="Print GIF rendering commands without executing"
     )
     parser.add_argument(
+        "--hide-signs", action="store_true", default=True,
+        help="Hide traffic sign visual models in GIFs (signs still affect behavior)"
+    )
+    parser.add_argument(
         "--run-name", type=str, default=None,
         help="Run name for GIF rendering (default: real_<timestamp>)"
     )
@@ -430,6 +439,7 @@ def main():
             max_scenes=args.gif_max_scenes,
             dry_run=args.gif_dry_run,
             gif_dir=gif_dir,
+            hide_signs=args.hide_signs,
         )
 
         resolved_gif_dir = gif_dir or (experiment_dir / "gifs")

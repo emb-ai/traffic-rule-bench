@@ -177,6 +177,7 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         show_lane_arrows=row.get("show_lane_arrows", False),
         show_traffic_lights=row.get("show_traffic_lights", False),
         show_npc_vehicles=row.get("show_npc_vehicles", False),
+        skip_auto_signs=True,
     )
     if row.get("road_id"):
         config["vehicle_config"]["spawn_lane_index"] = row["road_id"]
@@ -193,6 +194,7 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
             cfg["show_lane_arrows"] = True
             cfg["show_traffic_lights"] = True
             cfg["show_npc_vehicles"] = True
+            cfg["skip_auto_signs"] = False
             return cfg
 
         def setup_engine(self):
@@ -201,6 +203,16 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
             # Otherwise keep the default SimpleTrafficManager (no NPC spawning)
             if self.config.get("traffic_density", 0.0) > 0:
                 self.engine.update_manager("traffic_manager", SumoTrafficManager())
+
+        def reset(self, *, seed=None):
+            # Skip TrafficSignSumoEnv.reset() sign creation by calling grandparent directly
+            if self.config.get("skip_auto_signs", False):
+                # Call BaseEnv.reset() directly, skipping TrafficSignSumoEnv.reset()
+                from metadrive.envs import BaseEnv
+                obs, info = BaseEnv.reset(self, seed=seed)
+                return obs, info
+            else:
+                return super().reset(seed=seed)
 
     return _RealMapEnv(config)
 
@@ -600,8 +612,15 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
     }
 
 
-def _place_yield_sign_on_spawn_lane(env, distance_before_end: float = 20.0) -> bool:
+def _place_yield_sign_on_spawn_lane(
+    env, distance_before_end: float = 20.0, show_model: bool = True
+) -> bool:
     """Place a YieldSign on the ego's current lane, `distance_before_end` meters before the lane end.
+    
+    Args:
+        env: The environment instance.
+        distance_before_end: Distance in meters before lane end to place the sign.
+        show_model: If False, the sign's visual model will not be rendered.
     
     Returns True if sign was successfully placed, False otherwise.
     """
@@ -618,8 +637,10 @@ def _place_yield_sign_on_spawn_lane(env, distance_before_end: float = 20.0) -> b
         if sign_mgr is None:
             return False
         
-        # Clear any existing signs first (sign_mgr.signs is a list)
+        # Clear signs list only (don't destroy objects - they belong to this env)
+        # Just clear the tracking lists, the visual cleanup happens naturally when env closes
         sign_mgr.signs.clear()
+        sign_mgr.rules.clear()
         
         # Calculate longitudinal offset: negative from lane end
         # longitudinal_offset is relative to lane end (negative = before end)
@@ -631,12 +652,17 @@ def _place_yield_sign_on_spawn_lane(env, distance_before_end: float = 20.0) -> b
             longitudinal_offset = -distance_before_end
         
         # Place the yield sign
-        sign_mgr.add_sign(
+        sign = sign_mgr.add_sign(
             YieldSign,
             lane=lane,
             longitudinal_offset=longitudinal_offset,
             lateral_offset=lane.width_at(0) / 2 + 0.8,
+            show_model=show_model,
         )
+        # Disable is_priority_sign to prevent renderer from drawing
+        # map-based priority signs (yield/main road from SUMO topology)
+        if sign is not None:
+            sign.is_priority_sign = False
         return True
     except Exception as e:
         print(f"[YieldSign] Failed to place sign: {e}")
@@ -653,6 +679,7 @@ def run_one_episode(
     ego_sample_seed_base: int,
     replay_root: Path | None = None,
     save_gif: Path | None = None,
+    hide_signs: bool = False,
 ) -> dict:
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
     np.random.seed(seed)
@@ -701,7 +728,9 @@ def run_one_episode(
 
         # Place yield sign on ego's spawn lane, 20m before lane end
         sign_distance = float(row.get("sign_distance_before_end", 20.0))
-        _place_yield_sign_on_spawn_lane(base_env, distance_before_end=sign_distance)
+        _place_yield_sign_on_spawn_lane(
+            base_env, distance_before_end=sign_distance, show_model=not hide_signs
+        )
 
         policy_obj = None
         sampled_ego_params = None
@@ -1302,6 +1331,8 @@ def main():
     parser.add_argument("--plant2-action-mode", type=str, default="pid",
                         choices=["pid", "wps_pure_pursuit"],
                         help="How PlanT2 converts pred_plan -> action")
+    parser.add_argument("--hide-signs", action="store_true",
+                        help="Hide traffic sign visual models (signs still affect behavior)")
 
     args = parser.parse_args()
 
@@ -1457,6 +1488,7 @@ def main():
                 ego_sample_seed_base=args.ego_sample_seed_base,
                 replay_root=replay_root,
                 save_gif=gif_path,
+                hide_signs=args.hide_signs,
             )
             episode_dt = time.time() - episode_t0
             print(f"{args.policy}  elapsed_s={episode_dt:.3f}")
