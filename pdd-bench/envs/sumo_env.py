@@ -23,6 +23,7 @@ from traffic_signs.no_stopping_allowed_sign import NoStoppingAllowedSign
 from traffic_signs.no_overtaking_sign import NoOvertakingSign
 from traffic_signs.zone_signs import ZoneSpeedLimitSign
 from traffic_signs.end_of_zone_signs import EndOfZoneSpeedLimitSign
+from traffic_signs.residential_zone_signs import ResidentialZoneSign, EndOfResidentialZoneSign
 from traffic_signs.speed_limit_sign import SpeedLimitSign
 from traffic_signs.no_stopping_allowed_sign import NoStoppingAllowedSign
 from traffic_signs.lane_allowed_direction_sign import *
@@ -65,6 +66,8 @@ SIGN_TYPE_TO_CLASS = {
     "5.15.2": DirectionSign,
     "5.31": ZoneSpeedLimitSign,
     "5.32": EndOfZoneSpeedLimitSign,
+    "5.21": ResidentialZoneSign,
+    "5.22": EndOfResidentialZoneSign,
     "5.16": BusStationSign,
     "5.3":  OnlyAutoSign,
     "3.1" : NoEntrySign,
@@ -1761,9 +1764,13 @@ class TrafficSignSumoEnv(BaseEnv):
         # sign (resolved up the road graph). Done LAST so the spawn_lane_num
         # teleport above doesn't clobber it.
         if self.config.get("ego_braking_spawn", False):
+            # Braking start sign = the speed/zone-limit sign ego must slow for:
+            # 3.24 (SpeedLimitSign), 5.31 (ZoneSpeedLimitSign), 5.21
+            # (ResidentialZoneSign ⊂ ZoneSpeedLimitSign). End-of-zone signs are
+            # BaseEndOfZoneSign and excluded automatically.
             start_sign = next(
-                (s for s in sign_mgr.signs if isinstance(s, SpeedLimitSign)
-                 and not isinstance(s, ZoneSpeedLimitSign)),
+                (s for s in sign_mgr.signs
+                 if isinstance(s, (SpeedLimitSign, ZoneSpeedLimitSign))),
                 None,
             )
             if start_sign is not None:

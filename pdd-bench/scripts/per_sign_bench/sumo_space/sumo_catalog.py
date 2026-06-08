@@ -25,8 +25,9 @@ from .sumo_scene_enumerator import (
 )
 
 # Signs whose scenes get a braking-spawn (ego starts above the limit, placed far
-# enough before the sign to slow down). Currently only the speed-limit sign 3.24.
-BRAKING_SPAWN_CODES = {"3.24"}
+# enough before the sign to slow down). Speed-limit 3.24 + speed-zone signs:
+# 5.21 (residential zone, fixed 20 km/h) and 5.31 (zone speed limit).
+BRAKING_SPAWN_CODES = {"3.24", "5.21", "5.31"}
 
 
 def bucket_limit_kmh(raw_kmh: float, selector: Optional[int] = None):
@@ -153,20 +154,29 @@ def build_catalog(
             n_lanes_field = n_lanes
 
         is_braking = scene.sign_code in BRAKING_SPAWN_CODES
-        # Sign speed limit (km/h) from the net edge — same as lane.speed×3.6.
+        # Enforced speed limit (km/h) ego must brake to before the sign.
         v_target_kmh = 0.0
         v_target_raw_kmh = 0.0
         if is_braking:
-            net_abs = str(scenes_root / scene.net_path)
-            v_target_raw_kmh = round(edge_speed_mps(net_abs, scene.road_id) * 3.6)
-            # selector keyed on scene_id → even, reproducible 40/50 split of the
-            # former 60 bucket (independent of v0/var/lane axes).
-            bucketed = bucket_limit_kmh(v_target_raw_kmh,
-                                        selector=stable_hash(scene.scene_id, "limit40_50"))
-            if bucketed is None:        # raw limit > 80 km/h → drop the scene
-                dropped_high_limit += 1
-                continue
-            v_target_kmh = bucketed
+            if scene.sign_code == "5.21":
+                # Residential zone: fixed 20 km/h, independent of the road's speed.
+                v_target_kmh = v_target_raw_kmh = 20.0
+            else:
+                net_abs = str(scenes_root / scene.net_path)
+                v_target_raw_kmh = round(edge_speed_mps(net_abs, scene.road_id) * 3.6)
+                if scene.sign_code == "3.24":
+                    # 3.24: reproducible 40/50 split of the former 60 bucket
+                    # (selector keyed on scene_id, independent of v0/var/lane axes).
+                    bucketed = bucket_limit_kmh(
+                        v_target_raw_kmh,
+                        selector=stable_hash(scene.scene_id, "limit40_50"))
+                    if bucketed is None:    # raw limit > 80 km/h → drop the scene
+                        dropped_high_limit += 1
+                        continue
+                    v_target_kmh = bucketed
+                else:
+                    # Zone-limit signs (5.31): brake to the real zone limit.
+                    v_target_kmh = v_target_raw_kmh
 
         for spawn_lane_num in lane_range:
             for var_idx in range(n_variations):
