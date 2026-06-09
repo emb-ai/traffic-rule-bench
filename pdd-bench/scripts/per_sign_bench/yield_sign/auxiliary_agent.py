@@ -67,14 +67,20 @@ class AuxiliaryAgentsManager(BaseManager):
             lane = road_network.get_lane(spawn_lane_index)
 
             spawn_long = max(1.0, lane.length - self._distance_from_intersection)
-            # breakpoint()
+
+            # SUMO maps use EdgeRoadNetwork: spawn_lane_index must be an edge id
+            # (e.g. "46710990#1"), not a full lane key ("lane_46710990#1_0").
+            # Passing a full lane key makes find_rightmost_lane_by_road_id() fail and
+            # fall back to a random lane via os.urandom — different every subprocess.
+            raw_name = spawn_lane_index[5:] if spawn_lane_index.startswith("lane_") else spawn_lane_index
+            edge_id = raw_name.rsplit("_", 1)[0] if "_" in raw_name else raw_name
+
             vehicle_config = {
-                "spawn_lane_index": spawn_lane_index,
-                "spawn_longitude": 5.0,
+                "spawn_lane_index": edge_id,
+                "spawn_longitude": lane.length,
                 "spawn_lateral": 0.0,
-                # "spawn_longitude": lane.position(lane.length, 0.0)[0],
-                # "spawn_lateral": lane.position(lane.length, 0.0)[1],
                 "enable_reverse": False,
+                "navigation_module": None,
             }
 
             try:
@@ -154,7 +160,10 @@ def add_auxiliary_agents(
     spawn_lane_indices: List[str],
     distance_from_intersection: float = DEFAULT_DISTANCE_FROM_INTERSECTION,
 ) -> Optional[AuxiliaryAgentsManager]:
-    """Add stationary auxiliary agents on multiple lanes."""
+    """
+    Add stationary auxiliary agents on multiple lanes.
+    !!! TODO: DOES NOT work when spawning several agents on different lanes
+    """
     if not spawn_lane_indices:
         return None
 

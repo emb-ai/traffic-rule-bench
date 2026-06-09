@@ -620,13 +620,44 @@ def _format_lane_pos(pos) -> str:
     return f"({float(pos[0]):.1f}, {float(pos[1]):.1f})"
 
 
+def _set_lane_endpoint_debug_points(env, lane_names: list[str], incoming_lanes: list[dict]) -> None:
+    """Draw red dots at start/end of specific lanes (e.g. aux-agent spawn lanes)."""
+    if not hasattr(env, "engine") or env.engine is None:
+        return
+
+    lane_by_name = {lane["lane_name"]: lane for lane in incoming_lanes}
+    debug_points = []
+
+    for lane_name in lane_names:
+        lane = lane_by_name.get(lane_name)
+        if lane is None:
+            continue
+        start_pos = lane.get("start_pos")
+        end_pos = lane.get("end_pos")
+        if start_pos is not None:
+            debug_points.append({
+                "pos": (float(start_pos[0]), float(start_pos[1])),
+                "color": (255, 0, 0),
+                "radius": 8,
+                "label": f"START:{lane_name}",
+            })
+        if end_pos is not None:
+            debug_points.append({
+                "pos": (float(end_pos[0]), float(end_pos[1])),
+                "color": (139, 0, 0),
+                "radius": 8,
+                "label": f"END:{lane_name}",
+            })
+
+    env.engine._junction_debug_points = debug_points
+    print(f"[JunctionAnalysis] Stored {len(debug_points)} debug points for aux spawn lane(s)")
+
+
 def _analyze_junction_lanes(env) -> dict:
     """Analyze and print incoming/outgoing lanes of the junction.
     
     Incoming lanes: lanes that feed INTO the junction (have exit_lanes)
     Outgoing lanes: lanes that exit FROM the junction (have entry_lanes but no exit_lanes)
-    
-    Also stores lane endpoint positions on the renderer for visualization.
     
     Args:
         env: The environment instance.
@@ -635,9 +666,6 @@ def _analyze_junction_lanes(env) -> dict:
         Dict with 'incoming' and 'outgoing' lane lists.
     """
     result = {"incoming": [], "outgoing": [], "junction_id": None}
-    
-    # List of points to draw: (x, y, color, radius, label)
-    debug_points = []
     
     try:
         road_network = env.engine.current_map.road_network
@@ -692,32 +720,12 @@ def _analyze_junction_lanes(env) -> dict:
             # Outgoing: has entry_lanes but no exit_lanes (exits FROM junction)
             if exit_lanes:
                 incoming_lanes.append(lane_data)
-                # Add debug points for incoming lanes (RED)
-                if start_pos is not None:
-                    debug_points.append({
-                        "pos": (float(start_pos[0]), float(start_pos[1])),
-                        "color": (255, 0, 0),  # Red for start
-                        "radius": 8,
-                        "label": f"START:{lane_name}"
-                    })
-                if end_pos is not None:
-                    debug_points.append({
-                        "pos": (float(end_pos[0]), float(end_pos[1])),
-                        "color": (139, 0, 0),  # Dark red for end (near junction)
-                        "radius": 8,
-                        "label": f"END:{lane_name}"
-                    })
             elif entry_lanes and not exit_lanes:
                 outgoing_lanes.append(lane_data)
         
         result["incoming"] = incoming_lanes
         result["outgoing"] = outgoing_lanes
         result["junction_id"] = junction_id
-        
-        # Store debug points on the engine for visualization (renderer is created lazily)
-        if hasattr(env, "engine") and env.engine is not None:
-            env.engine._junction_debug_points = debug_points
-            print(f"[JunctionAnalysis] Stored {len(debug_points)} debug points on engine")
         
         # Print analysis
         print("\n" + "=" * 60)
@@ -929,24 +937,43 @@ def run_one_episode(
         incoming_lanes, outgoing_lanes = _analyze_junction_lanes(base_env)
 
         # Add auxiliary agents on every incoming lane (except ego's road)
+        # aux_agent_mgr = None
+        # if auxiliary_agent:
+        #     ego_lane_index = getattr(base_env.vehicle.lane, "index", "")
+        #     aux_spawn_lanes = [
+        #         lane["lane_name"]
+        #         for lane in incoming_lanes
+        #         # if lane["edge_id"] not in ego_lane_index
+        #     ]
+        #     if aux_spawn_lanes:
+        #         aux_agent_mgr = add_auxiliary_agents(
+        #             base_env,
+        #             spawn_lane_indices=aux_spawn_lanes,
+        #             distance_from_intersection=aux_distance_from_intersection,
+        #         )
+        #         print(f"[AuxAgent] Spawned on {len(aux_spawn_lanes)} incoming lane(s)")
+        #     else:
+        #         print("[AuxAgent] No incoming lanes available for auxiliary agents")
+
         aux_agent_mgr = None
         if auxiliary_agent:
             ego_lane_index = getattr(base_env.vehicle.lane, "index", "")
-            aux_spawn_lanes = [
-                lane["lane_name"]
-                for lane in incoming_lanes
-                # if lane["edge_id"] not in ego_lane_index
-            ]
+            spawn_lane = None
+            for lane in incoming_lanes:
+                if lane["edge_id"] not in ego_lane_index:
+                    spawn_lane = lane["lane_name"]
+                    break
+
+            aux_spawn_lanes = [spawn_lane] if spawn_lane else []
             if aux_spawn_lanes:
+                _set_lane_endpoint_debug_points(base_env, aux_spawn_lanes, incoming_lanes)
                 aux_agent_mgr = add_auxiliary_agents(
                     base_env,
                     spawn_lane_indices=aux_spawn_lanes,
                     distance_from_intersection=aux_distance_from_intersection,
                 )
-                print(f"[AuxAgent] Spawned on {len(aux_spawn_lanes)} incoming lane(s)")
-            else:
-                print("[AuxAgent] No incoming lanes available for auxiliary agents")
-
+        elif hasattr(base_env, "engine") and base_env.engine is not None:
+            base_env.engine._junction_debug_points = []
         policy_obj = None
         sampled_ego_params = None
         if policy_cls is not None:
@@ -1156,6 +1183,7 @@ def run_one_episode(
                     "Step": step,
                     "Speed": f"{vehicle.speed_km_h:.2f} km/h",
                     "Vehicle lane: ": vehicle.lane.index,
+                    "Spawn lane: ": spawn_lane,
                     # "Current lane" : env.engine.current_map.road_network.get_closest_lane_index(vehicle.position)[0],
                     # "Auxiliary agent spawn lane: ": spawn_lane,
                     "Current lane width: ": vehicle.lane.width,
@@ -1559,7 +1587,7 @@ def main():
     # Auxiliary agent options
     parser.add_argument("--auxiliary-agent", action="store_true", default=True,
                         help="Spawn a stationary auxiliary agent on the main road near intersection")
-    parser.add_argument("--aux-distance-from-intersection", type=float, default=0,
+    parser.add_argument("--aux-distance-from-intersection", type=float, default=5,
                         help="Distance from intersection to spawn aux agent (meters, default: 5.0)")
 
     args = parser.parse_args()
