@@ -972,6 +972,11 @@ def main():
             json.dump(metrics, f, indent=2, ensure_ascii=False)
         print(f"✅ Metrics for '{sign_type}' saved to {output_file}")
 
+        episodes_file = scenes_root / f"benchmark_episodes_{sign_type}_{args.run_name}.json"
+        with open(episodes_file, "w", encoding="utf-8") as f:
+            json.dump(valid_runs, f, indent=2, ensure_ascii=False)
+        print(f"📊 Per-episode results saved to {episodes_file}")
+
         summary_all[sign_type] = metrics
 
     if summary_all:
