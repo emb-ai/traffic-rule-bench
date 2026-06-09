@@ -29,6 +29,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from junction_priority_layout import JunctionLayoutError, build_junction_priority_layout
+
 
 SCRIPT_DIR = Path(__file__).parent
 DEFAULT_SCENES_DIR = SCRIPT_DIR / "scenes"
@@ -138,6 +140,29 @@ def parse_sumo_net_for_spawn_lanes(net_path: Path, min_length: float = 20.0) -> 
     return spawn_lanes
 
 
+def build_junction_layout_for_scene(net_path: Path) -> Optional[dict]:
+    """Build main/secondary junction layout from a scene net.xml."""
+    try:
+        layout = build_junction_priority_layout(net_path)
+    except JunctionLayoutError as exc:
+        print(f"  [junction_layout] {net_path.parent.name}: {exc}")
+        return None
+    return layout.to_dict()
+
+
+def filter_spawn_lanes_to_secondary(
+    spawn_lanes: List[SumoLaneInfo],
+    junction_layout: Optional[dict],
+) -> List[SumoLaneInfo]:
+    """Keep only lanes on secondary junction arms."""
+    if not junction_layout:
+        return spawn_lanes
+    secondary_ids = set(junction_layout.get("secondary_edge_ids") or [])
+    if not secondary_ids:
+        return []
+    return [lane for lane in spawn_lanes if lane.edge_id in secondary_ids]
+
+
 def select_random_spawn_lane(
     spawn_lanes: List[SumoLaneInfo],
     seed: int,
@@ -223,6 +248,7 @@ def build_manifest_entry(
     auxiliary_agent: bool = False,
     aux_distance_from_intersection: float = 5.0,
     spawn_lanes_cache: Optional[List[SumoLaneInfo]] = None,
+    junction_layout_cache: Optional[dict] = None,
 ) -> Dict:
     """Build a single manifest entry for a scene.
     
@@ -239,6 +265,7 @@ def build_manifest_entry(
         auxiliary_agent: Whether to spawn auxiliary agent
         aux_distance_from_intersection: Distance for auxiliary agent
         spawn_lanes_cache: Pre-parsed spawn lanes (to avoid re-parsing for each variant)
+        junction_layout_cache: Pre-built junction layout dict for the scene net
     """
     scene_name = meta.get("scene_name", scene_dir.name)
     net_file = meta.get("net_file", "map.net.xml")
@@ -251,9 +278,15 @@ def build_manifest_entry(
     # Parse spawn lanes if not cached
     if spawn_lanes_cache is None:
         spawn_lanes_cache = parse_sumo_net_for_spawn_lanes(net_full_path)
-    
-    # Select a random spawn lane based on seed
-    selected_lane = select_random_spawn_lane(spawn_lanes_cache, seed)
+
+    spawn_candidates = spawn_lanes_cache
+    if junction_layout_cache is not None:
+        spawn_candidates = filter_spawn_lanes_to_secondary(
+            spawn_lanes_cache, junction_layout_cache
+        )
+
+    # Select a random spawn lane based on seed (secondary arms only)
+    selected_lane = select_random_spawn_lane(spawn_candidates, seed)
     
     entry = {
         "scene_id": scene_name,
@@ -281,16 +314,33 @@ def build_manifest_entry(
     
     # Add spawn lane info (from parsed network or meta override)
     if meta.get("road_id"):
-        # Meta override takes precedence
-        entry["road_id"] = meta["road_id"]
-        if meta.get("spawn_lane_num") is not None:
-            entry["spawn_lane_num"] = meta["spawn_lane_num"]
+        secondary_ids = set()
+        if junction_layout_cache is not None:
+            secondary_ids = set(junction_layout_cache.get("secondary_edge_ids") or [])
+        if secondary_ids and meta["road_id"] not in secondary_ids:
+            print(
+                f"  [spawn] meta road_id {meta['road_id']!r} is not secondary; "
+                "picking from secondary arms"
+            )
+            selected_lane = select_random_spawn_lane(spawn_candidates, seed)
+            if selected_lane is not None:
+                entry["road_id"] = selected_lane.edge_id
+                entry["spawn_lane_num"] = selected_lane.lane_num
+                entry["spawn_lane_length"] = selected_lane.length
+                entry["spawn_to_junction"] = selected_lane.to_junction
+        else:
+            entry["road_id"] = meta["road_id"]
+            if meta.get("spawn_lane_num") is not None:
+                entry["spawn_lane_num"] = meta["spawn_lane_num"]
     elif selected_lane is not None:
         # Use randomly selected lane from network
         entry["road_id"] = selected_lane.edge_id
         entry["spawn_lane_num"] = selected_lane.lane_num
         entry["spawn_lane_length"] = selected_lane.length
         entry["spawn_to_junction"] = selected_lane.to_junction
+    elif junction_layout_cache is not None:
+        entry["valid"] = False
+        print(f"  [spawn] No secondary incoming lanes available for {scene_name}")
     
     if meta.get("distance_from_start"):
         entry["distance_from_start"] = meta["distance_from_start"]
@@ -298,6 +348,21 @@ def build_manifest_entry(
         entry["sign_spawn_distance"] = meta["sign_spawn_distance"]
     if meta.get("destination_lane_id"):
         entry["destination_lane_id"] = meta["destination_lane_id"]
+
+    if junction_layout_cache is not None:
+        entry["junction_layout"] = junction_layout_cache
+        entry["main_lane_keys"] = [
+            lane_key
+            for arm in junction_layout_cache.get("arms", [])
+            if arm.get("road_class") == "main"
+            for lane_key in arm.get("lane_keys", [])
+        ]
+        entry["secondary_lane_keys"] = [
+            lane_key
+            for arm in junction_layout_cache.get("arms", [])
+            if arm.get("road_class") == "secondary"
+            for lane_key in arm.get("lane_keys", [])
+        ]
     
     entry = {k: v for k, v in entry.items() if v is not None}
     
@@ -334,6 +399,20 @@ def generate_manifest(
         # Pre-parse spawn lanes for this scene (cache for all variants)
         spawn_lanes = parse_sumo_net_for_spawn_lanes(net_full_path)
         print(f"  Found {len(spawn_lanes)} intersection-approaching lane(s)")
+
+        junction_layout = build_junction_layout_for_scene(net_full_path)
+        if junction_layout is not None:
+            print(
+                f"  Junction layout: {junction_layout['shape']} @ {junction_layout['junction_id']} "
+                f"(main={len(junction_layout.get('main_edge_ids', []))}, "
+                f"secondary={len(junction_layout.get('secondary_edge_ids', []))})"
+            )
+            secondary_spawn = filter_spawn_lanes_to_secondary(spawn_lanes, junction_layout)
+            secondary_edges = sorted({lane.edge_id for lane in secondary_spawn})
+            print(
+                f"  Secondary spawn pool: {len(secondary_spawn)} lane(s) "
+                f"on edge(s) {secondary_edges}"
+            )
         
         if spawn_lanes:
             # Show available lanes
@@ -354,6 +433,7 @@ def generate_manifest(
                 auxiliary_agent=auxiliary_agent,
                 aux_distance_from_intersection=aux_distance_from_intersection,
                 spawn_lanes_cache=spawn_lanes,
+                junction_layout_cache=junction_layout,
             )
             entries.append(entry)
             
@@ -615,11 +695,11 @@ def main():
     
     # Auxiliary agent options
     parser.add_argument(
-        "--auxiliary-agent", action="store_true",
+        "--auxiliary-agent", action="store_true", default=True,
         help="Spawn a stationary auxiliary agent on the main road near intersection"
     )
     parser.add_argument(
-        "--aux-distance-from-intersection", type=float, default=30,
+        "--aux-distance-from-intersection", type=float, default=5,
         help="Distance from intersection to spawn aux agent (meters, default: 5.0)"
     )
     
