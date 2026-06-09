@@ -48,6 +48,88 @@ import cv2
 
 from envs.sumo_traffic_manager import SumoTrafficManager
 
+# ---------------------------------------------------------------------------
+# Sign-group mapping for GCR (Group Compliance Rate)
+# ---------------------------------------------------------------------------
+SIGN_GROUP = {
+    # Priority
+    "2.1": "Priority", "2.2": "Priority", "2.3.1": "Priority",
+    "2.3.2": "Priority", "2.3.3": "Priority", "2.4": "Priority",
+    "2.5": "Priority",
+    # Prohibitory
+    "3.1": "Prohibitory", "3.2": "Prohibitory",
+    "3.18.1": "Prohibitory", "3.18.2": "Prohibitory",
+    "3.19": "Prohibitory", "3.20": "Prohibitory",
+    "3.21": "Prohibitory", "3.24": "Prohibitory",
+    "3.25": "Prohibitory", "3.27": "Prohibitory",
+    "3.31": "Prohibitory",
+    # Mandatory
+    "4.1.1": "Mandatory", "4.1.2": "Mandatory",
+    "4.1.3": "Mandatory", "4.1.4": "Mandatory",
+    "4.1.5": "Mandatory", "4.1.6": "Mandatory",
+    "4.2.1": "Mandatory", "4.2.2": "Mandatory",
+    "4.2.3": "Mandatory", "4.6": "Mandatory",
+    "5.3": "Mandatory", "5.4": "Mandatory",
+    "5.5": "Mandatory", "5.7.1": "Mandatory",
+    "5.7.2": "Mandatory", "5.11.1": "Mandatory",
+    "5.11.2": "Mandatory", "5.12.1": "Mandatory",
+    "5.12.2": "Mandatory", "5.13.1": "Mandatory",
+    "5.13.2": "Mandatory", "5.13.3": "Mandatory",
+    "5.13.4": "Mandatory", "5.14.1": "Mandatory",
+    "5.14.2": "Mandatory", "5.14.3": "Mandatory",
+    "5.14.4": "Mandatory", "5.15.1": "Mandatory",
+    "5.15.2": "Mandatory", "5.16": "Mandatory",
+    "5.31": "Mandatory", "5.32": "Mandatory",
+}
+
+
+def _safe_float(v, default: float = 0.0) -> float:
+    try:
+        return float(v)
+    except Exception:
+        return default
+
+
+def _route_completion_percent(info: dict, reached_dest: bool) -> float:
+    for k in ("route_completion", "route_completion_rate", "route_completion_ratio", "route_completion_percentage"):
+        if k in info:
+            v = _safe_float(info.get(k), 0.0)
+            if v <= 1.0:
+                v *= 100.0
+            return max(0.0, min(100.0, v))
+    return 100.0 if reached_dest else 0.0
+
+
+def _infraction_penalty(crashed: bool, out_of_road: bool, violations: int) -> float:
+    p = 1.0
+    if crashed:
+        p *= 0.5
+    if out_of_road:
+        p *= 0.7
+    if violations > 0:
+        p *= 0.9 ** int(violations)
+    return max(0.0, min(1.0, p))
+
+
+def _compute_smoothness(step_vars: list, segment_len: int = 20) -> dict:
+    if not step_vars:
+        return {"smoothness_ratio": 0.0, "smooth_segments": 0, "total_segments": 0, "frame_smooth_ratio": 0.0}
+
+    def _frame_ok(v):
+        return (-4.05 <= v["long_acc"] <= 2.40 and abs(v["lat_acc"]) <= 4.89
+                and abs(v["yaw_rate"]) <= 0.95 and abs(v["yaw_acc"]) <= 1.93
+                and abs(v["long_jerk"]) <= 4.13 and abs(v["jerk_mag"]) <= 8.37)
+
+    flags = [_frame_ok(v) for v in step_vars]
+    frame_ratio = float(np.mean(flags)) if flags else 0.0
+    total_seg = len(step_vars) // segment_len
+    if total_seg <= 0:
+        return {"smoothness_ratio": frame_ratio, "smooth_segments": int(sum(flags)),
+                "total_segments": len(flags), "frame_smooth_ratio": frame_ratio}
+    smooth_seg = sum(1 for i in range(total_seg) if all(flags[i * segment_len:(i + 1) * segment_len]))
+    return {"smoothness_ratio": float(smooth_seg / total_seg), "smooth_segments": int(smooth_seg),
+            "total_segments": int(total_seg), "frame_smooth_ratio": frame_ratio}
+
 
 def _list_parallel_lane_nums(net_path: str, road_id: str):
     """Parse the SUMO .net.xml and return sorted lane_num ints available on road_id."""
@@ -292,12 +374,20 @@ def run_single_episode(
             carl_model.reset()
         total_reward = 0
         violations = 0
+        sign_violations = 0
         steps = 0
         crashed = False
+        out_of_road = False
         reached_dest = False
         violated_sign_ids = set()
         last_violation_texts = []
         violation_text_ttl = 0
+        efficiency_samples = []
+        smooth_step_vars = []
+        violation_groups = set()  # sign groups that were violated this episode
+        prev_long = None
+        prev_steer = None
+        prev_velocity = None
 
         if hasattr(env, "_get_base_env"):
             base_env = env._get_base_env()
@@ -384,6 +474,39 @@ def run_single_episode(
             total_reward += reward
             steps += 1
 
+            # Collect efficiency and smoothness step data
+            vehicle = base_env.agent
+            speed_kmh = getattr(vehicle, "speed_km_h", 0.0) or 0.0
+            try:
+                long_acc = info.get("long_acc", info.get("acceleration", 0.0))
+                lat_acc = info.get("lat_acc", 0.0)
+            except Exception:
+                long_acc = lat_acc = 0.0
+            if prev_velocity is not None:
+                dt = max(float(info.get("dt", 0.1)), 0.01)
+                long_jerk = (long_acc - prev_long) / dt
+                jerk_mag = abs(long_jerk)
+            else:
+                long_jerk = jerk_mag = 0.0
+            prev_long = long_acc
+            prev_velocity = speed_kmh
+            try:
+                lane = getattr(vehicle, "lane", None)
+                if lane is not None and hasattr(lane, "speed_limit"):
+                    limit = lane.speed_limit
+                else:
+                    limit = info.get("speed_limit", 60.0)
+                if limit and limit > 0:
+                    efficiency_samples.append(speed_kmh / limit)
+            except Exception:
+                pass
+            smooth_step_vars.append({
+                "long_acc": long_acc, "lat_acc": lat_acc,
+                "yaw_rate": info.get("yaw_rate", 0.0),
+                "yaw_acc": info.get("yaw_acc", 0.0),
+                "long_jerk": long_jerk, "jerk_mag": jerk_mag,
+            })
+
             vehicle = base_env.agent
             current_violations = base_env.engine.traffic_sign_manager.check_all_violations(vehicle)
             current_violation_names, current_violation_texts = [], []
@@ -401,19 +524,18 @@ def run_single_episode(
                     is_rule = False
 
                 currently_violating = False
-                # if not is_rule and hasattr(sign, "_is_violating"):
-                #     try:
-                #         currently_violating = bool(sign._is_violating(vehicle))
-                #     except Exception:
-                #         currently_violating = bool(violated_for_report)
-                # else:
-                #     currently_violating = bool(violated_for_report) or (name in violated_sign_ids)
 
                 if violated_for_report:
                     violations += 1
+                    step_has_sign_violation = True
                     current_violation_names.append(name)
                     violated_sign_ids.add(name)
                     current_violation_texts.append(_format_violation(sign, vehicle))
+                    # Map to sign group for GCR
+                    sign_type_str = env_config["sign_type"]
+                    grp = SIGN_GROUP.get(sign_type_str)
+                    if grp:
+                        violation_groups.add(grp)
 
                 compliance_lines.append(f"{name}: {'VIOLATED' if currently_violating else 'OK'}")
 
@@ -432,10 +554,11 @@ def run_single_episode(
             # done = False
             if done:
                 reached_dest = info.get("arrive_dest", False)
+                out_of_road = bool(info.get("out_of_road", False))
                 crashed = (
                     info.get("crash", False)
                     or getattr(vehicle, "crash_vehicle", False)
-                    or info.get("out_of_road", False)
+                    or out_of_road
                 )
             # elif done and manual_control:
             #     if info.get("arrive_dest", False):
@@ -544,14 +667,29 @@ def run_single_episode(
         #         gif_name=f"./gifs/demo_{env_config.get('sign_type','x')}_{seed}_lane{_ln}.gif"
         #     )
 
+        sm = _compute_smoothness(smooth_step_vars) if smooth_step_vars else {}
+        eff_mean = float(np.mean(efficiency_samples)) * 100.0 if efficiency_samples else 0.0
+        route_pct = _route_completion_percent(info, reached_dest)
+        infr_pen = _infraction_penalty(crashed, out_of_road, violations)
+        sign_violations = violations  # all tracked violations are sign violations here
+
         return {
             "seed": seed,
             "total_reward": total_reward,
             "steps": steps,
             "violations": violations,
+            "sign_violations": violations,
             "crashed": crashed,
+            "out_of_road": out_of_road,
             "reached_dest": reached_dest,
-            "success": reached_dest and not crashed
+            "success": reached_dest and not crashed,
+            "efficiency": eff_mean,
+            "smoothness": sm.get("smoothness_ratio", 0.0) * 100.0,
+            "route_completion_pct": route_pct,
+            "infraction_penalty": infr_pen,
+            "driving_score": route_pct * infr_pen / 100.0,
+            "violation_groups": list(violation_groups),
+            "has_sign_violation": int(violations > 0),
         }
 
     finally:
@@ -581,7 +719,7 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default=None,
+        default="carl_v3_output",
         help="If set, save top-down GIFs under <output-dir>/gifs/ (same layout as run_benchmark_v2.py).",
     )
     parser.add_argument(
@@ -780,36 +918,54 @@ def main():
         valid_runs = [r for r in runs if "error" not in r]
         if not valid_runs:
             metrics = {
-                "run_name": args.run_name,
-                "total_runs": 0,
-                "success_rate": 0.0,
-                "crash_rate": 0.0,
-                "average_violations": 0.0,
-                "average_reward": 0.0
+                "run_name": args.run_name, "total_runs": 0,
+                "success_rate": 0.0, "crash_rate": 0.0,
+                "average_violations": 0.0, "average_reward": 0.0,
+                "efficiency": 0.0, "smoothness": 0.0,
+                "scr": 0.0, "route_completion_pct": 0.0,
             }
+            rg = SIGN_GROUP.get(sign_type, "Special")
+            metrics[f"gcr_{rg}"] = 0.0
         else:
             success_rate = np.mean([r["success"] for r in valid_runs])
             crash_rate = np.mean([r["crashed"] for r in valid_runs])
             avg_violations = np.mean([r["violations"] for r in valid_runs])
             avg_reward = np.mean([r["total_reward"] for r in valid_runs])
+            avg_eff = np.mean([r.get("efficiency", 0.0) for r in valid_runs])
+            avg_smooth = np.mean([r.get("smoothness", 0.0) for r in valid_runs])
+            avg_route = np.mean([r.get("route_completion_pct", 0.0) for r in valid_runs])
+            scr = np.mean([r.get("has_sign_violation", 1) == 0 for r in valid_runs])
+
+            gcr = {}
+            relevant_group = SIGN_GROUP.get(sign_type, "Special")
+            for g in [relevant_group]:
+                group_runs = [r for r in valid_runs if g in r.get("violation_groups", [])]
+                gcr[g] = 1.0 - (len(group_runs) / max(len(valid_runs), 1))
 
             metrics = {
-                "run_name": args.run_name,
-                "total_runs": len(valid_runs),
+                "run_name": args.run_name, "total_runs": len(valid_runs),
                 "success_rate": float(success_rate),
                 "crash_rate": float(crash_rate),
                 "average_violations": float(avg_violations),
-                "average_reward": float(avg_reward)
+                "average_reward": float(avg_reward),
+                "efficiency": float(avg_eff),
+                "smoothness": float(avg_smooth),
+                "scr": float(scr),
+                "route_completion_pct": float(avg_route),
             }
+            for g in [relevant_group]:
+                metrics[f"gcr_{g}"] = float(gcr[g])
 
-            print(f"\n{'='*50}")
-            print(f"Sign type: {sign_type}")
-            print(f"Total runs: {metrics['total_runs']}")
-            print(f"Success rate: {success_rate:.2%}")
-            print(f"Crash rate: {crash_rate:.2%}")
-            print(f"Average violations: {avg_violations:.2f}")
-            print(f"Average reward: {avg_reward:.2f}")
-            print('='*50)
+            print(f"\n{'='*60}")
+            print(f"Sign type: {sign_type}  |  Runs: {metrics['total_runs']}")
+            print(f"{'='*60}")
+            print(f"  Eff: {avg_eff:6.1f}  |  Comf: {avg_smooth:5.1f}  |  "
+                  f"SCR: {scr*100:5.1f}%")
+            print(f"  GCR {relevant_group}: {gcr[relevant_group]*100:5.1f}%")
+            print(f"  Route: {avg_route:5.1f}%  |  "
+                  f"Success: {success_rate*100:5.1f}%  |  "
+                  f"Crash: {crash_rate*100:5.1f}%")
+            print('='*60)
 
         output_file = scenes_root / f"benchmark_results_{sign_type}_{args.run_name}.json"
         with open(output_file, "w", encoding="utf-8") as f:
