@@ -876,6 +876,9 @@ def run_one_episode(
     hide_signs: bool = False,
     auxiliary_agent: bool = False,
     aux_distance_from_intersection: float = 5.0,
+    aux_policy: str = "idm",
+    aux_spawn_velocity_ms: float = 5.0,
+    aux_release_when_ego_within_m: float = 5.0,
 ) -> dict:
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
     np.random.seed(seed)
@@ -970,7 +973,13 @@ def run_one_episode(
                 aux_agent_mgr = add_auxiliary_agents(
                     base_env,
                     spawn_lane_indices=aux_spawn_lanes,
+                    outgoing_lanes=outgoing_lanes,
                     distance_from_intersection=aux_distance_from_intersection,
+                    policy=aux_policy,
+                    spawn_velocity_ms=aux_spawn_velocity_ms,
+                    ego_vehicle=base_env.vehicle,
+                    ego_spawn_lane_index=ego_lane_index,
+                    ego_release_distance_before_end=aux_release_when_ego_within_m,
                 )
         elif hasattr(base_env, "engine") and base_env.engine is not None:
             base_env.engine._junction_debug_points = []
@@ -1210,6 +1219,14 @@ def run_one_episode(
                 if aux_agent_mgr is not None:
                     aux_status = aux_agent_mgr.get_status()
                     text_dict["Aux agents"] = aux_status.get("count", 0)
+                    text_dict["Aux policy"] = aux_status.get("policy", aux_policy)
+                    agents = aux_status.get("agents") or []
+                    if agents:
+                        text_dict["Aux dest"] = agents[0].get("destination_lane", "")
+                        text_dict["Aux released"] = agents[0].get("released", False)
+                        ego_dist = agents[0].get("ego_dist_to_spawn_lane_end_m")
+                        if ego_dist is not None:
+                            text_dict["Ego to lane end"] = f"{ego_dist:.1f}m"
 
             if current_violation_texts:
                 text_dict["Violation"] = current_violation_texts[0]
@@ -1586,9 +1603,15 @@ def main():
 
     # Auxiliary agent options
     parser.add_argument("--auxiliary-agent", action="store_true", default=True,
-                        help="Spawn a stationary auxiliary agent on the main road near intersection")
+                        help="Spawn an auxiliary agent on an incoming lane near intersection")
     parser.add_argument("--aux-distance-from-intersection", type=float, default=5,
                         help="Distance from intersection to spawn aux agent (meters, default: 5.0)")
+    parser.add_argument("--aux-policy", type=str, default="idm", choices=["idm", "stationary"],
+                        help="Auxiliary agent behavior: idm drives to outgoing lane, stationary stays put")
+    parser.add_argument("--aux-spawn-velocity-ms", type=float, default=5.0,
+                        help="Initial speed for IDM auxiliary agents when released (m/s, default: 5.0)")
+    parser.add_argument("--aux-release-when-ego-within-m", type=float, default=5.0,
+                        help="Release gated IDM aux when ego is within this distance of spawn lane end (m); 0 = immediate")
 
     args = parser.parse_args()
 
@@ -1627,8 +1650,12 @@ def main():
     print(f"Backend: sumo (real maps only)")
     print(f"Input: {benchmark_output_dir}")
     if args.auxiliary_agent:
-        print(f"Auxiliary agent: ENABLED (stationary, near intersection)")
+        print(f"Auxiliary agent: ENABLED ({args.aux_policy}, near intersection)")
         print(f"  - Distance from intersection: {args.aux_distance_from_intersection}m")
+        if args.aux_policy == "idm":
+            print(f"  - Release when ego within: {args.aux_release_when_ego_within_m}m of spawn lane end")
+            print(f"  - Speed after release: {args.aux_spawn_velocity_ms} m/s")
+            print(f"  - Route: incoming lane -> reachable outgoing lane")
 
     if args.manifest:
         manifest_path = Path(args.manifest)
@@ -1750,6 +1777,9 @@ def main():
                 hide_signs=args.hide_signs,
                 auxiliary_agent=args.auxiliary_agent,
                 aux_distance_from_intersection=args.aux_distance_from_intersection,
+                aux_policy=args.aux_policy,
+                aux_spawn_velocity_ms=args.aux_spawn_velocity_ms,
+                aux_release_when_ego_within_m=args.aux_release_when_ego_within_m,
             )
             episode_dt = time.time() - episode_t0
             print(f"{args.policy}  elapsed_s={episode_dt:.3f}")
