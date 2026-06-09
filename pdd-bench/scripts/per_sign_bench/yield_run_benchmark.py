@@ -23,12 +23,12 @@ def _find_pdd_bench_root(start: Path) -> Path:
 
 SCRIPT_PATH = Path(__file__).resolve()
 BENCH_DIR = SCRIPT_PATH.parent
-SCRIPTS_DIR = BENCH_DIR.parent
+PER_SIGN_BENCH_DIR = BENCH_DIR.parent
 PDD_BENCH_DIR = _find_pdd_bench_root(SCRIPT_PATH)
 SDC_ROOT = PDD_BENCH_DIR.parent
 METADRIVE_DIR = SDC_ROOT / "metadrive"
 
-for p in (PDD_BENCH_DIR, METADRIVE_DIR, BENCH_DIR):
+for p in (PDD_BENCH_DIR, METADRIVE_DIR, PER_SIGN_BENCH_DIR, BENCH_DIR):
     ps = str(p)
     if ps not in sys.path:
         sys.path.insert(0, ps)
@@ -48,10 +48,11 @@ from stable_baselines3 import PPO
 from agents.policies.comprehensive_rule_expert import ComprehensiveRuleExpertPolicy
 from agents.policies.rule_compliant_expert import RuleCompliantExpertPolicy
 
-from metadrive_core.bev_cnn import CustomBEVCNN as CustomBEVCNN_5ch
-from metadrive_core.observation_wrappers import AddStateObservationWrapper as AddStateObservationWrapper_5ch
-from metadrive_core.ppo_w_o_stop_sign.wrappers import EnsureSuccessInfoWrapper
 from factorized_space.ego_defaults import apply_ego_defaults, apply_ego_sampled, sample_ego_params
+
+# Import main road traffic manager for yield sign scenarios
+from yield_main_road_traffic import add_main_road_traffic
+_MAIN_ROAD_TRAFFIC_AVAILABLE = True
 
 
 _SUMO_SIGN_DISTANCE_CACHE: dict[Path, float] = {}
@@ -240,6 +241,7 @@ def _place_pgmap_sign(env: TrafficSignEnv, row: dict, seed: int) -> bool:
         BEGIN_TO_END,
         DETOUR_KEYS,
         LANE_CHANGE_KEYS,
+        PRIORITY_KEYS,
         RESTRICTED_BEGIN_KEYS,
         SIGN_CLASS_MAP,
         _get_route_lanes,
@@ -247,9 +249,11 @@ def _place_pgmap_sign(env: TrafficSignEnv, row: dict, seed: int) -> bool:
         _pick_detour_lane,
         _pick_lane_for_lane_change,
         _pick_rightmost_lane,
+        # _pick_priority_lane,
         _pick_route_lane,
         _spawn_cyclists_on_lane,
     )
+    from yield_generate_fixed_scenes import _pick_route_lane as _pick_priority_lane
     from factorized_space.space_definition import BIKE_RELATED_SIGNS
     from traffic_signs.detour_obstacle import spawn_detour_obstacle
 
@@ -304,6 +308,47 @@ def _place_pgmap_sign(env: TrafficSignEnv, row: dict, seed: int) -> bool:
         return False
     sign_cls = SIGN_CLASS_MAP[sign_key]
 
+    # ── pg_direction: apply turn rules to the whole road network first ────────
+    if sign_key == "pg_direction":
+        from traffic_signs.pg_direction_sign import PGDirectionSign as _PGDir
+        rn = env.current_map.road_network
+        layout_index    = int(row.get("layout_index", 0))
+        allow_uturn     = bool(row.get("allow_uturn", False))
+        regex_mode      = str(row.get("regex_layout_mode", "all"))
+        regex_seed      = int(row.get("seed") or row.get("deterministic_seed") or 0)
+        try:
+            _PGDir.generate_and_apply_turns(
+                road_network=rn,
+                allow_uturn=allow_uturn,
+                strict=False,
+                overwrite_existing=True,
+                regex_layout_mode=regex_mode,
+                regex_max_layouts=32,
+                regex_seed=regex_seed,
+                layout_index=layout_index,
+                allow_s_block_multi_exit=False,
+            )
+        except Exception as exc:
+            logging.warning("pg_direction generate_and_apply_turns failed: %s", exc)
+            return False
+        # Place the sign object on a route lane before the intersection
+        if not _override_route_intent(env, row):
+            return False
+        route_lanes = _get_route_lanes(env)
+        if not route_lanes:
+            return False
+        lane = _pick_route_lane(route_lanes, min_length=15.0,
+                                road_network=env.current_map.road_network)
+        if lane is None:
+            lane = route_lanes[0]
+        try:
+            env.engine.traffic_sign_manager.add_sign(
+                _PGDir, lane=lane, use_random_lane=False)
+        except Exception:
+            pass  # sign object is cosmetic; turn rules already applied
+        return True
+    # ── end pg_direction ──────────────────────────────────────────────────────
+
     if not _override_route_intent(env, row):
         return False
 
@@ -323,6 +368,8 @@ def _place_pgmap_sign(env: TrafficSignEnv, row: dict, seed: int) -> bool:
         lane = _pick_lane_for_lane_change(route_lanes, vnum, road_network=rn)
     elif sign_key in RESTRICTED_BEGIN_KEYS:
         lane = _pick_rightmost_lane(route_lanes, min_length=30.0)
+    elif sign_key in PRIORITY_KEYS:
+        lane = _pick_priority_lane(route_lanes, min_length=15.0)
     else:
         lane = _pick_route_lane(route_lanes, min_length=15.0, road_network=rn)
 
@@ -340,7 +387,6 @@ def _place_pgmap_sign(env: TrafficSignEnv, row: dict, seed: int) -> bool:
         spawn_detour_obstacle(env.engine, sign.lane, sign)
     if sign_key in BIKE_RELATED_SIGNS and sign is not None:
         _spawn_cyclists_on_lane(env, sign.lane, seed, n=3)
-
     return True
 
 
@@ -433,16 +479,6 @@ def _resolve_sign_spawn_distance(row: dict, scenes_root: Path) -> float:
 
 
 def _wrap_for_policy(env, policy_type: str):
-    if policy_type == "ppo_5ch":
-        wrapped = AddStateObservationWrapper_5ch(
-            env,
-            debug=False,
-            add_stop_signs=False,
-            stop_sign_probability=0.0,
-            stop_sign_min_lane_length=15.0,
-        )
-        wrapped = EnsureSuccessInfoWrapper(wrapped)
-        return wrapped
     return env
 
 def _format_violation(sign, vehicle):
@@ -790,23 +826,12 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
     """Load model checkpoints and resolve the BasePolicy class to instantiate.
 
     Returns dict with:
-      "policy_cls":   BasePolicy subclass (or None for ppo_5ch which uses
-                      direct sb3 invocation); set as agent_policy in env config
+      "policy_cls":   BasePolicy subclass; set as agent_policy in env config
                       OR instantiated manually for IDM-family.
-      "ppo_model":    sb3 PPO instance (only for ppo_5ch, legacy direct path).
     """
-    ppo_model = None
     policy_cls = None
 
-    if policy == "ppo_5ch":
-        if not model_path:
-            raise ValueError("--model-path is required for --policy ppo_5ch")
-        ppo_model = PPO.load(
-            model_path,
-            device="cpu",
-            custom_objects={"policy_kwargs": dict(features_extractor_class=CustomBEVCNN_5ch)},
-        )
-    elif policy == "carl":
+    if policy == "carl":
         if not model_path:
             raise ValueError("--model-path is required for --policy carl")
         CARL_ADAPTER_PATH = SDC_ROOT / "carl_in_metadrive"
@@ -854,7 +879,6 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
         policy_cls = PlanT2SignCompliantPolicy
 
     return {
-        "ppo_model": ppo_model,
         "policy_cls": policy_cls,
     }
 
@@ -870,6 +894,10 @@ def run_one_episode(
     ego_sample_seed_base: int,
     replay_root: Path | None = None,
     save_gif: Path | None = None,
+    main_road_traffic: bool = False,
+    main_road_num_vehicles: int = 1,
+    main_road_velocity: float = 10.0,
+    main_road_trigger_distance: float = 15.0,
 ) -> dict:
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
     np.random.seed(seed)
@@ -895,9 +923,9 @@ def run_one_episode(
     env = _wrap_for_policy(env, policy_type)
 
     # Resolve the BasePolicy class to instantiate on the ego vehicle. All policies
-    # except ppo_5ch (which uses sb3's own .predict on observations) implement the
-    # uniform BasePolicy.act(name) interface — including PlainCarl/PlainPlanT2 (raw
-    # NN) and CarlSignCompliantPolicy/PlanT2SignCompliantPolicy (NN + rule overlay).
+    # implement the uniform BasePolicy.act(name) interface — including
+    # PlainCarl/PlainPlanT2 (raw NN) and CarlSignCompliantPolicy/PlanT2SignCompliantPolicy
+    # (NN + rule overlay).
     policy_cls = None
     if policy_type == "idm":
         policy_cls = IDMPolicy
@@ -949,6 +977,26 @@ def run_one_episode(
                     "sign_type": row.get("_sign_code") or row.get("sign_code") or row.get("pdd_code") or row.get("sign_type"),
                     "seed": int(row.get("seed") or row.get("deterministic_seed") or -1),
                 }
+        # Spawn main road traffic for yield sign scenarios
+        yield_traffic_mgr = None
+        if main_road_traffic:
+            print(f"[YieldTraffic] main_road_traffic={main_road_traffic}, _MAIN_ROAD_TRAFFIC_AVAILABLE={_MAIN_ROAD_TRAFFIC_AVAILABLE}")
+            if _MAIN_ROAD_TRAFFIC_AVAILABLE:
+                try:
+                    print(f"[YieldTraffic] Calling add_main_road_traffic (trigger at {main_road_trigger_distance}m from sign)...")
+                    yield_traffic_mgr = add_main_road_traffic(
+                        base_env,
+                        num_vehicles=main_road_num_vehicles,
+                        spawn_velocity=main_road_velocity,
+                        spawn_trigger_distance=main_road_trigger_distance,
+                    )
+                    print(f"[YieldTraffic] Manager ready, will spawn when ego is {main_road_trigger_distance}m from yield sign")
+                except Exception as e:
+                    import traceback
+                    print(f"[YieldTraffic] Failed to initialize main road traffic: {e}")
+                    traceback.print_exc()
+            else:
+                print("[YieldTraffic] Main road traffic requested but yield_main_road_traffic module not available")
 
         policy_obj = None
         sampled_ego_params = None
@@ -1020,9 +1068,14 @@ def run_one_episode(
         last_info: dict = {}
 
         for step in range(max_steps):
-            if policy_type == "ppo_5ch":
-                action, _ = models["ppo_model"].predict(obs, deterministic=True)
-            elif policy_obj is not None:
+            # Update main road traffic (before ego action)
+            if yield_traffic_mgr is not None:
+                try:
+                    yield_traffic_mgr.before_step()
+                except Exception:
+                    pass
+
+            if policy_obj is not None:
                 action = policy_obj.act(base_env.vehicle.name)
             else:
                 action = [0.0, 0.0]
@@ -1032,6 +1085,13 @@ def run_one_episode(
                 expert_actions.append([0.0, 0.0])
 
             obs, reward, terminated, truncated, info = env.step(action)
+
+            # Update main road traffic (after step, handles respawning)
+            if yield_traffic_mgr is not None:
+                try:
+                    yield_traffic_mgr.after_step()
+                except Exception:
+                    pass
             last_info = info
             total_reward += float(reward)
             steps += 1
@@ -1040,6 +1100,7 @@ def run_one_episode(
             sign_mgr = getattr(base_env.engine, "traffic_sign_manager", None)
             current_violation_texts = []
             current_violated_class_names: set = set()
+            current_violations = []  # Initialize here so it's accessible in text_dict
             if sign_mgr is not None and vehicle is not None:
                 # In-zone tracking (per-step, per-class). Done once per step
                 # over all signs — independent from violation check below.
@@ -1051,6 +1112,11 @@ def run_one_episode(
                         in_zone_by_class_step[cls] = in_zone_by_class_step.get(cls, 0) + 1
                 if step_in_any_zone:
                     in_zone_total_steps += 1
+
+                for sign in sign_mgr.signs:
+                    if sign._is_violating(vehicle):
+                        sign_violations += 1
+                        violations += 1
 
                 current_violations = sign_mgr.check_all_violations(vehicle)
                 for _sign, violated in current_violations:
@@ -1179,7 +1245,25 @@ def run_one_episode(
                     "Speed": f"{vehicle.speed_km_h:.2f} km/h",
                     "Current lane: ": vehicle.lane.index,
                     "Current lane width: ": vehicle.lane.width,
+                    "Violations: ": sign_violations,
                 }
+                
+                # Add yield sign status indicators
+                ego_in_yield_zone = False
+                ego_violating_yield = False
+                main_road_has_traffic = False
+                
+                if sign_mgr is not None and vehicle is not None:
+                    for sign in sign_mgr.signs:
+                        sign_class_name = type(sign).__name__.lower()
+                        if "yield" in sign_class_name:
+                            main_road_has_traffic, _ = sign.has_main_road_traffic(exclude_vehicle=vehicle)
+                            ego_in_yield_zone = sign._is_vehicle_in_zone(vehicle)
+                            ego_violating_yield = sign._is_violating(vehicle)
+                
+                text_dict["Main road traffic"] = main_road_has_traffic
+                text_dict["Ego in yield zone"] = ego_in_yield_zone
+                text_dict["Yield violation"] = ego_violating_yield
 
             if current_violation_texts:
                 text_dict["Violation"] = current_violation_texts[0]
@@ -1522,11 +1606,11 @@ def main():
     parser = argparse.ArgumentParser(description="Run policies on per_sign_bench full manifests")
     parser.add_argument("--policy", required=True,
                         choices=["idm", "modified_idm", "comprehensive_rule_expert",
-                                 "rule_compliant", "ppo_5ch", "ppo_lidar",
+                                 "rule_compliant", "ppo_lidar",
                                  "carl", "carl_rule",
                                  "plant2", "plant2_rule"])
     parser.add_argument("--model-path", type=str, default=None,
-                        help="Required for ppo_5ch/carl/plant2")
+                        help="Required for carl/plant2")
     parser.add_argument("--run-name", type=str, required=True)
     parser.add_argument("--preset", type=str, default="full", choices=["full", "full_last"])
     parser.add_argument("--benchmark-output", type=str, default="benchmark_output",
@@ -1546,6 +1630,8 @@ def main():
                         help="Base seed for sampled IDM ego variants")
     parser.add_argument("--rerun-failed", action="store_true",
                         help="Recompute scenes with existing failed records (ok=false)")
+    parser.add_argument("--force-rerun", action="store_true",
+                        help="Ignore existing results and rerun all scenes (useful for regenerating GIFs)")
     parser.add_argument("--skip-error-episodes", action="store_true",
                         help="When used with --rerun-failed, keep previously errored episodes skipped")
     parser.add_argument("--debug-one-way-sign-selection", action="store_true",
@@ -1580,6 +1666,16 @@ def main():
                              "pure-pursuit on pred_wps[1] + softmax(pred_speed) "
                              "throttle (matches eval_plant2_wps_steer.py). "
                              "Applies to --policy plant2 and plant2_rule.")
+
+    # Main road traffic options for yield sign scenarios
+    parser.add_argument("--main-road-traffic", action="store_true", default=True,
+                        help="Spawn NPC vehicle on the incoming main road (for yield sign scenarios)")
+    parser.add_argument("--main-road-num-vehicles", type=int, default=1,
+                        help="Number of vehicles on the main road (default: 1)")
+    parser.add_argument("--main-road-velocity", type=float, default=10.0,
+                        help="Spawn velocity for main road traffic (m/s, default: 10.0)")
+    parser.add_argument("--main-road-trigger-distance", type=float, default=35.0,
+                        help="Spawn main road traffic when ego is within this distance of yield sign (m, default: 15.0)")
     args = parser.parse_args()
 
     if args.scene_id and args.scene_uid:
@@ -1607,8 +1703,8 @@ def main():
         raise ValueError(f"Benchmark output not found: {benchmark_output_dir}")
 
     scenes_root = Path(args.scenes_root).resolve()
-    if not scenes_root.exists():
-        raise ValueError(f"Scenes root not found: {scenes_root}")
+    # if not scenes_root.exists():
+    #     raise ValueError(f"Scenes root not found: {scenes_root}")
 
     backends = [b.strip() for b in args.backends.split(",") if b.strip()]
     allowed = {"sumo", "pgmap", "paired", "citymap"}
@@ -1626,6 +1722,11 @@ def main():
     print(f"Preset: {args.preset}")
     print(f"Backends: {backends}")
     print(f"Input: {benchmark_output_dir}")
+    if args.main_road_traffic:
+        print(f"Main road traffic: ENABLED")
+        print(f"  - Number of vehicles: {args.main_road_num_vehicles}")
+        print(f"  - Velocity: {args.main_road_velocity} m/s")
+        print(f"  - Trigger distance: {args.main_road_trigger_distance}m from yield sign")
 
     if args.manifest:
         manifest_path = Path(args.manifest).resolve()
@@ -1663,8 +1764,14 @@ def main():
         rows = [r for r in rows if str(r.get("scene_id")) == args.scene_id]
     if args.scene_uid:
         # _episode_key_from_row → tuple, joined with ":" matches user input format.
+        print(f"[DEBUG] Looking for scene_uid: {args.scene_uid}")
+        print(f"[DEBUG] Available scene keys (first 5):")
+        for i, r in enumerate(rows[:5]):
+            key = ":".join(str(x) for x in _episode_key_from_row(r))
+            print(f"  [{i}] {key}")
         rows = [r for r in rows
                 if ":".join(str(x) for x in _episode_key_from_row(r)) == args.scene_uid]
+        print(f"[DEBUG] Matched {len(rows)} rows")
 
     if not rows:
         raise RuntimeError(
@@ -1712,6 +1819,9 @@ def main():
     for row in rows:
         key = _episode_key_from_row(row)
         old = existing_by_key.get(key)
+        if args.force_rerun:
+            rows_to_run.append(row)
+            continue
         if old is None:
             rows_to_run.append(row)
             continue
@@ -1723,7 +1833,8 @@ def main():
             continue
         skipped += 1
 
-    print(f"Resume: loaded {len(existing_results)} existing episodes, skip {skipped}, run {len(rows_to_run)}")
+    print(f"Resume: loaded {len(existing_results)} existing episodes, skip {skipped}, run {len(rows_to_run)}"
+          + (" (--force-rerun: ignoring existing)" if args.force_rerun else ""))
 
     results_by_key: dict[tuple[str, str, str, int], dict] = dict(existing_by_key)
     write_mode = "a" if episodes_path.exists() else "w"
@@ -1733,56 +1844,35 @@ def main():
             scene_id = row.get("scene_id")
             sign_code = row.get("_sign_code")
             print(f"[{idx}/{len(rows_to_run)}] backend={backend} sign={sign_code} scene={scene_id}")
-            try:
-                if args.debug_one_way_sign_selection:
-                    row["debug_one_way_sign_selection"] = True
-                gif_path = None
-                if gifs_dir is not None:
-                    seed_val = int(row.get("seed") or row.get("deterministic_seed") or 0)
-                    var_idx = int(row.get("var_idx", 0) or 0)
-                    uid = f"{scene_id or 'scene'}_v{var_idx}_s{seed_val}"
-                    gif_path = gifs_dir / f"{uid}_{args.policy}_{args.ego_variant}.gif"
-                episode_t0 = time.time()
-                r = run_one_episode(
-                    row=row,
-                    backend=backend,
-                    policy_type=args.policy,
-                    models=models,
-                    scenes_root=scenes_root,
-                    max_steps=args.max_steps,
-                    ego_variant=args.ego_variant,
-                    ego_sample_seed_base=args.ego_sample_seed_base,
-                    replay_root=replay_root,
-                    save_gif=gif_path,
-                )
-                episode_dt = time.time() - episode_t0
-                print(f"{args.policy}  elapsed_s={episode_dt:.3f}")
-            except Exception as exc:
-                r = {
-                    "ok": False,
-                    "backend": backend,
-                    "scene_id": scene_id,
-                    "sign_type": sign_code,
-                    "seed": int(row.get("seed") or row.get("deterministic_seed") or -1),
-                    "error": str(exc),
-                }
-            results_by_key[_episode_key_from_result(r)] = r
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-            f.flush()
+            
+            if args.debug_one_way_sign_selection:
+                row["debug_one_way_sign_selection"] = True
+            gif_path = None
+            if gifs_dir is not None:
+                seed_val = int(row.get("seed") or row.get("deterministic_seed") or 0)
+                var_idx = int(row.get("var_idx", 0) or 0)
+                uid = f"{scene_id or 'scene'}_v{var_idx}_s{seed_val}"
+                gif_path = gifs_dir / f"{uid}_{args.policy}_{args.ego_variant}.gif"
+            episode_t0 = time.time()
 
-            # Persist sampled ego IDM params per scene_uid (atomic rewrite).
-            if args.ego_variant != "default" and r.get("ok") and r.get("ego_params"):
-                key = ":".join(str(x) for x in _episode_key_from_result(r))
-                k_idx = int(args.ego_variant[1:]) if args.ego_variant.startswith("s") else 0
-                sample_seed = int(args.ego_sample_seed_base) + int(r.get("seed") or 0) + k_idx * 1000003
-                ego_params_manifest["params_per_scene_uid"][key] = {
-                    "sample_seed": sample_seed,
-                    "params": r["ego_params"],
-                }
-                tmp = ego_params_manifest_path.with_suffix(".json.tmp")
-                tmp.write_text(json.dumps(ego_params_manifest, indent=2, default=str),
-                               encoding="utf-8")
-                tmp.replace(ego_params_manifest_path)
+            r = run_one_episode(
+                row=row,
+                backend=backend,
+                policy_type=args.policy,
+                models=models,
+                scenes_root=scenes_root,
+                max_steps=args.max_steps,
+                ego_variant=args.ego_variant,
+                ego_sample_seed_base=args.ego_sample_seed_base,
+                replay_root=replay_root,
+                save_gif=gif_path,
+                main_road_traffic=args.main_road_traffic,
+                main_road_num_vehicles=args.main_road_num_vehicles,
+                main_road_velocity=args.main_road_velocity,
+                main_road_trigger_distance=args.main_road_trigger_distance,
+            )
+            episode_dt = time.time() - episode_t0
+            print(f"{args.policy}  elapsed_s={episode_dt:.3f}")
 
     results: list[dict] = list(results_by_key.values())
     summary = aggregate_results(results)

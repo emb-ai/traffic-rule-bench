@@ -28,8 +28,12 @@ dist/
 *.lock
 nohup.out
 
-### Local data symlinks (e.g. benchmark_mini -> smirnova benchmark_output/mini)
+### Local data symlinks
 pdd-bench/data/
+
+### Checkpoints
+pdd-bench/checkpoints/
+pdd-bench/scenes/
 
 ### pdd-bench runtime outputs (top-level)
 pdd-bench/database_signs
@@ -43,6 +47,7 @@ pdd-bench/gifs/
 pdd-bench/gifs/
 pdd-bench/scripts/per_sign_bench/benchmark_2node_eval
 traj_all_experts_ffff
+
 ### pdd-bench runtime outputs (any depth)
 pdd-bench/**/runs/
 pdd-bench/**/wandb/

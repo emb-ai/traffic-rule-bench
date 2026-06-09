@@ -104,14 +104,6 @@ def replay_in_our_env(
     try:
         env.reset(seed=env_seed)
 
-        # Re-apply sign(s) exactly as recorded — but only for PGMap.
-        # The SUMO env already populates all signs (main + traffic lights)
-        # in its reset(); re-adding from sidecar creates duplicates because
-        # (a) sidecar lane_index was stored as list(str) → per-char chars,
-        # which rn.get_lane() can't resolve, so the code fell back to the
-        # ego lane and (b) lateral_offset defaults to 0 instead of the
-        # original `width/2 + 0.8` side offset, placing the duplicate in
-        # the middle of the lane while the original sits on the shoulder.
         sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
         rn = env.current_map.road_network
         re_add_signs = (backend != "sumo")
@@ -150,11 +142,7 @@ def replay_in_our_env(
         except Exception:
             pass
 
-        # For TRUE 1:1 replay: set ALL objects (ego + NPC + pedestrians)
-        # directly from pkl frame data each step. No physics, no policies —
-        # pure kinematic replay from recorded positions.
-        #
-        # Build ID mapping: recorded obj_id → live env obj by proximity at step 0
+
         all_live_objs = dict(env.engine.get_objects())
         ego_id = env.vehicle.id
         ego_rec_id = None

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compute expert-selection-style metrics from consolidated <baseline>_replays.jsonl.
 
-Mirrors expert_selection_exps/select_experts.py logic:
+Mirrors select_experts.py logic:
   - recompute_dest (rules 1.1/1.2 — no_entry compliance + horizon timeout)
   - passes_filter (Strategy-F-new): not crashed AND not out_of_road AND
                    compliance(target_sign_class) == True AND
@@ -25,7 +25,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-# Mirror constants from expert_selection_exps/select_experts.py
+# Mirror constants from select_experts.py
 NO_ENTRY_SIGNS = {"3.1", "3.2", "3.18.1", "3.18.2", "3.19"}
 HORIZON_DEFAULT = 600
 MIN_FINAL_STEP = 30
@@ -257,7 +257,7 @@ def _make_markdown(pol_stats: dict, sign_total: dict, sign_passing: dict,
     lines.append("# Expert Filter Metrics Report")
     lines.append("")
     lines.append(f"**Source**: `{runs_var}/<baseline>_replays.jsonl`")
-    lines.append(f"**Strategy**: F-new (mirror of `expert_selection_exps/select_experts.passes_filter`)")
+    lines.append(f"**Strategy**: F-new (mirror of `select_experts.passes_filter`)")
     lines.append(f"**Horizon**: {horizon}  |  **min_final_step**: {min_final_step}")
     lines.append("")
 

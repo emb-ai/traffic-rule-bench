@@ -11,8 +11,8 @@ Usage:
     python yield_prepare_metrics.py --manifest manifest.jsonl --out-dir output --dry-run
     python yield_prepare_metrics.py --manifest manifest.jsonl --out-dir output --baselines idm_default,carl
     python yield_prepare_metrics.py \
-    --manifest pdd-bench/scripts/per_sign_bench/benchmark_output/fixed/2_4/pgmap_materialized.jsonl \
-    --out-dir pdd-bench/scripts/per_sign_bench/benchmark_output/fixed/2_4 \
+    --manifest benchmark_output/fixed/2_4/pgmap_materialized.jsonl \
+    --out-dir benchmark_output/fixed/2_4 \
     --rerun-failed \
     --emit-replay-sidecar
 
@@ -51,7 +51,7 @@ SCRIPTS_DIR = BENCHMARK_DIR.parent
 PDD_BENCH_DIR = SCRIPTS_DIR.parent
 SDC_ROOT = PDD_BENCH_DIR.parent
 
-RUN_BENCH_SCRIPT = BENCHMARK_DIR / "yield_run_benchmark_mini.py"
+RUN_BENCH_SCRIPT = BENCHMARK_DIR / "yield_run_benchmark.py"
 
 import os
 

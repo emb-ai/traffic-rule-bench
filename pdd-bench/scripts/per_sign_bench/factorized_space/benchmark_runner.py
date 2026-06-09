@@ -197,7 +197,7 @@ def place_pgmap_sign_from_row(env, row: dict, *, seed: int | None = None) -> tup
       * paired rows with `sign_type=None`, `sign_type_start=<begin>`,
         `sign_type_end=<end>`, `zone_length_m=<float>` — places a begin/end
         pair on one lane segment, mirroring _place_pgmap_sign in
-        run_benchmark_mini.py.
+        run_benchmark.py.
 
     Designed to be called from inside TrafficSignEnv.reset() so the manager has
     signs at step 0 — verifier (`check_all_violations`) and reward_function are
