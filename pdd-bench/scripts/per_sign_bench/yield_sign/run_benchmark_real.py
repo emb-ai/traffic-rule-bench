@@ -24,6 +24,7 @@ from scripts.per_sign_bench.factorized_space.ego_defaults import (
     sample_ego_params,
 )
 from traffic_signs.priority_signs import YieldSign
+from scripts.per_sign_bench.yield_sign.auxiliary_agent import add_auxiliary_agents
 
 BENCH_DIR = Path(__file__).resolve().parent
 PER_SIGN_BENCH_DIR = BENCH_DIR.parent
@@ -612,6 +613,191 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
     }
 
 
+def _format_lane_pos(pos) -> str:
+    """Format lane position for logging (handles numpy arrays)."""
+    if pos is None:
+        return "N/A"
+    return f"({float(pos[0]):.1f}, {float(pos[1]):.1f})"
+
+
+def _analyze_junction_lanes(env) -> dict:
+    """Analyze and print incoming/outgoing lanes of the junction.
+    
+    Incoming lanes: lanes that feed INTO the junction (have exit_lanes)
+    Outgoing lanes: lanes that exit FROM the junction (have entry_lanes but no exit_lanes)
+    
+    Also stores lane endpoint positions on the renderer for visualization.
+    
+    Args:
+        env: The environment instance.
+        
+    Returns:
+        Dict with 'incoming' and 'outgoing' lane lists.
+    """
+    result = {"incoming": [], "outgoing": [], "junction_id": None}
+    
+    # List of points to draw: (x, y, color, radius, label)
+    debug_points = []
+    
+    try:
+        road_network = env.engine.current_map.road_network
+        graph = road_network.graph
+        
+        incoming_lanes = []
+        outgoing_lanes = []
+        junction_id = None
+        
+        for lane_name, lane_info in graph.items():
+            # Find the junction polygon
+            if lane_name.startswith("junction"):
+                junction_id = lane_name
+                continue
+            
+            # Skip non-lane entries
+            if not lane_name.startswith("lane_"):
+                continue
+            
+            exit_lanes = getattr(lane_info, "exit_lanes", None) or []
+            entry_lanes = getattr(lane_info, "entry_lanes", None) or []
+            
+            # Extract edge ID from lane name (e.g., "lane_46710990#1_0" -> "46710990#1")
+            raw_name = lane_name[5:] if lane_name.startswith("lane_") else lane_name
+            edge_id = raw_name.rsplit("_", 1)[0] if "_" in raw_name else raw_name
+            
+            lane_obj = None
+            lane_length = 0.0
+            start_pos = None
+            end_pos = None
+            
+            try:
+                lane_obj = road_network.get_lane(lane_name)
+                lane_length = lane_obj.length
+                # Get start and end positions of the lane
+                start_pos = lane_obj.position(0.0, 0.0)  # Beginning of lane
+                end_pos = lane_obj.position(lane_length, 0.0)  # End of lane
+            except Exception:
+                pass
+            
+            lane_data = {
+                "lane_name": lane_name,
+                "edge_id": edge_id,
+                "length": lane_length,
+                "exit_lanes": exit_lanes,
+                "entry_lanes": entry_lanes,
+                "start_pos": start_pos,
+                "end_pos": end_pos,
+            }
+            
+            # Incoming: has exit_lanes (feeds INTO junction)
+            # Outgoing: has entry_lanes but no exit_lanes (exits FROM junction)
+            if exit_lanes:
+                incoming_lanes.append(lane_data)
+                # Add debug points for incoming lanes (RED)
+                if start_pos is not None:
+                    debug_points.append({
+                        "pos": (float(start_pos[0]), float(start_pos[1])),
+                        "color": (255, 0, 0),  # Red for start
+                        "radius": 8,
+                        "label": f"START:{lane_name}"
+                    })
+                if end_pos is not None:
+                    debug_points.append({
+                        "pos": (float(end_pos[0]), float(end_pos[1])),
+                        "color": (139, 0, 0),  # Dark red for end (near junction)
+                        "radius": 8,
+                        "label": f"END:{lane_name}"
+                    })
+            elif entry_lanes and not exit_lanes:
+                outgoing_lanes.append(lane_data)
+        
+        result["incoming"] = incoming_lanes
+        result["outgoing"] = outgoing_lanes
+        result["junction_id"] = junction_id
+        
+        # Store debug points on the engine for visualization (renderer is created lazily)
+        if hasattr(env, "engine") and env.engine is not None:
+            env.engine._junction_debug_points = debug_points
+            print(f"[JunctionAnalysis] Stored {len(debug_points)} debug points on engine")
+        
+        # Print analysis
+        print("\n" + "=" * 60)
+        print("JUNCTION LANE ANALYSIS")
+        print("=" * 60)
+        if junction_id:
+            print(f"Junction: {junction_id}")
+        
+        print(f"\n--- INCOMING LANES (approaching junction): {len(incoming_lanes)} ---")
+        for lane in sorted(incoming_lanes, key=lambda x: x["edge_id"]):
+            start_str = _format_lane_pos(lane.get("start_pos"))
+            end_str = _format_lane_pos(lane.get("end_pos"))
+            print(f"  {lane['lane_name']:<35} edge={lane['edge_id']:<20} len={lane['length']:.1f}m")
+            print(f"    start={start_str}  end={end_str}")
+            print(f"    -> exits to: {lane['exit_lanes']}")
+        
+        print(f"\n--- OUTGOING LANES (leaving junction): {len(outgoing_lanes)} ---")
+        for lane in sorted(outgoing_lanes, key=lambda x: x["edge_id"]):
+            print(f"  {lane['lane_name']:<35} edge={lane['edge_id']:<20} len={lane['length']:.1f}m")
+            print(f"    <- enters from: {lane['entry_lanes']}")
+        
+        print("=" * 60 + "\n")
+        
+    except Exception as e:
+        import traceback
+        print(f"[JunctionAnalysis] Failed to analyze junction lanes: {e}")
+        traceback.print_exc()
+    
+    return result.get("incoming", []), result.get("outgoing", [])
+
+
+def _reposition_ego_before_lane_end(env, distance_before_end: float) -> bool:
+    """Reposition the ego vehicle to a specific distance before the lane end.
+    
+    Args:
+        env: The environment instance.
+        distance_before_end: Distance in meters before lane end to place the vehicle.
+        
+    Returns True if repositioning succeeded, False otherwise.
+    """
+    try:
+        vehicle = env.agent
+        if vehicle is None:
+            return False
+        
+        lane = vehicle.lane
+        if lane is None:
+            return False
+        
+        lane_length = lane.length
+        # spawn_longitude is from lane START, so: lane_length - distance_before_end
+        spawn_long = max(1.0, min(lane_length - distance_before_end, lane_length - 0.1))
+        
+        pos = lane.position(spawn_long, 0.0)
+        heading = lane.heading_theta_at(spawn_long)
+        
+        vehicle.set_position(pos)
+        vehicle.set_heading_theta(heading)
+        
+        # Update spawn_place so navigation uses the new position
+        try:
+            vehicle.spawn_place = pos.copy()
+        except Exception:
+            pass
+        
+        # Rebuild navigation from new position
+        if hasattr(env, "_refresh_navigation_after_spawn"):
+            env._refresh_navigation_after_spawn(lane)
+        else:
+            try:
+                vehicle.reset_navigation(lane)
+            except Exception:
+                pass
+        
+        return True
+    except Exception as e:
+        print(f"[EgoReposition] Failed to reposition ego: {e}")
+        return False
+
+
 def _place_yield_sign_on_spawn_lane(
     env, distance_before_end: float = 20.0, show_model: bool = True
 ) -> bool:
@@ -680,6 +866,8 @@ def run_one_episode(
     replay_root: Path | None = None,
     save_gif: Path | None = None,
     hide_signs: bool = False,
+    auxiliary_agent: bool = False,
+    aux_distance_from_intersection: float = 5.0,
 ) -> dict:
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
     np.random.seed(seed)
@@ -726,11 +914,38 @@ def run_one_episode(
         except Exception:
             pass
 
-        # Place yield sign on ego's spawn lane, 20m before lane end
+        # Reposition ego vehicle to specified distance before lane end (intersection)
+        spawn_distance = float(row.get("spawn_distance_before_end", 0) or 0)
+        if spawn_distance > 0:
+            _reposition_ego_before_lane_end(base_env, spawn_distance)
+
+        # Place yield sign on ego's spawn lane, before lane end
         sign_distance = float(row.get("sign_distance_before_end", 20.0))
         _place_yield_sign_on_spawn_lane(
             base_env, distance_before_end=sign_distance, show_model=not hide_signs
         )
+
+        # Analyze and print junction lanes (for debugging/info only)
+        incoming_lanes, outgoing_lanes = _analyze_junction_lanes(base_env)
+
+        # Add auxiliary agents on every incoming lane (except ego's road)
+        aux_agent_mgr = None
+        if auxiliary_agent:
+            ego_lane_index = getattr(base_env.vehicle.lane, "index", "")
+            aux_spawn_lanes = [
+                lane["lane_name"]
+                for lane in incoming_lanes
+                # if lane["edge_id"] not in ego_lane_index
+            ]
+            if aux_spawn_lanes:
+                aux_agent_mgr = add_auxiliary_agents(
+                    base_env,
+                    spawn_lane_indices=aux_spawn_lanes,
+                    distance_from_intersection=aux_distance_from_intersection,
+                )
+                print(f"[AuxAgent] Spawned on {len(aux_spawn_lanes)} incoming lane(s)")
+            else:
+                print("[AuxAgent] No incoming lanes available for auxiliary agents")
 
         policy_obj = None
         sampled_ego_params = None
@@ -940,7 +1155,9 @@ def run_one_episode(
                 text_dict = {
                     "Step": step,
                     "Speed": f"{vehicle.speed_km_h:.2f} km/h",
-                    "Current lane: ": vehicle.lane.index,
+                    "Vehicle lane: ": vehicle.lane.index,
+                    # "Current lane" : env.engine.current_map.road_network.get_closest_lane_index(vehicle.position)[0],
+                    # "Auxiliary agent spawn lane: ": spawn_lane,
                     "Current lane width: ": vehicle.lane.width,
                     "Violations: ": sign_violations,
                 }
@@ -960,6 +1177,11 @@ def run_one_episode(
                 text_dict["Main road traffic"] = main_road_has_traffic
                 text_dict["Ego in yield zone"] = ego_in_yield_zone
                 text_dict["Yield violation"] = ego_violating_yield
+                
+                # Add auxiliary agent status
+                if aux_agent_mgr is not None:
+                    aux_status = aux_agent_mgr.get_status()
+                    text_dict["Aux agents"] = aux_status.get("count", 0)
 
             if current_violation_texts:
                 text_dict["Violation"] = current_violation_texts[0]
@@ -1334,6 +1556,12 @@ def main():
     parser.add_argument("--hide-signs", action="store_true",
                         help="Hide traffic sign visual models (signs still affect behavior)")
 
+    # Auxiliary agent options
+    parser.add_argument("--auxiliary-agent", action="store_true", default=True,
+                        help="Spawn a stationary auxiliary agent on the main road near intersection")
+    parser.add_argument("--aux-distance-from-intersection", type=float, default=0,
+                        help="Distance from intersection to spawn aux agent (meters, default: 5.0)")
+
     args = parser.parse_args()
 
     if args.scene_id and args.scene_uid:
@@ -1370,6 +1598,9 @@ def main():
     print(f"Preset: {args.preset}")
     print(f"Backend: sumo (real maps only)")
     print(f"Input: {benchmark_output_dir}")
+    if args.auxiliary_agent:
+        print(f"Auxiliary agent: ENABLED (stationary, near intersection)")
+        print(f"  - Distance from intersection: {args.aux_distance_from_intersection}m")
 
     if args.manifest:
         manifest_path = Path(args.manifest)
@@ -1489,6 +1720,8 @@ def main():
                 replay_root=replay_root,
                 save_gif=gif_path,
                 hide_signs=args.hide_signs,
+                auxiliary_agent=args.auxiliary_agent,
+                aux_distance_from_intersection=args.aux_distance_from_intersection,
             )
             episode_dt = time.time() - episode_t0
             print(f"{args.policy}  elapsed_s={episode_dt:.3f}")

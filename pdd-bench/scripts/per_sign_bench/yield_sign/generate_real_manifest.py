@@ -20,8 +20,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import random
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -35,6 +38,125 @@ EXPERIMENT_TIMESTAMP_FMT = "%Y-%m-%d_%H-%M-%S"
 
 PDD_CODE = "2.4"
 SIGN_TYPE = "yield"
+
+# Default spawn position: 5 meters before lane end (intersection)
+DEFAULT_SPAWN_DISTANCE_BEFORE_END = 50.0
+
+
+@dataclass
+class SumoLaneInfo:
+    """Information about a SUMO lane suitable for spawning."""
+    edge_id: str
+    lane_num: int
+    lane_id: str  # e.g., "lane_-123#0_0"
+    length: float
+    to_junction: str
+    junction_type: str
+
+
+def parse_sumo_net_for_spawn_lanes(net_path: Path, min_length: float = 20.0) -> List[SumoLaneInfo]:
+    """
+    Parse SUMO .net.xml and find lanes that lead to intersections.
+    
+    Args:
+        net_path: Path to the .net.xml file
+        min_length: Minimum lane length in meters
+        
+    Returns:
+        List of SumoLaneInfo for lanes suitable for spawning
+    """
+    if not net_path.exists():
+        return []
+    
+    tree = ET.parse(net_path)
+    root = tree.getroot()
+    
+    # First, collect junction info
+    junctions = {}
+    for junction in root.findall("junction"):
+        jid = junction.get("id")
+        jtype = junction.get("type", "unknown")
+        junctions[jid] = jtype
+    
+    # Intersection junction types (where yield signs matter)
+    intersection_types = {"priority", "right_before_left", "allway_stop", "traffic_light"}
+    
+    spawn_lanes = []
+    
+    for edge in root.findall("edge"):
+        edge_id = edge.get("id")
+        func = edge.get("function", "normal")
+        
+        # Skip internal edges (junction connectors)
+        if func == "internal" or edge_id.startswith(":"):
+            continue
+        
+        to_junction = edge.get("to", "")
+        junction_type = junctions.get(to_junction, "unknown")
+        
+        # Only consider edges leading to intersections
+        if junction_type not in intersection_types:
+            continue
+        
+        lanes = edge.findall("lane")
+        for lane in lanes:
+            lane_id = lane.get("id", "")
+            
+            # Parse lane length
+            length = float(lane.get("length", 0))
+            if length == 0:
+                # Try to compute from shape
+                shape_str = lane.get("shape", "")
+                if shape_str:
+                    points = shape_str.strip().split()
+                    coords = [tuple(map(float, p.split(','))) for p in points if ',' in p]
+                    if len(coords) >= 2:
+                        length = sum(
+                            ((coords[i+1][0] - coords[i][0])**2 + 
+                             (coords[i+1][1] - coords[i][1])**2)**0.5
+                            for i in range(len(coords) - 1)
+                        )
+            
+            if length < min_length:
+                continue
+            
+            # Extract lane number from lane_id (e.g., "-123#0_1" -> 1)
+            try:
+                lane_num = int(lane_id.rsplit("_", 1)[1])
+            except (ValueError, IndexError):
+                lane_num = 0
+            
+            spawn_lanes.append(SumoLaneInfo(
+                edge_id=edge_id,
+                lane_num=lane_num,
+                lane_id=f"lane_{lane_id}",
+                length=length,
+                to_junction=to_junction,
+                junction_type=junction_type,
+            ))
+    
+    return spawn_lanes
+
+
+def select_random_spawn_lane(
+    spawn_lanes: List[SumoLaneInfo],
+    seed: int,
+) -> Optional[SumoLaneInfo]:
+    """
+    Select a random lane from available spawn lanes.
+    
+    Args:
+        spawn_lanes: List of available lanes
+        seed: Random seed for reproducibility
+        
+    Returns:
+        Selected SumoLaneInfo or None if no lanes available
+    """
+    if not spawn_lanes:
+        return None
+    
+    rng = random.Random(seed)
+    return rng.choice(spawn_lanes)
 
 
 def make_experiment_dir(
@@ -97,14 +219,41 @@ def build_manifest_entry(
     traffic_density: float = 0.0,
     horizon: int = 600,
     sign_distance_before_end: float = 20.0,
+    spawn_distance_before_end: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+    auxiliary_agent: bool = False,
+    aux_distance_from_intersection: float = 5.0,
+    spawn_lanes_cache: Optional[List[SumoLaneInfo]] = None,
 ) -> Dict:
-    """Build a single manifest entry for a scene."""
+    """Build a single manifest entry for a scene.
+    
+    Args:
+        scene_dir: Directory containing the scene
+        scenes_root: Root directory for all scenes
+        meta: Scene metadata from meta.json
+        variant: Variant index for seed generation
+        spawn_velocity_ms: Initial vehicle velocity
+        traffic_density: NPC traffic density
+        horizon: Simulation steps
+        sign_distance_before_end: Distance before lane end to place yield sign
+        spawn_distance_before_end: Distance before lane end to spawn ego vehicle
+        auxiliary_agent: Whether to spawn auxiliary agent
+        aux_distance_from_intersection: Distance for auxiliary agent
+        spawn_lanes_cache: Pre-parsed spawn lanes (to avoid re-parsing for each variant)
+    """
     scene_name = meta.get("scene_name", scene_dir.name)
     net_file = meta.get("net_file", "map.net.xml")
     
     net_path = scene_dir.relative_to(scenes_root) / net_file
+    net_full_path = scene_dir / net_file
     
     seed = _stable_seed(scene_name, variant)
+    
+    # Parse spawn lanes if not cached
+    if spawn_lanes_cache is None:
+        spawn_lanes_cache = parse_sumo_net_for_spawn_lanes(net_full_path)
+    
+    # Select a random spawn lane based on seed
+    selected_lane = select_random_spawn_lane(spawn_lanes_cache, seed)
     
     entry = {
         "scene_id": scene_name,
@@ -118,22 +267,35 @@ def build_manifest_entry(
         "traffic_density": traffic_density,
         "horizon": horizon,
         "sign_distance_before_end": sign_distance_before_end,
+        "spawn_distance_before_end": spawn_distance_before_end,
         "valid": True,
         "latitude": meta.get("latitude"),
         "longitude": meta.get("longitude"),
         "crop_radius_m": meta.get("crop_radius_m"),
         "source_osm": meta.get("source_osm"),
         "osm_file": meta.get("osm_file"),
+        # Auxiliary agent settings
+        "auxiliary_agent": auxiliary_agent,
+        "aux_distance_from_intersection": aux_distance_from_intersection,
     }
+    
+    # Add spawn lane info (from parsed network or meta override)
+    if meta.get("road_id"):
+        # Meta override takes precedence
+        entry["road_id"] = meta["road_id"]
+        if meta.get("spawn_lane_num") is not None:
+            entry["spawn_lane_num"] = meta["spawn_lane_num"]
+    elif selected_lane is not None:
+        # Use randomly selected lane from network
+        entry["road_id"] = selected_lane.edge_id
+        entry["spawn_lane_num"] = selected_lane.lane_num
+        entry["spawn_lane_length"] = selected_lane.length
+        entry["spawn_to_junction"] = selected_lane.to_junction
     
     if meta.get("distance_from_start"):
         entry["distance_from_start"] = meta["distance_from_start"]
     if meta.get("sign_spawn_distance"):
         entry["sign_spawn_distance"] = meta["sign_spawn_distance"]
-    if meta.get("road_id"):
-        entry["road_id"] = meta["road_id"]
-    if meta.get("spawn_lane_num") is not None:
-        entry["spawn_lane_num"] = meta["spawn_lane_num"]
     if meta.get("destination_lane_id"):
         entry["destination_lane_id"] = meta["destination_lane_id"]
     
@@ -150,6 +312,9 @@ def generate_manifest(
     traffic_density: float = 0.0,
     horizon: int = 600,
     sign_distance_before_end: float = 20.0,
+    spawn_distance_before_end: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+    auxiliary_agent: bool = False,
+    aux_distance_from_intersection: float = 5.0,
 ) -> List[Dict]:
     """Generate real_manifest.jsonl from discovered scenes."""
     scenes = discover_scenes(scenes_dir)
@@ -160,9 +325,20 @@ def generate_manifest(
     for scene_dir in scenes:
         meta = load_scene_metadata(scene_dir)
         scene_name = meta.get("scene_name", scene_dir.name)
+        net_file = meta.get("net_file", "map.net.xml")
+        net_full_path = scene_dir / net_file
         
         print(f"\n[SCENE] {scene_name}")
         print(f"  Location: ({meta.get('latitude')}, {meta.get('longitude')})")
+        
+        # Pre-parse spawn lanes for this scene (cache for all variants)
+        spawn_lanes = parse_sumo_net_for_spawn_lanes(net_full_path)
+        print(f"  Found {len(spawn_lanes)} intersection-approaching lane(s)")
+        
+        if spawn_lanes:
+            # Show available lanes
+            unique_edges = set(lane.edge_id for lane in spawn_lanes)
+            print(f"  Available edges: {list(unique_edges)[:5]}{'...' if len(unique_edges) > 5 else ''}")
         
         for variant in range(n_variants):
             entry = build_manifest_entry(
@@ -174,11 +350,21 @@ def generate_manifest(
                 traffic_density=traffic_density,
                 horizon=horizon,
                 sign_distance_before_end=sign_distance_before_end,
+                spawn_distance_before_end=spawn_distance_before_end,
+                auxiliary_agent=auxiliary_agent,
+                aux_distance_from_intersection=aux_distance_from_intersection,
+                spawn_lanes_cache=spawn_lanes,
             )
             entries.append(entry)
             
+            # Print spawn lane selection info
+            road_id = entry.get("road_id", "N/A")
+            lane_num = entry.get("spawn_lane_num", "N/A")
+            lane_len = entry.get("spawn_lane_length", "N/A")
             if n_variants > 1:
-                print(f"  Variant {variant}: seed={entry['seed']}")
+                print(f"  Variant {variant}: seed={entry['seed']}, road={road_id}, lane={lane_num}")
+            else:
+                print(f"  Spawn lane: road_id={road_id}, lane_num={lane_num}, length={lane_len}m")
     
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "real_manifest.jsonl"
@@ -198,6 +384,9 @@ def generate_manifest(
         "traffic_density": traffic_density,
         "horizon": horizon,
         "sign_distance_before_end": sign_distance_before_end,
+        "spawn_distance_before_end": spawn_distance_before_end,
+        "auxiliary_agent": auxiliary_agent,
+        "aux_distance_from_intersection": aux_distance_from_intersection,
         "generated_at": datetime.now().isoformat(),
         "scenes": [s.name for s in scenes],
     }
@@ -213,6 +402,10 @@ def generate_manifest(
     print(f"  - Scenes processed: {len(scenes)}")
     print(f"  - Manifest entries: {len(entries)}")
     print(f"  - Sign distance before lane end: {sign_distance_before_end}m")
+    print(f"  - Ego spawn distance before lane end: {spawn_distance_before_end}m")
+    if auxiliary_agent:
+        print(f"\nAuxiliary Agent: ENABLED (stationary, near intersection)")
+        print(f"  - Distance from intersection: {aux_distance_from_intersection}m")
     print(f"\nOutput files:")
     print(f"  - Manifest: {manifest_path}")
     print(f"  - Summary: {summary_path}")
@@ -244,6 +437,8 @@ def render_gifs_from_manifest(
     dry_run: bool = False,
     gif_dir: Optional[Path] = None,
     hide_signs: bool = False,
+    auxiliary_agent: bool = False,
+    aux_distance_from_intersection: float = 5.0,
 ) -> Tuple[int, int]:
     """Render GIFs for scenes from a manifest file.
     
@@ -257,6 +452,8 @@ def render_gifs_from_manifest(
         max_scenes: Limit number of scenes to render
         dry_run: Print commands without executing
         hide_signs: If True, hide traffic sign visual models in rendered GIFs
+        auxiliary_agent: If True, spawn a stationary auxiliary agent near intersection
+        aux_distance_from_intersection: Distance from intersection (meters)
         
     Returns:
         (rendered_count, failed_count)
@@ -321,6 +518,11 @@ def render_gifs_from_manifest(
         if hide_signs:
             cmd.append("--hide-signs")
         
+        # Auxiliary agent options
+        if auxiliary_agent:
+            cmd.append("--auxiliary-agent")
+            cmd.extend(["--aux-distance-from-intersection", str(aux_distance_from_intersection)])
+        
         print(f"\n[GIF {i}/{len(rows)}] {scene_uid}")
         print("  " + " ".join(cmd))
         
@@ -374,7 +576,11 @@ def main():
     )
     parser.add_argument(
         "--sign-distance", type=float, default=5.0,
-        help="Distance before lane end to place yield sign in meters (default: 20.0)"
+        help="Distance before lane end to place yield sign in meters (default: 5.0)"
+    )
+    parser.add_argument(
+        "--spawn-distance", type=float, default=DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+        help=f"Distance before lane end to spawn ego vehicle in meters (default: {DEFAULT_SPAWN_DISTANCE_BEFORE_END})"
     )
 
     # GIF rendering options
@@ -407,6 +613,16 @@ def main():
         help="Run name for GIF rendering (default: real_<timestamp>)"
     )
     
+    # Auxiliary agent options
+    parser.add_argument(
+        "--auxiliary-agent", action="store_true",
+        help="Spawn a stationary auxiliary agent on the main road near intersection"
+    )
+    parser.add_argument(
+        "--aux-distance-from-intersection", type=float, default=30,
+        help="Distance from intersection to spawn aux agent (meters, default: 5.0)"
+    )
+    
     args = parser.parse_args()
 
     scenes_dir = Path(args.scenes_dir)
@@ -422,6 +638,9 @@ def main():
         traffic_density=args.traffic_density,
         horizon=args.horizon,
         sign_distance_before_end=args.sign_distance,
+        spawn_distance_before_end=args.spawn_distance,
+        auxiliary_agent=args.auxiliary_agent,
+        aux_distance_from_intersection=args.aux_distance_from_intersection,
     )
     
     if args.save_gifs and entries:
@@ -430,6 +649,9 @@ def main():
         run_name = args.run_name or experiment_dir.name
 
         print(f"\n[INFO] Rendering GIFs into experiment: {experiment_dir}")
+        if args.auxiliary_agent:
+            print(f"[INFO] Auxiliary agent: ENABLED (stationary, near intersection)")
+            print(f"  - Distance from intersection: {args.aux_distance_from_intersection}m")
         gif_rendered, gif_failed = render_gifs_from_manifest(
             manifest_path=manifest_path,
             experiment_dir=experiment_dir,
@@ -440,6 +662,8 @@ def main():
             dry_run=args.gif_dry_run,
             gif_dir=gif_dir,
             hide_signs=args.hide_signs,
+            auxiliary_agent=args.auxiliary_agent,
+            aux_distance_from_intersection=args.aux_distance_from_intersection,
         )
 
         resolved_gif_dir = gif_dir or (experiment_dir / "gifs")
