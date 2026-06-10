@@ -30,7 +30,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from junction_priority_layout import JunctionLayoutError, build_junction_priority_layout
-from manifest_config import DEFAULT_SPAWN_DISTANCE_BEFORE_END
+from manifest_config import (
+    DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+    DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+)
 
 
 SCRIPT_DIR = Path(__file__).parent
@@ -243,7 +246,7 @@ def build_manifest_entry(
     sign_distance_before_end: float = 20.0,
     spawn_distance_before_end: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     auxiliary_agent: bool = False,
-    aux_distance_from_intersection: float = 5.0,
+    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     spawn_lanes_cache: Optional[List[SumoLaneInfo]] = None,
     junction_layout_cache: Optional[dict] = None,
 ) -> Dict:
@@ -376,7 +379,7 @@ def generate_manifest(
     sign_distance_before_end: float = 20.0,
     spawn_distance_before_end: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     auxiliary_agent: bool = False,
-    aux_distance_from_intersection: float = 5.0,
+    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 ) -> List[Dict]:
     """Generate real_manifest.jsonl from discovered scenes."""
     scenes = discover_scenes(scenes_dir)
@@ -521,7 +524,7 @@ def render_gifs_from_manifest(
     gif_dir: Optional[Path] = None,
     hide_signs: bool = False,
     auxiliary_agent: bool = False,
-    aux_distance_from_intersection: float = 5.0,
+    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 ) -> Tuple[int, int]:
     """Render GIFs for scenes from a manifest file.
     
@@ -702,8 +705,10 @@ def main():
         help="Spawn a stationary auxiliary agent on the main road near intersection"
     )
     parser.add_argument(
-        "--aux-distance-from-intersection", type=float, default=5,
-        help="Distance from intersection to spawn aux agent (meters, default: 5.0)"
+        "--aux-distance-from-intersection", type=float,
+        default=DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+        help=f"Distance from intersection to spawn aux agent (meters, "
+             f"default: {DEFAULT_AUX_DISTANCE_FROM_INTERSECTION})"
     )
     
     args = parser.parse_args()

@@ -6,8 +6,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-# Shared with generate_real_manifest.py (--spawn-distance default).
+# Shared with generate_real_manifest.py / run_benchmark_real.py CLI defaults.
 DEFAULT_SPAWN_DISTANCE_BEFORE_END = 50.0
+DEFAULT_AUX_DISTANCE_FROM_INTERSECTION = 20.0
 
 # Row fields that may be filled from manifest.json / real_manifest_summary.json.
 EXPERIMENT_DEFAULT_KEYS = (
@@ -48,8 +49,14 @@ def enrich_manifest_row(row: dict[str, Any], config: dict[str, Any] | None = Non
         raw = config.get("spawn_distance_before_end", DEFAULT_SPAWN_DISTANCE_BEFORE_END)
         out["spawn_distance_before_end"] = float(raw)
 
+    if out.get("aux_distance_from_intersection") is None:
+        raw = config.get(
+            "aux_distance_from_intersection", DEFAULT_AUX_DISTANCE_FROM_INTERSECTION
+        )
+        out["aux_distance_from_intersection"] = float(raw)
+
     for key in EXPERIMENT_DEFAULT_KEYS:
-        if key == "spawn_distance_before_end":
+        if key in ("spawn_distance_before_end", "aux_distance_from_intersection"):
             continue
         if out.get(key) is None and key in config:
             out[key] = config[key]

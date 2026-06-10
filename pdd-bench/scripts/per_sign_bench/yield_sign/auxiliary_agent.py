@@ -29,10 +29,39 @@ from metadrive.policy.idm_policy import IDMPolicy
 from metadrive.component.navigation_module.edge_network_navigation import EdgeNetworkNavigation
 
 
-DEFAULT_DISTANCE_FROM_INTERSECTION = 5.0
+DEFAULT_DISTANCE_FROM_INTERSECTION = 20.0
 DEFAULT_SPAWN_VELOCITY_MS = 5.0
 DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END = 5.0
 AuxPolicyType = Literal["idm", "stationary"]
+
+_IDM_SYNC_KEYS = (
+    "NORMAL_SPEED",
+    "MAX_SPEED",
+    "CREEP_SPEED",
+    "ACC_FACTOR",
+    "DEACC_FACTOR",
+    "DISTANCE_WANTED",
+    "TIME_WANTED",
+    "LANE_CHANGE_FREQ",
+)
+
+
+def ego_cruise_speed_ms(ego_policy) -> float:
+    """Ego IDM cruise speed in m/s (policy stores NORMAL_SPEED in km/h)."""
+    if ego_policy is not None and hasattr(ego_policy, "NORMAL_SPEED"):
+        return float(ego_policy.NORMAL_SPEED) / 3.6
+    return DEFAULT_SPAWN_VELOCITY_MS
+
+
+def sync_aux_policy_from_ego(ego_policy, aux_policy) -> None:
+    """Copy ego IDM driving parameters onto an auxiliary IDM policy."""
+    if ego_policy is None or aux_policy is None:
+        return
+    for key in _IDM_SYNC_KEYS:
+        if hasattr(ego_policy, key):
+            setattr(aux_policy, key, getattr(ego_policy, key))
+    if hasattr(aux_policy, "target_speed") and hasattr(ego_policy, "NORMAL_SPEED"):
+        aux_policy.target_speed = ego_policy.NORMAL_SPEED
 
 
 class StationaryPolicy(BasePolicy):
@@ -157,13 +186,17 @@ class AuxiliaryAgentsManager(BaseManager):
         ego_vehicle=None,
         ego_spawn_lane_index: Optional[str] = None,
         ego_release_distance_before_end: float = DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END,
+        ego_idm_policy=None,
     ):
         super().__init__()
         self._spawn_lane_indices = list(spawn_lane_indices)
         self._outgoing_lanes = list(outgoing_lanes or [])
         self._distance_from_intersection = distance_from_intersection
         self._policy = policy
-        self._spawn_velocity_ms = spawn_velocity_ms
+        self._ego_idm_policy = ego_idm_policy
+        if spawn_velocity_ms is None:
+            spawn_velocity_ms = ego_cruise_speed_ms(ego_idm_policy)
+        self._spawn_velocity_ms = float(spawn_velocity_ms)
         self._destination_lanes = list(destination_lanes or [])
         self._ego_vehicle = ego_vehicle
         self._ego_spawn_lane_index = ego_spawn_lane_index
@@ -189,7 +222,7 @@ class AuxiliaryAgentsManager(BaseManager):
 
         for idx, spawn_lane_index in enumerate(self._spawn_lane_indices):
             lane = road_network.get_lane(spawn_lane_index)
-            spawn_long = max(1.0, lane.length - self._distance_from_intersection)
+            spawn_long = lane.length - self._distance_from_intersection
             edge_id = _lane_edge_id(spawn_lane_index)
 
             if idx < len(self._destination_lanes) and self._destination_lanes[idx]:
@@ -253,7 +286,11 @@ class AuxiliaryAgentsManager(BaseManager):
                             aux_vehicle,
                             self.generate_seed(),
                         )
-                    self._aux_policies.append(self.get_policy(aux_vehicle.id))
+                    aux_policy = self.get_policy(aux_vehicle.id)
+                    sync_aux_policy_from_ego(self._ego_idm_policy, aux_policy)
+                    if isinstance(aux_policy, GatedAuxiliaryIDMPolicy):
+                        aux_policy._release_speed_ms = ego_cruise_speed_ms(self._ego_idm_policy)
+                    self._aux_policies.append(aux_policy)
                 else:
                     aux_vehicle.set_velocity([0.0, 0.0], in_local_frame=True)
                     self.add_policy(
@@ -314,6 +351,16 @@ class AuxiliaryAgentsManager(BaseManager):
         """First auxiliary vehicle (backward compatibility)."""
         return self._aux_vehicles[0] if self._aux_vehicles else None
 
+    def sync_from_ego_policy(self, ego_policy) -> None:
+        """Update auxiliary IDM policies to match ego cruise / IDM parameters."""
+        self._ego_idm_policy = ego_policy
+        cruise_ms = ego_cruise_speed_ms(ego_policy)
+        self._spawn_velocity_ms = cruise_ms
+        for policy in self._aux_policies:
+            sync_aux_policy_from_ego(ego_policy, policy)
+            if isinstance(policy, GatedAuxiliaryIDMPolicy):
+                policy._release_speed_ms = cruise_ms
+
     def get_status(self) -> dict:
         if not self._aux_vehicles:
             return {"exists": False, "count": 0, "agents": []}
@@ -360,11 +407,12 @@ def add_auxiliary_agents(
     outgoing_lanes: Optional[List[dict]] = None,
     distance_from_intersection: float = DEFAULT_DISTANCE_FROM_INTERSECTION,
     policy: AuxPolicyType = "idm",
-    spawn_velocity_ms: float = DEFAULT_SPAWN_VELOCITY_MS,
+    spawn_velocity_ms: Optional[float] = None,
     destination_lanes: Optional[List[str]] = None,
     ego_vehicle=None,
     ego_spawn_lane_index: Optional[str] = None,
     ego_release_distance_before_end: float = DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END,
+    ego_idm_policy=None,
 ) -> Optional[AuxiliaryAgentsManager]:
     """Add auxiliary agents on incoming lanes."""
     if not spawn_lane_indices:
@@ -384,6 +432,7 @@ def add_auxiliary_agents(
         ego_vehicle=ego_vehicle,
         ego_spawn_lane_index=ego_spawn_lane_index,
         ego_release_distance_before_end=ego_release_distance_before_end,
+        ego_idm_policy=ego_idm_policy,
     )
     env.engine.register_manager("auxiliary_agent_manager", manager)
     manager.after_reset()
@@ -396,11 +445,12 @@ def add_auxiliary_agent(
     outgoing_lanes: Optional[List[dict]] = None,
     distance_from_intersection: float = DEFAULT_DISTANCE_FROM_INTERSECTION,
     policy: AuxPolicyType = "idm",
-    spawn_velocity_ms: float = DEFAULT_SPAWN_VELOCITY_MS,
+    spawn_velocity_ms: Optional[float] = None,
     destination_lane: Optional[str] = None,
     ego_vehicle=None,
     ego_spawn_lane_index: Optional[str] = None,
     ego_release_distance_before_end: float = DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END,
+    ego_idm_policy=None,
 ) -> Optional[AuxiliaryAgentsManager]:
     """Add a single auxiliary agent (backward compatibility)."""
     destination_lanes = [destination_lane] if destination_lane else None
@@ -415,4 +465,5 @@ def add_auxiliary_agent(
         ego_vehicle=ego_vehicle,
         ego_spawn_lane_index=ego_spawn_lane_index,
         ego_release_distance_before_end=ego_release_distance_before_end,
+        ego_idm_policy=ego_idm_policy,
     )
