@@ -1764,13 +1764,13 @@ def main():
     # Auxiliary agent options
     parser.add_argument("--auxiliary-agent", action="store_true", default=True,
                         help="Spawn an auxiliary agent on an incoming lane near intersection")
-    parser.add_argument("--aux-distance-from-intersection", type=float, default=5,
+    parser.add_argument("--aux-distance-from-intersection", type=float, default=10,
                         help="Distance from intersection to spawn aux agent (meters, default: 5.0)")
     parser.add_argument("--aux-policy", type=str, default="idm", choices=["idm", "stationary"],
                         help="Auxiliary agent behavior: idm drives to outgoing lane, stationary stays put")
     parser.add_argument("--aux-spawn-velocity-ms", type=float, default=5.0,
                         help="Initial speed for IDM auxiliary agents when released (m/s, default: 5.0)")
-    parser.add_argument("--aux-release-when-ego-within-m", type=float, default=5.0,
+    parser.add_argument("--aux-release-when-ego-within-m", type=float, default=10.0,
                         help="Release gated IDM aux when ego is within this distance of spawn lane end (m); 0 = immediate")
 
     args = parser.parse_args()
