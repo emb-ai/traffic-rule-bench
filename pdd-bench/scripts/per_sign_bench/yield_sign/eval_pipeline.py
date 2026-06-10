@@ -78,6 +78,12 @@ BENCH_DIR = Path(__file__).resolve().parent
 PDD_BENCH_DIR = BENCH_DIR.parent.parent.parent
 CHECKPOINTS_DIR = PDD_BENCH_DIR / "checkpoints"
 
+from manifest_config import (
+    DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+    enrich_manifest_row,
+    load_manifest_config,
+)
+
 DEFAULT_MODEL_PATHS: dict[str, Path] = {
     "carl": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
     "carl_rule": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
@@ -187,11 +193,27 @@ def main() -> None:
     OUT = Path(args.out_dir).resolve()
     OUT.mkdir(parents=True, exist_ok=True)
 
-    # Assemble input manifest 
+    # Assemble input manifest (apply experiment defaults from manifest.json)
     all_lines: list[str] = []
     for m_path in args.manifest:
-        lines = [ln for ln in Path(m_path).read_text().splitlines() if ln.strip()]
-        all_lines.extend(lines)
+        m_path = Path(m_path)
+        config = load_manifest_config(m_path)
+        if config:
+            cfg_path = m_path.parent / "manifest.json"
+            if not cfg_path.is_file():
+                cfg_path = m_path.parent / "real_manifest_summary.json"
+            print(f"  + {cfg_path}: loaded experiment config")
+            if config.get("spawn_distance_before_end") is not None:
+                print(f"    spawn_distance_before_end={config['spawn_distance_before_end']}")
+        else:
+            print(
+                f"  + {m_path}: no manifest.json/summary; "
+                f"spawn_distance_before_end defaults to {DEFAULT_SPAWN_DISTANCE_BEFORE_END}"
+            )
+        lines = [ln for ln in m_path.read_text().splitlines() if ln.strip()]
+        for ln in lines:
+            row = enrich_manifest_row(json.loads(ln), config)
+            all_lines.append(json.dumps(row, default=str))
         print(f"  + {m_path}: {len(lines)} rows")
     print(f"Total rows: {len(all_lines)}")
 

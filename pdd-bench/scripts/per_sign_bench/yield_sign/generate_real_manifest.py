@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from junction_priority_layout import JunctionLayoutError, build_junction_priority_layout
+from manifest_config import DEFAULT_SPAWN_DISTANCE_BEFORE_END
 
 
 SCRIPT_DIR = Path(__file__).parent
@@ -40,10 +41,6 @@ EXPERIMENT_TIMESTAMP_FMT = "%Y-%m-%d_%H-%M-%S"
 
 PDD_CODE = "2.4"
 SIGN_TYPE = "yield"
-
-# Default spawn position: 5 meters before lane end (intersection)
-DEFAULT_SPAWN_DISTANCE_BEFORE_END = 50.0
-
 
 @dataclass
 class SumoLaneInfo:
@@ -474,6 +471,11 @@ def generate_manifest(
     summary_path = output_dir / "real_manifest_summary.json"
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
+
+    manifest_meta_path = output_dir / "manifest.json"
+    manifest_meta = {"entries_file": "real_manifest.jsonl", **summary}
+    with open(manifest_meta_path, "w", encoding="utf-8") as f:
+        json.dump(manifest_meta, f, indent=2, ensure_ascii=False)
     
     print("\n" + "=" * 60)
     print("Generation Complete")
@@ -488,6 +490,7 @@ def generate_manifest(
         print(f"  - Distance from intersection: {aux_distance_from_intersection}m")
     print(f"\nOutput files:")
     print(f"  - Manifest: {manifest_path}")
+    print(f"  - Experiment config: {manifest_meta_path}")
     print(f"  - Summary: {summary_path}")
     
     return entries

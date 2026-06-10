@@ -29,6 +29,10 @@ from scripts.per_sign_bench.yield_sign.junction_priority_layout import (
     JunctionLayoutError,
     build_junction_priority_layout,
 )
+from scripts.per_sign_bench.yield_sign.manifest_config import (
+    enrich_manifest_row,
+    load_manifest_config,
+)
 
 BENCH_DIR = Path(__file__).resolve().parent
 PER_SIGN_BENCH_DIR = BENCH_DIR.parent
@@ -99,6 +103,11 @@ def _load_jsonl_rows(path: Path) -> list[dict]:
     return rows
 
 
+def _load_enriched_manifest_rows(path: Path) -> list[dict]:
+    config = load_manifest_config(path)
+    return [enrich_manifest_row(row, config) for row in _load_jsonl_rows(path)]
+
+
 def _choose_manifest(code_dir: Path) -> Path | None:
     """Find real_manifest.jsonl for SUMO scenes."""
     p1 = code_dir / "sumo" / "sumo_manifest.jsonl"
@@ -131,7 +140,9 @@ def collect_rows(
         if manifest is None:
             continue
 
+        config = load_manifest_config(manifest)
         for row in _load_jsonl_rows(manifest):
+            row = enrich_manifest_row(row, config)
             if "valid" in row and not row["valid"]:
                 continue
             if unique_scene_id:
@@ -1811,7 +1822,7 @@ def main():
         if not manifest_path.exists():
             raise FileNotFoundError(f"--manifest not found: {manifest_path}")
         rows: list[dict] = []
-        for row in _load_jsonl_rows(manifest_path):
+        for row in _load_enriched_manifest_rows(manifest_path):
             if "valid" in row and not row["valid"]:
                 continue
             row["_backend"] = "sumo"
