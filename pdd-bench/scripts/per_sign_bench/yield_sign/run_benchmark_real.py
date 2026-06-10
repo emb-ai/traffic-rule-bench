@@ -24,7 +24,10 @@ from scripts.per_sign_bench.factorized_space.ego_defaults import (
     sample_ego_params,
 )
 from traffic_signs.priority_signs import MainRoadSign, YieldSign
-from scripts.per_sign_bench.yield_sign.auxiliary_agent import add_auxiliary_agents
+from scripts.per_sign_bench.yield_sign.auxiliary_agent import (
+    DEFAULT_SPAWN_VELOCITY_MS,
+    add_auxiliary_agents,
+)
 from scripts.per_sign_bench.yield_sign.junction_priority_layout import (
     JunctionLayoutError,
     build_junction_priority_layout,
@@ -1020,7 +1023,7 @@ def run_one_episode(
     auxiliary_agent: bool = False,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     aux_policy: str = "idm",
-    aux_spawn_velocity_ms: float | None = None,
+    aux_spawn_velocity_ms: float = DEFAULT_SPAWN_VELOCITY_MS,
     aux_release_when_ego_within_m: float = 5.0,
 ) -> dict:
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
@@ -1126,6 +1129,9 @@ def run_one_episode(
             aux_distance_from_intersection = float(
                 row.get("aux_distance_from_intersection", aux_distance_from_intersection)
             )
+            aux_spawn_velocity_ms = float(
+                row.get("aux_spawn_velocity_ms", aux_spawn_velocity_ms)
+            )
             ego_lane_index = getattr(base_env.vehicle.lane, "index", "")
             spawn_lane = None
             for lane_key in row.get("main_lane_keys") or []:
@@ -1151,7 +1157,6 @@ def run_one_episode(
                     ego_vehicle=base_env.vehicle,
                     ego_spawn_lane_index=ego_lane_index,
                     ego_release_distance_before_end=aux_release_when_ego_within_m,
-                    ego_idm_policy=policy_obj,
                 )
 
         total_reward = 0.0
@@ -1780,9 +1785,12 @@ def main():
     )
     parser.add_argument("--aux-policy", type=str, default="idm", choices=["idm", "stationary"],
                         help="Auxiliary agent behavior: idm drives to outgoing lane, stationary stays put")
-    parser.add_argument("--aux-spawn-velocity-ms", type=float, default=None,
-                        help="Aux IDM cruise/release speed override in m/s "
-                             "(default: match ego NORMAL_SPEED)")
+    parser.add_argument(
+        "--aux-spawn-velocity-ms",
+        type=float,
+        default=DEFAULT_SPAWN_VELOCITY_MS,
+        help=f"Aux IDM cruise/release speed in m/s (default: {DEFAULT_SPAWN_VELOCITY_MS})",
+    )
     parser.add_argument("--aux-release-when-ego-within-m", type=float, default=20.0,
                         help="Release gated IDM aux when ego is within this distance of spawn lane end (m); 0 = immediate")
 
@@ -1827,10 +1835,7 @@ def main():
         print(f"  - Distance from intersection: {args.aux_distance_from_intersection}m")
         if args.aux_policy == "idm":
             print(f"  - Release when ego within: {args.aux_release_when_ego_within_m}m of spawn lane end")
-            if args.aux_spawn_velocity_ms is not None:
-                print(f"  - Speed after release (override): {args.aux_spawn_velocity_ms} m/s")
-            else:
-                print("  - Speed after release: match ego IDM cruise speed")
+            print(f"  - Speed after release: {args.aux_spawn_velocity_ms} m/s")
             print(f"  - Route: incoming lane -> reachable outgoing lane")
 
     if args.manifest:
