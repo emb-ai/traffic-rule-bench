@@ -666,39 +666,6 @@ def _format_lane_pos(pos) -> str:
     return f"({float(pos[0]):.1f}, {float(pos[1]):.1f})"
 
 
-def _set_lane_endpoint_debug_points(env, lane_names: list[str], incoming_lanes: list[dict]) -> None:
-    """Draw red dots at start/end of specific lanes (e.g. aux-agent spawn lanes)."""
-    if not hasattr(env, "engine") or env.engine is None:
-        return
-
-    lane_by_name = {lane["lane_name"]: lane for lane in incoming_lanes}
-    debug_points = []
-
-    for lane_name in lane_names:
-        lane = lane_by_name.get(lane_name)
-        if lane is None:
-            continue
-        start_pos = lane.get("start_pos")
-        end_pos = lane.get("end_pos")
-        if start_pos is not None:
-            debug_points.append({
-                "pos": (float(start_pos[0]), float(start_pos[1])),
-                "color": (255, 0, 0),
-                "radius": 8,
-                "label": f"START:{lane_name}",
-            })
-        if end_pos is not None:
-            debug_points.append({
-                "pos": (float(end_pos[0]), float(end_pos[1])),
-                "color": (139, 0, 0),
-                "radius": 8,
-                "label": f"END:{lane_name}",
-            })
-
-    env.engine._junction_debug_points = debug_points
-    print(f"[JunctionAnalysis] Stored {len(debug_points)} debug points for aux spawn lane(s)")
-
-
 def _analyze_junction_lanes(env) -> dict:
     """Analyze and print incoming/outgoing lanes of the junction.
     
@@ -980,7 +947,7 @@ def _place_junction_priority_signs(
             print(f"[JunctionSigns] Skipping main sign, lane not found: {lane_key}")
             continue
         try:
-            sign_mgr.add_sign(
+            sign = sign_mgr.add_sign(
                 MainRoadSign,
                 lane=lane,
                 longitudinal_offset=_sign_longitudinal_offset(lane, distance_before_end),
@@ -989,6 +956,10 @@ def _place_junction_priority_signs(
                 use_random_lane=False,
                 intersection_name=junction_id,
             )
+            if sign is not None:
+                # Avoid duplicate top-down icons: priority junctions also draw
+                # SUMO lane-priority glyphs when is_priority_sign is True.
+                sign.is_priority_sign = False
             placed_main += 1
         except Exception as exc:
             print(f"[JunctionSigns] Failed MainRoadSign on {lane_key}: {exc}")
@@ -999,7 +970,7 @@ def _place_junction_priority_signs(
             print(f"[JunctionSigns] Skipping yield sign, lane not found: {lane_key}")
             continue
         try:
-            sign_mgr.add_sign(
+            sign = sign_mgr.add_sign(
                 YieldSign,
                 lane=lane,
                 longitudinal_offset=_sign_longitudinal_offset(lane, distance_before_end),
@@ -1010,6 +981,8 @@ def _place_junction_priority_signs(
                 main_road_lanes=main_lanes,
                 auto_detect_main_roads=False,
             )
+            if sign is not None:
+                sign.is_priority_sign = False
             placed_yield += 1
         except Exception as exc:
             print(f"[JunctionSigns] Failed YieldSign on {lane_key}: {exc}")
@@ -1138,7 +1111,6 @@ def run_one_episode(
 
             aux_spawn_lanes = [spawn_lane] if spawn_lane else []
             if aux_spawn_lanes:
-                _set_lane_endpoint_debug_points(base_env, aux_spawn_lanes, incoming_lanes)
                 aux_agent_mgr = add_auxiliary_agents(
                     base_env,
                     spawn_lane_indices=aux_spawn_lanes,
@@ -1150,8 +1122,6 @@ def run_one_episode(
                     ego_spawn_lane_index=ego_lane_index,
                     ego_release_distance_before_end=aux_release_when_ego_within_m,
                 )
-        elif hasattr(base_env, "engine") and base_env.engine is not None:
-            base_env.engine._junction_debug_points = []
         policy_obj = None
         sampled_ego_params = None
         if policy_cls is not None:

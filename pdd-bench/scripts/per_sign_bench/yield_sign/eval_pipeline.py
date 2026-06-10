@@ -239,6 +239,7 @@ def main() -> None:
             "--benchmark-output", str(bench_root),
             "--emit-replay-sidecar",
             "--replay-root",      str(replay_root),
+            "--save-gifs",
         ]
         if policy in NN_NEED_CHECKPOINT:
             cmd += ["--model-path", model_paths[policy]]
