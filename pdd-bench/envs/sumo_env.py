@@ -199,6 +199,10 @@ class TrafficSignSumoEnv(BaseEnv):
         config["debug_one_way_sign_selection"] = False
         config["min_route_hops_after_spawn"] = 10
         config["max_route_hops_after_spawn"] = 10
+        # When True (default), after sign placement ego is teleported onto the
+        # sign-topology lane. Neural policies (plant2/carl) need False — keep ego
+        # on vehicle_config spawn_lane_index / meta road_id instead.
+        config["relocate_ego_to_sign_lane"] = True
         # Braking-spawn (3.24): ego starts above the limit, placed d_required
         # before the sign (resolved up the road graph). Disabled by default.
         config["ego_braking_spawn"] = False
@@ -1663,7 +1667,7 @@ class TrafficSignSumoEnv(BaseEnv):
 
         # If sign was attached to a concrete lane set, spawn ego on one of those
         # lanes instead of an unrelated default lane.
-        if lane_source != "vehicle_lane_fallback":
+        if self.config.get("relocate_ego_to_sign_lane", True) and lane_source != "vehicle_lane_fallback":
             # For no-turn signs, spawn only from render lanes.
             if self.sign_type in ("3.18.1", "3.18.2", "3.19"):
                 render_lanes = [

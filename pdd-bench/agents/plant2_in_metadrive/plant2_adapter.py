@@ -45,7 +45,8 @@ def _wps_to_action(pred_plan, current_speed: float, target_speed_mps: float) -> 
     Mirrors eval_plant2_wps_steer.py:_wps_to_action — bypasses LateralPID/PCHIP
     used by plant2_predictions_to_action. Steering from pred_wps[lookahead_idx]
     via pure-pursuit; throttle from softmax(pred_speed) capped by target_speed.
-    Ego frame: x=forward, y=left. MetaDrive action[0]: +1=left, -1=right.
+    Ego frame: x=forward, y=right (CARLA / metadrive_obs_to_plant2 convention).
+    MetaDrive action[0]: +1=left, -1=right.
     """
     pred_path, pred_wps, pred_speed = pred_plan
 
@@ -63,6 +64,8 @@ def _wps_to_action(pred_plan, current_speed: float, target_speed_mps: float) -> 
             alpha = np.arctan2(ty, max(tx, 1e-3))
             delta = np.arctan2(2.0 * _WHEELBASE_M * np.sin(alpha), dist)
             steer = float(np.clip(delta / (np.pi / 4.0), -1.0, 1.0))
+            # pred_wps use CARLA y=right; MetaDrive steer +1=left (mirrors plant2_control.py:198)
+            steer = -steer
 
     if pred_speed is not None:
         logits = pred_speed.detach().float()
@@ -242,13 +245,10 @@ class PlanT2MetaDriveAdapter:
         input_ego_speed = getattr(self, "_input_ego_speed", False)
 
         # Pre-compute route with configurable step_m.
-        # get_route_points_ego_frame returns y = -local_y (CARLA y=right convention),
-        # but PlanT2 was trained with y = local_y (MetaDrive y=left convention).
-        # Fix: flip the y sign so the model receives the correct lateral direction.
+        # get_route_points_ego_frame already returns CARLA convention (y=right),
+        # matching collect_objects_ego_frame — do NOT flip y here.
         from metadrive.policy.plant_policy import get_route_points_ego_frame
         route_ego, _ = get_route_points_ego_frame(vehicle, num_points=20, step_m=self.route_step_m)
-        route_ego = route_ego.copy()
-        route_ego[:, 1] = -route_ego[:, 1]   # y=right → y=left (training convention)
 
         # Mirrors the reference inference path in eval_plant2_rule_sign_speed_probs.py:736-748.
         # max_objects=30 — PlanT2 must see surrounding NPCs and sign tokens via x_objs;
