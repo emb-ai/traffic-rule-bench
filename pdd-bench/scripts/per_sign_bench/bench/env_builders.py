@@ -236,6 +236,13 @@ def _apply_manifest_npc_speed_cap(row: dict) -> None:
         cls.MAX_SPEED = cap
 
 
+# Set by run_benchmark.main() before building envs. True (default) teleports ego
+# onto the sign-topology lane after sign placement; run_benchmark flips this to
+# False for NN policies (plant2/carl/ppo_lidar), matching upstream 1300c1e —
+# those policies fail when relocated off the manifest road_id.
+RELOCATE_EGO_TO_SIGN_LANE = True
+
+
 def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSignSumoEnv:
     SumoTrafficManager.EGO_SAFE_RADIUS = 15
     _apply_manifest_profile_to_npcs(row)
@@ -277,6 +284,7 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         num_scenarios=100000,
         vehicle_config=vehicle_config,
         debug_one_way_sign_selection=bool(row.get("debug_one_way_sign_selection", False)),
+        relocate_ego_to_sign_lane=RELOCATE_EGO_TO_SIGN_LANE,
     )
     if row.get("road_id"):
         config["vehicle_config"]["spawn_lane_index"] = row["road_id"]
