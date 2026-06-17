@@ -2,17 +2,19 @@
 Auxiliary agents for yield sign scenarios.
 
 Spawns NPC vehicles on incoming lanes near the intersection. By default they
-use IDM to drive through the junction to a reachable outgoing lane.
+use IDM to drive through the junction to a reachable outgoing lane. Multiple
+vehicles can be spawned as a convoy (column) on the same lane.
 
 Usage:
     from scripts.per_sign_bench.yield_sign.auxiliary_agent import add_auxiliary_agents
 
-    # After env.reset()
     aux_mgr = add_auxiliary_agents(
         env,
         spawn_lane_indices=["lane_46710989#1_0"],
         outgoing_lanes=outgoing_lanes,
         distance_from_intersection=5.0,
+        convoy_size=3,
+        convoy_gap_m=10.0,
         policy="idm",
     )
 """
@@ -32,6 +34,9 @@ from metadrive.component.navigation_module.edge_network_navigation import EdgeNe
 DEFAULT_DISTANCE_FROM_INTERSECTION = 20.0
 DEFAULT_SPAWN_VELOCITY_MS = 5.0
 DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END = 5.0
+DEFAULT_CONVOY_SIZE = 3
+DEFAULT_CONVOY_GAP_M = 10.0
+MIN_SPAWN_LONGITUDE_M = 3.0
 AuxPolicyType = Literal["idm", "stationary"]
 
 
@@ -170,9 +175,11 @@ class AuxiliaryAgentsManager(BaseManager):
         ego_vehicle=None,
         ego_spawn_lane_index: Optional[str] = None,
         ego_release_distance_before_end: float = DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END,
+        convoy_size: int = DEFAULT_CONVOY_SIZE,
+        convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
     ):
         super().__init__()
-        self._spawn_lane_indices = list(spawn_lane_indices)
+        self._requested_spawn_lane_indices = list(spawn_lane_indices)
         self._outgoing_lanes = list(outgoing_lanes or [])
         self._distance_from_intersection = distance_from_intersection
         self._policy = policy
@@ -183,29 +190,139 @@ class AuxiliaryAgentsManager(BaseManager):
         self._ego_vehicle = ego_vehicle
         self._ego_spawn_lane_index = ego_spawn_lane_index
         self._ego_release_distance_before_end = float(ego_release_distance_before_end)
+        self._convoy_size = max(1, int(convoy_size))
+        self._convoy_gap_m = max(1.0, float(convoy_gap_m))
         self._aux_vehicles: List[BaseVehicle] = []
+        self._spawn_lane_indices: List[str] = []
         self._spawn_destinations: List[Optional[str]] = []
+        self._convoy_positions: List[int] = []
         self._aux_policies: List[BasePolicy] = []
 
     def reset(self):
         self._aux_vehicles = []
+        self._spawn_lane_indices = []
         self._spawn_destinations = []
+        self._convoy_positions = []
         self._aux_policies = []
 
     def after_reset(self):
         self._spawn_auxiliary_vehicles()
 
-    def _spawn_auxiliary_vehicles(self):
+    def _spawn_vehicle_on_lane(
+        self,
+        spawn_lane_index: str,
+        spawn_long: float,
+        destination_lane: Optional[str],
+        convoy_position: int,
+    ) -> bool:
         from metadrive.component.vehicle.vehicle_type import DefaultVehicle
 
         road_network = self.engine.current_map.road_network
-        self._aux_vehicles = []
-        self._spawn_destinations = []
+        lane = road_network.get_lane(spawn_lane_index)
+        edge_id = _lane_edge_id(spawn_lane_index)
 
-        for idx, spawn_lane_index in enumerate(self._spawn_lane_indices):
+        vehicle_config = {
+            "spawn_lane_index": edge_id,
+            "spawn_longitude": spawn_long,
+            "spawn_lateral": 0.0,
+            "enable_reverse": False,
+            "navigation_module": EdgeNetworkNavigation,
+            "destination": destination_lane,
+            "show_navi_mark": False,
+            "show_dest_mark": False,
+            "show_line_to_dest": False,
+        }
+
+        try:
+            aux_vehicle = self.spawn_object(
+                DefaultVehicle,
+                vehicle_config=vehicle_config,
+            )
+
+            correct_pos = lane.position(spawn_long, 0.0)
+            correct_heading = lane.heading_theta_at(spawn_long)
+            aux_vehicle.set_position([float(correct_pos[0]), float(correct_pos[1])])
+            aux_vehicle.set_heading_theta(correct_heading)
+
+            if destination_lane and aux_vehicle.navigation is not None:
+                aux_vehicle.navigation.set_route(spawn_lane_index, destination_lane)
+
+            if self._policy == "idm":
+                use_gated = (
+                    self._ego_vehicle is not None
+                    and self._ego_spawn_lane_index
+                    and self._ego_release_distance_before_end > 0
+                )
+                if use_gated:
+                    aux_vehicle.set_velocity([0.0, 0.0], in_local_frame=True)
+                    self.add_policy(
+                        aux_vehicle.id,
+                        GatedAuxiliaryIDMPolicy,
+                        aux_vehicle,
+                        self.generate_seed(),
+                        ego_vehicle=self._ego_vehicle,
+                        ego_spawn_lane_index=self._ego_spawn_lane_index,
+                        release_distance_before_end=self._ego_release_distance_before_end,
+                        release_speed_ms=self._spawn_velocity_ms,
+                    )
+                else:
+                    aux_vehicle.set_velocity(
+                        [self._spawn_velocity_ms, 0.0], in_local_frame=True
+                    )
+                    self.add_policy(
+                        aux_vehicle.id,
+                        AuxiliaryIDMPolicy,
+                        aux_vehicle,
+                        self.generate_seed(),
+                    )
+                aux_policy = self.get_policy(aux_vehicle.id)
+                apply_aux_cruise_speed(aux_policy, self._spawn_velocity_ms)
+                if isinstance(aux_policy, GatedAuxiliaryIDMPolicy):
+                    aux_policy._release_speed_ms = self._spawn_velocity_ms
+                self._aux_policies.append(aux_policy)
+            else:
+                aux_vehicle.set_velocity([0.0, 0.0], in_local_frame=True)
+                self.add_policy(
+                    aux_vehicle.id,
+                    StationaryPolicy,
+                    aux_vehicle,
+                    self.generate_seed(),
+                )
+                self._aux_policies.append(self.get_policy(aux_vehicle.id))
+
+            self._aux_vehicles.append(aux_vehicle)
+            self._spawn_lane_indices.append(spawn_lane_index)
+            self._spawn_destinations.append(destination_lane)
+            self._convoy_positions.append(convoy_position)
+            logging.info(
+                f"[AuxAgent] Spawned convoy slot {convoy_position + 1}/{self._convoy_size} "
+                f"on {spawn_lane_index} at {spawn_long:.1f}m "
+                f"(lane_length={lane.length:.1f}m, policy={self._policy}, "
+                f"destination={destination_lane})"
+            )
+            return True
+        except Exception as e:
+            logging.warning(
+                f"[AuxAgent] Failed to spawn convoy slot {convoy_position + 1} "
+                f"on {spawn_lane_index}: {e}"
+            )
+            print(
+                f"[AuxAgent] Failed to spawn convoy slot {convoy_position + 1} "
+                f"on {spawn_lane_index}: {e}"
+            )
+            return False
+
+    def _spawn_auxiliary_vehicles(self):
+        road_network = self.engine.current_map.road_network
+        self._aux_vehicles = []
+        self._spawn_lane_indices = []
+        self._spawn_destinations = []
+        self._convoy_positions = []
+        self._aux_policies = []
+
+        for idx, spawn_lane_index in enumerate(self._requested_spawn_lane_indices):
             lane = road_network.get_lane(spawn_lane_index)
-            spawn_long = lane.length - self._distance_from_intersection
-            edge_id = _lane_edge_id(spawn_lane_index)
+            lead_spawn_long = lane.length - self._distance_from_intersection
 
             if idx < len(self._destination_lanes) and self._destination_lanes[idx]:
                 destination_lane = self._destination_lanes[idx]
@@ -214,89 +331,29 @@ class AuxiliaryAgentsManager(BaseManager):
                     spawn_lane_index, self._outgoing_lanes, road_network
                 )
 
-            vehicle_config = {
-                "spawn_lane_index": edge_id,
-                "spawn_longitude": spawn_long,
-                "spawn_lateral": 0.0,
-                "enable_reverse": False,
-                "navigation_module": EdgeNetworkNavigation,
-                "destination": destination_lane,
-                "show_navi_mark": False,
-                "show_dest_mark": False,
-                "show_line_to_dest": False,
-            }
-
-            try:
-                aux_vehicle = self.spawn_object(
-                    DefaultVehicle,
-                    vehicle_config=vehicle_config,
-                )
-
-                correct_pos = lane.position(spawn_long, 0.0)
-                correct_heading = lane.heading_theta_at(spawn_long)
-                aux_vehicle.set_position([float(correct_pos[0]), float(correct_pos[1])])
-                aux_vehicle.set_heading_theta(correct_heading)
-
-                if destination_lane and aux_vehicle.navigation is not None:
-                    aux_vehicle.navigation.set_route(spawn_lane_index, destination_lane)
-
-                if self._policy == "idm":
-                    use_gated = (
-                        self._ego_vehicle is not None
-                        and self._ego_spawn_lane_index
-                        and self._ego_release_distance_before_end > 0
-                    )
-                    if use_gated:
-                        aux_vehicle.set_velocity([0.0, 0.0], in_local_frame=True)
-                        self.add_policy(
-                            aux_vehicle.id,
-                            GatedAuxiliaryIDMPolicy,
-                            aux_vehicle,
-                            self.generate_seed(),
-                            ego_vehicle=self._ego_vehicle,
-                            ego_spawn_lane_index=self._ego_spawn_lane_index,
-                            release_distance_before_end=self._ego_release_distance_before_end,
-                            release_speed_ms=self._spawn_velocity_ms,
+            spawned_on_lane = 0
+            for convoy_idx in range(self._convoy_size):
+                spawn_long = lead_spawn_long - convoy_idx * self._convoy_gap_m
+                if spawn_long < MIN_SPAWN_LONGITUDE_M:
+                    if convoy_idx == 0:
+                        logging.warning(
+                            f"[AuxAgent] Lane {spawn_lane_index} too short for convoy "
+                            f"(lead at {lead_spawn_long:.1f}m)"
                         )
-                    else:
-                        aux_vehicle.set_velocity(
-                            [self._spawn_velocity_ms, 0.0], in_local_frame=True
-                        )
-                        self.add_policy(
-                            aux_vehicle.id,
-                            AuxiliaryIDMPolicy,
-                            aux_vehicle,
-                            self.generate_seed(),
-                        )
-                    aux_policy = self.get_policy(aux_vehicle.id)
-                    apply_aux_cruise_speed(aux_policy, self._spawn_velocity_ms)
-                    if isinstance(aux_policy, GatedAuxiliaryIDMPolicy):
-                        aux_policy._release_speed_ms = self._spawn_velocity_ms
-                    self._aux_policies.append(aux_policy)
-                else:
-                    aux_vehicle.set_velocity([0.0, 0.0], in_local_frame=True)
-                    self.add_policy(
-                        aux_vehicle.id,
-                        StationaryPolicy,
-                        aux_vehicle,
-                        self.generate_seed(),
-                    )
-                    self._aux_policies.append(self.get_policy(aux_vehicle.id))
+                    break
+                if self._spawn_vehicle_on_lane(
+                    spawn_lane_index,
+                    spawn_long,
+                    destination_lane,
+                    convoy_idx,
+                ):
+                    spawned_on_lane += 1
 
-                self._aux_vehicles.append(aux_vehicle)
-                self._spawn_destinations.append(destination_lane)
-                logging.info(
-                    f"[AuxAgent] Spawned on {spawn_lane_index} at {spawn_long:.1f}m "
-                    f"(lane_length={lane.length:.1f}m, policy={self._policy}, "
-                    f"destination={destination_lane})"
-                )
+            if spawned_on_lane:
                 print(
-                    f"[AuxAgent] Spawned on {spawn_lane_index} -> {destination_lane} "
-                    f"({self._policy})"
+                    f"[AuxAgent] Convoy x{spawned_on_lane} on {spawn_lane_index} "
+                    f"-> {destination_lane} ({self._policy}, gap={self._convoy_gap_m:.1f}m)"
                 )
-            except Exception as e:
-                logging.warning(f"[AuxAgent] Failed to spawn on {spawn_lane_index}: {e}")
-                print(f"[AuxAgent] Failed to spawn on {spawn_lane_index}: {e}")
 
     def before_step(self):
         if not self._aux_vehicles:
@@ -338,16 +395,18 @@ class AuxiliaryAgentsManager(BaseManager):
             return {"exists": False, "count": 0, "agents": []}
 
         agents = []
-        for aux_vehicle, lane_index, destination, policy in zip(
+        for aux_vehicle, lane_index, destination, policy, convoy_pos in zip(
             self._aux_vehicles,
             self._spawn_lane_indices,
             self._spawn_destinations,
             self._aux_policies,
+            self._convoy_positions,
         ):
             try:
                 agent_status = {
                     "spawn_lane": lane_index,
                     "destination_lane": destination,
+                    "convoy_position": convoy_pos,
                     "position": list(aux_vehicle.position),
                     "speed_mps": float(aux_vehicle.speed) if hasattr(aux_vehicle, "speed") else 0.0,
                     "policy": self._policy,
@@ -368,6 +427,8 @@ class AuxiliaryAgentsManager(BaseManager):
         return {
             "exists": True,
             "count": len(self._aux_vehicles),
+            "convoy_size": self._convoy_size,
+            "convoy_gap_m": self._convoy_gap_m,
             "policy": self._policy,
             "agents": agents,
         }
@@ -384,8 +445,10 @@ def add_auxiliary_agents(
     ego_vehicle=None,
     ego_spawn_lane_index: Optional[str] = None,
     ego_release_distance_before_end: float = DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END,
+    convoy_size: int = DEFAULT_CONVOY_SIZE,
+    convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
 ) -> Optional[AuxiliaryAgentsManager]:
-    """Add auxiliary agents on incoming lanes."""
+    """Add auxiliary agents on incoming lanes (optionally as a convoy per lane)."""
     if not spawn_lane_indices:
         return None
 
@@ -403,6 +466,8 @@ def add_auxiliary_agents(
         ego_vehicle=ego_vehicle,
         ego_spawn_lane_index=ego_spawn_lane_index,
         ego_release_distance_before_end=ego_release_distance_before_end,
+        convoy_size=convoy_size,
+        convoy_gap_m=convoy_gap_m,
     )
     env.engine.register_manager("auxiliary_agent_manager", manager)
     manager.after_reset()
@@ -420,8 +485,10 @@ def add_auxiliary_agent(
     ego_vehicle=None,
     ego_spawn_lane_index: Optional[str] = None,
     ego_release_distance_before_end: float = DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END,
+    convoy_size: int = DEFAULT_CONVOY_SIZE,
+    convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
 ) -> Optional[AuxiliaryAgentsManager]:
-    """Add a single auxiliary agent (backward compatibility)."""
+    """Add auxiliary agents on one lane (backward compatibility)."""
     destination_lanes = [destination_lane] if destination_lane else None
     return add_auxiliary_agents(
         env,
@@ -434,4 +501,6 @@ def add_auxiliary_agent(
         ego_vehicle=ego_vehicle,
         ego_spawn_lane_index=ego_spawn_lane_index,
         ego_release_distance_before_end=ego_release_distance_before_end,
+        convoy_size=convoy_size,
+        convoy_gap_m=convoy_gap_m,
     )

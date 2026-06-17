@@ -19,6 +19,8 @@ EXPERIMENT_DEFAULT_KEYS = (
     "horizon",
     "auxiliary_agent",
     "aux_distance_from_intersection",
+    "aux_convoy_size_max",
+    "aux_convoy_gap_m",
 )
 
 

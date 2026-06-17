@@ -25,6 +25,8 @@ from scripts.per_sign_bench.factorized_space.ego_defaults import (
 )
 from traffic_signs.priority_signs import MainRoadSign, YieldSign
 from scripts.per_sign_bench.yield_sign.auxiliary_agent import (
+    DEFAULT_CONVOY_GAP_M,
+    DEFAULT_CONVOY_SIZE,
     DEFAULT_SPAWN_VELOCITY_MS,
     add_auxiliary_agents,
 )
@@ -1053,6 +1055,8 @@ def run_one_episode(
     aux_policy: str = "idm",
     aux_spawn_velocity_ms: float = DEFAULT_SPAWN_VELOCITY_MS,
     aux_release_when_ego_within_m: float = 5.0,
+    aux_convoy_size: int = DEFAULT_CONVOY_SIZE,
+    aux_convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
 ) -> dict:
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
     np.random.seed(seed)
@@ -1161,6 +1165,8 @@ def run_one_episode(
             aux_spawn_velocity_ms = float(
                 row.get("aux_spawn_velocity_ms", aux_spawn_velocity_ms)
             )
+            aux_convoy_size = int(row.get("aux_convoy_size", aux_convoy_size))
+            aux_convoy_gap_m = float(row.get("aux_convoy_gap_m", aux_convoy_gap_m))
             ego_lane_index = getattr(base_env.vehicle.lane, "index", "")
             spawn_lane = row.get("aux_spawn_lane_index")
             if not spawn_lane and row.get("aux_road_id") is not None:
@@ -1199,7 +1205,14 @@ def run_one_episode(
                     ego_vehicle=base_env.vehicle,
                     ego_spawn_lane_index=ego_lane_index,
                     ego_release_distance_before_end=aux_release_when_ego_within_m,
+                    convoy_size=aux_convoy_size,
+                    convoy_gap_m=aux_convoy_gap_m,
                 )
+                if aux_agent_mgr is not None:
+                    print(
+                        f"[AuxAgent] Convoy size={aux_convoy_size}, gap={aux_convoy_gap_m}m, "
+                        f"spawned={aux_agent_mgr.get_status().get('count', 0)}"
+                    )
 
         total_reward = 0.0
         violations = 0
@@ -1432,6 +1445,7 @@ def run_one_episode(
                 if aux_agent_mgr is not None:
                     aux_status = aux_agent_mgr.get_status()
                     text_dict["Aux agents"] = aux_status.get("count", 0)
+                    text_dict["Aux convoy size"] = aux_status.get("convoy_size", aux_convoy_size)
                     text_dict["Aux policy"] = aux_status.get("policy", aux_policy)
                     agents = aux_status.get("agents") or []
                     if agents:
@@ -1835,6 +1849,19 @@ def main():
     )
     parser.add_argument("--aux-release-when-ego-within-m", type=float, default=20.0,
                         help="Release gated IDM aux when ego is within this distance of spawn lane end (m); 0 = immediate")
+    parser.add_argument(
+        "--aux-convoy-size",
+        type=int,
+        default=DEFAULT_CONVOY_SIZE,
+        help=f"Max convoy size at manifest generation; spawns rows for sizes 1..N "
+             f"(default: {DEFAULT_CONVOY_SIZE}). Per-row size is stored as aux_convoy_size.",
+    )
+    parser.add_argument(
+        "--aux-convoy-gap-m",
+        type=float,
+        default=DEFAULT_CONVOY_GAP_M,
+        help=f"Longitudinal spacing between convoy vehicles in meters (default: {DEFAULT_CONVOY_GAP_M})",
+    )
 
     args = parser.parse_args()
 
@@ -1878,6 +1905,8 @@ def main():
         if args.aux_policy == "idm":
             print(f"  - Release when ego within: {args.aux_release_when_ego_within_m}m of spawn lane end")
             print(f"  - Speed after release: {args.aux_spawn_velocity_ms} m/s")
+            print(f"  - Convoy size: from manifest row aux_convoy_size (CLI default {args.aux_convoy_size})")
+            print(f"  - Convoy gap: {args.aux_convoy_gap_m}m")
             print(f"  - Route: incoming lane -> reachable outgoing lane")
 
     if args.manifest:
@@ -2003,6 +2032,8 @@ def main():
                 aux_policy=args.aux_policy,
                 aux_spawn_velocity_ms=args.aux_spawn_velocity_ms,
                 aux_release_when_ego_within_m=args.aux_release_when_ego_within_m,
+                aux_convoy_size=args.aux_convoy_size,
+                aux_convoy_gap_m=args.aux_convoy_gap_m,
             )
             episode_dt = time.time() - episode_t0
             print(f"{args.policy}  elapsed_s={episode_dt:.3f}")
