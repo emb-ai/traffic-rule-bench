@@ -1,9 +1,4 @@
-"""
-Enumerate augmented yield-sign scenarios from junction layout + SUMO net.
-
-Varies ego/aux spawn lanes, lane indices, and ego destination while filtering
-combinations where paths do not conflict (no yield interaction needed).
-"""
+"""Scenario augmentation for ego/aux spawn combinations."""
 
 from __future__ import annotations
 
@@ -12,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
-from junction_priority_layout import JunctionPriorityLayout, build_junction_priority_layout
+from .junction_priority_layout import JunctionPriorityLayout, build_junction_priority_layout
 
 
 @dataclass(frozen=True)

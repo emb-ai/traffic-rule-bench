@@ -297,7 +297,7 @@ def main() -> None:
         run_name = f"{policy}_{variant}"
         replay_root = OUT / "runs" / "var_0" / run_name / "replays"
         cmd = [
-            sys.executable, str(BENCH_DIR / "run_benchmark_real.py"),
+            sys.executable, str(BENCH_DIR / "run_benchmark.py"),
             "--policy",           policy,
             "--run-name",         run_name,
             "--manifest",         str(input_manifest),

@@ -1,14 +1,4 @@
-"""
-Junction main/secondary road layout for real SUMO maps.
-
-Builds approach arms around the single intersection in a cropped net.xml,
-classifies them as main or secondary (main+secondary mode), and exposes lane
-keys for sign placement / yield verification.
-
-Sorting uses entry-point angle around the junction (robust on skewed maps).
-Main-road pairing prefers SUMO straight-through connectivity; X junctions fall
-back to opposite slots in the circular order (i, i+2).
-"""
+"""Junction main/secondary road layout analysis."""
 
 from __future__ import annotations
 

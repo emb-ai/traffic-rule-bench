@@ -24,19 +24,19 @@ from scripts.per_sign_bench.factorized_space.ego_defaults import (
     sample_ego_params,
 )
 from traffic_signs.priority_signs import MainRoadSign, YieldSign
-from scripts.per_sign_bench.yield_sign.auxiliary_agent import (
+from lib.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
     DEFAULT_CONVOY_SIZE,
     DEFAULT_SPAWN_VELOCITY_MS,
     add_auxiliary_agents,
     resolve_aux_spawn_lanes,
 )
-from scripts.per_sign_bench.yield_sign.manifest_config import DEFAULT_AUX_LANES_OCCUPIED_MAX
-from scripts.per_sign_bench.yield_sign.junction_priority_layout import (
+from lib.manifest_config import DEFAULT_AUX_LANES_OCCUPIED_MAX
+from lib.junction_priority_layout import (
     JunctionLayoutError,
     build_junction_priority_layout,
 )
-from scripts.per_sign_bench.yield_sign.manifest_config import (
+from lib.manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     enrich_manifest_row,
     load_manifest_config,

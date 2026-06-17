@@ -1,20 +1,5 @@
 #!/usr/bin/env python3
-"""
-Real map manifest generator for sign 2.4 (Yield).
-
-This script scans the scenes/ directory for manually collected SUMO scenes
-and generates real_manifest.jsonl for policy evaluation.
-
-Usage (Hydra config):
-    python generate_real_manifest.py
-    python generate_real_manifest.py gif.enabled=true
-    python generate_real_manifest.py auxiliary.lanes_occupied=4 auxiliary.convoy_size=3
-    python generate_real_manifest.py +experiment=mantulinskaya
-
-Each run writes to benchmark_output/2_4/<YYYY-MM-DD_HH-MM-SS>/ so previous
-experiments are not overwritten.
-"""
-
+"""Generate evaluation manifest from scenes."""
 from __future__ import annotations
 
 import hashlib
@@ -29,21 +14,22 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import hydra
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
-from junction_priority_layout import JunctionLayoutError, build_junction_priority_layout
-from auxiliary_agent import (
+from lib.junction_priority_layout import JunctionLayoutError, build_junction_priority_layout
+from lib.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
     DEFAULT_CONVOY_SIZE,
     main_lane_keys_for_aux,
     select_occupied_main_lanes,
 )
-from manifest_config import (
+from lib.manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     DEFAULT_AUX_LANES_OCCUPIED_MAX,
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
 )
-from scene_augmentation import SpawnScenario, augment_layout_for_scene
+from lib.scene_augmentation import SpawnScenario, augment_layout_for_scene
 
 
 # -----------------------------------------------------------------------------
@@ -51,9 +37,7 @@ from scene_augmentation import SpawnScenario, augment_layout_for_scene
 # -----------------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DEFAULT_SCENES_DIR = SCRIPT_DIR / "scenes"
-DEFAULT_OUTPUT_BASE = SCRIPT_DIR / "benchmark_output" / "2_4"
-RUN_BENCH_SCRIPT = SCRIPT_DIR / "run_benchmark_real.py"
-EXPERIMENT_TIMESTAMP_FMT = "%Y-%m-%d_%H-%M-%S"
+RUN_BENCH_SCRIPT = SCRIPT_DIR / "run_benchmark.py"
 
 PDD_CODE = "2.4"
 SIGN_TYPE = "yield"
@@ -234,13 +218,7 @@ def select_random_spawn_lane(
 # -----------------------------------------------------------------------------
 # Experiment directory management
 # -----------------------------------------------------------------------------
-def make_experiment_dir(output_base: Path, experiment_name: Optional[str] = None) -> Path:
-    """Create a dated experiment directory under benchmark_output/2_4."""
-    name = experiment_name or datetime.now().strftime(EXPERIMENT_TIMESTAMP_FMT)
-    experiment_dir = output_base / name
-    experiment_dir.mkdir(parents=True, exist_ok=True)
-    return experiment_dir
-
+# Experiment dir is created by Hydra (see config/config.yaml hydra.run.dir).
 
 # -----------------------------------------------------------------------------
 # Seed generation
@@ -717,7 +695,7 @@ def render_gifs_from_manifest(
 ) -> Tuple[int, int]:
     """Render GIFs for scenes from a manifest file."""
     if not RUN_BENCH_SCRIPT.is_file():
-        print(f"[GIF] run_benchmark_real.py not found at {RUN_BENCH_SCRIPT}", file=sys.stderr)
+        print(f"[GIF] run_benchmark.py not found at {RUN_BENCH_SCRIPT}", file=sys.stderr)
         return 0, 1
     
     if not manifest_path.is_file():
@@ -803,20 +781,18 @@ def render_gifs_from_manifest(
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(cfg: DictConfig) -> None:
     """Main entry point with Hydra configuration."""
-    # Resolve paths
     scenes_dir = Path(cfg.paths.scenes_dir) if cfg.paths.scenes_dir else DEFAULT_SCENES_DIR
-    output_base = Path(cfg.paths.output_base) if cfg.paths.output_base else DEFAULT_OUTPUT_BASE
-    experiment_name = cfg.paths.experiment_name
-    
-    experiment_dir = make_experiment_dir(output_base, experiment_name)
+
+    # Hydra run dir is configured in config.yaml (benchmark_output/2_4/<experiment_name>).
+    experiment_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
+    experiment_dir.mkdir(parents=True, exist_ok=True)
     print(f"\n[INFO] Experiment directory: {experiment_dir}")
-    
-    # Print resolved config
+    print(f"[INFO] Hydra metadata: {experiment_dir / '.hydra'}")
+
     print("\n[CONFIG]")
     print(OmegaConf.to_yaml(cfg))
-    
-    # Save config to experiment directory
-    config_path = experiment_dir / "hydra_config.yaml"
+
+    config_path = experiment_dir / "config.yaml"
     with open(config_path, "w", encoding="utf-8") as f:
         f.write(OmegaConf.to_yaml(cfg))
     
@@ -893,6 +869,7 @@ def main(cfg: DictConfig) -> None:
     print(f"\nOutput files:")
     print(f"  - Manifest: {experiment_dir / 'real_manifest.jsonl'}")
     print(f"  - Config: {config_path}")
+    print(f"  - Hydra: {experiment_dir / '.hydra'}")
     print(f"  - Summary: {experiment_dir / 'real_manifest_summary.json'}")
 
 

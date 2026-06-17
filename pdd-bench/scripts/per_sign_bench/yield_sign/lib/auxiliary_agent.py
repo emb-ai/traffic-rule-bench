@@ -1,23 +1,4 @@
-"""
-Auxiliary agents for yield sign scenarios.
-
-Spawns NPC vehicles on incoming lanes near the intersection. By default they
-use IDM to drive through the junction to a reachable outgoing lane. Multiple
-vehicles can be spawned as a convoy (column) on the same lane.
-
-Usage:
-    from scripts.per_sign_bench.yield_sign.auxiliary_agent import add_auxiliary_agents
-
-    aux_mgr = add_auxiliary_agents(
-        env,
-        spawn_lane_indices=["lane_46710989#1_0"],
-        outgoing_lanes=outgoing_lanes,
-        distance_from_intersection=5.0,
-        convoy_size=3,
-        convoy_gap_m=10.0,
-        policy="idm",
-    )
-"""
+"""Auxiliary agents (main road NPCs) for yield sign scenarios."""
 
 from __future__ import annotations
 
@@ -435,11 +416,6 @@ class AuxiliaryAgentsManager(BaseManager):
         }
 
 
-def _lane_edge_from_key(lane_key: str) -> str:
-    raw = lane_key[5:] if lane_key.startswith("lane_") else lane_key
-    return raw.rsplit("_", 1)[0] if "_" in raw else raw
-
-
 def main_lane_keys_for_aux(
     junction_layout: Optional[dict],
     ego_edge_id: Optional[str] = None,
@@ -450,7 +426,7 @@ def main_lane_keys_for_aux(
         if not ego_edge_id:
             return sorted(main_lane_keys)
         return sorted(
-            k for k in main_lane_keys if _lane_edge_from_key(k) != ego_edge_id
+            k for k in main_lane_keys if _lane_edge_id(k) != ego_edge_id
         )
     if not junction_layout:
         return []
@@ -485,7 +461,7 @@ def resolve_aux_spawn_lanes(
     if occupied:
         return list(occupied)
 
-    ego_edge = _lane_edge_from_key(str(ego_lane_index)) if ego_lane_index else None
+    ego_edge = _lane_edge_id(str(ego_lane_index)) if ego_lane_index else None
     if row.get("road_id"):
         ego_edge = str(row["road_id"])
 

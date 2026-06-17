@@ -1,19 +1,5 @@
 #!/usr/bin/env python3
-"""Convert OSM map to SUMO net.xml (main roads only, no signs/lights/railways).
-
-Each scene folder under scenes/ must contain:
-  - map.osm          — full OSM extract (input)
-  - coordinates.json — crop center: {"lat": ..., "lon": ...}
-
-Build outputs (neutral names, same in every scene folder):
-  - map.net.xml      — SUMO network
-  - cropped.osm      — cropped OSM used for conversion
-  - meta.json        — scene metadata
-
-Usage:
-    python build_single_sign_scene.py savvinskaya_3 --radius 200
-    python build_single_sign_scene.py savvinskaya_3
-"""
+"""Convert OSM map to SUMO net.xml for a scene."""
 
 import argparse
 import json
@@ -311,12 +297,13 @@ def main():
     print(f"\n{'=' * 60}")
     print("SUCCESS!")
     print(f"Scene created at: {scene_dir}")
-    print("\nTo render static map:")
-    print(f"  python render_static_map.py {args.scene}")
-    print("\nTo run simulation (IDM/CARL/PLANT):")
-    print(f"  python run_simulation.py {args.scene}")
-    print(f"  python run_simulation.py {args.scene} --policy carl")
-    print(f"  python run_simulation.py {args.scene} --policy plant2")
+    print("\nTo render static map (debug):")
+    print(f"  python -m tools.render_map {args.scene}")
+    print("\nTo run simulation (debug):")
+    print(f"  python -m tools.run_simulation {args.scene}")
+    print(f"  python -m tools.run_simulation {args.scene} --policy carl")
+    print("\nTo generate manifest for evaluation:")
+    print(f"  python generate_manifest.py")
     print(f"{'=' * 60}")
 
 

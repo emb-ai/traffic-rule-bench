@@ -1,4 +1,4 @@
-"""Experiment-level defaults for yield-sign real manifests."""
+"""Manifest configuration defaults."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-# Shared with generate_real_manifest.py / run_benchmark_real.py CLI defaults.
+# Shared with generate_manifest.py / run_benchmark.py CLI defaults.
 DEFAULT_SPAWN_DISTANCE_BEFORE_END = 20.0
 DEFAULT_AUX_DISTANCE_FROM_INTERSECTION = 20.0
 DEFAULT_AUX_LANES_OCCUPIED_MAX = 4

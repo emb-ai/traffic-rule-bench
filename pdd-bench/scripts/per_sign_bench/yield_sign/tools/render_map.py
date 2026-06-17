@@ -1,55 +1,23 @@
 #!/usr/bin/env python3
-"""Render a SUMO network (map.net.xml) as a static map image.
-
-Usage:
-    python render_static_map.py savvinskaya_3
-    python render_static_map.py savvinskaya_3 --out scenes/savvinskaya_3/custom.png
-"""
+"""Debug: Render a scene map as static image."""
 from __future__ import annotations
 
 import argparse
-import json
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.collections import LineCollection
-import numpy as np
 
-SCENES_DIR_DEFAULT = Path(__file__).resolve().parent / "scenes"
-DEFAULT_NET_FILE = "map.net.xml"
+# Path setup - tools/ is inside yield_sign/
+TOOLS_DIR = Path(__file__).resolve().parent
+YIELD_SIGN_DIR = TOOLS_DIR.parent
+sys.path.insert(0, str(YIELD_SIGN_DIR))
 
+from lib.sumo_utils import resolve_net_file, load_scene_meta, resolve_scene_dir
 
-def resolve_net_file(scene_dir: Path, meta: dict) -> str:
-    """Resolve SUMO net filename (neutral map.net.xml, with legacy fallback)."""
-    net_file = meta.get("net_file", DEFAULT_NET_FILE)
-    if (scene_dir / net_file).exists():
-        return net_file
-
-    net_files = sorted(scene_dir.glob("*.net.xml"))
-    if net_files:
-        return net_files[0].name
-
-    raise FileNotFoundError(
-        f"No .net.xml file found in {scene_dir} "
-        f"(expected {DEFAULT_NET_FILE} or net_file in meta.json)"
-    )
-
-
-def resolve_scene_dir(scenes_dir: Path, scene_name: str) -> Path:
-    scene_dir = scenes_dir / scene_name
-    if not scene_dir.is_dir():
-        raise FileNotFoundError(f"Scene folder not found: {scene_dir}")
-    return scene_dir
-
-
-def load_scene_meta(scene_dir: Path) -> dict:
-    """Load meta.json from a scene directory."""
-    meta_path = scene_dir / "meta.json"
-    if not meta_path.exists():
-        raise FileNotFoundError(f"meta.json not found in {scene_dir}")
-    with open(meta_path) as f:
-        return json.load(f)
+SCENES_DIR_DEFAULT = YIELD_SIGN_DIR / "scenes"
 
 
 def parse_sumo_net(net_path: Path):

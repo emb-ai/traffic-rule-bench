@@ -1,22 +1,8 @@
 #!/usr/bin/env python3
-"""Run vehicle simulation (IDM, CARL, or PLANT) on a SUMO scene and save GIF.
-
-Usage:
-    # Simple usage (IDM by default)
-    python run_simulation.py savvinskaya_3
-    python run_simulation.py check
-
-    # With policy selection
-    python run_simulation.py savvinskaya_3 --policy carl
-    python run_simulation.py savvinskaya_3 --policy plant2
-
-    # Full options
-    python run_simulation.py savvinskaya_3 --policy plant2 --max-steps 400 --traffic-density 0.2
-"""
+"""Debug: Run simulation on a scene and save GIF."""
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from pathlib import Path
@@ -24,39 +10,25 @@ from pathlib import Path
 import numpy as np
 import torch
 
-# Path setup
-SCRIPT_DIR = Path(__file__).resolve().parent
-PDD_BENCH_DIR = SCRIPT_DIR.parent.parent.parent
+# Path setup - tools/ is inside yield_sign/
+TOOLS_DIR = Path(__file__).resolve().parent
+YIELD_SIGN_DIR = TOOLS_DIR.parent
+PDD_BENCH_DIR = YIELD_SIGN_DIR.parent.parent.parent
 SDC_ROOT = PDD_BENCH_DIR.parent
-SCENES_ROOT = SCRIPT_DIR / "scenes"
+SCENES_ROOT = YIELD_SIGN_DIR / "scenes"
 CHECKPOINTS_DIR = PDD_BENCH_DIR / "checkpoints"
 
 # Add paths for imports
 sys.path.insert(0, str(PDD_BENCH_DIR))
+sys.path.insert(0, str(YIELD_SIGN_DIR))
+
+from lib.sumo_utils import resolve_net_file, load_scene_meta, find_first_edge_id, DEFAULT_NET_FILE
 
 # Policy categories
 IDM_FAMILY = {"idm", "modified_idm", "comprehensive_rule_expert"}
 NN_NEED_CHECKPOINT = {"carl", "carl_rule", "plant2", "plant2_rule"}
 NN_NO_CHECKPOINT = {"rule_compliant", "ppo_lidar"}
 ALL_POLICIES = IDM_FAMILY | NN_NEED_CHECKPOINT | NN_NO_CHECKPOINT
-
-DEFAULT_NET_FILE = "map.net.xml"
-
-
-def resolve_net_file(scene_dir: Path, meta: dict) -> str:
-    """Resolve SUMO net filename (neutral map.net.xml, with legacy fallback)."""
-    net_file = meta.get("net_file", DEFAULT_NET_FILE)
-    if (scene_dir / net_file).exists():
-        return net_file
-
-    net_files = sorted(scene_dir.glob("*.net.xml"))
-    if net_files:
-        return net_files[0].name
-
-    raise FileNotFoundError(
-        f"No .net.xml file found in {scene_dir} "
-        f"(expected {DEFAULT_NET_FILE} or net_file in meta.json)"
-    )
 
 # Default checkpoint paths
 DEFAULT_MODEL_PATHS = {
@@ -65,31 +37,6 @@ DEFAULT_MODEL_PATHS = {
     "plant2": CHECKPOINTS_DIR / "plant2_finetuned" / "plant2_supervised_2nd_final.pt",
     "plant2_rule": CHECKPOINTS_DIR / "plant2_finetuned" / "plant2_supervised_2nd_final.pt",
 }
-
-
-def load_scene_meta(scene_dir: Path) -> dict:
-    """Load meta.json from a scene directory."""
-    meta_path = scene_dir / "meta.json"
-    if not meta_path.exists():
-        raise FileNotFoundError(f"meta.json not found in {scene_dir}")
-    with open(meta_path) as f:
-        return json.load(f)
-
-
-def find_first_edge_id(net_path: Path) -> str | None:
-    """Find the first non-internal edge ID from a SUMO net.xml file."""
-    import xml.etree.ElementTree as ET
-    try:
-        tree = ET.parse(net_path)
-        root = tree.getroot()
-        for edge in root.findall("edge"):
-            edge_id = edge.get("id", "")
-            # Skip internal edges (start with ':')
-            if not edge_id.startswith(":"):
-                return edge_id
-    except Exception:
-        pass
-    return None
 
 
 def build_catalog_row(scene_dir: Path, meta: dict, var_idx: int = 0) -> dict:
