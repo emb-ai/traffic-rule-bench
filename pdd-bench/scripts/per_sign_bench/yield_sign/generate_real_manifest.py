@@ -34,6 +34,7 @@ from manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
 )
+from scene_augmentation import SpawnScenario, augment_layout_for_scene
 
 
 SCRIPT_DIR = Path(__file__).parent
@@ -195,12 +196,15 @@ def make_experiment_dir(
     return experiment_dir
 
 
-def _stable_seed(scene_name: str, variant: int = 0) -> int:
-    """Generate deterministic 32-bit seed from scene name and variant."""
+def _stable_seed(scene_name: str, variant: int = 0, scenario_id: str = "") -> int:
+    """Generate deterministic 32-bit seed from scene name and variant/scenario."""
     h = hashlib.sha256()
     h.update(scene_name.encode("utf-8"))
     h.update(b"|")
     h.update(str(variant).encode("utf-8"))
+    if scenario_id:
+        h.update(b"|")
+        h.update(scenario_id.encode("utf-8"))
     return int.from_bytes(h.digest()[:4], "big")
 
 
@@ -249,6 +253,7 @@ def build_manifest_entry(
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     spawn_lanes_cache: Optional[List[SumoLaneInfo]] = None,
     junction_layout_cache: Optional[dict] = None,
+    spawn_scenario: Optional[SpawnScenario] = None,
 ) -> Dict:
     """Build a single manifest entry for a scene.
     
@@ -273,20 +278,30 @@ def build_manifest_entry(
     net_path = scene_dir.relative_to(scenes_root) / net_file
     net_full_path = scene_dir / net_file
     
-    seed = _stable_seed(scene_name, variant)
-    
+    scenario_id = spawn_scenario.scenario_id if spawn_scenario else ""
+    seed = _stable_seed(scene_name, variant, scenario_id)
+
     # Parse spawn lanes if not cached
     if spawn_lanes_cache is None:
         spawn_lanes_cache = parse_sumo_net_for_spawn_lanes(net_full_path)
 
     spawn_candidates = spawn_lanes_cache
-    if junction_layout_cache is not None:
+    if junction_layout_cache is not None and spawn_scenario is None:
         spawn_candidates = filter_spawn_lanes_to_secondary(
             spawn_lanes_cache, junction_layout_cache
         )
 
-    # Select a random spawn lane based on seed (secondary arms only)
-    selected_lane = select_random_spawn_lane(spawn_candidates, seed)
+    selected_lane = None
+    if spawn_scenario is not None:
+        for lane in spawn_lanes_cache:
+            if (
+                lane.edge_id == spawn_scenario.ego_edge_id
+                and lane.lane_num == spawn_scenario.ego_lane_num
+            ):
+                selected_lane = lane
+                break
+    else:
+        selected_lane = select_random_spawn_lane(spawn_candidates, seed)
     
     entry = {
         "scene_id": scene_name,
@@ -312,8 +327,12 @@ def build_manifest_entry(
         "aux_distance_from_intersection": aux_distance_from_intersection,
     }
     
-    # Add spawn lane info (from parsed network or meta override)
-    if meta.get("road_id"):
+    if spawn_scenario is not None:
+        entry.update(spawn_scenario.to_manifest_fields())
+        if selected_lane is not None:
+            entry["spawn_lane_length"] = selected_lane.length
+            entry["spawn_to_junction"] = selected_lane.to_junction
+    if spawn_scenario is None and meta.get("road_id"):
         secondary_ids = set()
         if junction_layout_cache is not None:
             secondary_ids = set(junction_layout_cache.get("secondary_edge_ids") or [])
@@ -346,7 +365,7 @@ def build_manifest_entry(
         entry["distance_from_start"] = meta["distance_from_start"]
     if meta.get("sign_spawn_distance"):
         entry["sign_spawn_distance"] = meta["sign_spawn_distance"]
-    if meta.get("destination_lane_id"):
+    if spawn_scenario is None and meta.get("destination_lane_id"):
         entry["destination_lane_id"] = meta["destination_lane_id"]
 
     if junction_layout_cache is not None:
@@ -380,6 +399,8 @@ def generate_manifest(
     spawn_distance_before_end: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     auxiliary_agent: bool = False,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+    augment: bool = True,
+    max_scenarios_per_scene: Optional[int] = None,
 ) -> List[Dict]:
     """Generate real_manifest.jsonl from discovered scenes."""
     scenes = discover_scenes(scenes_dir)
@@ -418,33 +439,71 @@ def generate_manifest(
             # Show available lanes
             unique_edges = set(lane.edge_id for lane in spawn_lanes)
             print(f"  Available edges: {list(unique_edges)[:5]}{'...' if len(unique_edges) > 5 else ''}")
-        
-        for variant in range(n_variants):
-            entry = build_manifest_entry(
-                scene_dir=scene_dir,
-                scenes_root=scenes_dir,
-                meta=meta,
-                variant=variant,
-                spawn_velocity_ms=spawn_velocity_ms,
-                traffic_density=traffic_density,
-                horizon=horizon,
-                sign_distance_before_end=sign_distance_before_end,
-                spawn_distance_before_end=spawn_distance_before_end,
-                auxiliary_agent=auxiliary_agent,
-                aux_distance_from_intersection=aux_distance_from_intersection,
-                spawn_lanes_cache=spawn_lanes,
-                junction_layout_cache=junction_layout,
-            )
-            entries.append(entry)
-            
-            # Print spawn lane selection info
-            road_id = entry.get("road_id", "N/A")
-            lane_num = entry.get("spawn_lane_num", "N/A")
-            lane_len = entry.get("spawn_lane_length", "N/A")
-            if n_variants > 1:
-                print(f"  Variant {variant}: seed={entry['seed']}, road={road_id}, lane={lane_num}")
-            else:
-                print(f"  Spawn lane: road_id={road_id}, lane_num={lane_num}, length={lane_len}m")
+
+        scenarios: List[SpawnScenario] = []
+        if augment and junction_layout is not None:
+            _, scenarios, aug_stats = augment_layout_for_scene(net_full_path, spawn_lanes)
+            if max_scenarios_per_scene is not None:
+                scenarios = scenarios[:max_scenarios_per_scene]
+            if aug_stats is not None:
+                print(aug_stats.format_report(scene_name))
+            print(f"  Augmented scenarios (conflict-valid): {len(scenarios)}")
+            if not scenarios:
+                print(f"  [augment] No valid scenarios for {scene_name}; skipping scene")
+                continue
+
+        if scenarios:
+            for variant, scenario in enumerate(scenarios):
+                entry = build_manifest_entry(
+                    scene_dir=scene_dir,
+                    scenes_root=scenes_dir,
+                    meta=meta,
+                    variant=variant,
+                    spawn_velocity_ms=spawn_velocity_ms,
+                    traffic_density=traffic_density,
+                    horizon=horizon,
+                    sign_distance_before_end=sign_distance_before_end,
+                    spawn_distance_before_end=spawn_distance_before_end,
+                    auxiliary_agent=auxiliary_agent,
+                    aux_distance_from_intersection=aux_distance_from_intersection,
+                    spawn_lanes_cache=spawn_lanes,
+                    junction_layout_cache=junction_layout,
+                    spawn_scenario=scenario,
+                )
+                entries.append(entry)
+                if variant < 3 or variant == len(scenarios) - 1:
+                    print(
+                        f"  [{variant + 1}/{len(scenarios)}] {scenario.scenario_id} "
+                        f"seed={entry['seed']}"
+                    )
+                elif variant == 3:
+                    print(f"  ... ({len(scenarios) - 4} more)")
+        else:
+            for variant in range(n_variants):
+                entry = build_manifest_entry(
+                    scene_dir=scene_dir,
+                    scenes_root=scenes_dir,
+                    meta=meta,
+                    variant=variant,
+                    spawn_velocity_ms=spawn_velocity_ms,
+                    traffic_density=traffic_density,
+                    horizon=horizon,
+                    sign_distance_before_end=sign_distance_before_end,
+                    spawn_distance_before_end=spawn_distance_before_end,
+                    auxiliary_agent=auxiliary_agent,
+                    aux_distance_from_intersection=aux_distance_from_intersection,
+                    spawn_lanes_cache=spawn_lanes,
+                    junction_layout_cache=junction_layout,
+                )
+                entries.append(entry)
+
+                road_id = entry.get("road_id", "N/A")
+                lane_num = entry.get("spawn_lane_num", "N/A")
+                lane_len = entry.get("spawn_lane_length", "N/A")
+                if n_variants > 1:
+                    print(f"  Variant {variant}: seed={entry['seed']}, road={road_id}, lane={lane_num}")
+                else:
+                    print(f"  Spawn lane: road_id={road_id}, lane_num={lane_num}, length={lane_len}m")
     
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "real_manifest.jsonl"
@@ -460,6 +519,8 @@ def generate_manifest(
         "total_scenes": len(scenes),
         "total_entries": len(entries),
         "variants_per_scene": n_variants,
+        "augment": augment,
+        "max_scenarios_per_scene": max_scenarios_per_scene,
         "spawn_velocity_ms": spawn_velocity_ms,
         "traffic_density": traffic_density,
         "horizon": horizon,
@@ -557,22 +618,23 @@ def render_gifs_from_manifest(
     gif_dir.mkdir(parents=True, exist_ok=True)
 
     rows = []
-    seen_scene_ids = set()
-    
+    seen_keys = set()
+
     for row in _iter_jsonl_rows(manifest_path):
         if not row.get("valid", True):
             continue
         if row.get("pdd_code") != PDD_CODE:
             continue
-        
+
         scene_id = row.get("scene_id")
         seed = row.get("seed")
         if scene_id is None or seed is None:
             continue
-        if scene_id in seen_scene_ids:
+        row_key = (scene_id, seed)
+        if row_key in seen_keys:
             continue
-        
-        seen_scene_ids.add(scene_id)
+
+        seen_keys.add(row_key)
         rows.append(row)
         
         if max_scenes is not None and len(rows) >= max_scenes:
@@ -646,7 +708,15 @@ def main():
     )
     parser.add_argument(
         "--n-variants", type=int, default=1,
-        help="Number of seed variants per scene (default: 1)"
+        help="Random seed variants per scene when --no-augment (default: 1)"
+    )
+    parser.add_argument(
+        "--no-augment", action="store_true",
+        help="Disable spawn-point augmentation; use --n-variants random spawns instead"
+    )
+    parser.add_argument(
+        "--max-scenarios-per-scene", type=int, default=None,
+        help="Cap augmented scenarios per scene (default: all valid combinations)"
     )
     parser.add_argument(
         "--spawn-velocity", type=float, default=2.5,
@@ -661,7 +731,7 @@ def main():
         help="Simulation horizon in steps (default: 600)"
     )
     parser.add_argument(
-        "--sign-distance", type=float, default=5.0,
+        "--sign-distance", type=float, default=0.0,
         help="Distance before lane end to place yield sign in meters (default: 5.0)"
     )
     parser.add_argument(
@@ -729,6 +799,8 @@ def main():
         spawn_distance_before_end=args.spawn_distance,
         auxiliary_agent=args.auxiliary_agent,
         aux_distance_from_intersection=args.aux_distance_from_intersection,
+        augment=not args.no_augment,
+        max_scenarios_per_scene=args.max_scenarios_per_scene,
     )
     
     if args.save_gifs and entries:

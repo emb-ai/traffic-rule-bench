@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 # Shared with generate_real_manifest.py / run_benchmark_real.py CLI defaults.
-DEFAULT_SPAWN_DISTANCE_BEFORE_END = 50.0
+DEFAULT_SPAWN_DISTANCE_BEFORE_END = 20.0
 DEFAULT_AUX_DISTANCE_FROM_INTERSECTION = 20.0
 
 # Row fields that may be filled from manifest.json / real_manifest_summary.json.

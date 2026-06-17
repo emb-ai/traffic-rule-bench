@@ -785,6 +785,34 @@ def _analyze_junction_lanes(env) -> dict:
     return result.get("incoming", []), result.get("outgoing", [])
 
 
+def _apply_manifest_ego_spawn_lane(env, row: dict) -> bool:
+    """Teleport ego onto the manifest parallel lane (needed when skip_auto_signs=True)."""
+    road_id = row.get("road_id")
+    if not road_id:
+        return False
+    lane_num = int(row.get("spawn_lane_num", 0) or 0)
+    target_key = f"lane_{road_id}_{lane_num}"
+    try:
+        vehicle = env.agent
+        if vehicle is None:
+            return False
+        road_network = env.engine.current_map.road_network
+        target_lane = road_network.get_lane(target_key)
+        start_long = min(1.0, target_lane.length - 0.1)
+        pos = target_lane.position(start_long, 0.0)
+        heading = target_lane.heading_theta_at(start_long)
+        vehicle.set_position(pos)
+        vehicle.set_heading_theta(heading)
+        try:
+            vehicle.spawn_place = pos.copy()
+        except Exception:
+            pass
+        return True
+    except Exception as exc:
+        print(f"[EgoSpawn] Could not teleport to {target_key}: {exc}")
+        return False
+
+
 def _reposition_ego_before_lane_end(env, distance_before_end: float) -> bool:
     """Reposition the ego vehicle to a specific distance before the lane end.
     
@@ -1072,7 +1100,8 @@ def run_one_episode(
         except Exception:
             pass
 
-        # Reposition ego vehicle to specified distance before lane end (intersection)
+        # Manifest spawn lane + distance before intersection
+        _apply_manifest_ego_spawn_lane(base_env, row)
         spawn_distance = float(row.get("spawn_distance_before_end", 0) or 0)
         if spawn_distance > 0:
             _reposition_ego_before_lane_end(base_env, spawn_distance)
@@ -1133,17 +1162,29 @@ def run_one_episode(
                 row.get("aux_spawn_velocity_ms", aux_spawn_velocity_ms)
             )
             ego_lane_index = getattr(base_env.vehicle.lane, "index", "")
-            spawn_lane = None
-            for lane_key in row.get("main_lane_keys") or []:
-                edge_id = lane_key[5:].rsplit("_", 1)[0] if lane_key.startswith("lane_") else lane_key
-                if edge_id not in str(ego_lane_index):
-                    spawn_lane = lane_key
-                    break
+            spawn_lane = row.get("aux_spawn_lane_index")
+            if not spawn_lane and row.get("aux_road_id") is not None:
+                aux_lane_num = int(row.get("aux_spawn_lane_num", 0) or 0)
+                spawn_lane = f"lane_{row['aux_road_id']}_{aux_lane_num}"
+            if spawn_lane is None:
+                for lane_key in row.get("main_lane_keys") or []:
+                    edge_id = (
+                        lane_key[5:].rsplit("_", 1)[0]
+                        if lane_key.startswith("lane_")
+                        else lane_key
+                    )
+                    if edge_id not in str(ego_lane_index):
+                        spawn_lane = lane_key
+                        break
             if spawn_lane is None:
                 for lane in incoming_lanes:
                     if lane["edge_id"] not in str(ego_lane_index):
                         spawn_lane = lane["lane_name"]
                         break
+
+            aux_destination_lanes = None
+            if row.get("aux_destination_lane_id"):
+                aux_destination_lanes = [row["aux_destination_lane_id"]]
 
             aux_spawn_lanes = [spawn_lane] if spawn_lane else []
             if aux_spawn_lanes:
@@ -1154,6 +1195,7 @@ def run_one_episode(
                     distance_from_intersection=aux_distance_from_intersection,
                     policy=aux_policy,
                     spawn_velocity_ms=aux_spawn_velocity_ms,
+                    destination_lanes=aux_destination_lanes,
                     ego_vehicle=base_env.vehicle,
                     ego_spawn_lane_index=ego_lane_index,
                     ego_release_distance_before_end=aux_release_when_ego_within_m,

@@ -9,10 +9,12 @@ Per-policy rules:
   Checkpoint required for: carl, carl_rule, plant2, plant2_rule.
 
 Supported input modes:
-  1. ONE scene:              --manifest <m.jsonl> --scene-line N
-  2. WHOLE manifest:         --manifest <m.jsonl>
-  3. GROUP of manifests:     --manifest <m1.jsonl> <m2.jsonl> ...
-  4. With a row cap:         --manifest ... --max-scenes K
+  1. Benchmark run folder:   --manifest <run_dir>  (reads <run_dir>/real_manifest.jsonl,
+                             writes results into <run_dir>/eval_out/)
+  2. ONE scene:              --manifest <m.jsonl> --scene-line N
+  3. WHOLE manifest:         --manifest <m.jsonl>
+  4. GROUP of manifests:     --manifest <m1.jsonl> <m2.jsonl> ...
+  5. With a row cap:         --manifest ... --max-scenes K
 
 Output layout:
     <out>/
@@ -25,6 +27,12 @@ Output layout:
       reports/report_cumulative.md                     !!!! final table
 
 Usage examples:
+    # Benchmark run folder (reads real_manifest.jsonl, writes to <run_dir>/eval_out/)
+    python3 eval_pipeline.py \\
+        --policies    idm,modified_idm \\
+        --manifest    benchmark_output/2_4/2026-06-11_13-33-40 \\
+        --scenes-root scenes
+
     # IDM only (5 baselines)
     python3 eval_pipeline.py \\
         --policies    idm \\
@@ -74,6 +82,8 @@ NN_NO_CHECKPOINT = {"rule_compliant", "ppo_lidar"}
 ALL_POLICIES = IDM_FAMILY | NN_NEED_CHECKPOINT | NN_NO_CHECKPOINT
 
 EGO_VARIANTS = ["default", "s1", "s2", "s3", "s4"]
+RUN_MANIFEST_NAME = "real_manifest.jsonl"
+RUN_EVAL_OUT_DIRNAME = "eval_out"
 BENCH_DIR = Path(__file__).resolve().parent
 PDD_BENCH_DIR = BENCH_DIR.parent.parent.parent
 CHECKPOINTS_DIR = PDD_BENCH_DIR / "checkpoints"
@@ -132,6 +142,24 @@ def resolve_model_paths(spec: str | None, policies: list[str]) -> dict[str, str]
     return paths
 
 
+def resolve_manifest_path(path: Path) -> tuple[Path, Path | None]:
+    """Resolve a manifest file or benchmark run directory.
+
+    Returns (manifest_file, run_dir). run_dir is set when path is a directory.
+    """
+    path = path.expanduser()
+    if path.is_file():
+        return path.resolve(), None
+    if path.is_dir():
+        manifest = path / RUN_MANIFEST_NAME
+        if not manifest.is_file():
+            sys.exit(
+                f"No {RUN_MANIFEST_NAME} in run directory: {path.resolve()}"
+            )
+        return manifest.resolve(), path.resolve()
+    sys.exit(f"Manifest path not found: {path}")
+
+
 def plan_baselines(policies: list[str]) -> list[tuple[str, str]]:
     """Return ordered list of (policy, ego_variant) tuples to run."""
     out: list[tuple[str, str]] = []
@@ -157,7 +185,9 @@ def main() -> None:
                          f"{CHECKPOINTS_DIR} when omitted. Required for: "
                          f"{sorted(NN_NEED_CHECKPOINT)}"))
     p.add_argument("--manifest", nargs="+", required=True,
-                   help="one or more manifest .jsonl files (space-separated)")
+                   help=("one or more manifest .jsonl files, or benchmark run "
+                         f"directories containing {RUN_MANIFEST_NAME} "
+                         "(space-separated)"))
     p.add_argument("--scenes-root", default="pdd-bench/scenes",
                    help="path to pdd-bench/scenes")
     p.add_argument("--scene-line", type=int, default=None,
@@ -170,9 +200,26 @@ def main() -> None:
     p.add_argument("--plant2-action-mode", default="pid",
                    choices=["pid", "wps_pure_pursuit"],
                    help="PlanT2 action mode (default: pid)")
-    p.add_argument("--out-dir", default="./eval_out",
-                   help="output directory")
+    p.add_argument("--out-dir", default=None,
+                   help=("output directory (default: ./eval_out, or "
+                         f"<run_dir>/{RUN_EVAL_OUT_DIRNAME} when --manifest is a folder)"))
     args = p.parse_args()
+
+    manifest_paths: list[Path] = []
+    run_dirs: list[Path] = []
+    for raw in args.manifest:
+        manifest_path, run_dir = resolve_manifest_path(Path(raw))
+        manifest_paths.append(manifest_path)
+        if run_dir is not None:
+            run_dirs.append(run_dir)
+
+    if args.out_dir is not None:
+        out_dir = Path(args.out_dir).resolve()
+    elif len(run_dirs) == 1 and len(args.manifest) == 1:
+        out_dir = run_dirs[0] / RUN_EVAL_OUT_DIRNAME
+        print(f"Using run eval output directory: {out_dir}")
+    else:
+        out_dir = Path("./eval_out").resolve()
 
     # --- 0. Validate policies + model-paths ---------------------------------
     policies = [s.strip() for s in args.policies.split(",") if s.strip()]
@@ -190,13 +237,12 @@ def main() -> None:
     for pol, v in baselines:
         print(f"  - {pol}_{v}")
 
-    OUT = Path(args.out_dir).resolve()
+    OUT = out_dir
     OUT.mkdir(parents=True, exist_ok=True)
 
     # Assemble input manifest (apply experiment defaults from manifest.json)
     all_lines: list[str] = []
-    for m_path in args.manifest:
-        m_path = Path(m_path)
+    for m_path in manifest_paths:
         config = load_manifest_config(m_path)
         if config:
             cfg_path = m_path.parent / "manifest.json"
@@ -218,7 +264,7 @@ def main() -> None:
     print(f"Total rows: {len(all_lines)}")
 
     if args.scene_line is not None:
-        if len(args.manifest) != 1:
+        if len(manifest_paths) != 1:
             sys.exit("--scene-line only works with a single --manifest")
         if not (1 <= args.scene_line <= len(all_lines)):
             sys.exit(f"--scene-line {args.scene_line} out of range [1, {len(all_lines)}]")

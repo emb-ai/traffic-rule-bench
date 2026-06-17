@@ -29,7 +29,7 @@ python yield_sign/eval_pipeline.py \
 ```
 python3 eval_pipeline.py \
     --policies    idm \
-    --manifest    benchmark_output/2_4/2026-06-08_13-04-10/real_manifest.jsonl \
+    --manifest    benchmark_output/2_4/2026-06-08_13-04-10 \
     --scenes-root scenes
 ```
 
