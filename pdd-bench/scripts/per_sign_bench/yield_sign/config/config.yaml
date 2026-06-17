@@ -1,0 +1,35 @@
+defaults:
+  - _self_
+
+paths:
+  scenes_dir: null  # null = use default (script_dir/scenes)
+  output_base: null  # null = use default (script_dir/benchmark_output/2_4)
+  experiment_name: null  # null = auto-generate timestamp
+
+scenario:
+  n_variants: 1
+  augment: true
+  max_scenarios_per_scene: null
+
+simulation:
+  spawn_velocity_ms: 2.5
+  traffic_density: 0.0
+  horizon: 600
+  sign_distance_before_end: 0.0
+  spawn_distance_before_end: 20.0
+
+auxiliary:
+  enabled: true
+  distance_from_intersection: 20.0
+  convoy_size: 1  
+  lanes_occupied: 1  
+  convoy_gap_m: 10.0
+
+gif:
+  enabled: true
+  policy: idm
+  max_scenes: null
+  dry_run: false
+  hide_signs: true
+  dir: null  # null = <experiment_dir>/gifs
+  run_name: null  # null = experiment timestamp

@@ -5,11 +5,11 @@ Real map manifest generator for sign 2.4 (Yield).
 This script scans the scenes/ directory for manually collected SUMO scenes
 and generates real_manifest.jsonl for policy evaluation.
 
-Usage:
-    python yield_sign/generate_real_manifest.py
-    python yield_sign/generate_real_manifest.py --save-gifs --gif-policy idm
-    python yield_sign/generate_real_manifest.py --save-gifs --gif-dry-run
-    python yield_sign/generate_real_manifest.py --save-gifs --hide-signs
+Usage (Hydra config):
+    python generate_real_manifest.py
+    python generate_real_manifest.py gif.enabled=true
+    python generate_real_manifest.py auxiliary.lanes_occupied=4 auxiliary.convoy_size=3
+    python generate_real_manifest.py +experiment=mantulinskaya
 
 Each run writes to benchmark_output/2_4/<YYYY-MM-DD_HH-MM-SS>/ so previous
 experiments are not overwritten.
@@ -17,17 +17,19 @@ experiments are not overwritten.
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import random
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+import hydra
+from omegaconf import DictConfig, OmegaConf
 
 from junction_priority_layout import JunctionLayoutError, build_junction_priority_layout
 from auxiliary_agent import (
@@ -44,7 +46,10 @@ from manifest_config import (
 from scene_augmentation import SpawnScenario, augment_layout_for_scene
 
 
-SCRIPT_DIR = Path(__file__).parent
+# -----------------------------------------------------------------------------
+# Constants
+# -----------------------------------------------------------------------------
+SCRIPT_DIR = Path(__file__).parent.resolve()
 DEFAULT_SCENES_DIR = SCRIPT_DIR / "scenes"
 DEFAULT_OUTPUT_BASE = SCRIPT_DIR / "benchmark_output" / "2_4"
 RUN_BENCH_SCRIPT = SCRIPT_DIR / "run_benchmark_real.py"
@@ -53,69 +58,111 @@ EXPERIMENT_TIMESTAMP_FMT = "%Y-%m-%d_%H-%M-%S"
 PDD_CODE = "2.4"
 SIGN_TYPE = "yield"
 
+
+# -----------------------------------------------------------------------------
+# Configuration dataclasses
+# -----------------------------------------------------------------------------
+@dataclass
+class PathsConfig:
+    scenes_dir: Optional[str] = None
+    output_base: Optional[str] = None
+    experiment_name: Optional[str] = None
+
+
+@dataclass
+class ScenarioConfig:
+    n_variants: int = 1
+    augment: bool = True
+    max_scenarios_per_scene: Optional[int] = None
+
+
+@dataclass
+class SimulationConfig:
+    spawn_velocity_ms: float = 2.5
+    traffic_density: float = 0.0
+    horizon: int = 600
+    sign_distance_before_end: float = 0.0
+    spawn_distance_before_end: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END
+
+
+@dataclass
+class AuxiliaryConfig:
+    enabled: bool = True
+    distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION
+    convoy_size: int = 1
+    convoy_gap_m: float = DEFAULT_CONVOY_GAP_M
+    lanes_occupied: int = 1
+
+
+@dataclass
+class GifConfig:
+    enabled: bool = False
+    policy: str = "idm"
+    max_scenes: Optional[int] = None
+    dry_run: bool = False
+    hide_signs: bool = True
+    dir: Optional[str] = None
+    run_name: Optional[str] = None
+
+
+@dataclass
+class ManifestConfig:
+    paths: PathsConfig = field(default_factory=PathsConfig)
+    scenario: ScenarioConfig = field(default_factory=ScenarioConfig)
+    simulation: SimulationConfig = field(default_factory=SimulationConfig)
+    auxiliary: AuxiliaryConfig = field(default_factory=AuxiliaryConfig)
+    gif: GifConfig = field(default_factory=GifConfig)
+
+
+# -----------------------------------------------------------------------------
+# SUMO network parsing
+# -----------------------------------------------------------------------------
 @dataclass
 class SumoLaneInfo:
     """Information about a SUMO lane suitable for spawning."""
     edge_id: str
     lane_num: int
-    lane_id: str  # e.g., "lane_-123#0_0"
+    lane_id: str
     length: float
     to_junction: str
     junction_type: str
 
 
 def parse_sumo_net_for_spawn_lanes(net_path: Path, min_length: float = 20.0) -> List[SumoLaneInfo]:
-    """
-    Parse SUMO .net.xml and find lanes that lead to intersections.
-    
-    Args:
-        net_path: Path to the .net.xml file
-        min_length: Minimum lane length in meters
-        
-    Returns:
-        List of SumoLaneInfo for lanes suitable for spawning
-    """
+    """Parse SUMO .net.xml and find lanes that lead to intersections."""
     if not net_path.exists():
         return []
     
     tree = ET.parse(net_path)
     root = tree.getroot()
     
-    # First, collect junction info
     junctions = {}
     for junction in root.findall("junction"):
         jid = junction.get("id")
         jtype = junction.get("type", "unknown")
         junctions[jid] = jtype
     
-    # Intersection junction types (where yield signs matter)
     intersection_types = {"priority", "right_before_left", "allway_stop", "traffic_light"}
-    
     spawn_lanes = []
     
     for edge in root.findall("edge"):
         edge_id = edge.get("id")
         func = edge.get("function", "normal")
         
-        # Skip internal edges (junction connectors)
         if func == "internal" or edge_id.startswith(":"):
             continue
         
         to_junction = edge.get("to", "")
         junction_type = junctions.get(to_junction, "unknown")
         
-        # Only consider edges leading to intersections
         if junction_type not in intersection_types:
             continue
         
-        lanes = edge.findall("lane")
-        for lane in lanes:
+        for lane in edge.findall("lane"):
             lane_id = lane.get("id", "")
-            
-            # Parse lane length
             length = float(lane.get("length", 0))
+            
             if length == 0:
-                # Try to compute from shape
                 shape_str = lane.get("shape", "")
                 if shape_str:
                     points = shape_str.strip().split()
@@ -130,7 +177,6 @@ def parse_sumo_net_for_spawn_lanes(net_path: Path, min_length: float = 20.0) -> 
             if length < min_length:
                 continue
             
-            # Extract lane number from lane_id (e.g., "-123#0_1" -> 1)
             try:
                 lane_num = int(lane_id.rsplit("_", 1)[1])
             except (ValueError, IndexError):
@@ -148,6 +194,9 @@ def parse_sumo_net_for_spawn_lanes(net_path: Path, min_length: float = 20.0) -> 
     return spawn_lanes
 
 
+# -----------------------------------------------------------------------------
+# Junction layout utilities
+# -----------------------------------------------------------------------------
 def build_junction_layout_for_scene(net_path: Path) -> Optional[dict]:
     """Build main/secondary junction layout from a scene net.xml."""
     try:
@@ -175,27 +224,17 @@ def select_random_spawn_lane(
     spawn_lanes: List[SumoLaneInfo],
     seed: int,
 ) -> Optional[SumoLaneInfo]:
-    """
-    Select a random lane from available spawn lanes.
-    
-    Args:
-        spawn_lanes: List of available lanes
-        seed: Random seed for reproducibility
-        
-    Returns:
-        Selected SumoLaneInfo or None if no lanes available
-    """
+    """Select a random lane from available spawn lanes."""
     if not spawn_lanes:
         return None
-    
     rng = random.Random(seed)
     return rng.choice(spawn_lanes)
 
 
-def make_experiment_dir(
-    output_base: Path,
-    experiment_name: str | None = None,
-) -> Path:
+# -----------------------------------------------------------------------------
+# Experiment directory management
+# -----------------------------------------------------------------------------
+def make_experiment_dir(output_base: Path, experiment_name: Optional[str] = None) -> Path:
     """Create a dated experiment directory under benchmark_output/2_4."""
     name = experiment_name or datetime.now().strftime(EXPERIMENT_TIMESTAMP_FMT)
     experiment_dir = output_base / name
@@ -203,6 +242,9 @@ def make_experiment_dir(
     return experiment_dir
 
 
+# -----------------------------------------------------------------------------
+# Seed generation
+# -----------------------------------------------------------------------------
 def _stable_seed(
     scene_name: str,
     variant: int = 0,
@@ -227,9 +269,12 @@ def _stable_seed(
     return int.from_bytes(h.digest()[:4], "big")
 
 
-def convoy_sizes_up_to(max_convoy_size: int, auxiliary_agent: bool) -> List[int]:
+# -----------------------------------------------------------------------------
+# Auxiliary agent dimension expansion
+# -----------------------------------------------------------------------------
+def convoy_sizes_up_to(max_convoy_size: int, auxiliary_enabled: bool) -> List[int]:
     """Return convoy sizes to materialize: {1, 2, ..., max} when aux is enabled."""
-    if not auxiliary_agent:
+    if not auxiliary_enabled:
         return [1]
     max_n = max(1, int(max_convoy_size))
     return list(range(1, max_n + 1))
@@ -238,15 +283,18 @@ def convoy_sizes_up_to(max_convoy_size: int, auxiliary_agent: bool) -> List[int]
 def lanes_occupied_sizes_up_to(
     max_lanes_occupied: int,
     n_available_main_lanes: int,
-    auxiliary_agent: bool,
+    auxiliary_enabled: bool,
 ) -> List[int]:
     """Return lane-occupancy counts to materialize: {1, 2, ..., min(max, available)}."""
-    if not auxiliary_agent or n_available_main_lanes <= 0:
+    if not auxiliary_enabled or n_available_main_lanes <= 0:
         return [1]
     cap = min(max(1, int(max_lanes_occupied)), int(n_available_main_lanes))
     return list(range(1, cap + 1))
 
 
+# -----------------------------------------------------------------------------
+# Scene discovery and metadata
+# -----------------------------------------------------------------------------
 def discover_scenes(scenes_dir: Path) -> List[Path]:
     """Find all valid scene directories containing meta.json and map.net.xml."""
     scenes = []
@@ -254,11 +302,14 @@ def discover_scenes(scenes_dir: Path) -> List[Path]:
         if not entry.is_dir():
             continue
         meta_path = entry / "meta.json"
+        if not meta_path.exists():
+            continue
         with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
         net_file = meta.get("net_file", "map.net.xml")
         net_path = entry / net_file
-        scenes.append(entry)
+        if net_path.exists():
+            scenes.append(entry)
     return scenes
 
 
@@ -278,45 +329,23 @@ def load_scene_metadata(scene_dir: Path) -> Dict:
     return meta
 
 
+# -----------------------------------------------------------------------------
+# Manifest entry builder
+# -----------------------------------------------------------------------------
 def build_manifest_entry(
     scene_dir: Path,
     scenes_root: Path,
     meta: Dict,
-    variant: int = 0,
-    spawn_velocity_ms: float = 5.0,
-    traffic_density: float = 0.0,
-    horizon: int = 600,
-    sign_distance_before_end: float = 20.0,
-    spawn_distance_before_end: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
-    auxiliary_agent: bool = False,
-    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
-    aux_convoy_size: int = DEFAULT_CONVOY_SIZE,
-    aux_convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
-    aux_lanes_occupied: int = 1,
+    variant: int,
+    sim_cfg: SimulationConfig,
+    aux_cfg: AuxiliaryConfig,
+    aux_convoy_size: int,
+    aux_lanes_occupied: int,
     spawn_lanes_cache: Optional[List[SumoLaneInfo]] = None,
     junction_layout_cache: Optional[dict] = None,
     spawn_scenario: Optional[SpawnScenario] = None,
 ) -> Dict:
-    """Build a single manifest entry for a scene.
-    
-    Args:
-        scene_dir: Directory containing the scene
-        scenes_root: Root directory for all scenes
-        meta: Scene metadata from meta.json
-        variant: Variant index for seed generation
-        spawn_velocity_ms: Initial vehicle velocity
-        traffic_density: NPC traffic density
-        horizon: Simulation steps
-        sign_distance_before_end: Distance before lane end to place yield sign
-        spawn_distance_before_end: Distance before lane end to spawn ego vehicle
-        auxiliary_agent: Whether to spawn auxiliary agent
-        aux_distance_from_intersection: Distance for auxiliary agent
-        aux_convoy_size: Vehicles per occupied main lane for this entry (1..max)
-        aux_convoy_gap_m: Spacing between convoy vehicles (meters)
-        aux_lanes_occupied: How many main-road lanes carry auxiliary convoys
-        spawn_lanes_cache: Pre-parsed spawn lanes (to avoid re-parsing for each variant)
-        junction_layout_cache: Pre-built junction layout dict for the scene net
-    """
+    """Build a single manifest entry for a scene."""
     scene_name = meta.get("scene_name", scene_dir.name)
     net_file = meta.get("net_file", "map.net.xml")
     
@@ -329,10 +358,9 @@ def build_manifest_entry(
         variant,
         scenario_id,
         convoy_size=aux_convoy_size,
-        lanes_occupied=aux_lanes_occupied if auxiliary_agent else 0,
+        lanes_occupied=aux_lanes_occupied if aux_cfg.enabled else 0,
     )
 
-    # Parse spawn lanes if not cached
     if spawn_lanes_cache is None:
         spawn_lanes_cache = parse_sumo_net_for_spawn_lanes(net_full_path)
 
@@ -362,28 +390,27 @@ def build_manifest_entry(
         "pdd_code": PDD_CODE,
         "sign_code": PDD_CODE,
         "sign_type": SIGN_TYPE,
-        "spawn_velocity_ms": spawn_velocity_ms,
-        "traffic_density": traffic_density,
-        "horizon": horizon,
-        "sign_distance_before_end": sign_distance_before_end,
-        "spawn_distance_before_end": spawn_distance_before_end,
+        "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
+        "traffic_density": sim_cfg.traffic_density,
+        "horizon": sim_cfg.horizon,
+        "sign_distance_before_end": sim_cfg.sign_distance_before_end,
+        "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
         "valid": True,
         "latitude": meta.get("latitude"),
         "longitude": meta.get("longitude"),
         "crop_radius_m": meta.get("crop_radius_m"),
         "source_osm": meta.get("source_osm"),
         "osm_file": meta.get("osm_file"),
-        # Auxiliary agent settings
-        "auxiliary_agent": auxiliary_agent,
-        "aux_distance_from_intersection": aux_distance_from_intersection,
+        "auxiliary_agent": aux_cfg.enabled,
+        "aux_distance_from_intersection": aux_cfg.distance_from_intersection,
         "aux_convoy_size": aux_convoy_size,
-        "aux_convoy_gap_m": aux_convoy_gap_m,
+        "aux_convoy_gap_m": aux_cfg.convoy_gap_m,
         "aux_lanes_occupied": aux_lanes_occupied,
     }
     
     if spawn_scenario is not None:
         entry.update(spawn_scenario.to_manifest_fields())
-        if auxiliary_agent:
+        if aux_cfg.enabled:
             suffix_parts = []
             if aux_lanes_occupied > 1:
                 suffix_parts.append(f"lanes{aux_lanes_occupied}")
@@ -395,6 +422,7 @@ def build_manifest_entry(
         if selected_lane is not None:
             entry["spawn_lane_length"] = selected_lane.length
             entry["spawn_to_junction"] = selected_lane.to_junction
+    
     if spawn_scenario is None and meta.get("road_id"):
         secondary_ids = set()
         if junction_layout_cache is not None:
@@ -415,7 +443,6 @@ def build_manifest_entry(
             if meta.get("spawn_lane_num") is not None:
                 entry["spawn_lane_num"] = meta["spawn_lane_num"]
     elif selected_lane is not None:
-        # Use randomly selected lane from network
         entry["road_id"] = selected_lane.edge_id
         entry["spawn_lane_num"] = selected_lane.lane_num
         entry["spawn_lane_length"] = selected_lane.length
@@ -445,7 +472,7 @@ def build_manifest_entry(
             if arm.get("road_class") == "secondary"
             for lane_key in arm.get("lane_keys", [])
         ]
-        if auxiliary_agent:
+        if aux_cfg.enabled:
             ego_edge = entry.get("road_id") or (
                 spawn_scenario.ego_edge_id if spawn_scenario is not None else None
             )
@@ -459,22 +486,15 @@ def build_manifest_entry(
     return entry
 
 
+# -----------------------------------------------------------------------------
+# Manifest generation
+# -----------------------------------------------------------------------------
 def generate_manifest(
     scenes_dir: Path,
     output_dir: Path,
-    n_variants: int = 1,
-    spawn_velocity_ms: float = 5.0,
-    traffic_density: float = 0.0,
-    horizon: int = 600,
-    sign_distance_before_end: float = 20.0,
-    spawn_distance_before_end: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
-    auxiliary_agent: bool = False,
-    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
-    aux_convoy_size_max: int = DEFAULT_CONVOY_SIZE,
-    aux_convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
-    aux_lanes_occupied_max: int = DEFAULT_AUX_LANES_OCCUPIED_MAX,
-    augment: bool = True,
-    max_scenarios_per_scene: Optional[int] = None,
+    scenario_cfg: ScenarioConfig,
+    sim_cfg: SimulationConfig,
+    aux_cfg: AuxiliaryConfig,
 ) -> List[Dict]:
     """Generate real_manifest.jsonl from discovered scenes."""
     scenes = discover_scenes(scenes_dir)
@@ -491,7 +511,6 @@ def generate_manifest(
         print(f"\n[SCENE] {scene_name}")
         print(f"  Location: ({meta.get('latitude')}, {meta.get('longitude')})")
         
-        # Pre-parse spawn lanes for this scene (cache for all variants)
         spawn_lanes = parse_sumo_net_for_spawn_lanes(net_full_path)
         print(f"  Found {len(spawn_lanes)} intersection-approaching lane(s)")
 
@@ -510,7 +529,6 @@ def generate_manifest(
             )
         
         if spawn_lanes:
-            # Show available lanes
             unique_edges = set(lane.edge_id for lane in spawn_lanes)
             print(f"  Available edges: {list(unique_edges)[:5]}{'...' if len(unique_edges) > 5 else ''}")
 
@@ -520,10 +538,10 @@ def generate_manifest(
             print(f"  Main-road lane slots for aux: {available_main_lane_count}")
 
         scenarios: List[SpawnScenario] = []
-        if augment and junction_layout is not None:
+        if scenario_cfg.augment and junction_layout is not None:
             _, scenarios, aug_stats = augment_layout_for_scene(net_full_path, spawn_lanes)
-            if max_scenarios_per_scene is not None:
-                scenarios = scenarios[:max_scenarios_per_scene]
+            if scenario_cfg.max_scenarios_per_scene is not None:
+                scenarios = scenarios[:scenario_cfg.max_scenarios_per_scene]
             if aug_stats is not None:
                 print(aug_stats.format_report(scene_name))
             print(f"  Augmented scenarios (conflict-valid): {len(scenarios)}")
@@ -532,17 +550,18 @@ def generate_manifest(
                 continue
 
         if scenarios:
-            convoy_sizes = convoy_sizes_up_to(aux_convoy_size_max, auxiliary_agent)
+            convoy_sizes = convoy_sizes_up_to(aux_cfg.convoy_size, aux_cfg.enabled)
             lanes_counts = lanes_occupied_sizes_up_to(
-                aux_lanes_occupied_max, available_main_lane_count, auxiliary_agent
+                aux_cfg.lanes_occupied, available_main_lane_count, aux_cfg.enabled
             )
             variant = 0
             total_planned = len(scenarios) * len(lanes_counts) * len(convoy_sizes)
+            
             for scenario in scenarios:
                 ego_edge = scenario.ego_edge_id
                 scene_main_lanes = main_lane_keys_for_aux(junction_layout, ego_edge)
                 scene_lane_counts = lanes_occupied_sizes_up_to(
-                    aux_lanes_occupied_max, len(scene_main_lanes), auxiliary_agent
+                    aux_cfg.lanes_occupied, len(scene_main_lanes), aux_cfg.enabled
                 )
                 for lanes_n in scene_lane_counts:
                     for convoy_n in convoy_sizes:
@@ -551,15 +570,9 @@ def generate_manifest(
                             scenes_root=scenes_dir,
                             meta=meta,
                             variant=variant,
-                            spawn_velocity_ms=spawn_velocity_ms,
-                            traffic_density=traffic_density,
-                            horizon=horizon,
-                            sign_distance_before_end=sign_distance_before_end,
-                            spawn_distance_before_end=spawn_distance_before_end,
-                            auxiliary_agent=auxiliary_agent,
-                            aux_distance_from_intersection=aux_distance_from_intersection,
+                            sim_cfg=sim_cfg,
+                            aux_cfg=aux_cfg,
                             aux_convoy_size=convoy_n,
-                            aux_convoy_gap_m=aux_convoy_gap_m,
                             aux_lanes_occupied=lanes_n,
                             spawn_lanes_cache=spawn_lanes,
                             junction_layout_cache=junction_layout,
@@ -575,12 +588,12 @@ def generate_manifest(
                             print(f"  ... ({total_planned - 4} more)")
                         variant += 1
         else:
-            convoy_sizes = convoy_sizes_up_to(aux_convoy_size_max, auxiliary_agent)
+            convoy_sizes = convoy_sizes_up_to(aux_cfg.convoy_size, aux_cfg.enabled)
             lanes_counts = lanes_occupied_sizes_up_to(
-                aux_lanes_occupied_max, available_main_lane_count, auxiliary_agent
+                aux_cfg.lanes_occupied, available_main_lane_count, aux_cfg.enabled
             )
             variant = 0
-            for _ in range(n_variants):
+            for _ in range(scenario_cfg.n_variants):
                 for lanes_n in lanes_counts:
                     for convoy_n in convoy_sizes:
                         entry = build_manifest_entry(
@@ -588,15 +601,9 @@ def generate_manifest(
                             scenes_root=scenes_dir,
                             meta=meta,
                             variant=variant,
-                            spawn_velocity_ms=spawn_velocity_ms,
-                            traffic_density=traffic_density,
-                            horizon=horizon,
-                            sign_distance_before_end=sign_distance_before_end,
-                            spawn_distance_before_end=spawn_distance_before_end,
-                            auxiliary_agent=auxiliary_agent,
-                            aux_distance_from_intersection=aux_distance_from_intersection,
+                            sim_cfg=sim_cfg,
+                            aux_cfg=aux_cfg,
                             aux_convoy_size=convoy_n,
-                            aux_convoy_gap_m=aux_convoy_gap_m,
                             aux_lanes_occupied=lanes_n,
                             spawn_lanes_cache=spawn_lanes,
                             junction_layout_cache=junction_layout,
@@ -606,7 +613,7 @@ def generate_manifest(
                         road_id = entry.get("road_id", "N/A")
                         lane_num = entry.get("spawn_lane_num", "N/A")
                         lane_len = entry.get("spawn_lane_length", "N/A")
-                        if n_variants > 1 or len(convoy_sizes) > 1 or len(lanes_counts) > 1:
+                        if scenario_cfg.n_variants > 1 or len(convoy_sizes) > 1 or len(lanes_counts) > 1:
                             print(
                                 f"  Variant {variant}: seed={entry['seed']}, "
                                 f"road={road_id}, lane={lane_num}, "
@@ -619,6 +626,7 @@ def generate_manifest(
                             )
                         variant += 1
     
+    # Write manifest files
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "real_manifest.jsonl"
     
@@ -632,19 +640,19 @@ def generate_manifest(
         "sign_name": "Yield",
         "total_scenes": len(scenes),
         "total_entries": len(entries),
-        "variants_per_scene": n_variants,
-        "augment": augment,
-        "max_scenarios_per_scene": max_scenarios_per_scene,
-        "spawn_velocity_ms": spawn_velocity_ms,
-        "traffic_density": traffic_density,
-        "horizon": horizon,
-        "sign_distance_before_end": sign_distance_before_end,
-        "spawn_distance_before_end": spawn_distance_before_end,
-        "auxiliary_agent": auxiliary_agent,
-        "aux_distance_from_intersection": aux_distance_from_intersection,
-        "aux_convoy_size_max": aux_convoy_size_max,
-        "aux_convoy_gap_m": aux_convoy_gap_m,
-        "aux_lanes_occupied_max": aux_lanes_occupied_max,
+        "variants_per_scene": scenario_cfg.n_variants,
+        "augment": scenario_cfg.augment,
+        "max_scenarios_per_scene": scenario_cfg.max_scenarios_per_scene,
+        "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
+        "traffic_density": sim_cfg.traffic_density,
+        "horizon": sim_cfg.horizon,
+        "sign_distance_before_end": sim_cfg.sign_distance_before_end,
+        "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
+        "auxiliary_agent": aux_cfg.enabled,
+        "aux_distance_from_intersection": aux_cfg.distance_from_intersection,
+        "aux_convoy_size_max": aux_cfg.convoy_size,
+        "aux_convoy_gap_m": aux_cfg.convoy_gap_m,
+        "aux_lanes_occupied_max": aux_cfg.lanes_occupied,
         "generated_at": datetime.now().isoformat(),
         "scenes": [s.name for s in scenes],
     }
@@ -658,33 +666,38 @@ def generate_manifest(
     with open(manifest_meta_path, "w", encoding="utf-8") as f:
         json.dump(manifest_meta, f, indent=2, ensure_ascii=False)
     
+    _print_summary(scenes, entries, sim_cfg, aux_cfg)
+    
+    return entries
+
+
+def _print_summary(
+    scenes: List[Path],
+    entries: List[Dict],
+    sim_cfg: SimulationConfig,
+    aux_cfg: AuxiliaryConfig,
+) -> None:
+    """Print generation summary."""
     print("\n" + "=" * 60)
     print("Generation Complete")
     print("=" * 60)
     print(f"\nResults:")
     print(f"  - Scenes processed: {len(scenes)}")
     print(f"  - Manifest entries: {len(entries)}")
-    print(f"  - Sign distance before lane end: {sign_distance_before_end}m")
-    print(f"  - Ego spawn distance before lane end: {spawn_distance_before_end}m")
-    if auxiliary_agent:
-        convoy_sizes = convoy_sizes_up_to(aux_convoy_size_max, auxiliary_agent)
+    print(f"  - Sign distance before lane end: {sim_cfg.sign_distance_before_end}m")
+    print(f"  - Ego spawn distance before lane end: {sim_cfg.spawn_distance_before_end}m")
+    if aux_cfg.enabled:
+        convoy_sizes = convoy_sizes_up_to(aux_cfg.convoy_size, aux_cfg.enabled)
         print(f"\nAuxiliary Agent: ENABLED (IDM convoy, near intersection)")
-        print(f"  - Distance from intersection: {aux_distance_from_intersection}m")
-        print(f"  - Convoy sizes generated: {convoy_sizes} (up to {aux_convoy_size_max})")
-        print(f"  - Lanes occupied generated: 1..{aux_lanes_occupied_max} (per scene main lanes)")
-        print(f"  - Convoy gap: {aux_convoy_gap_m}m")
-    print(f"\nOutput files:")
-    print(f"  - Manifest: {manifest_path}")
-    print(f"  - Experiment config: {manifest_meta_path}")
-    print(f"  - Summary: {summary_path}")
-    
-    return entries
+        print(f"  - Distance from intersection: {aux_cfg.distance_from_intersection}m")
+        print(f"  - Convoy sizes generated: {convoy_sizes} (up to {aux_cfg.convoy_size})")
+        print(f"  - Lanes occupied generated: 1..{aux_cfg.lanes_occupied} (per scene main lanes)")
+        print(f"  - Convoy gap: {aux_cfg.convoy_gap_m}m")
 
 
-# =============================================================================
-# GIF Rendering
-# =============================================================================
-
+# -----------------------------------------------------------------------------
+# GIF rendering
+# -----------------------------------------------------------------------------
 def _iter_jsonl_rows(path: Path):
     """Iterate over JSONL file rows."""
     with path.open("r", encoding="utf-8") as f:
@@ -699,35 +712,10 @@ def render_gifs_from_manifest(
     manifest_path: Path,
     experiment_dir: Path,
     scenes_root: Path,
-    run_name: str,
-    policy: str = "idm",
-    max_scenes: Optional[int] = None,
-    dry_run: bool = False,
-    gif_dir: Optional[Path] = None,
-    hide_signs: bool = False,
-    auxiliary_agent: bool = False,
-    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
-    aux_convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
+    gif_cfg: GifConfig,
+    aux_cfg: AuxiliaryConfig,
 ) -> Tuple[int, int]:
-    """Render GIFs for scenes from a manifest file.
-    
-    Args:
-        manifest_path: Path to real_manifest.jsonl
-        experiment_dir: Dated run directory under benchmark_output/2_4
-        scenes_root: Root directory containing scene folders
-        run_name: Name for the benchmark run
-        gif_dir: Optional GIF subdirectory (default: <experiment_dir>/gifs)
-        policy: Driving policy for rendering
-        max_scenes: Limit number of scenes to render
-        dry_run: Print commands without executing
-        hide_signs: If True, hide traffic sign visual models in rendered GIFs
-        auxiliary_agent: If True, spawn auxiliary IDM convoy near intersection
-        aux_distance_from_intersection: Distance from intersection (meters)
-        aux_convoy_gap_m: Spacing between convoy vehicles (meters); size is per manifest row
-        
-    Returns:
-        (rendered_count, failed_count)
-    """
+    """Render GIFs for scenes from a manifest file."""
     if not RUN_BENCH_SCRIPT.is_file():
         print(f"[GIF] run_benchmark_real.py not found at {RUN_BENCH_SCRIPT}", file=sys.stderr)
         return 0, 1
@@ -736,9 +724,9 @@ def render_gifs_from_manifest(
         print(f"[GIF] Manifest not found: {manifest_path}", file=sys.stderr)
         return 0, 1
     
-    if gif_dir is None:
-        gif_dir = experiment_dir / "gifs"
+    gif_dir = Path(gif_cfg.dir) if gif_cfg.dir else experiment_dir / "gifs"
     gif_dir.mkdir(parents=True, exist_ok=True)
+    run_name = gif_cfg.run_name or experiment_dir.name
 
     rows = []
     seen_keys = set()
@@ -760,7 +748,7 @@ def render_gifs_from_manifest(
         seen_keys.add(row_key)
         rows.append(row)
         
-        if max_scenes is not None and len(rows) >= max_scenes:
+        if gif_cfg.max_scenes is not None and len(rows) >= gif_cfg.max_scenes:
             break
     
     if not rows:
@@ -772,7 +760,6 @@ def render_gifs_from_manifest(
     rendered = 0
     failed = 0
     for i, row in enumerate(rows, start=1):
-        # scene_uid format: scene_id:sign_type:seed (no backend prefix)
         scene_uid = f"{row['scene_id']}:{row['pdd_code']}:{row['seed']}"
         cmd = [
             sys.executable,
@@ -784,21 +771,19 @@ def render_gifs_from_manifest(
             "--gif-dir", str(gif_dir),
             "--run-name", run_name,
             "--scenes-root", str(scenes_root),
-            "--policy", policy,
+            "--policy", gif_cfg.policy,
         ]
-        if hide_signs:
+        if gif_cfg.hide_signs:
             cmd.append("--hide-signs")
         
-        # Auxiliary agent options
-        if auxiliary_agent:
+        if aux_cfg.enabled:
             cmd.append("--auxiliary-agent")
-            cmd.extend(["--aux-distance-from-intersection", str(aux_distance_from_intersection)])
-            # aux_convoy_size is per manifest row; do not override from CLI here
+            cmd.extend(["--aux-distance-from-intersection", str(aux_cfg.distance_from_intersection)])
         
         print(f"\n[GIF {i}/{len(rows)}] {scene_uid}")
         print("  " + " ".join(cmd))
         
-        if dry_run:
+        if gif_cfg.dry_run:
             rendered += 1
             continue
         
@@ -812,172 +797,103 @@ def render_gifs_from_manifest(
     return rendered, failed
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Generate real_manifest.jsonl from manually collected SUMO scenes",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument(
-        "--scenes-dir", type=str, default=str(DEFAULT_SCENES_DIR),
-        help=f"Directory containing scene subdirectories (default: {DEFAULT_SCENES_DIR})"
-    )
-    parser.add_argument(
-        "--output-base", type=str, default=str(DEFAULT_OUTPUT_BASE),
-        help=f"Base directory for dated experiment folders (default: {DEFAULT_OUTPUT_BASE})"
-    )
-    parser.add_argument(
-        "--experiment-name", type=str, default=None,
-        help="Experiment folder name under output-base "
-             "(default: current timestamp YYYY-MM-DD_HH-MM-SS)"
-    )
-    parser.add_argument(
-        "--n-variants", type=int, default=1,
-        help="Random seed variants per scene when --no-augment (default: 1)"
-    )
-    parser.add_argument(
-        "--no-augment", action="store_true",
-        help="Disable spawn-point augmentation; use --n-variants random spawns instead"
-    )
-    parser.add_argument(
-        "--max-scenarios-per-scene", type=int, default=None,
-        help="Cap augmented scenarios per scene (default: all valid combinations)"
-    )
-    parser.add_argument(
-        "--spawn-velocity", type=float, default=2.5,
-        help="Spawn velocity in m/s (default: 5.0)"
-    )
-    parser.add_argument(
-        "--traffic-density", type=float, default=0.0,
-        help="Traffic density for NPCs (default: 0.0)"
-    )
-    parser.add_argument(
-        "--horizon", type=int, default=600,
-        help="Simulation horizon in steps (default: 600)"
-    )
-    parser.add_argument(
-        "--sign-distance", type=float, default=0.0,
-        help="Distance before lane end to place yield sign in meters (default: 5.0)"
-    )
-    parser.add_argument(
-        "--spawn-distance", type=float, default=DEFAULT_SPAWN_DISTANCE_BEFORE_END,
-        help=f"Distance before lane end to spawn ego vehicle in meters (default: {DEFAULT_SPAWN_DISTANCE_BEFORE_END})"
-    )
-
-    # GIF rendering options
-    parser.add_argument(
-        "--save-gifs", action="store_true",
-        help="Render and save GIFs for scenes via run_benchmark_real.py"
-    )
-    parser.add_argument(
-        "--gif-dir", type=str, default=None,
-        help="GIF output directory (default: <experiment-dir>/gifs)"
-    )
-    parser.add_argument(
-        "--gif-policy", type=str, default="idm",
-        help="Policy for GIF rendering (default: idm)"
-    )
-    parser.add_argument(
-        "--gif-max-scenes", type=int, default=None,
-        help="Render GIFs for at most this many scenes (default: all)"
-    )
-    parser.add_argument(
-        "--gif-dry-run", action="store_true",
-        help="Print GIF rendering commands without executing"
-    )
-    parser.add_argument(
-        "--hide-signs", action="store_true", default=True,
-        help="Hide traffic sign visual models in GIFs (signs still affect behavior)"
-    )
-    parser.add_argument(
-        "--run-name", type=str, default=None,
-        help="Run name for GIF rendering (default: real_<timestamp>)"
-    )
+# -----------------------------------------------------------------------------
+# Hydra entry point
+# -----------------------------------------------------------------------------
+@hydra.main(version_base=None, config_path="config", config_name="config")
+def main(cfg: DictConfig) -> None:
+    """Main entry point with Hydra configuration."""
+    # Resolve paths
+    scenes_dir = Path(cfg.paths.scenes_dir) if cfg.paths.scenes_dir else DEFAULT_SCENES_DIR
+    output_base = Path(cfg.paths.output_base) if cfg.paths.output_base else DEFAULT_OUTPUT_BASE
+    experiment_name = cfg.paths.experiment_name
     
-    # Auxiliary agent options
-    parser.add_argument(
-        "--auxiliary-agent", action="store_true", default=True,
-        help="Spawn a stationary auxiliary agent on the main road near intersection"
-    )
-    parser.add_argument(
-        "--aux-distance-from-intersection", type=float,
-        default=DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
-        help=f"Distance from intersection to spawn aux agent (meters, "
-             f"default: {DEFAULT_AUX_DISTANCE_FROM_INTERSECTION})"
-    )
-    parser.add_argument(
-        "--aux-convoy-size", type=int, default=DEFAULT_CONVOY_SIZE,
-        help=f"Max convoy size; generates manifest rows for sizes 1..N "
-             f"(default: {DEFAULT_CONVOY_SIZE})",
-    )
-    parser.add_argument(
-        "--aux-convoy-gap-m", type=float, default=DEFAULT_CONVOY_GAP_M,
-        help=f"Longitudinal spacing between convoy vehicles in meters (default: {DEFAULT_CONVOY_GAP_M})",
-    )
-    parser.add_argument(
-        "--aux-lanes-occupied", type=int, default=DEFAULT_AUX_LANES_OCCUPIED_MAX,
-        help=f"Max main-road lanes to occupy; generates rows for 1..N lanes per scene "
-             f"(default: {DEFAULT_AUX_LANES_OCCUPIED_MAX})",
-    )
-    
-    args = parser.parse_args()
-
-    scenes_dir = Path(args.scenes_dir)
-    output_base = Path(args.output_base)
-    experiment_dir = make_experiment_dir(output_base, args.experiment_name)
+    experiment_dir = make_experiment_dir(output_base, experiment_name)
     print(f"\n[INFO] Experiment directory: {experiment_dir}")
-
+    
+    # Print resolved config
+    print("\n[CONFIG]")
+    print(OmegaConf.to_yaml(cfg))
+    
+    # Save config to experiment directory
+    config_path = experiment_dir / "hydra_config.yaml"
+    with open(config_path, "w", encoding="utf-8") as f:
+        f.write(OmegaConf.to_yaml(cfg))
+    
+    # Build config objects
+    scenario_cfg = ScenarioConfig(
+        n_variants=cfg.scenario.n_variants,
+        augment=cfg.scenario.augment,
+        max_scenarios_per_scene=cfg.scenario.max_scenarios_per_scene,
+    )
+    
+    sim_cfg = SimulationConfig(
+        spawn_velocity_ms=cfg.simulation.spawn_velocity_ms,
+        traffic_density=cfg.simulation.traffic_density,
+        horizon=cfg.simulation.horizon,
+        sign_distance_before_end=cfg.simulation.sign_distance_before_end,
+        spawn_distance_before_end=cfg.simulation.spawn_distance_before_end,
+    )
+    
+    aux_cfg = AuxiliaryConfig(
+        enabled=cfg.auxiliary.enabled,
+        distance_from_intersection=cfg.auxiliary.distance_from_intersection,
+        convoy_size=cfg.auxiliary.convoy_size,
+        convoy_gap_m=cfg.auxiliary.convoy_gap_m,
+        lanes_occupied=cfg.auxiliary.lanes_occupied,
+    )
+    
+    gif_cfg = GifConfig(
+        enabled=cfg.gif.enabled,
+        policy=cfg.gif.policy,
+        max_scenes=cfg.gif.max_scenes,
+        dry_run=cfg.gif.dry_run,
+        hide_signs=cfg.gif.hide_signs,
+        dir=cfg.gif.dir,
+        run_name=cfg.gif.run_name,
+    )
+    
+    # Generate manifest
     entries = generate_manifest(
         scenes_dir=scenes_dir,
         output_dir=experiment_dir,
-        n_variants=args.n_variants,
-        spawn_velocity_ms=args.spawn_velocity,
-        traffic_density=args.traffic_density,
-        horizon=args.horizon,
-        sign_distance_before_end=args.sign_distance,
-        spawn_distance_before_end=args.spawn_distance,
-        auxiliary_agent=args.auxiliary_agent,
-        aux_distance_from_intersection=args.aux_distance_from_intersection,
-        aux_convoy_size_max=args.aux_convoy_size,
-        aux_convoy_gap_m=args.aux_convoy_gap_m,
-        aux_lanes_occupied_max=args.aux_lanes_occupied,
-        augment=not args.no_augment,
-        max_scenarios_per_scene=args.max_scenarios_per_scene,
+        scenario_cfg=scenario_cfg,
+        sim_cfg=sim_cfg,
+        aux_cfg=aux_cfg,
     )
     
-    if args.save_gifs and entries:
+    # Render GIFs if requested
+    if gif_cfg.enabled and entries:
         manifest_path = experiment_dir / "real_manifest.jsonl"
-        gif_dir = Path(args.gif_dir) if args.gif_dir else None
-        run_name = args.run_name or experiment_dir.name
-
+        
         print(f"\n[INFO] Rendering GIFs into experiment: {experiment_dir}")
-        if args.auxiliary_agent:
-            sizes = convoy_sizes_up_to(args.aux_convoy_size, True)
+        if aux_cfg.enabled:
+            sizes = convoy_sizes_up_to(aux_cfg.convoy_size, True)
             print(f"[INFO] Auxiliary agent: ENABLED (IDM convoy, near intersection)")
-            print(f"  - Distance from intersection: {args.aux_distance_from_intersection}m")
-            print(f"  - Convoy sizes: {sizes} (up to {args.aux_convoy_size})")
-            print(f"  - Lanes occupied: 1..{args.aux_lanes_occupied} (per scene)")
-            print(f"  - Convoy gap: {args.aux_convoy_gap_m}m")
+            print(f"  - Distance from intersection: {aux_cfg.distance_from_intersection}m")
+            print(f"  - Convoy sizes: {sizes} (up to {aux_cfg.convoy_size})")
+            print(f"  - Lanes occupied: 1..{aux_cfg.lanes_occupied} (per scene)")
+            print(f"  - Convoy gap: {aux_cfg.convoy_gap_m}m")
+        
         gif_rendered, gif_failed = render_gifs_from_manifest(
             manifest_path=manifest_path,
             experiment_dir=experiment_dir,
             scenes_root=scenes_dir,
-            run_name=run_name,
-            policy=args.gif_policy,
-            max_scenes=args.gif_max_scenes,
-            dry_run=args.gif_dry_run,
-            gif_dir=gif_dir,
-            hide_signs=args.hide_signs,
-            auxiliary_agent=args.auxiliary_agent,
-            aux_distance_from_intersection=args.aux_distance_from_intersection,
-            aux_convoy_gap_m=args.aux_convoy_gap_m,
+            gif_cfg=gif_cfg,
+            aux_cfg=aux_cfg,
         )
 
-        resolved_gif_dir = gif_dir or (experiment_dir / "gifs")
+        resolved_gif_dir = Path(gif_cfg.dir) if gif_cfg.dir else (experiment_dir / "gifs")
         print(f"\n[GIF RESULTS]")
         print(f"  - GIFs rendered: {gif_rendered}")
         print(f"  - GIF failures: {gif_failed}")
         print(f"  - Experiment directory: {experiment_dir}")
         print(f"  - GIF directory: {resolved_gif_dir}")
+    
+    print(f"\nOutput files:")
+    print(f"  - Manifest: {experiment_dir / 'real_manifest.jsonl'}")
+    print(f"  - Config: {config_path}")
+    print(f"  - Summary: {experiment_dir / 'real_manifest_summary.json'}")
 
 
 if __name__ == "__main__":
