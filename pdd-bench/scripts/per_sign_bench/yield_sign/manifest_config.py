@@ -9,6 +9,7 @@ from typing import Any
 # Shared with generate_real_manifest.py / run_benchmark_real.py CLI defaults.
 DEFAULT_SPAWN_DISTANCE_BEFORE_END = 20.0
 DEFAULT_AUX_DISTANCE_FROM_INTERSECTION = 20.0
+DEFAULT_AUX_LANES_OCCUPIED_MAX = 4
 
 # Row fields that may be filled from manifest.json / real_manifest_summary.json.
 EXPERIMENT_DEFAULT_KEYS = (
@@ -21,6 +22,7 @@ EXPERIMENT_DEFAULT_KEYS = (
     "aux_distance_from_intersection",
     "aux_convoy_size_max",
     "aux_convoy_gap_m",
+    "aux_lanes_occupied_max",
 )
 
 

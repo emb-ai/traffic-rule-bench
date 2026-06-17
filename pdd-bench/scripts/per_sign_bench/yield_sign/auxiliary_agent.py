@@ -429,9 +429,87 @@ class AuxiliaryAgentsManager(BaseManager):
             "count": len(self._aux_vehicles),
             "convoy_size": self._convoy_size,
             "convoy_gap_m": self._convoy_gap_m,
+            "lanes_occupied": len(set(self._spawn_lane_indices)),
             "policy": self._policy,
             "agents": agents,
         }
+
+
+def _lane_edge_from_key(lane_key: str) -> str:
+    raw = lane_key[5:] if lane_key.startswith("lane_") else lane_key
+    return raw.rsplit("_", 1)[0] if "_" in raw else raw
+
+
+def main_lane_keys_for_aux(
+    junction_layout: Optional[dict],
+    ego_edge_id: Optional[str] = None,
+    main_lane_keys: Optional[List[str]] = None,
+) -> List[str]:
+    """Main-road lane keys for aux spawning, excluding ego's approach arm."""
+    if main_lane_keys:
+        if not ego_edge_id:
+            return sorted(main_lane_keys)
+        return sorted(
+            k for k in main_lane_keys if _lane_edge_from_key(k) != ego_edge_id
+        )
+    if not junction_layout:
+        return []
+    keys: List[str] = []
+    for arm in junction_layout.get("arms", []):
+        if arm.get("road_class") != "main":
+            continue
+        if ego_edge_id and arm.get("edge_id") == ego_edge_id:
+            continue
+        keys.extend(arm.get("lane_keys", []))
+    return sorted(keys)
+
+
+def select_occupied_main_lanes(
+    all_main_lane_keys: List[str],
+    n_lanes_occupied: int,
+) -> List[str]:
+    if not all_main_lane_keys:
+        return []
+    n = max(1, min(int(n_lanes_occupied), len(all_main_lane_keys)))
+    return all_main_lane_keys[:n]
+
+
+def resolve_aux_spawn_lanes(
+    row: dict,
+    ego_lane_index: str,
+    incoming_lanes: Optional[List[dict]] = None,
+    aux_lanes_occupied: int = 1,
+) -> List[str]:
+    """Resolve which lane indices should carry auxiliary convoys for this episode."""
+    occupied = row.get("aux_occupied_lane_keys")
+    if occupied:
+        return list(occupied)
+
+    ego_edge = _lane_edge_from_key(str(ego_lane_index)) if ego_lane_index else None
+    if row.get("road_id"):
+        ego_edge = str(row["road_id"])
+
+    junction_layout = row.get("junction_layout")
+    main_keys = main_lane_keys_for_aux(
+        junction_layout,
+        ego_edge_id=ego_edge,
+        main_lane_keys=row.get("main_lane_keys"),
+    )
+    lanes_n = int(row.get("aux_lanes_occupied", aux_lanes_occupied) or aux_lanes_occupied)
+    if main_keys:
+        return select_occupied_main_lanes(main_keys, lanes_n)
+
+    # Legacy single-lane fallback
+    spawn_lane = row.get("aux_spawn_lane_index")
+    if not spawn_lane and row.get("aux_road_id") is not None:
+        aux_lane_num = int(row.get("aux_spawn_lane_num", 0) or 0)
+        spawn_lane = f"lane_{row['aux_road_id']}_{aux_lane_num}"
+    if spawn_lane is None and incoming_lanes:
+        for lane in incoming_lanes:
+            if lane["edge_id"] not in str(ego_lane_index):
+                spawn_lane = lane["lane_name"]
+                break
+    return [spawn_lane] if spawn_lane else []
 
 
 def add_auxiliary_agents(

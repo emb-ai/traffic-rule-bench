@@ -29,7 +29,9 @@ from scripts.per_sign_bench.yield_sign.auxiliary_agent import (
     DEFAULT_CONVOY_SIZE,
     DEFAULT_SPAWN_VELOCITY_MS,
     add_auxiliary_agents,
+    resolve_aux_spawn_lanes,
 )
+from scripts.per_sign_bench.yield_sign.manifest_config import DEFAULT_AUX_LANES_OCCUPIED_MAX
 from scripts.per_sign_bench.yield_sign.junction_priority_layout import (
     JunctionLayoutError,
     build_junction_priority_layout,
@@ -1057,6 +1059,7 @@ def run_one_episode(
     aux_release_when_ego_within_m: float = 5.0,
     aux_convoy_size: int = DEFAULT_CONVOY_SIZE,
     aux_convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
+    aux_lanes_occupied: int = DEFAULT_AUX_LANES_OCCUPIED_MAX,
 ) -> dict:
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
     np.random.seed(seed)
@@ -1158,6 +1161,7 @@ def run_one_episode(
         #         print("[AuxAgent] No incoming lanes available for auxiliary agents")
 
         aux_agent_mgr = None
+        aux_spawn_lanes: list[str] = []
         if auxiliary_agent:
             aux_distance_from_intersection = float(
                 row.get("aux_distance_from_intersection", aux_distance_from_intersection)
@@ -1167,32 +1171,20 @@ def run_one_episode(
             )
             aux_convoy_size = int(row.get("aux_convoy_size", aux_convoy_size))
             aux_convoy_gap_m = float(row.get("aux_convoy_gap_m", aux_convoy_gap_m))
+            aux_lanes_occupied = int(row.get("aux_lanes_occupied", aux_lanes_occupied))
             ego_lane_index = getattr(base_env.vehicle.lane, "index", "")
-            spawn_lane = row.get("aux_spawn_lane_index")
-            if not spawn_lane and row.get("aux_road_id") is not None:
-                aux_lane_num = int(row.get("aux_spawn_lane_num", 0) or 0)
-                spawn_lane = f"lane_{row['aux_road_id']}_{aux_lane_num}"
-            if spawn_lane is None:
-                for lane_key in row.get("main_lane_keys") or []:
-                    edge_id = (
-                        lane_key[5:].rsplit("_", 1)[0]
-                        if lane_key.startswith("lane_")
-                        else lane_key
-                    )
-                    if edge_id not in str(ego_lane_index):
-                        spawn_lane = lane_key
-                        break
-            if spawn_lane is None:
-                for lane in incoming_lanes:
-                    if lane["edge_id"] not in str(ego_lane_index):
-                        spawn_lane = lane["lane_name"]
-                        break
+
+            aux_spawn_lanes = resolve_aux_spawn_lanes(
+                row,
+                ego_lane_index=str(ego_lane_index),
+                incoming_lanes=incoming_lanes,
+                aux_lanes_occupied=aux_lanes_occupied,
+            )
 
             aux_destination_lanes = None
             if row.get("aux_destination_lane_id"):
-                aux_destination_lanes = [row["aux_destination_lane_id"]]
+                aux_destination_lanes = [row["aux_destination_lane_id"]] * len(aux_spawn_lanes)
 
-            aux_spawn_lanes = [spawn_lane] if spawn_lane else []
             if aux_spawn_lanes:
                 aux_agent_mgr = add_auxiliary_agents(
                     base_env,
@@ -1210,7 +1202,8 @@ def run_one_episode(
                 )
                 if aux_agent_mgr is not None:
                     print(
-                        f"[AuxAgent] Convoy size={aux_convoy_size}, gap={aux_convoy_gap_m}m, "
+                        f"[AuxAgent] lanes={len(aux_spawn_lanes)}, "
+                        f"convoy_size={aux_convoy_size}, gap={aux_convoy_gap_m}m, "
                         f"spawned={aux_agent_mgr.get_status().get('count', 0)}"
                     )
 
@@ -1408,9 +1401,7 @@ def run_one_episode(
                     "Step": step,
                     "Speed": f"{vehicle.speed_km_h:.2f} km/h",
                     "Vehicle lane: ": vehicle.lane.index,
-                    "Spawn lane: ": spawn_lane,
-                    # "Current lane" : env.engine.current_map.road_network.get_closest_lane_index(vehicle.position)[0],
-                    # "Auxiliary agent spawn lane: ": spawn_lane,
+                    "Aux lanes": len(aux_spawn_lanes),
                     "Current lane width: ": vehicle.lane.width,
                     "Violations: ": sign_violations,
                 }
@@ -1445,6 +1436,7 @@ def run_one_episode(
                 if aux_agent_mgr is not None:
                     aux_status = aux_agent_mgr.get_status()
                     text_dict["Aux agents"] = aux_status.get("count", 0)
+                    text_dict["Aux lanes"] = aux_status.get("lanes_occupied", aux_lanes_occupied)
                     text_dict["Aux convoy size"] = aux_status.get("convoy_size", aux_convoy_size)
                     text_dict["Aux policy"] = aux_status.get("policy", aux_policy)
                     agents = aux_status.get("agents") or []
@@ -1862,6 +1854,13 @@ def main():
         default=DEFAULT_CONVOY_GAP_M,
         help=f"Longitudinal spacing between convoy vehicles in meters (default: {DEFAULT_CONVOY_GAP_M})",
     )
+    parser.add_argument(
+        "--aux-lanes-occupied",
+        type=int,
+        default=DEFAULT_AUX_LANES_OCCUPIED_MAX,
+        help=f"Fallback max main-road lanes to occupy when manifest row omits aux_lanes_occupied "
+             f"(default: {DEFAULT_AUX_LANES_OCCUPIED_MAX})",
+    )
 
     args = parser.parse_args()
 
@@ -1906,6 +1905,7 @@ def main():
             print(f"  - Release when ego within: {args.aux_release_when_ego_within_m}m of spawn lane end")
             print(f"  - Speed after release: {args.aux_spawn_velocity_ms} m/s")
             print(f"  - Convoy size: from manifest row aux_convoy_size (CLI default {args.aux_convoy_size})")
+            print(f"  - Lanes occupied: from manifest row aux_lanes_occupied (CLI default {args.aux_lanes_occupied})")
             print(f"  - Convoy gap: {args.aux_convoy_gap_m}m")
             print(f"  - Route: incoming lane -> reachable outgoing lane")
 
@@ -2034,6 +2034,7 @@ def main():
                 aux_release_when_ego_within_m=args.aux_release_when_ego_within_m,
                 aux_convoy_size=args.aux_convoy_size,
                 aux_convoy_gap_m=args.aux_convoy_gap_m,
+                aux_lanes_occupied=args.aux_lanes_occupied,
             )
             episode_dt = time.time() - episode_t0
             print(f"{args.policy}  elapsed_s={episode_dt:.3f}")
