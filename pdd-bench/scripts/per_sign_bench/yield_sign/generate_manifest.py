@@ -516,8 +516,7 @@ def generate_manifest(
             auxiliary_enabled=aux_cfg.enabled,
             available=available_main_lane_count,
         )
-
-        for scenario in scenarios:
+        for variant, scenario in enumerate(scenarios):
             ego_edge = scenario.ego_edge_id
             scene_main_lanes = main_lane_keys_for_aux(junction_layout, ego_edge)
             scene_lane_counts = sizes_up_to(

@@ -88,7 +88,7 @@ BENCH_DIR = Path(__file__).resolve().parent
 PDD_BENCH_DIR = BENCH_DIR.parent.parent.parent
 CHECKPOINTS_DIR = PDD_BENCH_DIR / "checkpoints"
 
-from manifest_config import (
+from lib.manifest_config import (
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     enrich_manifest_row,
     load_manifest_config,
