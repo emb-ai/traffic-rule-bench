@@ -122,6 +122,12 @@ class PlanT2MetaDriveAdapter:
         self.route_step_m: float = route_step_m
         self._model = None
         self._config = None
+        # Persistent controllers for action_mode="pid". Created once (lazy) and
+        # reused across steps so the lateral PID's error-history window survives
+        # between frames (restores the derivative-damping term). Mirrors the
+        # canonical CARLA PlanT agent, which holds lat_pid/lon_pid as members.
+        self._lat_pid = None
+        self._lon_pid = None
 
     def _ensure_loaded(self) -> None:
         if self._model is not None:
@@ -225,19 +231,20 @@ class PlanT2MetaDriveAdapter:
         self._config = config_all
 
     def reset(self) -> None:
-        """No-op: PlanT2 has no per-episode state. Provided for parity with
-        CaRLMetaDriveAdapter.reset() so the policy can call either uniformly."""
-        return
+        """Clear the persistent lateral PID error-history window between episodes.
+
+        The controllers persist across episodes (created once); only the sliding
+        window must be cleared so a new episode doesn't inherit stale heading
+        errors. (_lon_pid is a stateless linear-regression controller — no reset.)"""
+        if self._lat_pid is not None:
+            self._lat_pid.error_history = []
 
     def get_action(self, vehicle, engine) -> np.ndarray:
         """Run one PlanT2 inference step → MetaDrive `[steering, throttle]` in [-1, 1]."""
         self._ensure_loaded()
 
         from metadrive.policy.metadrive_obs_to_plant2 import metadrive_obs_to_plant2_batch
-        from carla_garage.plant2_control import (
-            plant2_predictions_to_action,
-            get_target_speed_from_limit,
-        )
+        from carla_garage.plant2_control import get_target_speed_from_limit
 
         # input_ego_speed is detected from the checkpoint in _ensure_loaded()
         # and stored in self._input_ego_speed — do NOT re-read from PlanT.yaml
@@ -288,14 +295,102 @@ class PlanT2MetaDriveAdapter:
         if self.action_mode == "wps_pure_pursuit":
             action = _wps_to_action(pred_plan, ego_speed, target_speed_mps)
         else:
-            action = plant2_predictions_to_action(
-                pred_plan,
-                current_speed=ego_speed,
-                target_speed_mps=target_speed_mps,
-                speed_limit_idx=speed_limit_idx,
-                speed_limits_kmh=(50, 80, 100, 120),
-                device=self.device,
-                return_waypoints=False,
-            )
+            action = self._pid_action_persistent(pred_plan, ego_speed, target_speed_mps)
 
         return np.clip(np.asarray(action, dtype=np.float32), -1.0, 1.0)
+
+    def _ensure_controllers(self) -> None:
+        """Lazily create the persistent lateral/longitudinal controllers.
+
+        Imported the same way carla_garage.plant2_control imports them internally
+        (carla_garage is already on sys.path once the model is loaded)."""
+        if self._lat_pid is not None:
+            return
+        from config import GlobalConfig
+        from lateral_controller import LateralPIDController
+        from longitudinal_controller import LongitudinalLinearRegressionController
+        cfg = GlobalConfig()
+        self._lat_pid = LateralPIDController(cfg)
+        self._lon_pid = LongitudinalLinearRegressionController(cfg)
+
+    def _pid_action_persistent(self, pred_plan, current_speed, target_speed_mps) -> np.ndarray:
+        """Mirror of carla_garage.plant2_control.plant2_predictions_to_action, with
+        two faithfulness fixes vs that per-step function:
+
+          1. Reuses PERSISTENT controllers (self._lat_pid/_lon_pid) instead of
+             re-instantiating each step, so the lateral PID's error_history
+             accumulates across frames and its derivative (damping) term works —
+             this is what kills the lane-change wobble. Matches the canonical
+             CARLA PlanT agent (PlanT_agent.py:_get_control).
+          2. Applies FULL brake (-1.0 == CARLA control.brake=1.0) instead of the
+             half-brake (-0.5) the per-step function used.
+
+        Helpers (interpolate_waypoints, SPEED_BINS) are reused from the submodule —
+        plant2 is NOT modified."""
+        from carla_garage.plant2_control import interpolate_waypoints, SPEED_BINS
+
+        self._ensure_controllers()
+        pred_path, pred_wps, pred_speed = pred_plan
+
+        # 1. Desired speed (softmax over 8 speed bins, else waypoint-spacing heuristic)
+        if pred_speed is not None:
+            logits = pred_speed.detach().float()
+            if logits.dim() > 1:
+                logits = logits.squeeze(0)
+            probs = torch.softmax(logits, dim=0).cpu().numpy()
+            desired_speed = float((probs * SPEED_BINS).sum())
+        else:
+            _wp = pred_wps if pred_wps is not None else pred_path
+            if _wp is not None:
+                wp_arr = _wp.detach().cpu().numpy()
+                if wp_arr.ndim > 2:
+                    wp_arr = wp_arr.squeeze(0)
+                if len(wp_arr) >= 4:
+                    desired_speed = float(np.linalg.norm(wp_arr[2] - wp_arr[3]) * 4.0)
+                    mean_speed = float(np.linalg.norm(wp_arr[:-1] - wp_arr[1:], axis=-1).mean() * 4.0)
+                    if current_speed < 0.01:
+                        desired_speed = min(mean_speed, 0.1)
+                else:
+                    desired_speed = target_speed_mps
+            else:
+                desired_speed = target_speed_mps
+        desired_speed = min(desired_speed, target_speed_mps)
+
+        # 2. Longitudinal control (persistent, stateless linear-regression controller)
+        hazard_brake = desired_speed < 0.05
+        throttle, brake = self._lon_pid.get_throttle_and_brake(
+            hazard_brake, desired_speed, current_speed
+        )
+
+        # 3. Select steering waypoints — prefer pred_path, fallback pred_wps
+        steer_tensor = pred_path if pred_path is not None else pred_wps
+        if steer_tensor is None:
+            return np.array([0.0, 0.5], dtype=np.float32)
+        steer_np = steer_tensor.detach().cpu().numpy()
+        if steer_np.ndim > 2:
+            steer_np = steer_np.squeeze(0)
+        if steer_np.shape[0] == 0:
+            return np.array([0.0, 0.5], dtype=np.float32)
+
+        # 4. Interpolate steering path at 0.1 m (PCHIP) — reused from submodule
+        interp_wp = interpolate_waypoints(steer_np)
+
+        # 5. Lateral control (persistent PID; creep dummy path when stopped + braking)
+        if current_speed < 0.05 and brake:
+            steer_input = np.array([[1.0, 0.0], [2.0, 0.0], [3.0, 0.0], [4.0, 0.0]],
+                                   dtype=np.float32)
+        else:
+            steer_input = interp_wp
+        steer = self._lat_pid.step(
+            steer_input, current_speed, np.array([0.0, 0.0]), 0.0, False
+        )
+
+        # 6. Assemble MetaDrive action
+        steer = np.clip(float(steer), -1.0, 1.0)
+        steer = -steer                       # PID positive=right; MetaDrive action[0] positive=left
+        if brake:
+            throttle_brake = -1.0            # full brake (= CARLA control.brake=1.0); was -0.5 half-brake
+        else:
+            throttle_brake = float(np.clip(throttle, 0.0, 1.0))
+        throttle_brake = float(np.clip(throttle_brake, -1.0, 1.0))
+        return np.array([steer, throttle_brake], dtype=np.float32)
