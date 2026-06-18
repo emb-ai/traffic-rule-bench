@@ -52,6 +52,8 @@ class ApproachArm:
     arm_index: int
     road_class: RoadClass = "secondary"
     straight_to: List[str] = field(default_factory=list)
+    outgoing_to: List[str] = field(default_factory=list)
+    left_to: List[str] = field(default_factory=list)
     from_node: str = ""
 
     def to_dict(self) -> dict:
@@ -63,6 +65,8 @@ class ApproachArm:
             "arm_index": int(self.arm_index),
             "road_class": self.road_class,
             "straight_to": list(self.straight_to),
+            "outgoing_to": list(self.outgoing_to),
+            "left_to": list(self.left_to),
             "from_node": self.from_node,
         }
 
@@ -268,6 +272,28 @@ def _straight_targets(incoming_edge_id: str, connections: list) -> Set[str]:
     return targets
 
 
+def _outgoing_targets(incoming_edge_id: str, connections: list) -> Set[str]:
+    """All outgoing edge ids reachable from an incoming arm (any turn direction)."""
+    targets: Set[str] = set()
+    for conn in connections:
+        if conn["from"] != incoming_edge_id:
+            continue
+        if conn["to"]:
+            targets.add(conn["to"])
+    return targets
+
+
+def _left_targets(incoming_edge_id: str, connections: list) -> Set[str]:
+    """Outgoing edges via a left turn (SUMO dir=l) from an incoming arm."""
+    targets: Set[str] = set()
+    for conn in connections:
+        if conn["from"] != incoming_edge_id:
+            continue
+        if conn.get("dir") == "l" and conn.get("to"):
+            targets.add(conn["to"])
+    return targets
+
+
 def _are_through_partners(
     left: SumoEdge,
     right: SumoEdge,
@@ -303,6 +329,8 @@ def _build_arms(
     junctions: dict,
     incoming: List[SumoEdge],
     straight_map: Dict[str, Set[str]],
+    outgoing_map: Dict[str, Set[str]],
+    left_map: Dict[str, Set[str]],
 ) -> List[ApproachArm]:
     center = junctions[junction_id]["center"]
     arms: List[ApproachArm] = []
@@ -318,6 +346,8 @@ def _build_arms(
                 entry_angle=_angle_of_point(center, entry_point),
                 arm_index=-1,
                 straight_to=sorted(straight_map.get(edge.edge_id, set())),
+                outgoing_to=sorted(outgoing_map.get(edge.edge_id, set())),
+                left_to=sorted(left_map.get(edge.edge_id, set())),
                 from_node=edge.from_node,
             )
         )
@@ -443,7 +473,9 @@ def build_junction_priority_layout(
     shape = _infer_shape(len(incoming))
 
     straight_map = {edge.edge_id: _straight_targets(edge.edge_id, connections) for edge in incoming}
-    arms = _build_arms(junction_id, junctions, incoming, straight_map)
+    outgoing_map = {edge.edge_id: _outgoing_targets(edge.edge_id, connections) for edge in incoming}
+    left_map = {edge.edge_id: _left_targets(edge.edge_id, connections) for edge in incoming}
+    arms = _build_arms(junction_id, junctions, incoming, straight_map, outgoing_map, left_map)
 
     if shape == "X":
         main_ids, secondary_ids = _assign_main_secondary_x(
@@ -497,6 +529,8 @@ def load_junction_priority_layout(path: Path | str) -> JunctionPriorityLayout:
             arm_index=int(arm["arm_index"]),
             road_class=arm["road_class"],
             straight_to=list(arm.get("straight_to", [])),
+            outgoing_to=list(arm.get("outgoing_to", arm.get("straight_to", []))),
+            left_to=list(arm.get("left_to", [])),
             from_node=arm.get("from_node", ""),
         )
         for arm in data["arms"]

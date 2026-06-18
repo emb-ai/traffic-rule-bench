@@ -58,10 +58,15 @@ def _pick_outgoing_lane_key(
 
 
 def _ego_destination_edges(layout: JunctionPriorityLayout, ego_edge_id: str) -> List[str]:
+    """Ego destination edges by junction shape: X → straight, T → left turn."""
     arm = layout.arm_for_edge(ego_edge_id)
-    if arm is None or not arm.straight_to:
+    if arm is None:
         return []
-    return list(arm.straight_to)
+    if layout.shape == "T":
+        return list(arm.left_to)
+    if layout.shape == "X":
+        return list(arm.straight_to)
+    return list(arm.straight_to) or list(arm.left_to)
 
 
 def _aux_straight_destination(layout: JunctionPriorityLayout, aux_edge_id: str) -> Optional[str]:

@@ -501,9 +501,12 @@ def generate_manifest(
         scenarios: List[SpawnScenario] = []
         if scenario_cfg.augment:
             _, scenarios = augment_layout_for_scene(net_full_path, spawn_lanes)
-            assert scenarios is not None, f"No scenarios found for {scene_name}"
+            if not scenarios:
+                print(f"  [augment] No valid scenarios for {scene_name}; skipping scene")
+                continue
             if scenario_cfg.max_scenarios_per_scene is not None:
                 scenarios = scenarios[:scenario_cfg.max_scenarios_per_scene]
+            print(f"  Augmented scenarios: {len(scenarios)}")
         
         convoy_sizes = sizes_up_to(aux_cfg.convoy_size, auxiliary_enabled=aux_cfg.enabled)
         lanes_counts = sizes_up_to(
