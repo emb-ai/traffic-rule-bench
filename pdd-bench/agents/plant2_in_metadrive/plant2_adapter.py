@@ -319,10 +319,22 @@ class PlanT2MetaDriveAdapter:
         (carla_garage is already on sys.path once the model is loaded)."""
         if self._lat_pid is not None:
             return
+        import os as _os
         from config import GlobalConfig
         from lateral_controller import LateralPIDController
         from longitudinal_controller import LongitudinalLinearRegressionController
         cfg = GlobalConfig()
+        # Diagnostic: scale the lateral PID lookahead. CARLA tuned these gains for
+        # 20 Hz control; MetaDrive runs the ego at ~10 Hz (decision_repeat=5), so
+        # the ~4.5 m lookahead at ~12 m/s is too short for stable tracking
+        # (lookahead < speed -> pure-pursuit weave). A larger lookahead lowers the
+        # effective gain. PLANT2_LOOKAHEAD_MULT (default 1.0) scales it.
+        _m = float(_os.environ.get("PLANT2_LOOKAHEAD_MULT", "1.0"))
+        if _m != 1.0:
+            cfg.lateral_pid_speed_scale *= _m
+            cfg.lateral_pid_speed_offset *= _m
+            cfg.lateral_pid_minimum_lookahead_distance *= _m
+            cfg.lateral_pid_maximum_lookahead_distance *= _m
         self._lat_pid = LateralPIDController(cfg)
         self._lon_pid = LongitudinalLinearRegressionController(cfg)
 
