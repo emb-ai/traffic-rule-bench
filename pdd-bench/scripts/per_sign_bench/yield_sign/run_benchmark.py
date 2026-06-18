@@ -709,93 +709,65 @@ def _analyze_junction_lanes(env) -> dict:
     """
     result = {"incoming": [], "outgoing": [], "junction_id": None}
     
-    try:
-        road_network = env.engine.current_map.road_network
-        graph = road_network.graph
-        
-        incoming_lanes = []
-        outgoing_lanes = []
-        junction_id = None
-        
-        for lane_name, lane_info in graph.items():
-            # Find the junction polygon
-            if lane_name.startswith("junction"):
-                junction_id = lane_name
-                continue
-            
-            # Skip non-lane entries
-            if not lane_name.startswith("lane_"):
-                continue
-            
-            exit_lanes = getattr(lane_info, "exit_lanes", None) or []
-            entry_lanes = getattr(lane_info, "entry_lanes", None) or []
-            
-            # Extract edge ID from lane name (e.g., "lane_46710990#1_0" -> "46710990#1")
-            raw_name = lane_name[5:] if lane_name.startswith("lane_") else lane_name
-            edge_id = raw_name.rsplit("_", 1)[0] if "_" in raw_name else raw_name
-            
-            lane_obj = None
-            lane_length = 0.0
-            start_pos = None
-            end_pos = None
-            
-            try:
-                lane_obj = road_network.get_lane(lane_name)
-                lane_length = lane_obj.length
-                # Get start and end positions of the lane
-                start_pos = lane_obj.position(0.0, 0.0)  # Beginning of lane
-                end_pos = lane_obj.position(lane_length, 0.0)  # End of lane
-            except Exception:
-                pass
-            
-            lane_data = {
-                "lane_name": lane_name,
-                "edge_id": edge_id,
-                "length": lane_length,
-                "exit_lanes": exit_lanes,
-                "entry_lanes": entry_lanes,
-                "start_pos": start_pos,
-                "end_pos": end_pos,
-            }
-            
-            # Incoming: has exit_lanes (feeds INTO junction)
-            # Outgoing: has entry_lanes but no exit_lanes (exits FROM junction)
-            if exit_lanes:
-                incoming_lanes.append(lane_data)
-            elif entry_lanes and not exit_lanes:
-                outgoing_lanes.append(lane_data)
-        
-        result["incoming"] = incoming_lanes
-        result["outgoing"] = outgoing_lanes
-        result["junction_id"] = junction_id
-        
-        # Print analysis
-        print("\n" + "=" * 60)
-        print("JUNCTION LANE ANALYSIS")
-        print("=" * 60)
-        if junction_id:
-            print(f"Junction: {junction_id}")
-        
-        print(f"\n--- INCOMING LANES (approaching junction): {len(incoming_lanes)} ---")
-        for lane in sorted(incoming_lanes, key=lambda x: x["edge_id"]):
-            start_str = _format_lane_pos(lane.get("start_pos"))
-            end_str = _format_lane_pos(lane.get("end_pos"))
-            print(f"  {lane['lane_name']:<35} edge={lane['edge_id']:<20} len={lane['length']:.1f}m")
-            print(f"    start={start_str}  end={end_str}")
-            print(f"    -> exits to: {lane['exit_lanes']}")
-        
-        print(f"\n--- OUTGOING LANES (leaving junction): {len(outgoing_lanes)} ---")
-        for lane in sorted(outgoing_lanes, key=lambda x: x["edge_id"]):
-            print(f"  {lane['lane_name']:<35} edge={lane['edge_id']:<20} len={lane['length']:.1f}m")
-            print(f"    <- enters from: {lane['entry_lanes']}")
-        
-        print("=" * 60 + "\n")
-        
-    except Exception as e:
-        import traceback
-        print(f"[JunctionAnalysis] Failed to analyze junction lanes: {e}")
-        traceback.print_exc()
+    road_network = env.engine.current_map.road_network
+    graph = road_network.graph
     
+    incoming_lanes = []
+    outgoing_lanes = []
+    junction_id = None
+    
+    for lane_name, lane_info in graph.items():
+        # Find the junction polygon
+        if lane_name.startswith("junction"):
+            junction_id = lane_name
+            continue
+        
+        # Skip non-lane entries
+        if not lane_name.startswith("lane_"):
+            continue
+        
+        exit_lanes = getattr(lane_info, "exit_lanes", None) or []
+        entry_lanes = getattr(lane_info, "entry_lanes", None) or []
+        
+        # Extract edge ID from lane name (e.g., "lane_46710990#1_0" -> "46710990#1")
+        raw_name = lane_name[5:] if lane_name.startswith("lane_") else lane_name
+        edge_id = raw_name.rsplit("_", 1)[0] if "_" in raw_name else raw_name
+        
+        lane_obj = None
+        lane_length = 0.0
+        start_pos = None
+        end_pos = None
+        
+        try:
+            lane_obj = road_network.get_lane(lane_name)
+            lane_length = lane_obj.length
+            # Get start and end positions of the lane
+            start_pos = lane_obj.position(0.0, 0.0)  # Beginning of lane
+            end_pos = lane_obj.position(lane_length, 0.0)  # End of lane
+        except Exception:
+            pass
+        
+        lane_data = {
+            "lane_name": lane_name,
+            "edge_id": edge_id,
+            "length": lane_length,
+            "exit_lanes": exit_lanes,
+            "entry_lanes": entry_lanes,
+            "start_pos": start_pos,
+            "end_pos": end_pos,
+        }
+        
+        # Incoming: has exit_lanes (feeds INTO junction)
+        # Outgoing: has entry_lanes but no exit_lanes (exits FROM junction)
+        if exit_lanes:
+            incoming_lanes.append(lane_data)
+        elif entry_lanes and not exit_lanes:
+            outgoing_lanes.append(lane_data)
+    
+    result["incoming"] = incoming_lanes
+    result["outgoing"] = outgoing_lanes
+    result["junction_id"] = junction_id
+
     return result.get("incoming", []), result.get("outgoing", [])
 
 

@@ -505,6 +505,8 @@ def generate_manifest(
                 print(f"  [augment] No valid scenarios for {scene_name}; skipping scene")
                 continue
             if scenario_cfg.max_scenarios_per_scene is not None:
+                print(f"Retained only {scenario_cfg.max_scenarios_per_scene} from {len(scenarios)} possible scenarios")
+                random.shuffle(scenarios)
                 scenarios = scenarios[:scenario_cfg.max_scenarios_per_scene]
             print(f"  Augmented scenarios: {len(scenarios)}")
         

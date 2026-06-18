@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<!-- generated on 2026-06-08T13:01:30.417896+03:00 by Eclipse SUMO netconvert v1_24_0+1608-7a4ca0611c7
+<!-- generated on 2026-06-18T17:01:05.955506+03:00 by Eclipse SUMO netconvert v1_24_0+1608-7a4ca0611c7
 <netconvertConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/netconvertConfiguration.xsd">
 
     <input>
@@ -25,7 +25,7 @@
     </tls_building>
 
     <edge_removal>
-        <keep-edges.in-geo-boundary value="37.569373291100256,55.73874768882501,37.57256470889974,55.74054431117499"/>
+        <keep-edges.in-geo-boundary value="37.5696924328802,55.738927351060006,37.57224556711979,55.740364648939995"/>
         <keep-edges.by-type value="highway.motorway,highway.motorway_link,highway.trunk,highway.trunk_link,highway.primary,highway.primary_link,highway.secondary,highway.secondary_link,highway.tertiary,highway.tertiary_link,highway.unclassified,highway.residential"/>
         <remove-edges.by-type value="railway.subway,railway.rail,railway.light_rail,railway.tram,railway.monorail,railway.preserved,highway.service,highway.footway,highway.path,highway.cycleway,highway.pedestrian,highway.steps,highway.track,highway.bridleway,highway.corridor"/>
     </edge_removal>
