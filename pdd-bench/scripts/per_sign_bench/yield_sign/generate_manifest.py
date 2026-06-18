@@ -516,9 +516,7 @@ def generate_manifest(
             auxiliary_enabled=aux_cfg.enabled,
             available=available_main_lane_count,
         )
-        variant = 0
-        total_planned = len(scenarios) * len(lanes_counts) * len(convoy_sizes)
-        
+
         for scenario in scenarios:
             ego_edge = scenario.ego_edge_id
             scene_main_lanes = main_lane_keys_for_aux(junction_layout, ego_edge)
@@ -543,14 +541,6 @@ def generate_manifest(
                         spawn_scenario=scenario,
                     )
                     entries.append(entry)
-                    if variant < 3 or variant == total_planned - 1:
-                        print(
-                            f"  [{variant + 1}] {entry.get('augmentation_id', scenario.scenario_id)} "
-                            f"lanes={lanes_n} convoy={convoy_n} seed={entry['seed']}"
-                        )
-                    elif variant == 3:
-                        print(f"  ... ({total_planned - 4} more)")
-                    variant += 1
     
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "real_manifest.jsonl"
