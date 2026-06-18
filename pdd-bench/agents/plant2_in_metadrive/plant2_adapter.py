@@ -257,6 +257,19 @@ class PlanT2MetaDriveAdapter:
         from metadrive.policy.plant_policy import get_route_points_ego_frame
         route_ego, _ = get_route_points_ego_frame(vehicle, num_points=20, step_m=self.route_step_m)
 
+        import os as _os
+        if _os.environ.get("PLANT2_ROUTE_YFLIP"):
+            # A/B test: re-apply the pre-1300c1e route y-flip (route -> MetaDrive
+            # y=left). If this stops the pred_path oscillation, the checkpoint was
+            # trained expecting the route in y=left, and 1300c1e's route change is
+            # wrong for it. Temporary diagnostic toggle.
+            route_ego = route_ego.copy()
+            route_ego[:, 1] = -route_ego[:, 1]
+        if _os.environ.get("PLANT2_DEBUG_STEER"):
+            _r = route_ego[:, 1]
+            print(f"[routedbg] route_y[min/max/last]="
+                  f"{_r.min():+.2f}/{_r.max():+.2f}/{_r[-1]:+.2f}", flush=True)
+
         # Mirrors the reference inference path in eval_plant2_rule_sign_speed_probs.py:736-748.
         # max_objects=30 — PlanT2 must see surrounding NPCs and sign tokens via x_objs;
         # 0 silently degrades it to "drive forward by BEV alone".
