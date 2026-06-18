@@ -286,6 +286,23 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         debug_one_way_sign_selection=bool(row.get("debug_one_way_sign_selection", False)),
         relocate_ego_to_sign_lane=RELOCATE_EGO_TO_SIGN_LANE,
     )
+    # Control-rate test toggle. Default MetaDrive = 10 Hz (physics 0.02s *
+    # decision_repeat 5); CARLA runs the controller at 20 Hz. These keys are
+    # GLOBAL (affect NPC stepping + SUMO co-sim step = physics_world_step_size),
+    # so results are only comparable across policies run at the same rate.
+    # Off by default. For exact 20 Hz: EGO_PHYSICS_DT=0.025 EGO_DECISION_REPEAT=2.
+    import os as _os
+    _dr = _os.environ.get("EGO_DECISION_REPEAT")
+    if _dr:
+        config["decision_repeat"] = int(_dr)
+    _dt = _os.environ.get("EGO_PHYSICS_DT")
+    if _dt:
+        config["physics_world_step_size"] = float(_dt)
+    if _dr or _dt:
+        _phys = config.get("physics_world_step_size", 0.02)
+        _rep = config.get("decision_repeat", 5)
+        print(f"[env] sim cadence override: physics_dt={_phys} decision_repeat={_rep} "
+              f"-> {1.0/(_phys*_rep):.1f} Hz", flush=True)
     if row.get("road_id"):
         config["vehicle_config"]["spawn_lane_index"] = row["road_id"]
     if "spawn_lane_num" in row:
