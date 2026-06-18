@@ -393,4 +393,20 @@ class PlanT2MetaDriveAdapter:
         else:
             throttle_brake = float(np.clip(throttle, 0.0, 1.0))
         throttle_brake = float(np.clip(throttle_brake, -1.0, 1.0))
+
+        # Temporary diagnostic (env-gated): distinguish controller-wobble from
+        # pred_path-wobble. path_y = lateral spread of the model's raw pred_path
+        # (CARLA y=right). If path_y swings sign step-to-step → the MODEL's path
+        # oscillates (input/convention/model issue). If path_y is smooth but
+        # steer swings → controller. deriv = lateral PID derivative term.
+        import os as _os
+        if _os.environ.get("PLANT2_DEBUG_STEER"):
+            _lat = steer_np[:, 1]
+            _hist = self._lat_pid.error_history
+            _deriv = 0.0 if len(_hist) < 2 else (_hist[-1] - _hist[-2])
+            print(f"[steerdbg] v={current_speed:5.1f} steer={steer:+.3f} "
+                  f"deriv={_deriv:+.4f} path_y[min/max/last]="
+                  f"{_lat.min():+.2f}/{_lat.max():+.2f}/{_lat[-1]:+.2f} "
+                  f"npts={steer_np.shape[0]} brake={int(bool(brake))}", flush=True)
+
         return np.array([steer, throttle_brake], dtype=np.float32)
