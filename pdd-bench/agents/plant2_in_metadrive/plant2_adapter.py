@@ -103,6 +103,7 @@ class PlanT2MetaDriveAdapter:
         action_mode: str = "wps_pure_pursuit",
         max_speed_kmh: Optional[int] = 50,
         route_step_m: float = 1.0,
+        lateral_lookahead_scale: float = 2.0,
     ):
         if action_mode not in ("pid", "wps_pure_pursuit"):
             raise ValueError(
@@ -120,6 +121,12 @@ class PlanT2MetaDriveAdapter:
         # pg_direction maps have turns 37m+ ahead → step_m=4.0 gives 80m lookahead so
         # the model can see and react to intersection turns.
         self.route_step_m: float = route_step_m
+        # Lateral PID lookahead multiplier. CARLA tuned the lookahead for 20 Hz;
+        # MetaDrive runs the ego at ~10 Hz (decision_repeat=5), so the native
+        # ~4.5 m lookahead is too short -> lateral weave and missed turns at
+        # junctions. 2.0 compensates (3.24: route tracking settles ~±0.5 m vs
+        # ±5 m and divergence at 1.0). Env PLANT2_LOOKAHEAD_MULT overrides.
+        self._lateral_lookahead_scale: float = float(lateral_lookahead_scale)
         self._model = None
         self._config = None
         # Persistent controllers for action_mode="pid". Created once (lazy) and
@@ -324,12 +331,11 @@ class PlanT2MetaDriveAdapter:
         from lateral_controller import LateralPIDController
         from longitudinal_controller import LongitudinalLinearRegressionController
         cfg = GlobalConfig()
-        # Diagnostic: scale the lateral PID lookahead. CARLA tuned these gains for
-        # 20 Hz control; MetaDrive runs the ego at ~10 Hz (decision_repeat=5), so
-        # the ~4.5 m lookahead at ~12 m/s is too short for stable tracking
-        # (lookahead < speed -> pure-pursuit weave). A larger lookahead lowers the
-        # effective gain. PLANT2_LOOKAHEAD_MULT (default 1.0) scales it.
-        _m = float(_os.environ.get("PLANT2_LOOKAHEAD_MULT", "1.0"))
+        # Scale the lateral PID lookahead to compensate MetaDrive's ~10 Hz control
+        # (CARLA tuned it for 20 Hz). Default = self._lateral_lookahead_scale (2.0);
+        # a larger lookahead lowers the effective gain -> stable tracking + makes
+        # junction turns. Env PLANT2_LOOKAHEAD_MULT overrides for experiments.
+        _m = float(_os.environ.get("PLANT2_LOOKAHEAD_MULT", str(self._lateral_lookahead_scale)))
         if _m != 1.0:
             cfg.lateral_pid_speed_scale *= _m
             cfg.lateral_pid_speed_offset *= _m
