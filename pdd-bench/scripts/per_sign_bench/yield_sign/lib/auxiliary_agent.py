@@ -98,9 +98,7 @@ class GatedAuxiliaryIDMPolicy(AuxiliaryIDMPolicy):
         return super().act(*args, **kwargs)
 
 
-def _lane_edge_id(lane_name: str) -> str:
-    raw_name = lane_name[5:] if lane_name.startswith("lane_") else lane_name
-    return raw_name.rsplit("_", 1)[0] if "_" in raw_name else raw_name
+from .lane_keys import lane_edge_id, lane_num_from_key, make_lane_key, parse_lane_key
 
 
 def pick_destination_outgoing_lane(
@@ -200,7 +198,7 @@ class AuxiliaryAgentsManager(BaseManager):
 
         road_network = self.engine.current_map.road_network
         lane = road_network.get_lane(spawn_lane_index)
-        edge_id = _lane_edge_id(spawn_lane_index)
+        edge_id, lane_num = parse_lane_key(spawn_lane_index)
 
         vehicle_config = {
             "spawn_lane_index": edge_id,
@@ -224,6 +222,8 @@ class AuxiliaryAgentsManager(BaseManager):
             correct_heading = lane.heading_theta_at(spawn_long)
             aux_vehicle.set_position([float(correct_pos[0]), float(correct_pos[1])])
             aux_vehicle.set_heading_theta(correct_heading)
+            if aux_vehicle.navigation is not None:
+                aux_vehicle.reset_navigation(lane)
 
             if destination_lane and aux_vehicle.navigation is not None:
                 aux_vehicle.navigation.set_route(spawn_lane_index, destination_lane)
@@ -426,7 +426,7 @@ def main_lane_keys_for_aux(
         if not ego_edge_id:
             return sorted(main_lane_keys)
         return sorted(
-            k for k in main_lane_keys if _lane_edge_id(k) != ego_edge_id
+            k for k in main_lane_keys if lane_edge_id(k) != ego_edge_id
         )
     if not junction_layout:
         return []
@@ -443,11 +443,16 @@ def main_lane_keys_for_aux(
 def select_occupied_main_lanes(
     all_main_lane_keys: List[str],
     n_lanes_occupied: int,
+    prefer_lane_key: Optional[str] = None,
 ) -> List[str]:
     if not all_main_lane_keys:
         return []
     n = max(1, min(int(n_lanes_occupied), len(all_main_lane_keys)))
-    return all_main_lane_keys[:n]
+    ordered = sorted(all_main_lane_keys)
+    if prefer_lane_key and prefer_lane_key in ordered:
+        ordered.remove(prefer_lane_key)
+        ordered.insert(0, prefer_lane_key)
+    return ordered[:n]
 
 
 def resolve_aux_spawn_lanes(
@@ -457,11 +462,17 @@ def resolve_aux_spawn_lanes(
     aux_lanes_occupied: int = 1,
 ) -> List[str]:
     """Resolve which lane indices should carry auxiliary convoys for this episode."""
+    lanes_n = int(row.get("aux_lanes_occupied", aux_lanes_occupied) or aux_lanes_occupied)
+
+    scenario_lane = row.get("aux_spawn_lane_index")
+    if scenario_lane and lanes_n == 1:
+        return [str(scenario_lane)]
+
     occupied = row.get("aux_occupied_lane_keys")
     if occupied:
-        return list(occupied)
+        return list(occupied)[:lanes_n]
 
-    ego_edge = _lane_edge_id(str(ego_lane_index)) if ego_lane_index else None
+    ego_edge = lane_edge_id(str(ego_lane_index)) if ego_lane_index else None
     if row.get("road_id"):
         ego_edge = str(row["road_id"])
 
@@ -479,7 +490,7 @@ def resolve_aux_spawn_lanes(
     spawn_lane = row.get("aux_spawn_lane_index")
     if not spawn_lane and row.get("aux_road_id") is not None:
         aux_lane_num = int(row.get("aux_spawn_lane_num", 0) or 0)
-        spawn_lane = f"lane_{row['aux_road_id']}_{aux_lane_num}"
+        spawn_lane = make_lane_key(str(row["aux_road_id"]), aux_lane_num)
     if spawn_lane is None and incoming_lanes:
         for lane in incoming_lanes:
             if lane["edge_id"] not in str(ego_lane_index):

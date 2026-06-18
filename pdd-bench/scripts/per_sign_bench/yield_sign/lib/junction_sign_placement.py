@@ -4,15 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from .lane_keys import lane_num_from_key, make_lane_key
+
 # Distance from lane centerline edge to sign anchor (meters beyond pavement).
 SIGN_SHOULDER_OFFSET_M = 1.8
-
-
-def lane_num_from_key(lane_key: str) -> int:
-    try:
-        return int(str(lane_key).rsplit("_", 1)[1])
-    except (ValueError, IndexError):
-        return 0
 
 
 def pick_rightmost_lane_key(lane_keys: List[str]) -> Optional[str]:

@@ -24,6 +24,7 @@ from scripts.per_sign_bench.factorized_space.ego_defaults import (
     sample_ego_params,
 )
 from traffic_signs.priority_signs import MainRoadSign, YieldSign
+from lib.lane_keys import make_lane_key
 from lib.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
     DEFAULT_CONVOY_SIZE,
@@ -804,7 +805,7 @@ def _apply_manifest_ego_spawn_lane(env, row: dict) -> bool:
     if not road_id:
         return False
     lane_num = int(row.get("spawn_lane_num", 0) or 0)
-    target_key = f"lane_{road_id}_{lane_num}"
+    target_key = make_lane_key(str(road_id), lane_num)
     try:
         vehicle = env.agent
         if vehicle is None:
@@ -820,6 +821,10 @@ def _apply_manifest_ego_spawn_lane(env, row: dict) -> bool:
             vehicle.spawn_place = pos.copy()
         except Exception:
             pass
+        if hasattr(env, "_refresh_navigation_after_spawn"):
+            env._refresh_navigation_after_spawn(target_lane)
+        else:
+            vehicle.reset_navigation(target_lane)
         return True
     except Exception as exc:
         print(f"[EgoSpawn] Could not teleport to {target_key}: {exc}")
@@ -1162,7 +1167,11 @@ def run_one_episode(
             aux_convoy_size = int(row.get("aux_convoy_size", aux_convoy_size))
             aux_convoy_gap_m = float(row.get("aux_convoy_gap_m", aux_convoy_gap_m))
             aux_lanes_occupied = int(row.get("aux_lanes_occupied", aux_lanes_occupied))
-            ego_lane_index = getattr(base_env.vehicle.lane, "index", "")
+            ego_lane_index = (
+                make_lane_key(str(row.get("road_id")), int(row.get("spawn_lane_num", 0) or 0))
+                if row.get("road_id")
+                else str(getattr(base_env.vehicle.lane, "index", ""))
+            )
 
             aux_spawn_lanes = resolve_aux_spawn_lanes(
                 row,

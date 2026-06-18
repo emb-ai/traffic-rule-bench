@@ -18,6 +18,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 from lib.junction_priority_layout import JunctionLayoutError, build_junction_priority_layout
+from lib.lane_keys import make_lane_key
 from lib.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
     DEFAULT_CONVOY_SIZE,
@@ -448,8 +449,14 @@ def build_manifest_entry(
                 spawn_scenario.ego_edge_id if spawn_scenario is not None else None
             )
             available_main = main_lane_keys_for_aux(junction_layout_cache, ego_edge)
+            prefer_aux = None
+            if spawn_scenario is not None:
+                prefer_aux = make_lane_key(
+                    spawn_scenario.aux_edge_id,
+                    spawn_scenario.aux_lane_num,
+                )
             entry["aux_occupied_lane_keys"] = select_occupied_main_lanes(
-                available_main, aux_lanes_occupied
+                available_main, aux_lanes_occupied, prefer_lane_key=prefer_aux
             )
     
     entry = {k: v for k, v in entry.items() if v is not None}
@@ -493,7 +500,7 @@ def generate_manifest(
 
         scenarios: List[SpawnScenario] = []
         if scenario_cfg.augment:
-            _, scenarios, aug_stats = augment_layout_for_scene(net_full_path, spawn_lanes)
+            _, scenarios = augment_layout_for_scene(net_full_path, spawn_lanes)
             assert scenarios is not None, f"No scenarios found for {scene_name}"
             if scenario_cfg.max_scenarios_per_scene is not None:
                 scenarios = scenarios[:scenario_cfg.max_scenarios_per_scene]

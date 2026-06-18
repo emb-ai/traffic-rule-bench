@@ -22,7 +22,6 @@ from .junction_priority_layout import (
 )
 from .scene_augmentation import (
     SpawnScenario,
-    AugmentationStats,
     augment_layout_for_scene,
     enumerate_spawn_scenarios,
 )
