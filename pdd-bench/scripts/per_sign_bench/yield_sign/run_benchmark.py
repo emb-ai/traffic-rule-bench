@@ -32,6 +32,15 @@ from lib.auxiliary_agent import (
     resolve_aux_spawn_lanes,
 )
 from lib.manifest_config import DEFAULT_AUX_LANES_OCCUPIED_MAX
+from lib.junction_sign_placement import (
+    SIGN_SHOULDER_OFFSET_M,
+    arms_for_road_class,
+    collect_lanes_for_keys,
+    lateral_offset_beside_lane,
+    resolve_sign_lane_for_edge,
+    sign_longitudinal_offset,
+    sign_placement_long,
+)
 from lib.junction_priority_layout import (
     JunctionLayoutError,
     build_junction_priority_layout,
@@ -885,25 +894,6 @@ def _get_junction_layout(row: dict, scenes_root: Path) -> dict | None:
     return layout.to_dict()
 
 
-def _resolve_layout_lane(env, lane_key: str):
-    """Resolve a SUMO layout lane key (e.g. lane_46494579#5_0) to a MetaDrive lane."""
-    road_network = env.engine.current_map.road_network
-    try:
-        return road_network.get_lane(lane_key)
-    except Exception:
-        lane_info = getattr(road_network, "graph", {}).get(lane_key)
-        if lane_info is not None and hasattr(lane_info, "lane"):
-            return lane_info.lane
-    return None
-
-
-def _sign_longitudinal_offset(lane, distance_before_end: float) -> float:
-    lane_length = lane.length
-    if lane_length < distance_before_end + 5.0:
-        return -lane_length + 5.0
-    return -distance_before_end
-
-
 def _clear_sign_manager(sign_mgr) -> None:
     sign_mgr.signs.clear()
     sign_mgr.rules.clear()
@@ -912,7 +902,7 @@ def _clear_sign_manager(sign_mgr) -> None:
 def _place_yield_sign_on_spawn_lane(
     env, distance_before_end: float = 20.0, show_model: bool = True
 ) -> bool:
-    """Fallback: place a single YieldSign on the ego's current lane."""
+    """Fallback: place a single YieldSign beside the ego approach road."""
     try:
         vehicle = env.agent
         if vehicle is None or vehicle.lane is None:
@@ -924,11 +914,12 @@ def _place_yield_sign_on_spawn_lane(
 
         _clear_sign_manager(sign_mgr)
         lane = vehicle.lane
+        placement_long = sign_placement_long(lane, distance_before_end)
         sign = sign_mgr.add_sign(
             YieldSign,
             lane=lane,
-            longitudinal_offset=_sign_longitudinal_offset(lane, distance_before_end),
-            lateral_offset=lane.width_at(0) / 2 + 0.8,
+            longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
+            lateral_offset=lateral_offset_beside_lane(lane, placement_long),
             show_model=show_model,
             use_random_lane=False,
             auto_detect_main_roads=False,
@@ -948,7 +939,7 @@ def _place_junction_priority_signs(
     distance_before_end: float = 20.0,
     show_model: bool = True,
 ) -> bool:
-    """Place MainRoadSign / YieldSign on every incoming lane per junction layout."""
+    """Place one MainRoadSign / YieldSign per incoming road edge (not per lane line)."""
     layout = _get_junction_layout(row, scenes_root)
     if layout is None:
         print("[JunctionSigns] No layout available, falling back to ego-only yield sign")
@@ -962,21 +953,17 @@ def _place_junction_priority_signs(
 
     _clear_sign_manager(sign_mgr)
 
-    main_lane_keys = list(row.get("main_lane_keys") or [])
-    secondary_lane_keys = list(row.get("secondary_lane_keys") or [])
-    if not main_lane_keys or not secondary_lane_keys:
-        for arm in layout.get("arms", []):
-            keys = list(arm.get("lane_keys", []))
-            if arm.get("road_class") == "main":
-                main_lane_keys.extend(keys)
-            elif arm.get("road_class") == "secondary":
-                secondary_lane_keys.extend(keys)
+    main_arms = arms_for_road_class(layout, "main")
+    secondary_arms = arms_for_road_class(layout, "secondary")
+    if not main_arms or not secondary_arms:
+        print("[JunctionSigns] Missing main/secondary arms, falling back to ego-only yield sign")
+        return _place_yield_sign_on_spawn_lane(
+            env, distance_before_end=distance_before_end, show_model=show_model
+        )
 
     main_lanes = []
-    for lane_key in main_lane_keys:
-        lane = _resolve_layout_lane(env, lane_key)
-        if lane is not None:
-            main_lanes.append(lane)
+    for arm in main_arms:
+        main_lanes.extend(collect_lanes_for_keys(env, arm.get("lane_keys", [])))
 
     if not main_lanes:
         print("[JunctionSigns] Could not resolve main lanes, falling back to ego-only yield sign")
@@ -988,40 +975,42 @@ def _place_junction_priority_signs(
     placed_main = 0
     placed_yield = 0
 
-    for lane_key in main_lane_keys:
-        lane = _resolve_layout_lane(env, lane_key)
+    for arm in main_arms:
+        edge_id = arm.get("edge_id", "")
+        lane = resolve_sign_lane_for_edge(env, edge_id, arm.get("lane_keys", []))
         if lane is None:
-            print(f"[JunctionSigns] Skipping main sign, lane not found: {lane_key}")
+            print(f"[JunctionSigns] Skipping main sign, lane not found for edge: {edge_id}")
             continue
+        placement_long = sign_placement_long(lane, distance_before_end)
         try:
             sign = sign_mgr.add_sign(
                 MainRoadSign,
                 lane=lane,
-                longitudinal_offset=_sign_longitudinal_offset(lane, distance_before_end),
-                lateral_offset=lane.width_at(0) / 2 + 0.8,
+                longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
+                lateral_offset=lateral_offset_beside_lane(lane, placement_long),
                 show_model=show_model,
                 use_random_lane=False,
                 intersection_name=junction_id,
             )
             if sign is not None:
-                # Avoid duplicate top-down icons: priority junctions also draw
-                # SUMO lane-priority glyphs when is_priority_sign is True.
                 sign.is_priority_sign = False
             placed_main += 1
         except Exception as exc:
-            print(f"[JunctionSigns] Failed MainRoadSign on {lane_key}: {exc}")
+            print(f"[JunctionSigns] Failed MainRoadSign on edge {edge_id}: {exc}")
 
-    for lane_key in secondary_lane_keys:
-        lane = _resolve_layout_lane(env, lane_key)
+    for arm in secondary_arms:
+        edge_id = arm.get("edge_id", "")
+        lane = resolve_sign_lane_for_edge(env, edge_id, arm.get("lane_keys", []))
         if lane is None:
-            print(f"[JunctionSigns] Skipping yield sign, lane not found: {lane_key}")
+            print(f"[JunctionSigns] Skipping yield sign, lane not found for edge: {edge_id}")
             continue
+        placement_long = sign_placement_long(lane, distance_before_end)
         try:
             sign = sign_mgr.add_sign(
                 YieldSign,
                 lane=lane,
-                longitudinal_offset=_sign_longitudinal_offset(lane, distance_before_end),
-                lateral_offset=lane.width_at(0) / 2 + 0.8,
+                longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
+                lateral_offset=lateral_offset_beside_lane(lane, placement_long),
                 show_model=show_model,
                 use_random_lane=False,
                 intersection_name=junction_id,
@@ -1032,11 +1021,12 @@ def _place_junction_priority_signs(
                 sign.is_priority_sign = False
             placed_yield += 1
         except Exception as exc:
-            print(f"[JunctionSigns] Failed YieldSign on {lane_key}: {exc}")
+            print(f"[JunctionSigns] Failed YieldSign on edge {edge_id}: {exc}")
 
     print(
         f"[JunctionSigns] Placed {placed_main} MainRoadSign(s) and {placed_yield} YieldSign(s) "
-        f"at junction {junction_id} ({layout.get('shape')})"
+        f"at junction {junction_id} ({layout.get('shape')}), "
+        f"shoulder offset={SIGN_SHOULDER_OFFSET_M}m"
     )
     return placed_main > 0 or placed_yield > 0
 

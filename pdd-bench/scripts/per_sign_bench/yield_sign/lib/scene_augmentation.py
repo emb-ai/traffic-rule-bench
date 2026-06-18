@@ -467,10 +467,7 @@ def augment_layout_for_scene(
     min_lane_length: float = 20.0,
 ) -> Tuple[Optional[JunctionPriorityLayout], List[SpawnScenario], Optional[AugmentationStats]]:
     """Build layout and enumerate augmented scenarios for one scene."""
-    try:
-        layout = build_junction_priority_layout(net_path)
-    except Exception:
-        return None, [], None
+    layout = build_junction_priority_layout(net_path)
 
     spawn_by_edge = build_spawn_lanes_by_edge(spawn_lanes)
     lengths = lane_lengths_from_spawn_lanes(spawn_lanes)

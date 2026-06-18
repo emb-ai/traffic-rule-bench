@@ -16,7 +16,7 @@ hydra:
 # Path Configuration
 # =============================================================================
 paths:
-  scenes_dir: null                          # null = script_dir/scenes
+  scenes_dir: scenes
   output_base: benchmark_output/2_4
   experiment_name: ${now:%Y-%m-%d_%H-%M-%S}
 

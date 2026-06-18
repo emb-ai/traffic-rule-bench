@@ -32,11 +32,7 @@ from lib.manifest_config import (
 from lib.scene_augmentation import SpawnScenario, augment_layout_for_scene
 
 
-# -----------------------------------------------------------------------------
-# Constants
-# -----------------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).parent.resolve()
-DEFAULT_SCENES_DIR = SCRIPT_DIR / "scenes"
 RUN_BENCH_SCRIPT = SCRIPT_DIR / "run_benchmark.py"
 
 PDD_CODE = "2.4"
@@ -250,23 +246,20 @@ def _stable_seed(
 # -----------------------------------------------------------------------------
 # Auxiliary agent dimension expansion
 # -----------------------------------------------------------------------------
-def convoy_sizes_up_to(max_convoy_size: int, auxiliary_enabled: bool) -> List[int]:
-    """Return convoy sizes to materialize: {1, 2, ..., max} when aux is enabled."""
+def sizes_up_to(
+    max_value: int,
+    *,
+    auxiliary_enabled: bool = True,
+    available: Optional[int] = None,
+) -> List[int]:
+    """Return values to materialize: {1, 2, ..., cap} for aux manifest expansion."""
     if not auxiliary_enabled:
         return [1]
-    max_n = max(1, int(max_convoy_size))
-    return list(range(1, max_n + 1))
-
-
-def lanes_occupied_sizes_up_to(
-    max_lanes_occupied: int,
-    n_available_main_lanes: int,
-    auxiliary_enabled: bool,
-) -> List[int]:
-    """Return lane-occupancy counts to materialize: {1, 2, ..., min(max, available)}."""
-    if not auxiliary_enabled or n_available_main_lanes <= 0:
+    if available is not None and available <= 0:
         return [1]
-    cap = min(max(1, int(max_lanes_occupied)), int(n_available_main_lanes))
+    cap = max(1, int(max_value))
+    if available is not None:
+        cap = min(cap, int(available))
     return list(range(1, cap + 1))
 
 
@@ -476,8 +469,6 @@ def generate_manifest(
 ) -> List[Dict]:
     """Generate real_manifest.jsonl from discovered scenes."""
     scenes = discover_scenes(scenes_dir)
-    print(f"\n[INFO] Found {len(scenes)} valid scene(s):")
-
     entries = []
     
     for scene_dir in scenes:
@@ -486,125 +477,69 @@ def generate_manifest(
         net_file = meta.get("net_file", "map.net.xml")
         net_full_path = scene_dir / net_file
         
-        print(f"\n[SCENE] {scene_name}")
-        print(f"  Location: ({meta.get('latitude')}, {meta.get('longitude')})")
-        
         spawn_lanes = parse_sumo_net_for_spawn_lanes(net_full_path)
         print(f"  Found {len(spawn_lanes)} intersection-approaching lane(s)")
 
         junction_layout = build_junction_layout_for_scene(net_full_path)
-        if junction_layout is not None:
-            print(
-                f"  Junction layout: {junction_layout['shape']} @ {junction_layout['junction_id']} "
-                f"(main={len(junction_layout.get('main_edge_ids', []))}, "
-                f"secondary={len(junction_layout.get('secondary_edge_ids', []))})"
-            )
-            secondary_spawn = filter_spawn_lanes_to_secondary(spawn_lanes, junction_layout)
-            secondary_edges = sorted({lane.edge_id for lane in secondary_spawn})
-            print(
-                f"  Secondary spawn pool: {len(secondary_spawn)} lane(s) "
-                f"on edge(s) {secondary_edges}"
-            )
+        assert junction_layout is not None, f"No junction layout found for {scene_name}"
+        print(
+            f"  Junction layout: {junction_layout['shape']} @ {junction_layout['junction_id']} "
+            f"(main={len(junction_layout.get('main_edge_ids', []))}, "
+            f"secondary={len(junction_layout.get('secondary_edge_ids', []))})"
+        )
         
-        if spawn_lanes:
-            unique_edges = set(lane.edge_id for lane in spawn_lanes)
-            print(f"  Available edges: {list(unique_edges)[:5]}{'...' if len(unique_edges) > 5 else ''}")
-
-        available_main_lane_count = 0
-        if junction_layout is not None:
-            available_main_lane_count = len(main_lane_keys_for_aux(junction_layout))
-            print(f"  Main-road lane slots for aux: {available_main_lane_count}")
+        available_main_lane_count = len(main_lane_keys_for_aux(junction_layout))
+        print(f"  Main-road lane slots for aux: {available_main_lane_count}")
 
         scenarios: List[SpawnScenario] = []
-        if scenario_cfg.augment and junction_layout is not None:
+        if scenario_cfg.augment:
             _, scenarios, aug_stats = augment_layout_for_scene(net_full_path, spawn_lanes)
+            assert scenarios is not None, f"No scenarios found for {scene_name}"
             if scenario_cfg.max_scenarios_per_scene is not None:
                 scenarios = scenarios[:scenario_cfg.max_scenarios_per_scene]
-            if aug_stats is not None:
-                print(aug_stats.format_report(scene_name))
-            print(f"  Augmented scenarios (conflict-valid): {len(scenarios)}")
-            if not scenarios:
-                print(f"  [augment] No valid scenarios for {scene_name}; skipping scene")
-                continue
-
-        if scenarios:
-            convoy_sizes = convoy_sizes_up_to(aux_cfg.convoy_size, aux_cfg.enabled)
-            lanes_counts = lanes_occupied_sizes_up_to(
-                aux_cfg.lanes_occupied, available_main_lane_count, aux_cfg.enabled
+        
+        convoy_sizes = sizes_up_to(aux_cfg.convoy_size, auxiliary_enabled=aux_cfg.enabled)
+        lanes_counts = sizes_up_to(
+            aux_cfg.lanes_occupied,
+            auxiliary_enabled=aux_cfg.enabled,
+            available=available_main_lane_count,
+        )
+        variant = 0
+        total_planned = len(scenarios) * len(lanes_counts) * len(convoy_sizes)
+        
+        for scenario in scenarios:
+            ego_edge = scenario.ego_edge_id
+            scene_main_lanes = main_lane_keys_for_aux(junction_layout, ego_edge)
+            scene_lane_counts = sizes_up_to(
+                aux_cfg.lanes_occupied,
+                auxiliary_enabled=aux_cfg.enabled,
+                available=len(scene_main_lanes),
             )
-            variant = 0
-            total_planned = len(scenarios) * len(lanes_counts) * len(convoy_sizes)
-            
-            for scenario in scenarios:
-                ego_edge = scenario.ego_edge_id
-                scene_main_lanes = main_lane_keys_for_aux(junction_layout, ego_edge)
-                scene_lane_counts = lanes_occupied_sizes_up_to(
-                    aux_cfg.lanes_occupied, len(scene_main_lanes), aux_cfg.enabled
-                )
-                for lanes_n in scene_lane_counts:
-                    for convoy_n in convoy_sizes:
-                        entry = build_manifest_entry(
-                            scene_dir=scene_dir,
-                            scenes_root=scenes_dir,
-                            meta=meta,
-                            variant=variant,
-                            sim_cfg=sim_cfg,
-                            aux_cfg=aux_cfg,
-                            aux_convoy_size=convoy_n,
-                            aux_lanes_occupied=lanes_n,
-                            spawn_lanes_cache=spawn_lanes,
-                            junction_layout_cache=junction_layout,
-                            spawn_scenario=scenario,
+            for lanes_n in scene_lane_counts:
+                for convoy_n in convoy_sizes:
+                    entry = build_manifest_entry(
+                        scene_dir=scene_dir,
+                        scenes_root=scenes_dir,
+                        meta=meta,
+                        variant=variant,
+                        sim_cfg=sim_cfg,
+                        aux_cfg=aux_cfg,
+                        aux_convoy_size=convoy_n,
+                        aux_lanes_occupied=lanes_n,
+                        spawn_lanes_cache=spawn_lanes,
+                        junction_layout_cache=junction_layout,
+                        spawn_scenario=scenario,
+                    )
+                    entries.append(entry)
+                    if variant < 3 or variant == total_planned - 1:
+                        print(
+                            f"  [{variant + 1}] {entry.get('augmentation_id', scenario.scenario_id)} "
+                            f"lanes={lanes_n} convoy={convoy_n} seed={entry['seed']}"
                         )
-                        entries.append(entry)
-                        if variant < 3 or variant == total_planned - 1:
-                            print(
-                                f"  [{variant + 1}] {entry.get('augmentation_id', scenario.scenario_id)} "
-                                f"lanes={lanes_n} convoy={convoy_n} seed={entry['seed']}"
-                            )
-                        elif variant == 3:
-                            print(f"  ... ({total_planned - 4} more)")
-                        variant += 1
-        else:
-            convoy_sizes = convoy_sizes_up_to(aux_cfg.convoy_size, aux_cfg.enabled)
-            lanes_counts = lanes_occupied_sizes_up_to(
-                aux_cfg.lanes_occupied, available_main_lane_count, aux_cfg.enabled
-            )
-            variant = 0
-            for _ in range(scenario_cfg.n_variants):
-                for lanes_n in lanes_counts:
-                    for convoy_n in convoy_sizes:
-                        entry = build_manifest_entry(
-                            scene_dir=scene_dir,
-                            scenes_root=scenes_dir,
-                            meta=meta,
-                            variant=variant,
-                            sim_cfg=sim_cfg,
-                            aux_cfg=aux_cfg,
-                            aux_convoy_size=convoy_n,
-                            aux_lanes_occupied=lanes_n,
-                            spawn_lanes_cache=spawn_lanes,
-                            junction_layout_cache=junction_layout,
-                        )
-                        entries.append(entry)
-
-                        road_id = entry.get("road_id", "N/A")
-                        lane_num = entry.get("spawn_lane_num", "N/A")
-                        lane_len = entry.get("spawn_lane_length", "N/A")
-                        if scenario_cfg.n_variants > 1 or len(convoy_sizes) > 1 or len(lanes_counts) > 1:
-                            print(
-                                f"  Variant {variant}: seed={entry['seed']}, "
-                                f"road={road_id}, lane={lane_num}, "
-                                f"lanes={lanes_n}, convoy={convoy_n}"
-                            )
-                        else:
-                            print(
-                                f"  Spawn lane: road_id={road_id}, lane_num={lane_num}, "
-                                f"length={lane_len}m, lanes={lanes_n}, convoy={convoy_n}"
-                            )
-                        variant += 1
+                    elif variant == 3:
+                        print(f"  ... ({total_planned - 4} more)")
+                    variant += 1
     
-    # Write manifest files
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "real_manifest.jsonl"
     
@@ -644,34 +579,7 @@ def generate_manifest(
     with open(manifest_meta_path, "w", encoding="utf-8") as f:
         json.dump(manifest_meta, f, indent=2, ensure_ascii=False)
     
-    _print_summary(scenes, entries, sim_cfg, aux_cfg)
-    
     return entries
-
-
-def _print_summary(
-    scenes: List[Path],
-    entries: List[Dict],
-    sim_cfg: SimulationConfig,
-    aux_cfg: AuxiliaryConfig,
-) -> None:
-    """Print generation summary."""
-    print("\n" + "=" * 60)
-    print("Generation Complete")
-    print("=" * 60)
-    print(f"\nResults:")
-    print(f"  - Scenes processed: {len(scenes)}")
-    print(f"  - Manifest entries: {len(entries)}")
-    print(f"  - Sign distance before lane end: {sim_cfg.sign_distance_before_end}m")
-    print(f"  - Ego spawn distance before lane end: {sim_cfg.spawn_distance_before_end}m")
-    if aux_cfg.enabled:
-        convoy_sizes = convoy_sizes_up_to(aux_cfg.convoy_size, aux_cfg.enabled)
-        print(f"\nAuxiliary Agent: ENABLED (IDM convoy, near intersection)")
-        print(f"  - Distance from intersection: {aux_cfg.distance_from_intersection}m")
-        print(f"  - Convoy sizes generated: {convoy_sizes} (up to {aux_cfg.convoy_size})")
-        print(f"  - Lanes occupied generated: 1..{aux_cfg.lanes_occupied} (per scene main lanes)")
-        print(f"  - Convoy gap: {aux_cfg.convoy_gap_m}m")
-
 
 # -----------------------------------------------------------------------------
 # GIF rendering
@@ -781,28 +689,19 @@ def render_gifs_from_manifest(
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(cfg: DictConfig) -> None:
     """Main entry point with Hydra configuration."""
-    scenes_dir = Path(cfg.paths.scenes_dir) if cfg.paths.scenes_dir else DEFAULT_SCENES_DIR
+    scenes_dir = Path(cfg.paths.scenes_dir)
 
-    # Hydra run dir is configured in config.yaml (benchmark_output/2_4/<experiment_name>).
     experiment_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     experiment_dir.mkdir(parents=True, exist_ok=True)
-    print(f"\n[INFO] Experiment directory: {experiment_dir}")
-    print(f"[INFO] Hydra metadata: {experiment_dir / '.hydra'}")
-
-    print("\n[CONFIG]")
-    print(OmegaConf.to_yaml(cfg))
-
     config_path = experiment_dir / "config.yaml"
     with open(config_path, "w", encoding="utf-8") as f:
         f.write(OmegaConf.to_yaml(cfg))
     
-    # Build config objects
     scenario_cfg = ScenarioConfig(
         n_variants=cfg.scenario.n_variants,
         augment=cfg.scenario.augment,
         max_scenarios_per_scene=cfg.scenario.max_scenarios_per_scene,
     )
-    
     sim_cfg = SimulationConfig(
         spawn_velocity_ms=cfg.simulation.spawn_velocity_ms,
         traffic_density=cfg.simulation.traffic_density,
@@ -810,7 +709,6 @@ def main(cfg: DictConfig) -> None:
         sign_distance_before_end=cfg.simulation.sign_distance_before_end,
         spawn_distance_before_end=cfg.simulation.spawn_distance_before_end,
     )
-    
     aux_cfg = AuxiliaryConfig(
         enabled=cfg.auxiliary.enabled,
         distance_from_intersection=cfg.auxiliary.distance_from_intersection,
@@ -818,7 +716,6 @@ def main(cfg: DictConfig) -> None:
         convoy_gap_m=cfg.auxiliary.convoy_gap_m,
         lanes_occupied=cfg.auxiliary.lanes_occupied,
     )
-    
     gif_cfg = GifConfig(
         enabled=cfg.gif.enabled,
         policy=cfg.gif.policy,
@@ -829,7 +726,6 @@ def main(cfg: DictConfig) -> None:
         run_name=cfg.gif.run_name,
     )
     
-    # Generate manifest
     entries = generate_manifest(
         scenes_dir=scenes_dir,
         output_dir=experiment_dir,
@@ -838,19 +734,9 @@ def main(cfg: DictConfig) -> None:
         aux_cfg=aux_cfg,
     )
     
-    # Render GIFs if requested
     if gif_cfg.enabled and entries:
         manifest_path = experiment_dir / "real_manifest.jsonl"
-        
-        print(f"\n[INFO] Rendering GIFs into experiment: {experiment_dir}")
-        if aux_cfg.enabled:
-            sizes = convoy_sizes_up_to(aux_cfg.convoy_size, True)
-            print(f"[INFO] Auxiliary agent: ENABLED (IDM convoy, near intersection)")
-            print(f"  - Distance from intersection: {aux_cfg.distance_from_intersection}m")
-            print(f"  - Convoy sizes: {sizes} (up to {aux_cfg.convoy_size})")
-            print(f"  - Lanes occupied: 1..{aux_cfg.lanes_occupied} (per scene)")
-            print(f"  - Convoy gap: {aux_cfg.convoy_gap_m}m")
-        
+
         gif_rendered, gif_failed = render_gifs_from_manifest(
             manifest_path=manifest_path,
             experiment_dir=experiment_dir,
@@ -869,8 +755,6 @@ def main(cfg: DictConfig) -> None:
     print(f"\nOutput files:")
     print(f"  - Manifest: {experiment_dir / 'real_manifest.jsonl'}")
     print(f"  - Config: {config_path}")
-    print(f"  - Hydra: {experiment_dir / '.hydra'}")
-    print(f"  - Summary: {experiment_dir / 'real_manifest_summary.json'}")
 
 
 if __name__ == "__main__":
