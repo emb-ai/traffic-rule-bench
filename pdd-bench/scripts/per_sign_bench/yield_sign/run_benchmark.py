@@ -15,8 +15,9 @@ from stable_baselines3 import PPO
 from envs.sumo_env import TrafficSignSumoEnv
 from envs.sumo_traffic_manager import SumoTrafficManager
 from agents.policies.comprehensive_rule_expert import ComprehensiveRuleExpertPolicy
+from agents.policies.modified_idm_sign_compliant import ModifiedIDMSignCompliantPolicy
 from agents.policies.rule_compliant_expert import RuleCompliantExpertPolicy
-from metadrive.policy.idm_policy import IDMPolicy, ModifiedIDMPolicy
+from metadrive.policy.idm_policy import IDMPolicy
 from metadrive.policy.expert_policy import ExpertPolicy
 from scripts.per_sign_bench.factorized_space.ego_defaults import (
     apply_ego_defaults,
@@ -1051,7 +1052,7 @@ def run_one_episode(
     if policy_type == "idm":
         policy_cls = IDMPolicy
     elif policy_type == "modified_idm":
-        policy_cls = ModifiedIDMPolicy
+        policy_cls = ModifiedIDMSignCompliantPolicy
     elif policy_type == "comprehensive_rule_expert":
         policy_cls = ComprehensiveRuleExpertPolicy
     elif policy_type == "rule_compliant":

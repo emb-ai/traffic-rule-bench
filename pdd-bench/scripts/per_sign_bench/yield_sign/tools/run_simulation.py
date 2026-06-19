@@ -177,8 +177,8 @@ def make_policy(policy_type: str, vehicle, seed: int, models: dict | None = None
         return IDMPolicy(vehicle, seed)
     
     if policy_type == "modified_idm":
-        from metadrive.policy.idm_policy import ModifiedIDMPolicy
-        return ModifiedIDMPolicy(vehicle, seed)
+        from agents.policies.modified_idm_sign_compliant import ModifiedIDMSignCompliantPolicy
+        return ModifiedIDMSignCompliantPolicy(vehicle, seed)
     
     if policy_type == "comprehensive_rule_expert":
         from agents.policies.comprehensive_rule_expert import ComprehensiveRuleExpertPolicy

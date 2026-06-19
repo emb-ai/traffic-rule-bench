@@ -52,7 +52,7 @@ auxiliary:
 # GIF Visualization
 # =============================================================================
 gif:
-  enabled: false                  # Generate visualization GIFs
+  enabled: true                   # Generate visualization GIFs
   policy: idm                     # Policy for rendering
   max_scenes: null                # Limit GIFs (null = all)
   dry_run: false                  # Print commands without executing
