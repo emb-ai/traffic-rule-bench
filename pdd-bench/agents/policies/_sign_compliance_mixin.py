@@ -984,9 +984,59 @@ class SignComplianceMixin:
         if not checkpoints or len(checkpoints) < 2:
             return
         sign_idx = getattr(sign.lane, "index", None)
-        if sign_idx is None or len(sign_idx) < 2:
+        if sign_idx is None:
             return
-        # Find the next target road after the sign's road segment
+
+        # --- Edge-based (SUMO) path: string lane indices ---
+        if isinstance(sign_idx, str):
+            # Skip peer lanes on the same road edge; find first checkpoint
+            # on a different edge (the actual turn target).
+            next_target = None
+            sign_edge = sign_idx.rsplit("_", 1)[0] if ":" not in sign_idx else None
+            for i, cp in enumerate(checkpoints):
+                if cp == sign_idx:
+                    for j in range(i + 1, len(checkpoints)):
+                        cj = checkpoints[j]
+                        if isinstance(cj, str) and ":" not in cj:
+                            cj_edge = cj.rsplit("_", 1)[0]
+                            if cj_edge != sign_edge:
+                                next_target = cj
+                                break
+                    break
+            if next_target is None:
+                return
+            if next_target in allowed:
+                return
+            veh_long = self._veh_long(sign.lane)
+            dist_to_end = sign.lane.length - veh_long
+            if dist_to_end > LANE_CHANGE_LOOKAHEAD:
+                return
+            rn = self.engine.current_map.road_network
+            peer_lanes = rn.get_peer_lanes_from_index(sign_idx)
+            ref = self._get_ref_lanes()
+            for peer_lane in peer_lanes:
+                peer_idx = getattr(peer_lane, "index", None)
+                if peer_idx is None or peer_idx == sign_idx:
+                    continue
+                if peer_lane not in ref:
+                    continue
+                peer_info = rn.graph.get(peer_idx)
+                if peer_info is None:
+                    continue
+                for turn in (getattr(peer_info, "turns", None) or []):
+                    if turn.get("to_lane") == next_target:
+                        if self._lc_target_lane is None:
+                            self._lc_target_lane = peer_lane
+                            self._get_heading_pid().reset()
+                            self._get_lateral_pid().reset()
+                            self._cap_speed(max(SLOW_APPROACH_MIN_KMH,
+                                                self.control_object.speed_km_h * SLOW_APPROACH_FACTOR))
+                        return
+            return
+
+        # --- Tuple-based (PG) path ---
+        if len(sign_idx) < 2:
+            return
         target_road = None
         for i in range(len(checkpoints) - 1):
             if sign_idx[0] == checkpoints[i] and sign_idx[1] == checkpoints[i + 1]:
@@ -995,15 +1045,12 @@ class SignComplianceMixin:
                 break
         if target_road is None:
             return
-        # Check if current lane's allowed set covers the target road
         allowed_roads = set()
         for idx in allowed:
             if idx is not None and len(idx) >= 2:
                 allowed_roads.add((idx[0], idx[1]))
         if target_road in allowed_roads:
-            return  # current lane is fine
-        # Need to change lane — find a lane on this road whose direction sign
-        # allows the target road
+            return
         cur = self._cur_lane_num()
         if cur is None:
             return
@@ -1013,8 +1060,7 @@ class SignComplianceMixin:
         veh_long = self._veh_long(sign.lane)
         dist_to_end = sign.lane.length - veh_long
         if dist_to_end > LANE_CHANGE_LOOKAHEAD:
-            return  # too far, don't act yet
-        # Scan other lanes' direction signs for one that covers target_road
+            return
         all_signs = self._get_signs()
         for other_sign in all_signs:
             if other_sign is sign:

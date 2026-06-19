@@ -808,6 +808,99 @@ class TrafficSignSumoEnv(BaseEnv):
 
         return best_lane, candidate_lane_keys
 
+    def _setup_direction_sign_trap(self, road_network, current_lane):
+        """For sign 5.15.2, find a lane_A (fewer turn options) and a parallel
+        lane_B (more turn options). Returns (trap_lane_id, trap_lane_obj,
+        violation_target_id, adjacent_lane_id) or (None, None, None, None)."""
+        def _dirs_and_targets(lane_key):
+            info = road_network.graph.get(lane_key)
+            if info is None:
+                return set(), set()
+            dirs = set()
+            targets = set()
+            for t in (getattr(info, "turns", None) or []):
+                d = t.get("direction")
+                to = t.get("to_lane")
+                if d:
+                    dirs.add(d)
+                if to:
+                    targets.add(to)
+            return dirs, targets
+
+        def _peers_by_edge(candidate_key):
+            edge = candidate_key.rsplit("_", 1)[0]
+            return [
+                k for k in road_network.graph
+                if k != candidate_key and k.startswith(edge + "_") and ":" not in k
+            ]
+
+        # Build edge groups first
+        edge_groups = {}
+        for key in road_network.graph:
+            if not isinstance(key, str) or not key.startswith("lane_") or ":" in key:
+                continue
+            e = key.rsplit("_", 1)[0]
+            edge_groups.setdefault(e, []).append(key)
+
+        for edge, lane_keys in edge_groups.items():
+            if len(lane_keys) < 2:
+                continue
+            lane_data = {}
+            for lk in lane_keys:
+                dirs, targets = _dirs_and_targets(lk)
+                if dirs and targets:
+                    lane_data[lk] = (dirs, targets)
+            keys = list(lane_data.keys())
+            for i in range(len(keys)):
+                for j in range(i + 1, len(keys)):
+                    kA, kDirsA, kTargetsA = keys[i], lane_data[keys[i]][0], lane_data[keys[i]][1]
+                    kB, kDirsB, kTargetsB = keys[j], lane_data[keys[j]][0], lane_data[keys[j]][1]
+                    extra_B = kDirsB - kDirsA
+                    extra_A = kDirsA - kDirsB
+                    if len(extra_B) > 0:
+                        # kB (peer) has extra direction(s) — kA is trap
+                        violation_target = self._find_extra_target(kB, extra_B, road_network)
+                        if violation_target is not None:
+                            return kA, road_network.graph[kA].lane, violation_target, kB
+                    if len(extra_A) > 0:
+                        # kA (peer) has extra direction(s) — kB is trap
+                        violation_target = self._find_extra_target(kA, extra_A, road_network)
+                        if violation_target is not None:
+                            return kB, road_network.graph[kB].lane, violation_target, kA
+
+        return None, None, None, None
+
+    def _find_extra_target(self, lane_key, extra_dirs, road_network):
+        """Find a to_lane from lane_key's turns that matches any of
+        extra_dirs and is NOT reachable from peers of lane_key."""
+        info = road_network.graph.get(lane_key)
+        if info is None:
+            return None
+        edge = lane_key.rsplit("_", 1)[0]
+        peer_keys = [
+            k for k in road_network.graph
+            if k != lane_key and k.startswith(edge + "_") and ":" not in k
+        ]
+        for t in (getattr(info, "turns", None) or []):
+            d = t.get("direction")
+            to = t.get("to_lane")
+            if d in extra_dirs and to:
+                # Verify this target is NOT reachable from any peer
+                is_unique = True
+                for pk in peer_keys:
+                    pi = road_network.graph.get(pk)
+                    if pi is None:
+                        continue
+                    for pt in (getattr(pi, "turns", None) or []):
+                        if pt.get("to_lane") == to:
+                            is_unique = False
+                            break
+                    if not is_unique:
+                        break
+                if is_unique:
+                    return to
+        return None
+
     @staticmethod
     def _counterpart_dir_for_no_turn_anchor(sign_type: str) -> Optional[str]:
         mapping = {
@@ -1592,6 +1685,22 @@ class TrafficSignSumoEnv(BaseEnv):
         # if self.sign_type == "2.2" and self._priority_candidate_lane_keys:
         #     sign_kwargs["applicable_lane_indices"] = list(self._priority_candidate_lane_keys)
 
+        # For DirectionSign (5.15.2), set up trap lane with parallel alternatives
+        trap_lane_id = trap_violation_target = trap_adjacent_lane_id = None
+        if self.sign_type == "5.15.2":
+            trap_lane_id, trap_candidate, trap_violation_target, trap_adjacent_lane_id = self._setup_direction_sign_trap(
+                road_network, sign_lane
+            )
+            if trap_candidate is not None:
+                sign_lane = trap_candidate
+                lane_source = "direction_sign_trap"
+            if trap_lane_id is not None:
+                sign_kwargs["trap_lane_id"] = trap_lane_id
+            if trap_violation_target is not None:
+                sign_kwargs["trap_violation_target"] = trap_violation_target
+            if trap_adjacent_lane_id is not None:
+                sign_kwargs["trap_adjacent_lane_id"] = trap_adjacent_lane_id
+
         # Signs that manage their own placement offsets internally
         from traffic_signs.restricted_lane_sign import (
             RestrictedLaneSign as _RLS,
@@ -1675,14 +1784,47 @@ class TrafficSignSumoEnv(BaseEnv):
                     spawn_lane = self._pick_spawn_lane_from_sign_attachment(road_network, sign_lane, sign_kwargs)
             else:
                 spawn_lane = self._pick_spawn_lane_from_sign_attachment(road_network, sign_lane, sign_kwargs)
-            start_entry_lanes = [
+            approach_lanes = []
+            if trap_lane_id is not None:
+                # Walk backward through the road graph from trap_lane_id until
+                # we have accumulated at least 80 m of total lane length, so
+                # the ego has room to change lanes before the junction.
+                seen = set()
+                current_idx = trap_lane_id
+                total_len = 0.0
+                spawn_lane = road_network.get_lane(trap_lane_id)
+                spawn_long = 0.0
+                approach_lanes = [trap_lane_id]
+                for _ in range(10):
+                    lane_obj = road_network.get_lane(current_idx)
+                    total_len += float(getattr(lane_obj, "length", 0.0))
+                    if total_len >= 80.0:
+                        spawn_lane = lane_obj
+                        spawn_long = total_len - 80.0
+                        break
+                    spawn_lane = lane_obj
+                    spawn_long = 0.0
+                    seen.add(current_idx)
+                    found = None
+                    for k, v in road_network.graph.items():
+                        if k in seen:
+                            continue
+                        if current_idx in set(getattr(v, "exit_lanes", None) or []):
+                            found = k
+                            break
+                    if found is None:
+                        break
+                    current_idx = found
+                    approach_lanes.append(found)
+            else:
+                start_entry_lanes = [
                     lane_id
                     for lane_id in spawn_lane.entry_lanes
                     if ":" not in lane_id
                 ]
-            if len(start_entry_lanes) > 0:
-                spawn_lane = road_network.get_lane(start_entry_lanes[0])
-            spawn_long = min(2.0, max(0.2, spawn_lane.length * 0.05))
+                if len(start_entry_lanes) > 0:
+                    spawn_lane = road_network.get_lane(start_entry_lanes[0])
+                spawn_long = min(2.0, max(0.2, spawn_lane.length * 0.05))
             ego_spawn_pos = spawn_lane.position(spawn_long, 0.0)
             
             traffic_mgr = self.engine.traffic_manager
@@ -1696,8 +1838,63 @@ class TrafficSignSumoEnv(BaseEnv):
                     traffic_mgr.clear_objects([v.id])
                     traffic_mgr._traffic_vehicles.remove(v)
             # =====================================================
-            self._spawn_ego_on_lane(spawn_lane)
+            if trap_lane_id is not None:
+                # For trap scenarios, manually set spawn position from the
+                # walkback spawn_lane so the ego has room to change lanes.
+                try:
+                    heading = spawn_lane.heading_theta_at(spawn_long)
+                    self.vehicle.set_position(ego_spawn_pos)
+                    self.vehicle.set_heading_theta(heading)
+                except Exception:
+                    self._spawn_ego_on_lane(spawn_lane)
+            else:
+                self._spawn_ego_on_lane(spawn_lane)
             self._refresh_navigation_after_spawn(spawn_lane)
+
+            # Force navigation checkpoints through the trap lane to the
+            # violation target (which is NOT in the trap lane's allowed set),
+            # then extend the route from the violation target via BFS.
+            if trap_lane_id is not None and trap_violation_target is not None:
+                nav = getattr(self.vehicle, "navigation", None)
+                if nav is not None:
+                    # Detect if the policy is a sign-compliant expert (has
+                    # _handle_direction_compliance) or a vanilla IDM / neural
+                    # policy.  Expert route includes the adjacent lane as an
+                    # explicit checkpoint so the agent can switch to it and
+                    # still follow the navigation.  Non-expert route skips it
+                    # and goes straight to violation_target (route-based
+                    # violation check triggers).
+                    is_expert = False
+                    ap = self.config.get("agent_policy")
+                    if ap is not None:
+                        name = getattr(ap, "__name__", "")
+                        if "Expert" in name or "SignCompliant" in name or "Rule" in name:
+                            is_expert = True
+                    approach_prefix = list(reversed(approach_lanes))
+                    if trap_adjacent_lane_id is not None and is_expert:
+                        tail = road_network.find_path(trap_adjacent_lane_id, None, max_len=10)
+                        if tail:
+                            tail = tail[1:]
+                        else:
+                            tail = []
+                        forced_route = approach_prefix + [trap_adjacent_lane_id] + tail
+                    else:
+                        tail = road_network.find_path(trap_violation_target, None, max_len=10)
+                        if tail:
+                            tail = tail[1:]
+                        else:
+                            tail = []
+                        forced_route = approach_prefix + [trap_violation_target] + tail
+                    nav.checkpoints = forced_route
+                    nav.final_lane = road_network.get_lane(forced_route[-1])
+                    nav._target_checkpoints_index = [0, 1]
+                    if nav._dest_node_path is not None:
+                        ref_lane = nav.final_lane
+                        later_middle = (float(nav.get_current_lane_num()) / 2 - 0.5) * nav.get_current_lane_width()
+                        check_point = ref_lane.position(ref_lane.length, later_middle)
+                        from metadrive.utils.math import panda_vector
+                        nav._dest_node_path.setPos(panda_vector(check_point[0], check_point[1], nav.MARK_HEIGHT))
+                    nav.update_localization(self.vehicle)
 
         graph = self.engine.map_manager.graph
         for lane_name, lane_node in graph.lanes.items():
