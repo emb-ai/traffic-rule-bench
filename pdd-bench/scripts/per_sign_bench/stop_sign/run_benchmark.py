@@ -24,7 +24,7 @@ from scripts.per_sign_bench.factorized_space.ego_defaults import (
     apply_ego_sampled,
     sample_ego_params,
 )
-from traffic_signs.priority_signs import MainRoadSign, YieldSign
+from traffic_signs.priority_signs import MainRoadSign, StopSign
 from lib.lane_keys import make_lane_key
 from lib.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
@@ -877,10 +877,10 @@ def _clear_sign_manager(sign_mgr) -> None:
     sign_mgr.rules.clear()
 
 
-def _place_yield_sign_on_spawn_lane(
+def _place_stop_sign_on_spawn_lane(
     env, distance_before_end: float = 20.0, show_model: bool = True
 ) -> bool:
-    """Fallback: place a single YieldSign beside the ego approach road."""
+    """Fallback: place a single StopSign beside the ego approach road."""
     try:
         vehicle = env.agent
         if vehicle is None or vehicle.lane is None:
@@ -894,7 +894,7 @@ def _place_yield_sign_on_spawn_lane(
         lane = vehicle.lane
         placement_long = sign_placement_long(lane, distance_before_end)
         sign = sign_mgr.add_sign(
-            YieldSign,
+            StopSign,
             lane=lane,
             longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
             lateral_offset=lateral_offset_beside_lane(lane, placement_long),
@@ -906,7 +906,7 @@ def _place_yield_sign_on_spawn_lane(
             sign.is_priority_sign = False
         return sign is not None
     except Exception as e:
-        print(f"[YieldSign] Failed to place sign: {e}")
+        print(f"[StopSign] Failed to place sign: {e}")
         return False
 
 
@@ -917,11 +917,11 @@ def _place_junction_priority_signs(
     distance_before_end: float = 20.0,
     show_model: bool = True,
 ) -> bool:
-    """Place one MainRoadSign / YieldSign per incoming road edge (not per lane line)."""
+    """Place one MainRoadSign / StopSign per incoming road edge (not per lane line)."""
     layout = _get_junction_layout(row, scenes_root)
     if layout is None:
-        print("[JunctionSigns] No layout available, falling back to ego-only yield sign")
-        return _place_yield_sign_on_spawn_lane(
+        print("[JunctionSigns] No layout available, falling back to ego-only stop sign")
+        return _place_stop_sign_on_spawn_lane(
             env, distance_before_end=distance_before_end, show_model=show_model
         )
 
@@ -934,8 +934,8 @@ def _place_junction_priority_signs(
     main_arms = arms_for_road_class(layout, "main")
     secondary_arms = arms_for_road_class(layout, "secondary")
     if not main_arms or not secondary_arms:
-        print("[JunctionSigns] Missing main/secondary arms, falling back to ego-only yield sign")
-        return _place_yield_sign_on_spawn_lane(
+        print("[JunctionSigns] Missing main/secondary arms, falling back to ego-only stop sign")
+        return _place_stop_sign_on_spawn_lane(
             env, distance_before_end=distance_before_end, show_model=show_model
         )
 
@@ -944,14 +944,14 @@ def _place_junction_priority_signs(
         main_lanes.extend(collect_lanes_for_keys(env, arm.get("lane_keys", [])))
 
     if not main_lanes:
-        print("[JunctionSigns] Could not resolve main lanes, falling back to ego-only yield sign")
-        return _place_yield_sign_on_spawn_lane(
+        print("[JunctionSigns] Could not resolve main lanes, falling back to ego-only stop sign")
+        return _place_stop_sign_on_spawn_lane(
             env, distance_before_end=distance_before_end, show_model=show_model
         )
 
     junction_id = layout.get("junction_id", "")
     placed_main = 0
-    placed_yield = 0
+    placed_stop = 0
 
     for arm in main_arms:
         edge_id = arm.get("edge_id", "")
@@ -980,12 +980,12 @@ def _place_junction_priority_signs(
         edge_id = arm.get("edge_id", "")
         lane = resolve_sign_lane_for_edge(env, edge_id, arm.get("lane_keys", []))
         if lane is None:
-            print(f"[JunctionSigns] Skipping yield sign, lane not found for edge: {edge_id}")
+            print(f"[JunctionSigns] Skipping stop sign, lane not found for edge: {edge_id}")
             continue
         placement_long = sign_placement_long(lane, distance_before_end)
         try:
             sign = sign_mgr.add_sign(
-                YieldSign,
+                StopSign,
                 lane=lane,
                 longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
                 lateral_offset=lateral_offset_beside_lane(lane, placement_long),
@@ -993,20 +993,20 @@ def _place_junction_priority_signs(
                 use_random_lane=False,
                 intersection_name=junction_id,
                 main_road_lanes=main_lanes,
-                auto_detect_main_roads=False,
+                auto_detect_main_roads=True,
             )
             if sign is not None:
                 sign.is_priority_sign = False
-            placed_yield += 1
+            placed_stop += 1
         except Exception as exc:
-            print(f"[JunctionSigns] Failed YieldSign on edge {edge_id}: {exc}")
+            print(f"[JunctionSigns] Failed StopSign on edge {edge_id}: {exc}")
 
     print(
-        f"[JunctionSigns] Placed {placed_main} MainRoadSign(s) and {placed_yield} YieldSign(s) "
+        f"[JunctionSigns] Placed {placed_main} MainRoadSign(s) and {placed_stop} StopSign(s) "
         f"at junction {junction_id} ({layout.get('shape')}), "
         f"shoulder offset={SIGN_SHOULDER_OFFSET_M}m"
     )
-    return placed_main > 0 or placed_yield > 0
+    return placed_main > 0 or placed_stop > 0
 
 
 def run_one_episode(
@@ -1081,7 +1081,7 @@ def run_one_episode(
         if spawn_distance > 0:
             _reposition_ego_before_lane_end(base_env, spawn_distance)
 
-        # Place main/yield signs on all junction arms from layout
+        # Place main/stop signs on all junction arms from layout
         sign_distance = float(row.get("sign_distance_before_end", 20.0))
         _place_junction_priority_signs(
             base_env,
@@ -1378,31 +1378,35 @@ def run_one_episode(
                     "Violations: ": sign_violations,
                 }
                 
-                ego_in_yield_zone = False
-                ego_violating_yield = False
+                ego_in_stop_zone = False
+                ego_violating_stop = False
+                ego_stopped_before_line = False
                 main_road_has_traffic = False
                 
                 if sign_mgr is not None and vehicle is not None:
-                    yield_signs = [
+                    stop_signs = [
                         sign for sign in sign_mgr.signs
-                        if "yield" in type(sign).__name__.lower()
+                        if type(sign).__name__ == "StopSign"
                     ]
-                    text_dict["Yield signs"] = len(yield_signs)
+                    text_dict["Stop signs"] = len(stop_signs)
                     text_dict["Main road signs"] = sum(
                         1 for sign in sign_mgr.signs
                         if "mainroad" in type(sign).__name__.lower()
                     )
-                    for sign in yield_signs:
+                    for sign in stop_signs:
                         has_traffic, _ = sign.has_main_road_traffic(exclude_vehicle=vehicle)
                         main_road_has_traffic = main_road_has_traffic or has_traffic
                         if sign._is_vehicle_in_zone(vehicle):
-                            ego_in_yield_zone = True
+                            ego_in_stop_zone = True
                         if sign._is_violating(vehicle):
-                            ego_violating_yield = True
+                            ego_violating_stop = True
+                        if sign._track_stop_before_line(vehicle):
+                            ego_stopped_before_line = True
                 
                 text_dict["Main road traffic"] = main_road_has_traffic
-                text_dict["Ego in yield zone"] = ego_in_yield_zone
-                text_dict["Yield violation"] = ego_violating_yield
+                text_dict["Ego in stop zone"] = ego_in_stop_zone
+                text_dict["Stop violation"] = ego_violating_stop
+                text_dict["Stopped before line"] = ego_stopped_before_line
                 
                 # Add auxiliary agent status
                 if aux_agent_mgr is not None:
@@ -1736,7 +1740,7 @@ import time
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run policies on real SUMO maps (yield sign benchmark)")
+    parser = argparse.ArgumentParser(description="Run policies on real SUMO maps (stop sign benchmark)")
     parser.add_argument("--policy", required=True,
                         choices=["idm", "modified_idm", "comprehensive_rule_expert",
                                  "rule_compliant", "ppo_lidar",
@@ -1750,7 +1754,7 @@ def main():
                         help="Base dir that contains <preset>/")
     parser.add_argument("--scenes-root", type=str, default=str(BENCH_DIR / "scenes"))
     parser.add_argument("--sign-type", type=str, default=None,
-                        help="Single sign code, e.g. 2.4")
+                        help="Single sign code, e.g. 2.5")
     parser.add_argument("--sign-types", type=str, default="",
                         help="Comma-separated sign codes")
     parser.add_argument("--max-scenes-per-sign", type=int, default=None)

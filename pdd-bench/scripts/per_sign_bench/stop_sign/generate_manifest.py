@@ -36,8 +36,8 @@ from lib.scene_augmentation import SpawnScenario, augment_layout_for_scene
 SCRIPT_DIR = Path(__file__).parent.resolve()
 RUN_BENCH_SCRIPT = SCRIPT_DIR / "run_benchmark.py"
 
-PDD_CODE = "2.4"
-SIGN_TYPE = "yield"
+PDD_CODE = "2.5"
+SIGN_TYPE = "stop"
 
 
 # -----------------------------------------------------------------------------
@@ -551,7 +551,7 @@ def generate_manifest(
     summary = {
         "pdd_code": PDD_CODE,
         "sign_type": SIGN_TYPE,
-        "sign_name": "Yield",
+        "sign_name": "Stop",
         "total_scenes": len(scenes),
         "total_entries": len(entries),
         "variants_per_scene": scenario_cfg.n_variants,

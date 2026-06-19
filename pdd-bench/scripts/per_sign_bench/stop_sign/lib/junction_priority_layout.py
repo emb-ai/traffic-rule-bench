@@ -455,7 +455,7 @@ def build_junction_priority_layout(
         mode: Currently only ``main_secondary`` is implemented.
         ego_edge_id: Optional spawn edge; when ``require_ego_secondary`` is set,
             raises if that arm is not secondary.
-        require_ego_secondary: Validate ego spawn edge is secondary (yield scenarios).
+        require_ego_secondary: Validate ego spawn edge is secondary (stop scenarios).
 
     Returns:
         JunctionPriorityLayout with arms sorted CCW by entry angle.
@@ -497,7 +497,7 @@ def build_junction_priority_layout(
         if ego_arm.road_class != "secondary":
             raise JunctionLayoutError(
                 f"ego_edge_id {ego_edge_id!r} is classified as {ego_arm.road_class}, "
-                "expected secondary for yield benchmark"
+                "expected secondary for stop benchmark"
             )
 
     return JunctionPriorityLayout(

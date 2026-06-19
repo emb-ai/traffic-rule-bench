@@ -35,12 +35,11 @@ from traffic_signs.one_way_entry_sign import OneWayEntrySign
 from traffic_signs.lane_allowed_direction_sign import LaneAllowedDirectionSign
 from traffic_signs.right_turn_rule import RightTurnRule
 from traffic_signs.speed_limit_sign import SpeedLimitSign
-from traffic_signs.stop_sign import StopSign
 from traffic_signs.traffic_light_sign import TrafficLightSign
 from traffic_signs.zone_signs import ZoneSpeedLimitSign
 from traffic_signs.end_of_zone_signs import BaseEndOfZoneSign
 from traffic_signs.priority_signs import (
-    MainRoadSign, EndMainRoadSign, YieldSign,
+    MainRoadSign, EndMainRoadSign, YieldSign, StopSign,
     SecondaryRoadSign, SecondaryRoadLeftSign, SecondaryRoadRightSign,
 )
 
@@ -1270,6 +1269,7 @@ class SignComplianceMixin:
         for sign in self._get_signs():
             try:
                 if isinstance(sign, StopSign):
+                    self._handle_yield_sign(sign)
                     self._handle_stop_sign(sign)
                 elif isinstance(sign, MinimumSpeedLimitSign):
                     self._handle_min_speed(sign)
