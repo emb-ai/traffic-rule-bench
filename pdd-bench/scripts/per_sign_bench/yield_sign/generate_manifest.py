@@ -504,18 +504,10 @@ def generate_manifest(
             if not scenarios:
                 print(f"  [augment] No valid scenarios for {scene_name}; skipping scene")
                 continue
-            if scenario_cfg.max_scenarios_per_scene is not None:
-                print(f"Retained only {scenario_cfg.max_scenarios_per_scene} from {len(scenarios)} possible scenarios")
-                random.shuffle(scenarios)
-                scenarios = scenarios[:scenario_cfg.max_scenarios_per_scene]
-            print(f"  Augmented scenarios: {len(scenarios)}")
-        
+            print(f"  Augmented spawn scenarios: {len(scenarios)}")
+
         convoy_sizes = sizes_up_to(aux_cfg.convoy_size, auxiliary_enabled=aux_cfg.enabled)
-        lanes_counts = sizes_up_to(
-            aux_cfg.lanes_occupied,
-            auxiliary_enabled=aux_cfg.enabled,
-            available=available_main_lane_count,
-        )
+        scene_entries: List[Dict] = []
         for variant, scenario in enumerate(scenarios):
             ego_edge = scenario.ego_edge_id
             scene_main_lanes = main_lane_keys_for_aux(junction_layout, ego_edge)
@@ -539,7 +531,19 @@ def generate_manifest(
                         junction_layout_cache=junction_layout,
                         spawn_scenario=scenario,
                     )
-                    entries.append(entry)
+                    scene_entries.append(entry)
+
+        if scenario_cfg.max_scenarios_per_scene is not None and len(scene_entries) > scenario_cfg.max_scenarios_per_scene:
+            print(
+                f"  Retained {scenario_cfg.max_scenarios_per_scene} of "
+                f"{len(scene_entries)} manifest entries for {scene_name}"
+            )
+            random.shuffle(scene_entries)
+            scene_entries = scene_entries[:scenario_cfg.max_scenarios_per_scene]
+        else:
+            print(f"  Manifest entries for {scene_name}: {len(scene_entries)}")
+
+        entries.extend(scene_entries)
     
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "real_manifest.jsonl"
