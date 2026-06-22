@@ -11,6 +11,7 @@ that's not needed when we already drive the actual agent through the scene.
 from __future__ import annotations
 
 import logging
+import os
 import random
 import sys
 from pathlib import Path
@@ -52,7 +53,11 @@ def _build_env(catalog_row: dict, profile: dict):
         manual_control=False,
         use_mesh_terrain=False,
         log_level=logging.CRITICAL,
-        map_name=str(SCENES_ROOT / catalog_row["net_path"]),
+        # net_path is relative to the scenes root the catalog was built from.
+        # Honor PER_SIGN_SCENES_ROOT (set by sumo_pipeline from --scenes-root) so a
+        # non-default scene set (e.g. scenes_uniq) resolves correctly; else default.
+        map_name=str(Path(os.environ.get("PER_SIGN_SCENES_ROOT") or SCENES_ROOT)
+                     / catalog_row["net_path"]),
         sign_type=catalog_row["sign_code"],
         sign_spawn_distance=sign_spawn_distance,
         traffic_density=float(profile["traffic_density"]),

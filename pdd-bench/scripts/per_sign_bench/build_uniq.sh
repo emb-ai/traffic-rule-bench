@@ -7,12 +7,15 @@
 #   tail -f /tmp/build_uniq.log
 set -euo pipefail
 export PYTHONUNBUFFERED=1                      # unbuffered python output
+export SDL_AUDIODRIVER=dummy                   # silence ALSA/audio noise (headless)
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime-$USER}"
+mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null; chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
 
 REPO=/home/jovyan/shares/SR006.nfs2/smirnova/traffic-rule-bench
 PY=/home/jovyan/shares/SR006.nfs2/smirnova/.conda-envs/plant2/bin/python   # env with metadrive
 SC=scenes_uniq
 OUT=benchmark_output/uniq
-CODES=3.24,5.21,5.22,5.31,4.6
+CODES=3.24,3.25,5.21,5.22,5.31,4.6   # 5.31/4.6 may be absent in a set (skipped, harmless)
 
 log(){ echo "[$(date '+%F %T')] $*"; }
 
