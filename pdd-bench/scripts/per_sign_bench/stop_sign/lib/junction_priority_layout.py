@@ -18,7 +18,7 @@ INTERSECTION_JUNCTION_TYPES = {
 
 RoadClass = Literal["main", "secondary"]
 LayoutMode = Literal["main_secondary", "main_main"]
-JunctionShape = Literal["T", "X"]
+JunctionShape = Literal["2", "T", "X"]
 
 
 @dataclass
@@ -234,6 +234,70 @@ def _incoming_edges_for_junction(junction_id: str, edges: Dict[str, SumoEdge]) -
     return incoming
 
 
+def _parse_net_location(root: ET.Element) -> Optional[dict]:
+    location = root.find("location")
+    if location is None:
+        return None
+    try:
+        orig = tuple(float(v) for v in location.get("origBoundary", "").split(","))
+        conv = tuple(float(v) for v in location.get("convBoundary", "").split(","))
+    except ValueError:
+        return None
+    if len(orig) != 4 or len(conv) != 4:
+        return None
+    return {"orig": orig, "conv": conv}
+
+
+def _latlon_to_net_xy(lat: float, lon: float, location: dict) -> Tuple[float, float]:
+    min_lon, min_lat, max_lon, max_lat = location["orig"]
+    min_x, min_y, max_x, max_y = location["conv"]
+    x = min_x + (lon - min_lon) / (max_lon - min_lon) * (max_x - min_x)
+    y = min_y + (lat - min_lat) / (max_lat - min_lat) * (max_y - min_y)
+    return x, y
+
+
+def _point_segment_distance(
+    px: float,
+    py: float,
+    ax: float,
+    ay: float,
+    bx: float,
+    by: float,
+) -> float:
+    dx = bx - ax
+    dy = by - ay
+    if dx == 0.0 and dy == 0.0:
+        return math.hypot(px - ax, py - ay)
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
+    proj_x = ax + t * dx
+    proj_y = ay + t * dy
+    return math.hypot(px - proj_x, py - proj_y)
+
+
+def _min_dist_to_arm(
+    point: Tuple[float, float],
+    arm: ApproachArm,
+    edges: Dict[str, SumoEdge],
+) -> float:
+    px, py = point
+    edge = edges.get(arm.edge_id)
+    if edge is None:
+        return math.hypot(px - arm.entry_point[0], py - arm.entry_point[1])
+
+    best = float("inf")
+    for lane in edge.lanes:
+        pts = lane.shape or edge.shape
+        if len(pts) < 2:
+            continue
+        for i in range(len(pts) - 1):
+            ax, ay = pts[i]
+            bx, by = pts[i + 1]
+            best = min(best, _point_segment_distance(px, py, ax, ay, bx, by))
+    if best == float("inf"):
+        return math.hypot(px - arm.entry_point[0], py - arm.entry_point[1])
+    return best
+
+
 def _discover_primary_junction(
     junctions: dict,
     edges: Dict[str, SumoEdge],
@@ -243,12 +307,12 @@ def _discover_primary_junction(
         if info["type"] not in INTERSECTION_JUNCTION_TYPES:
             continue
         arm_count = len(_incoming_edges_for_junction(jid, edges))
-        if arm_count >= 3:
+        if arm_count >= 2:
             candidates.append((jid, arm_count))
 
     if not candidates:
         raise JunctionLayoutError(
-            "No intersection junction with at least 3 incoming arms found in net.xml"
+            "No intersection junction with at least 2 incoming arms found in net.xml"
         )
 
     if len(candidates) != 1:
@@ -363,8 +427,10 @@ def _infer_shape(num_arms: int) -> JunctionShape:
         return "X"
     if num_arms == 3:
         return "T"
+    if num_arms == 2:
+        return "2"
     raise JunctionLayoutError(
-        f"Unsupported arm count {num_arms}; expected 3 (T) or 4 (X)"
+        f"Unsupported arm count {num_arms}; expected 2, 3 (T), or 4 (X)"
     )
 
 
@@ -429,6 +495,42 @@ def _assign_main_secondary_t(
     return all_ids - secondary_ids, secondary_ids
 
 
+def _assign_main_secondary_2(
+    arms: List[ApproachArm],
+    edges: Dict[str, SumoEdge],
+    *,
+    sign_xy: Optional[Tuple[float, float]] = None,
+    secondary_edge_id: Optional[str] = None,
+) -> tuple[Set[str], Set[str]]:
+    all_ids = {arm.edge_id for arm in arms}
+    if len(arms) != 2:
+        raise JunctionLayoutError("2-way junction expected exactly 2 arms")
+
+    if secondary_edge_id is not None:
+        if secondary_edge_id not in all_ids:
+            raise JunctionLayoutError(
+                f"secondary_edge_id {secondary_edge_id!r} is not an incoming arm "
+                f"(expected one of {sorted(all_ids)})"
+            )
+        secondary_ids = {secondary_edge_id}
+        return all_ids - secondary_ids, secondary_ids
+
+    if sign_xy is not None:
+        by_dist = sorted(
+            arms,
+            key=lambda arm: _min_dist_to_arm(sign_xy, arm, edges),
+        )
+        secondary_ids = {by_dist[0].edge_id}
+        return all_ids - secondary_ids, secondary_ids
+
+    shortest = min(
+        arms,
+        key=lambda arm: min((lane.length for lane in edges[arm.edge_id].lanes), default=0.0),
+    )
+    secondary_ids = {shortest.edge_id}
+    return all_ids - secondary_ids, secondary_ids
+
+
 def _apply_classes(arms: List[ApproachArm], main_ids: Set[str], secondary_ids: Set[str]) -> None:
     for arm in arms:
         if arm.edge_id in main_ids:
@@ -446,6 +548,9 @@ def build_junction_priority_layout(
     mode: LayoutMode = "main_secondary",
     ego_edge_id: Optional[str] = None,
     require_ego_secondary: bool = False,
+    sign_lat: Optional[float] = None,
+    sign_lon: Optional[float] = None,
+    secondary_edge_id: Optional[str] = None,
 ) -> JunctionPriorityLayout:
     """
     Build main/secondary layout for the single intersection in a SUMO net.
@@ -456,6 +561,9 @@ def build_junction_priority_layout(
         ego_edge_id: Optional spawn edge; when ``require_ego_secondary`` is set,
             raises if that arm is not secondary.
         require_ego_secondary: Validate ego spawn edge is secondary (stop scenarios).
+        sign_lat: Optional WGS84 latitude of the stop sign (used for 2-arm junctions).
+        sign_lon: Optional WGS84 longitude of the stop sign (used for 2-arm junctions).
+        secondary_edge_id: Optional explicit secondary incoming edge id.
 
     Returns:
         JunctionPriorityLayout with arms sorted CCW by entry angle.
@@ -466,6 +574,13 @@ def build_junction_priority_layout(
     net_path = Path(net_path)
     if not net_path.is_file():
         raise JunctionLayoutError(f"net.xml not found: {net_path}")
+
+    tree = ET.parse(net_path)
+    root = tree.getroot()
+    location = _parse_net_location(root)
+    sign_xy: Optional[Tuple[float, float]] = None
+    if sign_lat is not None and sign_lon is not None and location is not None:
+        sign_xy = _latlon_to_net_xy(float(sign_lat), float(sign_lon), location)
 
     junctions, edges, _, connections = _load_net(net_path)
     junction_id = _discover_primary_junction(junctions, edges)
@@ -481,9 +596,16 @@ def build_junction_priority_layout(
         main_ids, secondary_ids = _assign_main_secondary_x(
             arms, incoming, edges, straight_map
         )
-    else:
+    elif shape == "T":
         main_ids, secondary_ids = _assign_main_secondary_t(
             arms, incoming, edges, straight_map
+        )
+    else:
+        main_ids, secondary_ids = _assign_main_secondary_2(
+            arms,
+            edges,
+            sign_xy=sign_xy,
+            secondary_edge_id=secondary_edge_id,
         )
 
     _apply_classes(arms, main_ids, secondary_ids)

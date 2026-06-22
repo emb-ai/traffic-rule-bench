@@ -569,7 +569,7 @@ class StopSign(YieldSign):
         except Exception:
             return False
 
-        if veh_long < self.stop_line_position + self.STOP_LINE_PAST_MARGIN:
+        if veh_long < self.stop_line_position + self.STOP_LINE_PAST_MARGIN_M:
             self._track_stop_before_line(vehicle)
             return False
 

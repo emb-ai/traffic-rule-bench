@@ -66,6 +66,8 @@ def _ego_destination_edges(layout: JunctionPriorityLayout, ego_edge_id: str) -> 
         return list(arm.left_to)
     if layout.shape == "X":
         return list(arm.straight_to)
+    if layout.shape == "2":
+        return list(arm.straight_to) or list(arm.outgoing_to)
     return list(arm.straight_to) or list(arm.left_to)
 
 
@@ -197,9 +199,17 @@ def augment_layout_for_scene(
     spawn_lanes: Iterable,
     *,
     min_lane_length: float = 20.0,
+    sign_lat: Optional[float] = None,
+    sign_lon: Optional[float] = None,
+    secondary_edge_id: Optional[str] = None,
 ) -> Tuple[JunctionPriorityLayout, List[SpawnScenario]]:
     """Build layout and enumerate augmented scenarios for one scene."""
-    layout = build_junction_priority_layout(net_path)
+    layout = build_junction_priority_layout(
+        net_path,
+        sign_lat=sign_lat,
+        sign_lon=sign_lon,
+        secondary_edge_id=secondary_edge_id,
+    )
     spawn_by_edge = build_spawn_lanes_by_edge(spawn_lanes)
     lengths = lane_lengths_from_spawn_lanes(spawn_lanes)
     scenarios = enumerate_spawn_scenarios(

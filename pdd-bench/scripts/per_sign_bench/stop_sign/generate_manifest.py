@@ -178,10 +178,21 @@ def parse_sumo_net_for_spawn_lanes(net_path: Path, min_length: float = 20.0) -> 
 # -----------------------------------------------------------------------------
 # Junction layout utilities
 # -----------------------------------------------------------------------------
-def build_junction_layout_for_scene(net_path: Path) -> Optional[dict]:
+def build_junction_layout_for_scene(
+    net_path: Path,
+    *,
+    sign_lat: Optional[float] = None,
+    sign_lon: Optional[float] = None,
+    secondary_edge_id: Optional[str] = None,
+) -> Optional[dict]:
     """Build main/secondary junction layout from a scene net.xml."""
     try:
-        layout = build_junction_priority_layout(net_path)
+        layout = build_junction_priority_layout(
+            net_path,
+            sign_lat=sign_lat,
+            sign_lon=sign_lon,
+            secondary_edge_id=secondary_edge_id,
+        )
     except JunctionLayoutError as exc:
         print(f"  [junction_layout] {net_path.parent.name}: {exc}")
         return None
@@ -487,8 +498,19 @@ def generate_manifest(
         spawn_lanes = parse_sumo_net_for_spawn_lanes(net_full_path)
         print(f"  Found {len(spawn_lanes)} intersection-approaching lane(s)")
 
-        junction_layout = build_junction_layout_for_scene(net_full_path)
-        assert junction_layout is not None, f"No junction layout found for {scene_name}"
+        sign_lat = meta.get("latitude") or meta.get("center_lat")
+        sign_lon = meta.get("longitude") or meta.get("center_lon")
+        secondary_edge_id = meta.get("secondary_edge_id")
+
+        junction_layout = build_junction_layout_for_scene(
+            net_full_path,
+            sign_lat=float(sign_lat) if sign_lat is not None else None,
+            sign_lon=float(sign_lon) if sign_lon is not None else None,
+            secondary_edge_id=secondary_edge_id,
+        )
+        if junction_layout is None:
+            print(f"  Skipping {scene_name}: no junction layout")
+            continue
         print(
             f"  Junction layout: {junction_layout['shape']} @ {junction_layout['junction_id']} "
             f"(main={len(junction_layout.get('main_edge_ids', []))}, "
@@ -500,7 +522,13 @@ def generate_manifest(
 
         scenarios: List[SpawnScenario] = []
         if scenario_cfg.augment:
-            _, scenarios = augment_layout_for_scene(net_full_path, spawn_lanes)
+            _, scenarios = augment_layout_for_scene(
+                net_full_path,
+                spawn_lanes,
+                sign_lat=float(sign_lat) if sign_lat is not None else None,
+                sign_lon=float(sign_lon) if sign_lon is not None else None,
+                secondary_edge_id=secondary_edge_id,
+            )
             if not scenarios:
                 print(f"  [augment] No valid scenarios for {scene_name}; skipping scene")
                 continue
