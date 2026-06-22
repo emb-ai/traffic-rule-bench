@@ -29,7 +29,7 @@ python generate_manifest.py paths.experiment_name=my_experiment
 |-----------|---------|-------------|
 | `n_variants` | `1` | Number of variants per scene |
 | `augment` | `true` | Enable scenario augmentation |
-| `max_scenarios_per_scene` | `null` | Limit scenarios per scene |
+| `max_scenarios_per_scene` | `null` | Limit total manifest rows per scene (after convoy/lanes expansion) |
 
 ### `simulation`
 | Parameter | Default | Description |
