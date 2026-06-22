@@ -44,15 +44,15 @@ simulation:
 auxiliary:
   enabled: true                   # Spawn agents on main road
   distance_from_intersection: 20.0  # Distance from junction (m)
-  convoy_size: 1                  # Vehicles per lane
-  lanes_occupied: 1               # Main road lanes to occupy
+  convoy_size: 3                  # Vehicles per lane
+  lanes_occupied: 4               # Main road lanes to occupy
   convoy_gap_m: 10.0              # Gap between convoy vehicles (m)
 
 # =============================================================================
 # GIF Visualization
 # =============================================================================
 gif:
-  enabled: true                   # Generate visualization GIFs
+  enabled: false                  # Generate visualization GIFs
   policy: idm                     # Policy for rendering
   max_scenes: null                # Limit GIFs (null = all)
   dry_run: false                  # Print commands without executing

@@ -37,7 +37,7 @@ stop_sign/
 
 Each scene folder in `scenes/` must contain:
 - `map.osm` — OpenStreetMap extract
-- `center.json` — Crop center: `{"lat": ..., "lon": ...}`
+- `center.json` — Crop center: `{"lat": ..., "lon": ...}`; optional `"save_service_roads": true` keeps `highway=service` ways connected to main roads
 
 Convert OSM to SUMO network:
 
