@@ -29,6 +29,19 @@ from .sumo_scene_enumerator import (
 # 5.21 (residential zone, fixed 20 km/h) and 5.31 (zone speed limit).
 BRAKING_SPAWN_CODES = {"3.24", "5.21", "5.31"}
 
+# Minimum-speed sign 4.6: built like a braking-spawn scene (ego placed upstream
+# with an approach run, route through the sign), but MIRRORED — the ego starts
+# BELOW the minimum and must ACCELERATE up to it instead of braking down.
+ACCEL_SPAWN_CODES = {"4.6"}
+ACCEL_DEFICIT_KMH = 15.0        # ego spawns this far BELOW the minimum speed
+ACCEL_V0_FLOOR_KMH = 5.0        # but never slower than this
+# Short upstream approach: unlike braking (ego must reach v_target BY the sign),
+# for a MIN-speed sign the ego accelerates IN the zone (after the sign). So we
+# only need it established at v0 just before the sign — a small fixed approach,
+# leaving the post-sign edge as the zone where it must reach the minimum.
+ACCEL_APPROACH_M = 8.0
+MIN_SPEED_FLOOR_KMH = 20.0      # skip 4.6 scenes whose road is too slow for a meaningful min
+
 
 def bucket_limit_kmh(raw_kmh: float, selector: Optional[int] = None):
     """Snap a raw OSM speed limit to {20, 30, 50} for 3.24.
@@ -159,6 +172,7 @@ def build_catalog(
     rows: List[dict] = []
     insufficient_v0 = 0
     dropped_high_limit = 0
+    dropped_slow_min = 0   # 4.6 scenes whose road is too slow for a meaningful min
     fifty_rr = 0   # round-robin counter: former-50 (3.24) scenes -> even 20/40
     for scene in sampled:
         n_lanes = count_lanes_on_road(scene.net_path, scene.road_id)
@@ -170,10 +184,24 @@ def build_catalog(
             n_lanes_field = n_lanes
 
         is_braking = scene.sign_code in BRAKING_SPAWN_CODES
+        is_accel = scene.sign_code in ACCEL_SPAWN_CODES
+        is_spawn = is_braking or is_accel
         # Enforced speed limit (km/h) ego must brake to before the sign.
         v_target_kmh = 0.0
         v_target_raw_kmh = 0.0
-        if is_braking:
+        if is_accel:
+            # 4.6 minimum-speed: target = min(road_speed - 10, achievable cap),
+            # where the cap is split 20 / 40 across scenes so the minimum is
+            # actually reachable (idm cruises ~30: min=20 -> idm complies, min=40
+            # -> idm too slow -> violates; discriminative like 3.24's 20/30 split).
+            net_abs = str(scenes_root / scene.net_path)
+            v_target_raw_kmh = round(edge_speed_mps(net_abs, scene.road_id) * 3.6)
+            cap = 20 if (stable_hash(scene.scene_id, "min2040") % 2 == 0) else 40
+            v_target_kmh = min(v_target_raw_kmh - 10, cap)
+            if v_target_kmh < MIN_SPEED_FLOOR_KMH:
+                dropped_slow_min += 1
+                continue
+        elif is_braking:
             if scene.sign_code == "5.21":
                 # Residential zone: fixed 20 km/h, independent of the road's speed.
                 v_target_kmh = v_target_raw_kmh = 20.0
@@ -216,10 +244,36 @@ def build_catalog(
                     "spawn_lane_num": spawn_lane_num,
                     "var_idx": var_idx,
                 }
-                if not is_braking:
+                if not is_spawn:
                     base["seed"] = stable_hash(scene.scene_id, spawn_lane_num, var_idx)
                     base["spawn_velocity_ms"] = 0.0
                     rows.append(base)
+                    continue
+
+                if is_accel:
+                    # Acceleration-spawn (4.6): ego starts BELOW the minimum and
+                    # must speed up. One row; placed d_required upstream at v0 so a
+                    # compliant policy reaches the minimum by the zone.
+                    seed = stable_hash(scene.scene_id, spawn_lane_num, var_idx)
+                    v_target_mps = v_target_kmh / 3.6
+                    v0 = max(ACCEL_V0_FLOOR_KMH / 3.6,
+                             (v_target_kmh - ACCEL_DEFICIT_KMH) / 3.6)
+                    # Short approach: ego accelerates IN the post-sign zone, so it
+                    # only needs to be at v0 just before the sign.
+                    d_req = ACCEL_APPROACH_M
+                    row = dict(base)
+                    row["seed"] = seed
+                    row["spawn_velocity_ms"] = round(v0, 4)
+                    row["v_target_kmh"] = v_target_kmh
+                    row["v_target_raw_kmh"] = v_target_raw_kmh
+                    row["d_required_m"] = round(d_req, 3)
+                    row["sign_s"] = scene.distance_from_start
+                    row["brake_decel_mps2"] = brake_decel_mps2
+                    row["brake_delay_s"] = brake_delay_s
+                    row["brake_margin_m"] = brake_margin_m
+                    row["braking_spawn"] = True
+                    row["spawn_mode"] = "accel"
+                    rows.append(row)
                     continue
 
                 # Braking-spawn (3.24): one row per v0 sample; ego starts above
@@ -263,10 +317,13 @@ def build_catalog(
                     row["brake_delay_s"] = brake_delay_s
                     row["brake_margin_m"] = brake_margin_m
                     row["braking_spawn"] = True
+                    row["spawn_mode"] = "brake"
                     rows.append(row)
 
     if dropped_high_limit:
         print(f"[build_catalog] dropped {dropped_high_limit} scenes (raw limit > 80 km/h)")
+    if dropped_slow_min:
+        print(f"[build_catalog] dropped {dropped_slow_min} 4.6 scenes (road too slow for a min)")
     if insufficient_v0:
         print(f"[build_catalog] dropped {insufficient_v0} braking rows "
               f"(v0 could not exceed limit; cap {SPAWN_VELOCITY_MAX_MPS} m/s)")

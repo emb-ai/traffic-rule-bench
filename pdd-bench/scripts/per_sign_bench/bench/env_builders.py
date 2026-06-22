@@ -318,6 +318,7 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
     # sumo_runner._build_env so the EVAL actor spawn is correct.
     if is_braking:
         config["ego_braking_spawn"] = True
+        config["ego_spawn_mode"] = str(row.get("spawn_mode", "brake"))
         config["ego_spawn_v0_ms"] = float(row.get("spawn_velocity_ms", 0.0) or 0.0)
         config["ego_brake_d_required"] = float(row.get("d_required_m", 0.0) or 0.0)
         config["ego_v_target_kmh"] = float(row.get("v_target_kmh", 0.0) or 0.0)

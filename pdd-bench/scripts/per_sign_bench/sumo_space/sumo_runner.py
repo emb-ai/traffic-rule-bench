@@ -58,8 +58,8 @@ def _build_env(catalog_row: dict, profile: dict):
         traffic_density=float(profile["traffic_density"]),
         horizon=int(profile.get("horizon_steps", 600)),
         tl_speed_factor=float(catalog_row.get("tl_speed_factor", 20.0)),
-        min_route_hops_after_spawn=int(catalog_row.get("min_route_hops_after_spawn", 10)),
-        max_route_hops_after_spawn=int(catalog_row.get("max_route_hops_after_spawn", 10)),
+        min_route_hops_after_spawn=int(catalog_row.get("min_route_hops_after_spawn", 2)),
+        max_route_hops_after_spawn=int(catalog_row.get("max_route_hops_after_spawn", 4)),
         num_scenarios=100000,  # allow seeds in [0, 100000) for variation
         vehicle_config={"show_lidar": False},
     )
@@ -85,6 +85,7 @@ def _build_env(catalog_row: dict, profile: dict):
     # the sign (resolved up the road graph in sumo_env). Pass the spec through.
     if catalog_row.get("braking_spawn"):
         config["ego_braking_spawn"] = True
+        config["ego_spawn_mode"] = str(catalog_row.get("spawn_mode", "brake"))
         config["ego_spawn_v0_ms"] = float(catalog_row.get("spawn_velocity_ms", 0.0) or 0.0)
         config["ego_brake_d_required"] = float(catalog_row.get("d_required_m", 0.0) or 0.0)
         config["ego_v_target_kmh"] = float(catalog_row.get("v_target_kmh", 0.0) or 0.0)

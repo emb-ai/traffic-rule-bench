@@ -20,11 +20,32 @@ from tqdm import tqdm
 from shapely.ops import nearest_points
 import json
 
-OVERPASS_URLS = [
+# Pure-stdlib sign-orientation helper (lives beside this script). Ensure the
+# script's own directory is importable whether run as a script or imported.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from sign_edge_orientation import orient_sign_edge
+
+# Overpass endpoints, tried in order. Override at runtime without editing code:
+#   OVERPASS_URLS="https://overpass.openstreetmap.fr/api/interpreter,..." python ...
+_DEFAULT_OVERPASS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.openstreetmap.fr/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
 ]
+OVERPASS_URLS = [u.strip() for u in os.environ.get("OVERPASS_URLS", "").split(",")
+                 if u.strip()] or _DEFAULT_OVERPASS
+
+# Per-sign-code highway-type filter for road matching. A residential/living zone
+# (5.21 Жилая зона / 5.22 Конец жилой зоны) is NEVER on a through-road, so
+# restrict matching to courtyard/residential ways and PREFER an actual
+# `living_street` when one is reasonably close. Codes not listed here keep the
+# legacy behavior: nearest car-accessible way regardless of highway type.
+THROUGH_ROADS = {"motorway", "trunk", "primary", "secondary", "tertiary"}
+RESIDENTIAL_WAYS = {"living_street", "service", "residential", "unclassified", "road"}
+SIGN_HIGHWAY_FILTER = {
+    "5.21": {"allowed": RESIDENTIAL_WAYS, "prefer": {"living_street"}},
+    "5.22": {"allowed": RESIDENTIAL_WAYS, "prefer": {"living_street"}},
+}
 
 class AsyncOSMDownloader:
     def __init__(self, max_concurrent=5):
@@ -59,6 +80,11 @@ class AsyncOSMDownloader:
                 async with self.session.post(url, data={"data": query}, timeout=aiohttp.ClientTimeout(total=60)) as response:
                     if response.status == 200:
                         content = await response.text()
+                        # Don't accept a 200 with no map data (regional/empty mirror) —
+                        # it would write an empty fragment that netconvert rejects.
+                        if "<node" not in content and "<way" not in content:
+                            print(f"Empty data from {url}, trying next endpoint")
+                            continue
                         async with aiofiles.open(output_path, "w", encoding="utf-8") as f:
                             await f.write(content)
                         return True
@@ -224,10 +250,11 @@ class BatchSignProcessor:
                 osm_raw, net_output_path
             )
             
+            _hwf = SIGN_HIGHWAY_FILTER.get(sign_type, {})
             way_id, distance_from_start = await loop.run_in_executor(
                 None,
                 self.find_closest_way_and_distance,
-                osm_raw, lat, lon
+                osm_raw, lat, lon, _hwf.get("allowed"), _hwf.get("prefer")
             )
 
             # Per-road dedup: ≤1 scene per unique road (osm_way_id) per code, so the
@@ -246,7 +273,16 @@ class BatchSignProcessor:
                 self.find_edge_and_offset_in_sumo,
                 net_output_path, way_id, distance_from_start
             )
-            
+
+            # Zone-entry signs (5.21): orient onto the directed edge whose
+            # upstream side reaches the big road, so the braking-spawn route is
+            # big-road -> sign -> courtyard (no-op for other codes).
+            road_id, s_offset, _orient = await loop.run_in_executor(
+                None,
+                orient_sign_edge,
+                str(net_output_path), road_id, s_offset, sign_type
+            )
+
             scene_dir.mkdir(parents=True, exist_ok=True)
             (scene_dir / net_file).write_bytes(net_output_path.read_bytes())
             
@@ -390,35 +426,59 @@ class BatchSignProcessor:
         return default_widths.get(highway, 5.0)
     
     @staticmethod
-    def find_closest_way_and_distance(osm_path, sign_lat, sign_lon):
+    def find_closest_way_and_distance(osm_path, sign_lat, sign_lon,
+                                      allowed_highways=None, prefer_highways=None,
+                                      prefer_margin_m=20.0):
+        """Find the OSM way nearest to the sign and the normalized offset along it.
 
+        `allowed_highways` (set of highway= values): if given, only ways of these
+        types are considered — used to keep zone signs (5.21/5.22) off through-
+        roads. `prefer_highways`: if a way of one of these types lies within
+        `prefer_margin_m` of the nearest allowed way, prefer it (so an actual
+        `living_street` wins over an adjacent service road). None = legacy
+        behavior (nearest car-accessible way of any type)."""
         tree = ET.parse(osm_path)
         root = tree.getroot()
-        nodes = {n.get("id"): (float(n.get("lat")), float(n.get("lon"))) 
+        nodes = {n.get("id"): (float(n.get("lat")), float(n.get("lon")))
                 for n in root.findall("node")}
-        
+
         proj = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32637", always_xy=True)
         sign_x, sign_y = proj.transform(sign_lon, sign_lat)
         sign_point = Point(sign_x, sign_y)
-        
-        min_dist = float("inf")
-        closest_way_id = None
-        distance_from_start = None
-        
+
+        def _frac_along(line):
+            nearest_on_road = nearest_points(line, sign_point)[0]
+            dist_along = 0.0
+            coords = list(line.coords)
+            for i in range(len(coords) - 1):
+                segment = LineString([coords[i], coords[i + 1]])
+                if segment.distance(nearest_on_road) < 1e-6:
+                    dist_along += Point(coords[i]).distance(nearest_on_road)
+                    break
+                dist_along += segment.length
+            return dist_along / line.length if line.length > 0 else 0.0
+
+        # (dist, way_id, frac) for the nearest allowed way and the nearest preferred way.
+        best_any = (float("inf"), None, None)
+        best_pref = (float("inf"), None, None)
+
         for way in root.findall("way"):
-            if not any(tag.get("k") == "highway" for tag in way.findall("tag")):
+            tags = {tag.get("k"): tag.get("v") for tag in way.findall("tag")}
+            highway = tags.get("highway")
+            if highway is None:
                 continue
             if not BatchSignProcessor.is_car_accessible(way):
                 continue
-            
-            blocks = []   
+            if allowed_highways is not None and highway not in allowed_highways:
+                continue
+
+            blocks = []
             current_block = []
             for nd in way.findall("nd"):
                 nid = nd.get("ref")
                 if nid in nodes:
                     lat, lon = nodes[nid]
-                    x, y = proj.transform(lon, lat)
-                    current_block.append((x, y))
+                    current_block.append(proj.transform(lon, lat))
                 else:
                     if len(current_block) >= 2:
                         blocks.append(current_block)
@@ -426,29 +486,24 @@ class BatchSignProcessor:
             if len(current_block) >= 2:
                 blocks.append(current_block)
 
+            width = BatchSignProcessor.get_road_width(way)
             for block_coords in blocks:
                 line = LineString(block_coords)
-                width = BatchSignProcessor.get_road_width(way)
-                polygon = line.buffer(width / 2)
-                dist = sign_point.distance(polygon)
-                if dist < min_dist:
-                    min_dist = dist
-                    closest_way_id = way.get("id")
-                    nearest_on_road = nearest_points(line, sign_point)[0]
-                    dist_along = 0.0
-                    block_coords_list = list(line.coords)
-                    for i in range(len(block_coords_list) - 1):
-                        segment = LineString([block_coords_list[i], block_coords_list[i+1]])
-                        if segment.distance(nearest_on_road) < 1e-6:
-                            dist_along += Point(block_coords_list[i]).distance(nearest_on_road)
-                            break
-                        else:
-                            dist_along += segment.length
-                    distance_from_start = dist_along / line.length
+                dist = sign_point.distance(line.buffer(width / 2))
+                if dist < best_any[0]:
+                    best_any = (dist, way.get("id"), _frac_along(line))
+                if prefer_highways and highway in prefer_highways and dist < best_pref[0]:
+                    best_pref = (dist, way.get("id"), _frac_along(line))
 
-        if closest_way_id is None:
-            raise ValueError(f"No road found near ({sign_lat}, {sign_lon})")
-        return closest_way_id, distance_from_start
+        if best_any[1] is None:
+            extra = (f" within allowed highways {sorted(allowed_highways)}"
+                     if allowed_highways else "")
+            raise ValueError(f"No road found near ({sign_lat}, {sign_lon}){extra}")
+        # Prefer an actual living_street when it is about as close as the nearest allowed way.
+        if (prefer_highways and best_pref[1] is not None
+                and best_pref[0] <= best_any[0] + prefer_margin_m):
+            return best_pref[1], best_pref[2]
+        return best_any[1], best_any[2]
         
     @staticmethod
     def find_edge_and_offset_in_sumo(net_path, way_id, target_distance):
