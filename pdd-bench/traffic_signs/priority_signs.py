@@ -491,6 +491,40 @@ class YieldSign(BaseTrafficSign):
         return "red"
 
 
+class RightHandYieldSign(YieldSign):
+    """Equal-priority intersection rule tracker (right-hand yield).
+
+    Not a separate PDD plate — used with MainRoadSign (2.1) on all approaches.
+    Reuses YieldSign zone logic with ``right_road_lanes`` passed as
+    ``main_road_lanes``. Violation = leaving the approach zone while traffic
+    was present on the conflicting approach from the right.
+  """
+
+    def __init__(
+        self,
+        lane,
+        intersection_name: str = None,
+        right_road_lanes: list = None,
+        **kwargs,
+    ):
+        kwargs.setdefault("show_model", False)
+        kwargs.setdefault("icon_path", "2.1.png")
+        super().__init__(
+            lane,
+            intersection_name=intersection_name,
+            main_road_lanes=right_road_lanes,
+            auto_detect_main_roads=False,
+            **kwargs,
+        )
+        self.priority_type = "right_hand_yield"
+
+    def get_rule_description(self) -> str:
+        return (
+            "Right-hand rule at equal-priority intersection — "
+            "must not leave approach zone while traffic is on the right"
+        )
+
+
 class StopSign(YieldSign):
     """Stop sign (2.5) — yield to main-road traffic in zone + mandatory stop at line."""
 
@@ -724,6 +758,7 @@ __all__ = [
     "EndMainRoadSign",
     "EndMainRoadSmartSign",
     "YieldSign",
+    "RightHandYieldSign",
     "StopSign",
     "SecondaryRoadSign",
     "SecondaryRoadLeftSign",

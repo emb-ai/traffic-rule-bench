@@ -39,7 +39,7 @@ from traffic_signs.traffic_light_sign import TrafficLightSign
 from traffic_signs.zone_signs import ZoneSpeedLimitSign
 from traffic_signs.end_of_zone_signs import BaseEndOfZoneSign
 from traffic_signs.priority_signs import (
-    MainRoadSign, EndMainRoadSign, YieldSign, StopSign,
+    MainRoadSign, EndMainRoadSign, YieldSign, RightHandYieldSign, StopSign,
     SecondaryRoadSign, SecondaryRoadLeftSign, SecondaryRoadRightSign,
 )
 
@@ -1295,6 +1295,8 @@ class SignComplianceMixin:
                     self._handle_only_auto(sign)
                 elif isinstance(sign, RightTurnRule):
                     self._handle_right_turn_rule(sign)
+                elif isinstance(sign, RightHandYieldSign):
+                    self._handle_yield_sign(sign)
                 elif isinstance(sign, YieldSign):
                     self._handle_yield_sign(sign)
                 elif isinstance(sign, EndMainRoadSign):
