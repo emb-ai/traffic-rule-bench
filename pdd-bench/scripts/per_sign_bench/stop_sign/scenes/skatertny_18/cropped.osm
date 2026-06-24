@@ -1,0 +1,1464 @@
+<?xml version='1.0' encoding='utf-8'?>
+<osm version="0.6" generator="crop_osm_to_bbox">
+  <bounds minlat="55.755518351060005" minlon="37.59227988989934" maxlat="55.75695564893999" maxlon="37.594834110100656" />
+  <node id="418735614" visible="true" version="4" changeset="29581660" timestamp="2015-03-18T22:44:42Z" user="literan" uid="830106" lat="55.7565418" lon="37.5931351" />
+  <node id="6718625099" visible="true" version="1" changeset="73445438" timestamp="2019-08-17T15:25:11Z" user="literan" uid="830106" lat="55.7559611" lon="37.5949739" />
+  <node id="3406210508" visible="true" version="1" changeset="29580849" timestamp="2015-03-18T21:56:54Z" user="literan" uid="830106" lat="55.7558228" lon="37.5953362" />
+  <node id="3405469765" visible="true" version="1" changeset="29572012" timestamp="2015-03-18T15:43:28Z" user="literan" uid="830106" lat="55.7562944" lon="37.5931064" />
+  <node id="820793839" visible="true" version="4" changeset="30000876" timestamp="2015-04-05T20:34:39Z" user="literan" uid="830106" lat="55.7566944" lon="37.5925600" />
+  <node id="469932170" visible="true" version="4" changeset="29572395" timestamp="2015-03-18T16:02:32Z" user="literan" uid="830106" lat="55.7563513" lon="37.5936028" />
+  <node id="3439921714" visible="true" version="2" changeset="65519055" timestamp="2018-12-16T11:00:28Z" user="literan" uid="830106" lat="55.7564368" lon="37.5925573" />
+  <node id="12529340702" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7560094" lon="37.5932140" />
+  <node id="3423483950" visible="true" version="1" changeset="29806801" timestamp="2015-03-28T15:03:39Z" user="literan" uid="830106" lat="55.7553413" lon="37.5978979" />
+  <node id="3439919985" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7558330" lon="37.5930237" />
+  <node id="418735616" visible="true" version="5" changeset="30000876" timestamp="2015-04-05T20:34:39Z" user="literan" uid="830106" lat="55.7563390" lon="37.5934372" />
+  <node id="3412764373" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7558292" lon="37.5930379" />
+  <node id="3439844813" visible="true" version="3" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7565931" lon="37.5931135" />
+  <node id="1403268125" visible="true" version="2" changeset="29572012" timestamp="2015-03-18T15:43:31Z" user="literan" uid="830106" lat="55.7561959" lon="37.5934335" />
+  <node id="3412764376" visible="true" version="1" changeset="29658794" timestamp="2015-03-22T15:13:31Z" user="literan" uid="830106" lat="55.7558807" lon="37.5939626" />
+  <node id="3423484016" visible="true" version="1" changeset="29806801" timestamp="2015-03-28T15:03:41Z" user="literan" uid="830106" lat="55.7561804" lon="37.5936004" />
+  <node id="3423484009" visible="true" version="1" changeset="29806801" timestamp="2015-03-28T15:03:40Z" user="literan" uid="830106" lat="55.7558113" lon="37.5932103" />
+  <node id="3439682634" visible="true" version="1" changeset="29998222" timestamp="2015-04-05T18:25:16Z" user="literan" uid="830106" lat="55.7562632" lon="37.5937229" />
+  <node id="418735603" visible="true" version="5" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7569459" lon="37.5923451" />
+  <node id="1447032340" visible="true" version="3" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7559555" lon="37.5931091" />
+  <node id="3439708369" visible="true" version="1" changeset="29998943" timestamp="2015-04-05T19:00:47Z" user="literan" uid="830106" lat="55.7562741" lon="37.5937024" />
+  <node id="3406262361" visible="true" version="3" changeset="63443452" timestamp="2018-10-12T06:53:08Z" user="literan" uid="830106" lat="55.7566488" lon="37.5944156" />
+  <node id="3439844797" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:33Z" user="literan" uid="830106" lat="55.7563169" lon="37.5934840" />
+  <node id="3439844804" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7564507" lon="37.5929864">
+    <tag k="access" v="private" />
+    <tag k="barrier" v="gate" />
+  </node>
+  <node id="12529339015" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7558318" lon="37.5929635" />
+  <node id="1447032383" visible="true" version="3" changeset="30001595" timestamp="2015-04-05T21:11:36Z" user="literan" uid="830106" lat="55.7562882" lon="37.5925960" />
+  <node id="3439711510" visible="true" version="5" changeset="153026662" timestamp="2024-06-22T12:04:05Z" user="radio-van" uid="12288220" lat="55.7567140" lon="37.5941683">
+    <tag k="barrier" v="kerb" />
+    <tag k="kerb" v="lowered" />
+    <tag k="tactile_paving" v="no" />
+  </node>
+  <node id="5370293453" visible="true" version="2" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7566730" lon="37.5928832" />
+  <node id="3423483899" visible="true" version="2" changeset="69017602" timestamp="2019-04-08T18:02:23Z" user="literan" uid="830106" lat="55.7543700" lon="37.5989910" />
+  <node id="820793652" visible="true" version="4" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7559835" lon="37.5938670" />
+  <node id="1447032344" visible="true" version="3" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7560375" lon="37.5929955" />
+  <node id="3439921736" visible="true" version="2" changeset="83643580" timestamp="2020-04-16T10:48:33Z" user="literan" uid="830106" lat="55.7570380" lon="37.5899619" />
+  <node id="5370293448" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7566907" lon="37.5932006" />
+  <node id="359705100" visible="true" version="6" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493" lat="55.7560066" lon="37.5937705" />
+  <node id="1403268127" visible="true" version="2" changeset="29572012" timestamp="2015-03-18T15:43:31Z" user="literan" uid="830106" lat="55.7562292" lon="37.5934244" />
+  <node id="3439844811" visible="true" version="2" changeset="55859136" timestamp="2018-01-29T13:09:17Z" user="bridgeconst" uid="3465650" lat="55.7565320" lon="37.5933663" />
+  <node id="12529340684" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7561071" lon="37.5943691" />
+  <node id="469932101" visible="true" version="4" changeset="29658794" timestamp="2015-03-22T15:13:40Z" user="literan" uid="830106" lat="55.7561820" lon="37.5935806" />
+  <node id="3412764384" visible="true" version="1" changeset="29658794" timestamp="2015-03-22T15:13:32Z" user="literan" uid="830106" lat="55.7561933" lon="37.5936167" />
+  <node id="3439844809" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:34Z" user="literan" uid="830106" lat="55.7565157" lon="37.5933288" />
+  <node id="359705072" visible="true" version="6" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493" lat="55.7559863" lon="37.5935146" />
+  <node id="5370293491" visible="true" version="1" changeset="55859136" timestamp="2018-01-29T13:09:16Z" user="bridgeconst" uid="3465650" lat="55.7564993" lon="37.5934831" />
+  <node id="418735610" visible="true" version="8" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7565635" lon="37.5930304" />
+  <node id="3439844803" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7564389" lon="37.5929759" />
+  <node id="1447032336" visible="true" version="3" changeset="135416591" timestamp="2023-04-27T08:36:43Z" user="literan" uid="830106" lat="55.7558998" lon="37.5927768" />
+  <node id="3423483939" visible="true" version="1" changeset="29806801" timestamp="2015-03-28T15:03:39Z" user="literan" uid="830106" lat="55.7552501" lon="37.5984269" />
+  <node id="3423483940" visible="true" version="1" changeset="29806801" timestamp="2015-03-28T15:03:39Z" user="literan" uid="830106" lat="55.7552780" lon="37.5983679" />
+  <node id="418735601" visible="true" version="6" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7568076" lon="37.5924641" />
+  <node id="3049300771" visible="true" version="3" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7556742" lon="37.5936922" />
+  <node id="3439921705" visible="true" version="1" changeset="30001595" timestamp="2015-04-05T21:11:32Z" user="literan" uid="830106" lat="55.7563473" lon="37.5928134" />
+  <node id="12529340730" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7566618" lon="37.5933112" />
+  <node id="3406262358" visible="true" version="3" changeset="40715701" timestamp="2016-07-13T15:42:42Z" user="literan" uid="830106" lat="55.7564022" lon="37.5941090" />
+  <node id="3423483941" visible="true" version="1" changeset="29806801" timestamp="2015-03-28T15:03:39Z" user="literan" uid="830106" lat="55.7552935" lon="37.5983043" />
+  <node id="3439708377" visible="true" version="3" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7563114" lon="37.5936261">
+    <tag k="crossing" v="uncontrolled" />
+    <tag k="highway" v="crossing" />
+    <tag k="tactile_paving" v="no" />
+  </node>
+  <node id="1447032354" visible="true" version="2" changeset="29572012" timestamp="2015-03-18T15:43:31Z" user="literan" uid="830106" lat="55.7560402" lon="37.5926185" />
+  <node id="13914468351" visible="true" version="1" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493" lat="55.7559264" lon="37.5933651" />
+  <node id="3439844824" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7568240" lon="37.5933195">
+    <tag k="barrier" v="gate" />
+    <tag k="bicycle" v="no" />
+    <tag k="foot" v="no" />
+  </node>
+  <node id="271860230" visible="true" version="12" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7562449" lon="37.5935649" />
+  <node id="13914468346" visible="true" version="1" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493" lat="55.7558614" lon="37.5935799" />
+  <node id="3439708365" visible="true" version="1" changeset="29998943" timestamp="2015-04-05T19:00:47Z" user="literan" uid="830106" lat="55.7562282" lon="37.5933977" />
+  <node id="2523674525" visible="true" version="2" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7568597" lon="37.5923108" />
+  <node id="3423483916" visible="true" version="2" changeset="69017602" timestamp="2019-04-08T18:02:23Z" user="literan" uid="830106" lat="55.7548916" lon="37.5987252" />
+  <node id="6121309948" visible="true" version="2" changeset="66869591" timestamp="2019-02-03T05:25:29Z" user="Erelen" uid="1419157" lat="55.7565970" lon="37.5921087">
+    <tag k="crossing" v="uncontrolled" />
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="3439921704" visible="true" version="1" changeset="30001595" timestamp="2015-04-05T21:11:32Z" user="literan" uid="830106" lat="55.7563229" lon="37.5929343" />
+  <node id="5772737536" visible="true" version="1" changeset="60899393" timestamp="2018-07-20T09:31:03Z" user="literan" uid="830106" lat="55.7561925" lon="37.5916556" />
+  <node id="3439708373" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7562950" lon="37.5936947" />
+  <node id="12529340652" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7554697" lon="37.5944022" />
+  <node id="3423483974" visible="true" version="2" changeset="69037949" timestamp="2019-04-09T10:07:20Z" user="literan" uid="830106" lat="55.7555322" lon="37.5963447" />
+  <node id="820794012" visible="true" version="5" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7566767" lon="37.5928473" />
+  <node id="12529340656" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7555275" lon="37.5941885" />
+  <node id="3412764378" visible="true" version="1" changeset="29658794" timestamp="2015-03-22T15:13:32Z" user="literan" uid="830106" lat="55.7559527" lon="37.5938835" />
+  <node id="3423484014" visible="true" version="1" changeset="29806801" timestamp="2015-03-28T15:03:40Z" user="literan" uid="830106" lat="55.7560973" lon="37.5939958" />
+  <node id="12529340704" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7562669" lon="37.5936897" />
+  <node id="3423483964" visible="true" version="1" changeset="29806801" timestamp="2015-03-28T15:03:39Z" user="literan" uid="830106" lat="55.7554615" lon="37.5968764" />
+  <node id="12529340713" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7562786" lon="37.5930937" />
+  <node id="469932168" visible="true" version="5" changeset="30000876" timestamp="2015-04-05T20:34:39Z" user="literan" uid="830106" lat="55.7567121" lon="37.5917948" />
+  <node id="3439708370" visible="true" version="4" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7562722" lon="37.5934361">
+    <tag k="crossing" v="uncontrolled" />
+    <tag k="highway" v="crossing" />
+    <tag k="tactile_paving" v="no" />
+  </node>
+  <node id="3439844802" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:33Z" user="literan" uid="830106" lat="55.7563953" lon="37.5929370" />
+  <node id="418735604" visible="true" version="5" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7567413" lon="37.5924379" />
+  <node id="418735615" visible="true" version="4" changeset="29581660" timestamp="2015-03-18T22:44:42Z" user="literan" uid="830106" lat="55.7564460" lon="37.5935211" />
+  <node id="3405469763" visible="true" version="1" changeset="29572012" timestamp="2015-03-18T15:43:28Z" user="literan" uid="830106" lat="55.7560433" lon="37.5928982" />
+  <node id="12529340708" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7563289" lon="37.5935534" />
+  <node id="418735612" visible="true" version="8" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7565279" lon="37.5926542" />
+  <node id="359705097" visible="true" version="4" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7559369" lon="37.5940576" />
+  <node id="715786874" visible="true" version="5" changeset="69017602" timestamp="2019-04-08T18:02:21Z" user="literan" uid="830106" lat="55.7548274" lon="37.5987835" />
+  <node id="5968539421" visible="true" version="3" changeset="153026662" timestamp="2024-06-22T12:03:47Z" user="radio-van" uid="12288220" lat="55.7567116" lon="37.5939701">
+    <tag k="barrier" v="kerb" />
+    <tag k="kerb" v="lowered" />
+    <tag k="tactile_paving" v="no" />
+  </node>
+  <node id="5370293492" visible="true" version="1" changeset="55859136" timestamp="2018-01-29T13:09:16Z" user="bridgeconst" uid="3465650" lat="55.7565366" lon="37.5934123" />
+  <node id="469932099" visible="true" version="4" changeset="69037949" timestamp="2019-04-09T10:07:20Z" user="literan" uid="830106" lat="55.7555403" lon="37.5963486" />
+  <node id="820794026" visible="true" version="4" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7559667" lon="37.5944657" />
+  <node id="469932112" visible="true" version="4" changeset="29572395" timestamp="2015-03-18T16:02:32Z" user="literan" uid="830106" lat="55.7562450" lon="37.5937491" />
+  <node id="3412764377" visible="true" version="3" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493" lat="55.7559022" lon="37.5934451" />
+  <node id="9183991380" visible="true" version="1" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7561133" lon="37.5930824" />
+  <node id="12529340675" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7560089" lon="37.5943232">
+    <tag k="addr:flats" v="3-12" />
+    <tag k="entrance" v="staircase" />
+    <tag k="ref" v="1" />
+  </node>
+  <node id="3439921707" visible="true" version="1" changeset="30001595" timestamp="2015-04-05T21:11:32Z" user="literan" uid="830106" lat="55.7563609" lon="37.5927575" />
+  <node id="820793330" visible="true" version="4" changeset="30000876" timestamp="2015-04-05T20:34:39Z" user="literan" uid="830106" lat="55.7568797" lon="37.5927489" />
+  <node id="3423484002" visible="true" version="1" changeset="29806801" timestamp="2015-03-28T15:03:40Z" user="literan" uid="830106" lat="55.7557825" lon="37.5953059" />
+  <node id="3439921702" visible="true" version="1" changeset="30001595" timestamp="2015-04-05T21:11:32Z" user="literan" uid="830106" lat="55.7563092" lon="37.5929902" />
+  <node id="3406262362" visible="true" version="3" changeset="63443452" timestamp="2018-10-12T06:53:08Z" user="literan" uid="830106" lat="55.7566861" lon="37.5942123" />
+  <node id="3406262353" visible="true" version="1" changeset="29581660" timestamp="2015-03-18T22:44:35Z" user="literan" uid="830106" lat="55.7564894" lon="37.5939332" />
+  <node id="3439839892" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:33Z" user="literan" uid="830106" lat="55.7560776" lon="37.5944914" />
+  <node id="9183991371" visible="true" version="1" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7560064" lon="37.5930043" />
+  <node id="7271971993" visible="true" version="1" changeset="81870227" timestamp="2020-03-06T13:27:15Z" user="bridgeconst" uid="3465650" lat="55.7567257" lon="37.5931300" />
+  <node id="12529340679" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7560961" lon="37.5941950" />
+  <node id="9183991377" visible="true" version="1" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7561192" lon="37.5930590" />
+  <node id="359705070" visible="true" version="3" changeset="29572395" timestamp="2015-03-18T16:02:31Z" user="literan" uid="830106" lat="55.7563211" lon="37.5946469" />
+  <node id="12529340736" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7568057" lon="37.5933032">
+    <tag k="barrier" v="lift_gate" />
+    <tag k="bicycle" v="yes" />
+    <tag k="foot" v="yes" />
+    <tag k="motor_vehicle" v="private" />
+  </node>
+  <node id="3439844823" visible="true" version="2" changeset="65519055" timestamp="2018-12-16T11:00:28Z" user="literan" uid="830106" lat="55.7567604" lon="37.5917259" />
+  <node id="820794090" visible="true" version="4" changeset="30000876" timestamp="2015-04-05T20:34:39Z" user="literan" uid="830106" lat="55.7566895" lon="37.5925800" />
+  <node id="3412764374" visible="true" version="3" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493" lat="55.7558397" lon="37.5935999" />
+  <node id="6140118132" visible="true" version="1" changeset="65519055" timestamp="2018-12-16T11:00:27Z" user="literan" uid="830106" lat="55.7567629" lon="37.5917144" />
+  <node id="3439844801" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:33Z" user="literan" uid="830106" lat="55.7563407" lon="37.5935647" />
+  <node id="3423440026" visible="true" version="2" changeset="63443452" timestamp="2018-10-12T06:53:08Z" user="literan" uid="830106" lat="55.7567143" lon="37.5941484" />
+  <node id="469932118" visible="true" version="3" changeset="29805973" timestamp="2015-03-28T14:18:08Z" user="literan" uid="830106" lat="55.7563123" lon="37.5956483" />
+  <node id="3439921725" visible="true" version="1" changeset="30001595" timestamp="2015-04-05T21:11:32Z" user="literan" uid="830106" lat="55.7566661" lon="37.5918194" />
+  <node id="3049302670" visible="true" version="2" changeset="29658794" timestamp="2015-03-22T15:13:39Z" user="literan" uid="830106" lat="55.7556159" lon="37.5939090" />
+  <node id="3439921700" visible="true" version="1" changeset="30001595" timestamp="2015-04-05T21:11:32Z" user="literan" uid="830106" lat="55.7563048" lon="37.5929868" />
+  <node id="1402324019" visible="true" version="4" changeset="63443452" timestamp="2018-10-12T06:53:08Z" user="literan" uid="830106" lat="55.7567130" lon="37.5941815" />
+  <node id="12529340734" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7564763" lon="37.5929900" />
+  <node id="3439921696" visible="true" version="1" changeset="30001595" timestamp="2015-04-05T21:11:32Z" user="literan" uid="830106" lat="55.7561970" lon="37.5934089" />
+  <node id="3439844820" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:34Z" user="literan" uid="830106" lat="55.7567463" lon="37.5917422" />
+  <node id="3439844805" visible="true" version="2" changeset="55859136" timestamp="2018-01-29T13:09:17Z" user="bridgeconst" uid="3465650" lat="55.7564601" lon="37.5929490" />
+  <node id="3439708376" visible="true" version="1" changeset="29998943" timestamp="2015-04-05T19:00:47Z" user="literan" uid="830106" lat="55.7563105" lon="37.5937045" />
+  <node id="418735609" visible="true" version="8" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7566253" lon="37.5927962" />
+  <node id="12529340700" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7561155" lon="37.5931283" />
+  <node id="13914468349" visible="true" version="1" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493" lat="55.7559496" lon="37.5936949" />
+  <node id="12467184628" visible="true" version="1" changeset="160875327" timestamp="2025-01-01T17:14:30Z" user="Vas111" uid="16951803" lat="55.7562166" lon="37.5936919">
+    <tag k="highway" v="stop" />
+  </node>
+  <node id="1402324050" visible="true" version="3" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7570016" lon="37.5919166" />
+  <node id="1447032377" visible="true" version="3" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7562208" lon="37.5933945" />
+  <node id="3439708372" visible="true" version="1" changeset="29998943" timestamp="2015-04-05T19:00:47Z" user="literan" uid="830106" lat="55.7562876" lon="37.5936967" />
+  <node id="1447032399" visible="true" version="2" changeset="29581660" timestamp="2015-03-18T22:44:42Z" user="literan" uid="830106" lat="55.7564783" lon="37.5933908" />
+  <node id="1402324010" visible="true" version="3" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7562886" lon="37.5936731" />
+  <node id="2523674530" visible="true" version="3" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7569412" lon="37.5923827">
+    <tag k="barrier" v="block" />
+  </node>
+  <node id="12529340674" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7560667" lon="37.5940866">
+    <tag k="addr:flats" v="13-17" />
+    <tag k="entrance" v="staircase" />
+    <tag k="ref" v="2" />
+  </node>
+  <node id="469932173" visible="true" version="5" changeset="30000876" timestamp="2015-04-05T20:34:39Z" user="literan" uid="830106" lat="55.7569988" lon="37.5920247" />
+  <node id="12529340707" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7562992" lon="37.5936771" />
+  <node id="3439844798" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:33Z" user="literan" uid="830106" lat="55.7563262" lon="37.5934693" />
+  <node id="12531626669" visible="true" version="1" changeset="161743925" timestamp="2025-01-25T12:34:52Z" user="literan" uid="830106" lat="55.7564706" lon="37.5905831" />
+  <node id="3439844799" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:33Z" user="literan" uid="830106" lat="55.7563290" lon="37.5935267" />
+  <node id="12529340731" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7565739" lon="37.5932414" />
+  <node id="3423440014" visible="true" version="2" changeset="69037949" timestamp="2019-04-09T10:07:20Z" user="literan" uid="830106" lat="55.7552843" lon="37.5983855" />
+  <node id="1402324021" visible="true" version="3" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7567598" lon="37.5917137" />
+  <node id="1447032389" visible="true" version="3" changeset="30001595" timestamp="2015-04-05T21:11:36Z" user="literan" uid="830106" lat="55.7563826" lon="37.5926690" />
+  <node id="3423484010" visible="true" version="3" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7558236" lon="37.5931204">
+    <tag k="crossing" v="uncontrolled" />
+    <tag k="highway" v="crossing" />
+    <tag k="tactile_paving" v="no" />
+  </node>
+  <node id="5370293482" visible="true" version="1" changeset="55859136" timestamp="2018-01-29T13:09:16Z" user="bridgeconst" uid="3465650" lat="55.7565695" lon="37.5932689" />
+  <node id="12529340677" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7561487" lon="37.5942349">
+    <tag k="access" v="private" />
+    <tag k="amenity" v="parking_entrance" />
+    <tag k="parking" v="underground" />
+  </node>
+  <node id="12529339018" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7558422" lon="37.5930593" />
+  <node id="12529340683" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7561150" lon="37.5943750">
+    <tag k="access" v="private" />
+    <tag k="amenity" v="parking_entrance" />
+    <tag k="parking" v="underground" />
+  </node>
+  <node id="469932161" visible="true" version="5" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7558463" lon="37.5930662" />
+  <node id="12529340851" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7569127" lon="37.5905806" />
+  <node id="12529339017" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7558053" lon="37.5931808" />
+  <node id="1447032334" visible="true" version="3" changeset="135416591" timestamp="2023-04-27T08:36:43Z" user="literan" uid="830106" lat="55.7558371" lon="37.5930092" />
+  <node id="359705096" visible="true" version="4" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7558878" lon="37.5940198" />
+  <node id="3439921698" visible="true" version="1" changeset="30001595" timestamp="2015-04-05T21:11:32Z" user="literan" uid="830106" lat="55.7562368" lon="37.5933775" />
+  <node id="469932174" visible="true" version="5" changeset="30000876" timestamp="2015-04-05T20:34:39Z" user="literan" uid="830106" lat="55.7569582" lon="37.5918518" />
+  <node id="1402324011" visible="true" version="3" changeset="30000876" timestamp="2015-04-05T20:34:37Z" user="literan" uid="830106" lat="55.7563209" lon="37.5935244" />
+  <node id="577492472" visible="true" version="4" changeset="29572395" timestamp="2015-03-18T16:02:32Z" user="literan" uid="830106" lat="55.7567421" lon="37.5939697" />
+  <node id="3439711494" visible="true" version="2" changeset="40715701" timestamp="2016-07-13T15:42:42Z" user="literan" uid="830106" lat="55.7564387" lon="37.5942939" />
+  <node id="12529340823" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7569331" lon="37.5907059" />
+  <node id="9183991372" visible="true" version="1" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7559977" lon="37.5930366" />
+  <node id="469932098" visible="true" version="3" changeset="29805973" timestamp="2015-03-28T14:18:07Z" user="literan" uid="830106" lat="55.7553010" lon="37.5983165" />
+  <node id="3406262356" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7565111" lon="37.5930455" />
+  <node id="9183991378" visible="true" version="1" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7560515" lon="37.5930075" />
+  <node id="7271971994" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7568363" lon="37.5932227">
+    <tag k="access" v="no" />
+    <tag k="barrier" v="gate" />
+  </node>
+  <node id="359705102" visible="true" version="6" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493" lat="55.7559440" lon="37.5937179" />
+  <node id="5370293454" visible="true" version="1" changeset="55859136" timestamp="2018-01-29T13:09:16Z" user="bridgeconst" uid="3465650" lat="55.7566784" lon="37.5930062" />
+  <node id="418735597" visible="true" version="8" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7567136" lon="37.5928862" />
+  <node id="3439921699" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7562892" lon="37.5930504" />
+  <node id="3439844818" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:34Z" user="literan" uid="830106" lat="55.7567260" lon="37.5939388" />
+  <node id="3406262352" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7564663" lon="37.5930103" />
+  <node id="3423427036" visible="true" version="2" changeset="69017602" timestamp="2019-04-08T18:02:22Z" user="literan" uid="830106" lat="55.7543395" lon="37.5989899" />
+  <node id="3343761912" visible="true" version="1" changeset="28771460" timestamp="2015-02-11T11:52:17Z" user="literan" uid="830106" lat="55.7552260" lon="37.5952442" />
+  <node id="3439711504" visible="true" version="5" changeset="153026538" timestamp="2024-06-22T12:04:22Z" user="radio-van" uid="12288220" lat="55.7566909" lon="37.5940151">
+    <tag k="crossing" v="uncontrolled" />
+    <tag k="highway" v="crossing" />
+    <tag k="tactile_paving" v="no" />
+  </node>
+  <node id="469932120" visible="true" version="5" changeset="63443452" timestamp="2018-10-12T06:53:07Z" user="literan" uid="830106" lat="55.7566936" lon="37.5940943" />
+  <node id="5370293487" visible="true" version="1" changeset="55859136" timestamp="2018-01-29T13:09:16Z" user="bridgeconst" uid="3465650" lat="55.7567024" lon="37.5938795" />
+  <node id="1402324008" visible="true" version="3" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7562588" lon="37.5937037" />
+  <node id="3406262363" visible="true" version="1" changeset="29581660" timestamp="2015-03-18T22:44:36Z" user="literan" uid="830106" lat="55.7566995" lon="37.5939025" />
+  <node id="5370293489" visible="true" version="1" changeset="55859136" timestamp="2018-01-29T13:09:16Z" user="bridgeconst" uid="3465650" lat="55.7563584" lon="37.5934680" />
+  <node id="3439844821" visible="true" version="2" changeset="65519055" timestamp="2018-12-16T11:00:28Z" user="literan" uid="830106" lat="55.7567551" lon="37.5917306" />
+  <node id="271860346" visible="true" version="7" changeset="29806801" timestamp="2015-03-28T15:03:49Z" user="literan" uid="830106" lat="55.7557654" lon="37.5930582" />
+  <node id="272631371" visible="true" version="8" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7567162" lon="37.5916097" />
+  <node id="469932160" visible="true" version="4" changeset="29658794" timestamp="2015-03-22T15:13:40Z" user="literan" uid="830106" lat="55.7558255" lon="37.5929870" />
+  <node id="469932092" visible="true" version="4" changeset="69017602" timestamp="2019-04-08T18:02:21Z" user="literan" uid="830106" lat="55.7547199" lon="37.5971023" />
+  <node id="1447032359" visible="true" version="2" changeset="29572012" timestamp="2015-03-18T15:43:32Z" user="literan" uid="830106" lat="55.7561308" lon="37.5932037" />
+  <node id="1447032403" visible="true" version="2" changeset="29581660" timestamp="2015-03-18T22:44:42Z" user="literan" uid="830106" lat="55.7565120" lon="37.5933572" />
+  <node id="3439921737" visible="true" version="2" changeset="83643580" timestamp="2020-04-16T10:48:33Z" user="literan" uid="830106" lat="55.7570439" lon="37.5900088" />
+  <node id="3412764383" visible="true" version="1" changeset="29658794" timestamp="2015-03-22T15:13:32Z" user="literan" uid="830106" lat="55.7561880" lon="37.5935959" />
+  <node id="12529340663" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7556662" lon="37.5937220">
+    <tag k="access" v="private" />
+    <tag k="barrier" v="gate" />
+  </node>
+  <node id="469932100" visible="true" version="4" changeset="29658794" timestamp="2015-03-22T15:13:40Z" user="literan" uid="830106" lat="55.7561912" lon="37.5936415" />
+  <node id="820793727" visible="true" version="4" changeset="30000876" timestamp="2015-04-05T20:34:39Z" user="literan" uid="830106" lat="55.7568432" lon="37.5930398" />
+  <node id="3439708371" visible="true" version="1" changeset="29998943" timestamp="2015-04-05T19:00:47Z" user="literan" uid="830106" lat="55.7562780" lon="37.5937008" />
+  <node id="12529340644" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7556062" lon="37.5960399" />
+  <node id="6391637230" visible="true" version="1" changeset="69017602" timestamp="2019-04-08T18:02:18Z" user="literan" uid="830106" lat="55.7544683" lon="37.5981659" />
+  <node id="1447032356" visible="true" version="3" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7560813" lon="37.5932421" />
+  <node id="820793981" visible="true" version="4" changeset="30000876" timestamp="2015-04-05T20:34:39Z" user="literan" uid="830106" lat="55.7568946" lon="37.5927548" />
+  <node id="1402324047" visible="true" version="3" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7569877" lon="37.5918797" />
+  <node id="3439921695" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7561949" lon="37.5929774" />
+  <node id="3439921729" visible="true" version="2" changeset="83643580" timestamp="2020-04-16T10:48:33Z" user="literan" uid="830106" lat="55.7567260" lon="37.5896665" />
+  <node id="6348232471" visible="true" version="1" changeset="68310103" timestamp="2019-03-19T20:23:12Z" user="literan" uid="830106" lat="55.7560206" lon="37.5965349" />
+  <node id="3405495933" visible="true" version="1" changeset="29572395" timestamp="2015-03-18T16:02:28Z" user="literan" uid="830106" lat="55.7564933" lon="37.5939191" />
+  <node id="3405495922" visible="true" version="2" changeset="29805973" timestamp="2015-03-28T14:18:07Z" user="literan" uid="830106" lat="55.7556245" lon="37.5963429" />
+  <node id="5370293486" visible="true" version="1" changeset="55859136" timestamp="2018-01-29T13:09:16Z" user="bridgeconst" uid="3465650" lat="55.7567502" lon="37.5938334" />
+  <node id="3439839891" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:33Z" user="literan" uid="830106" lat="55.7560332" lon="37.5944577" />
+  <node id="1402324051" visible="true" version="3" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7570042" lon="37.5919604" />
+  <node id="3423484013" visible="true" version="1" changeset="29806801" timestamp="2015-03-28T15:03:40Z" user="literan" uid="830106" lat="55.7559486" lon="37.5933449" />
+  <node id="5968539420" visible="true" version="3" changeset="153026662" timestamp="2024-06-22T12:04:21Z" user="radio-van" uid="12288220" lat="55.7566674" lon="37.5940660">
+    <tag k="barrier" v="kerb" />
+    <tag k="kerb" v="lowered" />
+    <tag k="tactile_paving" v="no" />
+  </node>
+  <node id="418735611" visible="true" version="7" changeset="55859136" timestamp="2018-01-29T13:09:17Z" user="bridgeconst" uid="3465650" lat="55.7564557" lon="37.5929456" />
+  <node id="3049300775" visible="true" version="4" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493" lat="55.7558480" lon="37.5935688" />
+  <node id="1447032342" visible="true" version="2" changeset="29572012" timestamp="2015-03-18T15:43:31Z" user="literan" uid="830106" lat="55.7560081" lon="37.5927360" />
+  <node id="12529340722" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7567079" lon="37.5925703">
+    <tag k="addr:flats" v="4-12;14-19;52-55" />
+    <tag k="entrance" v="staircase" />
+    <tag k="ref" v="1" />
+  </node>
+  <node id="1447032355" visible="true" version="3" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7560593" lon="37.5927801" />
+  <node id="469932111" visible="true" version="5" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7563130" lon="37.5936824" />
+  <node id="3423427037" visible="true" version="2" changeset="69017602" timestamp="2019-04-08T18:02:22Z" user="literan" uid="830106" lat="55.7543549" lon="37.5987533" />
+  <node id="5370293457" visible="true" version="1" changeset="55859136" timestamp="2018-01-29T13:09:16Z" user="bridgeconst" uid="3465650" lat="55.7567126" lon="37.5930511" />
+  <node id="3439708355" visible="true" version="1" changeset="29998943" timestamp="2015-04-05T19:00:47Z" user="literan" uid="830106" lat="55.7561690" lon="37.5935879" />
+  <node id="3405495927" visible="true" version="1" changeset="29572395" timestamp="2015-03-18T16:02:28Z" user="literan" uid="830106" lat="55.7563290" lon="37.5944441" />
+  <node id="3423484007" visible="true" version="1" changeset="29806801" timestamp="2015-03-28T15:03:40Z" user="literan" uid="830106" lat="55.7557968" lon="37.5932089" />
+  <node id="3439844808" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:34Z" user="literan" uid="830106" lat="55.7565117" lon="37.5933070" />
+  <node id="820793504" visible="true" version="4" changeset="30000876" timestamp="2015-04-05T20:34:39Z" user="literan" uid="830106" lat="55.7567823" lon="37.5923274" />
+  <node id="418735608" visible="true" version="8" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7565873" lon="37.5929345" />
+  <node id="1402324020" visible="true" version="3" changeset="30000876" timestamp="2015-04-05T20:34:37Z" user="literan" uid="830106" lat="55.7567416" lon="37.5917265" />
+  <node id="12529340678" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7561410" lon="37.5942291" />
+  <node id="3439921734" visible="true" version="2" changeset="83643580" timestamp="2020-04-16T10:48:33Z" user="literan" uid="830106" lat="55.7570210" lon="37.5899317" />
+  <node id="3406262365" visible="true" version="2" changeset="63443452" timestamp="2018-10-12T06:53:08Z" user="literan" uid="830106" lat="55.7566972" lon="37.5941555" />
+  <node id="3405469769" visible="true" version="2" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7565240" lon="37.5924145" />
+  <node id="3439711502" visible="true" version="2" changeset="63443452" timestamp="2018-10-12T06:53:09Z" user="literan" uid="830106" lat="55.7566583" lon="37.5944265" />
+  <node id="5370293488" visible="true" version="1" changeset="55859136" timestamp="2018-01-29T13:09:16Z" user="bridgeconst" uid="3465650" lat="55.7563454" lon="37.5935229" />
+  <node id="12529340726" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7567997" lon="37.5935132" />
+  <node id="12529340711" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7563263" lon="37.5935016" />
+  <node id="3405495923" visible="true" version="2" changeset="29805973" timestamp="2015-03-28T14:18:07Z" user="literan" uid="830106" lat="55.7556312" lon="37.5963703" />
+  <node id="3726255562" visible="true" version="1" changeset="33754909" timestamp="2015-09-02T15:59:00Z" user="Felis Pimeja" uid="260756" lat="55.7558040" lon="37.5965459" />
+  <node id="4300756311" visible="true" version="2" changeset="63443452" timestamp="2018-10-12T06:53:09Z" user="literan" uid="830106" lat="55.7565196" lon="37.5941158" />
+  <node id="12529340725" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7567948" lon="37.5934837" />
+  <node id="5370293484" visible="true" version="1" changeset="55859136" timestamp="2018-01-29T13:09:16Z" user="bridgeconst" uid="3465650" lat="55.7566940" lon="37.5932247" />
+  <node id="359705056" visible="true" version="3" changeset="29572395" timestamp="2015-03-18T16:02:31Z" user="literan" uid="830106" lat="55.7564540" lon="37.5938708" />
+  <node id="3406262354" visible="true" version="3" changeset="40715701" timestamp="2016-07-13T15:42:42Z" user="literan" uid="830106" lat="55.7563533" lon="37.5943760" />
+  <node id="3406262366" visible="true" version="2" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7567570" lon="37.5938552" />
+  <node id="3439921723" visible="true" version="1" changeset="30001595" timestamp="2015-04-05T21:11:32Z" user="literan" uid="830106" lat="55.7564827" lon="37.5923835" />
+  <node id="3405495931" visible="true" version="1" changeset="29572395" timestamp="2015-03-18T16:02:28Z" user="literan" uid="830106" lat="55.7564057" lon="37.5940720" />
+  <node id="3423484017" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7561846" lon="37.5936168" />
+  <node id="9183991376" visible="true" version="1" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7560353" lon="37.5929517" />
+  <node id="1447032374" visible="true" version="2" changeset="29572012" timestamp="2015-03-18T15:43:32Z" user="literan" uid="830106" lat="55.7561792" lon="37.5930137" />
+  <node id="469932094" visible="true" version="5" changeset="69017602" timestamp="2019-04-08T18:02:21Z" user="literan" uid="830106" lat="55.7543265" lon="37.5989323" />
+  <node id="3439708379" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7563254" lon="37.5934825" />
+  <node id="3439844810" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:34Z" user="literan" uid="830106" lat="55.7565435" lon="37.5925376" />
+  <node id="5370293483" visible="true" version="1" changeset="55859136" timestamp="2018-01-29T13:09:16Z" user="bridgeconst" uid="3465650" lat="55.7566710" lon="37.5933229" />
+  <node id="3439921706" visible="true" version="1" changeset="30001595" timestamp="2015-04-05T21:11:32Z" user="literan" uid="830106" lat="55.7563517" lon="37.5928168" />
+  <node id="1447032370" visible="true" version="3" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7561591" lon="37.5930929" />
+  <node id="12529340712" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7562840" lon="37.5930717">
+    <tag k="access" v="no" />
+    <tag k="barrier" v="gate" />
+  </node>
+  <node id="12529340676" visible="true" version="2" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493" lat="55.7559921" lon="37.5937583">
+    <tag k="addr:flats" v="1-28" />
+    <tag k="entrance" v="staircase" />
+    <tag k="ref" v="1" />
+  </node>
+  <node id="3439844800" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:33Z" user="literan" uid="830106" lat="55.7563297" lon="37.5934349" />
+  <node id="3439352929" visible="true" version="1" changeset="29993353" timestamp="2015-04-05T14:27:39Z" user="literan" uid="830106" lat="55.7552615" lon="37.5984029" />
+  <node id="2523674519" visible="true" version="3" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7565020" lon="37.5925049" />
+  <node id="1402324022" visible="true" version="2" changeset="29572395" timestamp="2015-03-18T16:02:30Z" user="literan" uid="830106" lat="55.7567589" lon="37.5939447" />
+  <node id="3412764372" visible="true" version="1" changeset="29658794" timestamp="2015-03-22T15:13:31Z" user="literan" uid="830106" lat="55.7558243" lon="37.5930139" />
+  <node id="3406262355" visible="true" version="1" changeset="29581660" timestamp="2015-03-18T22:44:35Z" user="literan" uid="830106" lat="55.7564974" lon="37.5931003" />
+  <node id="3439921708" visible="true" version="1" changeset="30001595" timestamp="2015-04-05T21:11:32Z" user="literan" uid="830106" lat="55.7563653" lon="37.5927609" />
+  <node id="9183991379" visible="true" version="1" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7560466" lon="37.5930257" />
+  <node id="3405495932" visible="true" version="2" changeset="40715701" timestamp="2016-07-13T15:42:42Z" user="literan" uid="830106" lat="55.7564424" lon="37.5941007" />
+  <node id="3423484004" visible="true" version="1" changeset="29806801" timestamp="2015-03-28T15:03:40Z" user="literan" uid="830106" lat="55.7557911" lon="37.5932136" />
+  <node id="1402324017" visible="true" version="3" changeset="30000876" timestamp="2015-04-05T20:34:37Z" user="literan" uid="830106" lat="55.7567249" lon="37.5917535" />
+  <node id="3439921703" visible="true" version="1" changeset="30001595" timestamp="2015-04-05T21:11:32Z" user="literan" uid="830106" lat="55.7563185" lon="37.5929309" />
+  <node id="12529340724" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7567915" lon="37.5935099" />
+  <node id="469932167" visible="true" version="6" changeset="65519055" timestamp="2018-12-16T11:00:28Z" user="literan" uid="830106" lat="55.7567837" lon="37.5917194" />
+  <node id="3439921697" visible="true" version="1" changeset="30001595" timestamp="2015-04-05T21:11:32Z" user="literan" uid="830106" lat="55.7562187" lon="37.5934066" />
+  <node id="3439844815" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:34Z" user="literan" uid="830106" lat="55.7566924" lon="37.5939288" />
+  <node id="9183991374" visible="true" version="1" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7559942" lon="37.5929645" />
+  <node id="9183991382" visible="true" version="1" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7560301" lon="37.5929474" />
+  <node id="3439844819" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:34Z" user="literan" uid="830106" lat="55.7567306" lon="37.5917662" />
+  <node id="469932095" visible="true" version="4" changeset="69017602" timestamp="2019-04-08T18:02:21Z" user="literan" uid="830106" lat="55.7543717" lon="37.5990050" />
+  <node id="3423484001" visible="true" version="1" changeset="29806801" timestamp="2015-03-28T15:03:40Z" user="literan" uid="830106" lat="55.7557825" lon="37.5931842" />
+  <node id="3439844817" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:34Z" user="literan" uid="830106" lat="55.7567206" lon="37.5917941" />
+  <node id="3049300773" visible="true" version="4" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493" lat="55.7558015" lon="37.5932187" />
+  <node id="3439844806" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:34Z" user="literan" uid="830106" lat="55.7564935" lon="37.5933874" />
+  <node id="418735613" visible="true" version="8" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7566356" lon="37.5927405" />
+  <node id="1447032351" visible="true" version="3" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7560302" lon="37.5928869" />
+  <node id="6391637265" visible="true" version="1" changeset="69017602" timestamp="2019-04-08T18:02:19Z" user="literan" uid="830106" lat="55.7546120" lon="37.5974997" />
+  <node id="3423484015" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7561841" lon="37.5936403" />
+  <node id="3412764371" visible="true" version="1" changeset="29658794" timestamp="2015-03-22T15:13:31Z" user="literan" uid="830106" lat="55.7557818" lon="37.5943838" />
+  <node id="9183991375" visible="true" version="1" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7560318" lon="37.5929647" />
+  <node id="359705075" visible="true" version="5" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7561685" lon="37.5936699" />
+  <node id="6393332467" visible="true" version="1" changeset="69037949" timestamp="2019-04-09T10:07:20Z" user="literan" uid="830106" lat="55.7555066" lon="37.5964932" />
+  <node id="2523674521" visible="true" version="2" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7567232" lon="37.5925819" />
+  <node id="1402324012" visible="true" version="3" changeset="30000876" timestamp="2015-04-05T20:34:37Z" user="literan" uid="830106" lat="55.7563334" lon="37.5935698" />
+  <node id="3412764379" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7559752" lon="37.5939008" />
+  <node id="3423484003" visible="true" version="1" changeset="29806801" timestamp="2015-03-28T15:03:40Z" user="literan" uid="830106" lat="55.7557902" lon="37.5931796" />
+  <node id="3439708380" visible="true" version="3" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7563319" lon="37.5935409" />
+  <node id="1447032358" visible="true" version="2" changeset="29572012" timestamp="2015-03-18T15:43:31Z" user="literan" uid="830106" lat="55.7560979" lon="37.5931772" />
+  <node id="418735599" visible="true" version="7" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7568299" lon="37.5932739" />
+  <node id="12529340723" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7567931" lon="37.5934972">
+    <tag k="barrier" v="wicket_gate" />
+    <tag k="foot" v="yes" />
+  </node>
+  <node id="469932169" visible="true" version="5" changeset="29572395" timestamp="2015-03-18T16:02:32Z" user="literan" uid="830106" lat="55.7563181" lon="37.5934490" />
+  <node id="820793937" visible="true" version="3" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7558174" lon="37.5943080" />
+  <node id="418735617" visible="true" version="5" changeset="30000876" timestamp="2015-04-05T20:34:39Z" user="literan" uid="830106" lat="55.7564348" lon="37.5930512" />
+  <node id="359705052" visible="true" version="4" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7562747" lon="37.5937110" />
+  <node id="820794057" visible="true" version="5" changeset="30000876" timestamp="2015-04-05T20:34:39Z" user="literan" uid="830106" lat="55.7568584" lon="37.5930458" />
+  <node id="1402324009" visible="true" version="3" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7562728" lon="37.5936793" />
+  <node id="3423427038" visible="true" version="2" changeset="69017602" timestamp="2019-04-08T18:02:22Z" user="literan" uid="830106" lat="55.7543541" lon="37.5990031" />
+  <node id="3412764382" visible="true" version="1" changeset="29658794" timestamp="2015-03-22T15:13:32Z" user="literan" uid="830106" lat="55.7561366" lon="37.5940262" />
+  <node id="12467184627" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7569551" lon="37.5906142">
+    <tag k="crossing" v="uncontrolled" />
+    <tag k="highway" v="crossing" />
+  </node>
+  <node id="1859394152" visible="true" version="3" changeset="69017602" timestamp="2019-04-08T18:02:21Z" user="literan" uid="830106" lat="55.7548941" lon="37.5987383" />
+  <node id="5370293458" visible="true" version="1" changeset="55859136" timestamp="2018-01-29T13:09:16Z" user="bridgeconst" uid="3465650" lat="55.7567222" lon="37.5930315" />
+  <node id="469932115" visible="true" version="4" changeset="29805973" timestamp="2015-03-28T14:18:07Z" user="literan" uid="830106" lat="55.7556396" lon="37.5963892" />
+  <node id="9183991373" visible="true" version="1" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7559723" lon="37.5930463" />
+  <node id="3049302671" visible="true" version="2" changeset="29658794" timestamp="2015-03-22T15:13:39Z" user="literan" uid="830106" lat="55.7558666" lon="37.5939378" />
+  <node id="6393332468" visible="true" version="1" changeset="69037949" timestamp="2019-04-09T10:07:20Z" user="literan" uid="830106" lat="55.7555143" lon="37.5965040" />
+  <node id="12529340729" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7565869" lon="37.5931899" />
+  <node id="3405495930" visible="true" version="1" changeset="29572395" timestamp="2015-03-18T16:02:28Z" user="literan" uid="830106" lat="55.7563604" lon="37.5944701" />
+  <node id="715786840" visible="true" version="2" changeset="29805973" timestamp="2015-03-28T14:18:08Z" user="literan" uid="830106" lat="55.7552562" lon="37.5984414" />
+  <node id="820793498" visible="true" version="4" changeset="30000876" timestamp="2015-04-05T20:34:39Z" user="literan" uid="830106" lat="55.7567670" lon="37.5923154" />
+  <node id="3439711503" visible="true" version="1" changeset="29998943" timestamp="2015-04-05T19:00:48Z" user="literan" uid="830106" lat="55.7566906" lon="37.5941098" />
+  <node id="469932114" visible="true" version="4" changeset="29805973" timestamp="2015-03-28T14:18:07Z" user="literan" uid="830106" lat="55.7556260" lon="37.5963125" />
+  <node id="5370293490" visible="true" version="1" changeset="55859136" timestamp="2018-01-29T13:09:16Z" user="bridgeconst" uid="3465650" lat="55.7564749" lon="37.5935645" />
+  <node id="3423427043" visible="true" version="2" changeset="69017602" timestamp="2019-04-08T18:02:22Z" user="literan" uid="830106" lat="55.7545418" lon="37.5978061" />
+  <node id="418735598" visible="true" version="7" changeset="55859136" timestamp="2018-01-29T13:09:17Z" user="bridgeconst" uid="3465650" lat="55.7567379" lon="37.5930398" />
+  <node id="820793584" visible="true" version="4" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7559729" lon="37.5944705" />
+  <node id="820794129" visible="true" version="3" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7558658" lon="37.5943454" />
+  <node id="12529340720" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7565712" lon="37.5926889">
+    <tag k="addr:flats" v="32-41;47-51" />
+    <tag k="entrance" v="staircase" />
+    <tag k="ref" v="3" />
+  </node>
+  <node id="5370293456" visible="true" version="1" changeset="55859136" timestamp="2018-01-29T13:09:16Z" user="bridgeconst" uid="3465650" lat="55.7566919" lon="37.5930381" />
+  <node id="12529340710" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7562379" lon="37.5934062" />
+  <node id="3423483902" visible="true" version="2" changeset="69017602" timestamp="2019-04-08T18:02:23Z" user="literan" uid="830106" lat="55.7546205" lon="37.5974646" />
+  <node id="418735600" visible="true" version="7" changeset="55859136" timestamp="2018-01-29T13:09:17Z" user="bridgeconst" uid="3465650" lat="55.7567199" lon="37.5931729" />
+  <node id="9183991381" visible="true" version="1" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7560045" lon="37.5929258" />
+  <node id="3423484012" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7558464" lon="37.5930454" />
+  <node id="418735605" visible="true" version="6" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7565681" lon="37.5924824" />
+  <node id="418735607" visible="true" version="6" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7567917" lon="37.5922838" />
+  <node id="577492473" visible="true" version="6" changeset="63443452" timestamp="2018-10-12T06:53:07Z" user="literan" uid="830106" lat="55.7567081" lon="37.5941173" />
+  <node id="12529340685" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7560626" lon="37.5943352" />
+  <node id="12529340721" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7566666" lon="37.5928372">
+    <tag k="addr:flats" v="21-31а;59" />
+    <tag k="entrance" v="staircase" />
+    <tag k="ref" v="2" />
+  </node>
+  <node id="6121196192" visible="true" version="1" changeset="65234459" timestamp="2018-12-06T10:47:16Z" user="feod_al" uid="9117991" lat="55.7566383" lon="37.5921399" />
+  <node id="12529340680" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7561326" lon="37.5943019">
+    <tag k="access" v="private" />
+    <tag k="amenity" v="parking_entrance" />
+    <tag k="parking" v="underground" />
+  </node>
+  <node id="3406262348" visible="true" version="1" changeset="29581660" timestamp="2015-03-18T22:44:35Z" user="literan" uid="830106" lat="55.7563367" lon="37.5935268" />
+  <node id="3406262349" visible="true" version="1" changeset="29581660" timestamp="2015-03-18T22:44:35Z" user="literan" uid="830106" lat="55.7563528" lon="37.5934481" />
+  <node id="12529340733" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7565164" lon="37.5930258" />
+  <node id="3405495929" visible="true" version="1" changeset="29572395" timestamp="2015-03-18T16:02:28Z" user="literan" uid="830106" lat="55.7563554" lon="37.5942811" />
+  <node id="3049300776" visible="true" version="4" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493" lat="55.7559235" lon="37.5933329" />
+  <node id="12529340717" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7564171" lon="37.5926383" />
+  <node id="12529340703" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7560476" lon="37.5930706" />
+  <node id="3439921730" visible="true" version="2" changeset="83643580" timestamp="2020-04-16T10:48:33Z" user="literan" uid="830106" lat="55.7567446" lon="37.5896536" />
+  <node id="5370293455" visible="true" version="1" changeset="55859136" timestamp="2018-01-29T13:09:16Z" user="bridgeconst" uid="3465650" lat="55.7566904" lon="37.5930187" />
+  <node id="12529340706" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7561727" lon="37.5935707" />
+  <node id="3439711507" visible="true" version="2" changeset="63443452" timestamp="2018-10-12T06:53:09Z" user="literan" uid="830106" lat="55.7567022" lon="37.5941308" />
+  <node id="3412764381" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7560902" lon="37.5939902">
+    <tag k="barrier" v="lift_gate" />
+    <tag k="bicycle" v="yes" />
+    <tag k="foot" v="yes" />
+    <tag k="motor_vehicle" v="private" />
+  </node>
+  <node id="1447032401" visible="true" version="2" changeset="29581660" timestamp="2015-03-18T22:44:42Z" user="literan" uid="830106" lat="55.7565048" lon="37.5932840" />
+  <node id="3423427034" visible="true" version="2" changeset="69017602" timestamp="2019-04-08T18:02:22Z" user="literan" uid="830106" lat="55.7543295" lon="37.5989619" />
+  <node id="3439844795" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:33Z" user="literan" uid="830106" lat="55.7562829" lon="37.5946179">
+    <tag k="access" v="private" />
+    <tag k="amenity" v="parking_entrance" />
+    <tag k="parking" v="underground" />
+  </node>
+  <node id="3406262351" visible="true" version="1" changeset="29581660" timestamp="2015-03-18T22:44:35Z" user="literan" uid="830106" lat="55.7564526" lon="37.5930652" />
+  <node id="12529340735" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7564600" lon="37.5929947" />
+  <node id="469932172" visible="true" version="4" changeset="29572395" timestamp="2015-03-18T16:02:32Z" user="literan" uid="830106" lat="55.7567710" lon="37.5939036" />
+  <node id="418735606" visible="true" version="6" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7566406" lon="37.5921718" />
+  <node id="5370293485" visible="true" version="1" changeset="55859136" timestamp="2018-01-29T13:09:16Z" user="bridgeconst" uid="3465650" lat="55.7568119" lon="37.5933380" />
+  <node id="3439844827" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:34Z" user="literan" uid="830106" lat="55.7569387" lon="37.5923423" />
+  <node id="3439844816" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:34Z" user="literan" uid="830106" lat="55.7567103" lon="37.5939378" />
+  <node id="3439711508" visible="true" version="2" changeset="63443452" timestamp="2018-10-12T06:53:09Z" user="literan" uid="830106" lat="55.7567046" lon="37.5941812" />
+  <node id="12529340669" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7556825" lon="37.5957224" />
+  <node id="3439708364" visible="true" version="3" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7562261" lon="37.5936493">
+    <tag k="crossing" v="uncontrolled" />
+    <tag k="highway" v="crossing" />
+    <tag k="tactile_paving" v="no" />
+  </node>
+  <node id="3439919984" visible="true" version="2" changeset="135416591" timestamp="2023-04-27T08:36:43Z" user="literan" uid="830106" lat="55.7558299" lon="37.5929985" />
+  <node id="3412764366" visible="true" version="2" changeset="29984134" timestamp="2015-04-05T01:58:59Z" user="Erelen" uid="1419157" lat="55.7555955" lon="37.5939369" />
+  <node id="13914468350" visible="true" version="1" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493" lat="55.7559814" lon="37.5935444" />
+  <node id="13914468347" visible="true" version="1" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493" lat="55.7557285" lon="37.5934703" />
+  <node id="3439921733" visible="true" version="1" changeset="30001595" timestamp="2015-04-05T21:11:32Z" user="literan" uid="830106" lat="55.7568469" lon="37.5908523" />
+  <node id="1402324018" visible="true" version="2" changeset="29572395" timestamp="2015-03-18T16:02:30Z" user="literan" uid="830106" lat="55.7567172" lon="37.5939740" />
+  <node id="3439711493" visible="true" version="2" changeset="40715701" timestamp="2016-07-13T15:42:42Z" user="literan" uid="830106" lat="55.7564169" lon="37.5944129" />
+  <node id="6121196193" visible="true" version="1" changeset="65234459" timestamp="2018-12-06T10:47:16Z" user="feod_al" uid="9117991" lat="55.7565555" lon="37.5920772" />
+  <node id="3412764380" visible="true" version="1" changeset="29658794" timestamp="2015-03-22T15:13:32Z" user="literan" uid="830106" lat="55.7560023" lon="37.5934228" />
+  <node id="418735602" visible="true" version="6" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7568284" lon="37.5922985" />
+  <node id="12529340709" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7563172" lon="37.5934754" />
+  <node id="3406201880" visible="true" version="1" changeset="29580849" timestamp="2015-03-18T21:56:54Z" user="literan" uid="830106" lat="55.7552717" lon="37.5951343" />
+  <node id="12529340732" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7565241" lon="37.5930519" />
+  <node id="6348232470" visible="true" version="1" changeset="68310103" timestamp="2019-03-19T20:23:12Z" user="literan" uid="830106" lat="55.7558176" lon="37.5965588" />
+  <node id="469932091" visible="true" version="5" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7557764" lon="37.5931962" />
+  <node id="469932163" visible="true" version="4" changeset="29572012" timestamp="2015-03-18T15:43:32Z" user="literan" uid="830106" lat="55.7562440" lon="37.5933934" />
+  <node id="4300756310" visible="true" version="1" changeset="40715701" timestamp="2016-07-13T15:42:35Z" user="literan" uid="830106" lat="55.7565094" lon="37.5941711" />
+  <node id="3439921735" visible="true" version="2" changeset="83643580" timestamp="2020-04-16T10:48:33Z" user="literan" uid="830106" lat="55.7570398" lon="37.5900656" />
+  <node id="469932119" visible="true" version="6" changeset="63443452" timestamp="2018-10-12T06:53:07Z" user="literan" uid="830106" lat="55.7567060" lon="37.5942218" />
+  <node id="12529340705" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7562023" lon="37.5934343" />
+  <node id="3412765304" visible="true" version="2" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7568892" lon="37.5908883" />
+  <node id="12529340718" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7564607" lon="37.5926720" />
+  <node id="469932090" visible="true" version="4" changeset="29806801" timestamp="2015-03-28T15:03:50Z" user="literan" uid="830106" lat="55.7558117" lon="37.5931835" />
+  <node id="12529340728" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7566748" lon="37.5932596" />
+  <node id="3423483913" visible="true" version="2" changeset="69017602" timestamp="2019-04-08T18:02:23Z" user="literan" uid="830106" lat="55.7548261" lon="37.5987678" />
+  <node id="12529340701" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7559877" lon="37.5932956" />
+  <node id="5968539423" visible="true" version="4" changeset="153026662" timestamp="2024-06-22T12:03:46Z" user="radio-van" uid="12288220" lat="55.7567604" lon="37.5939393">
+    <tag k="barrier" v="kerb" />
+    <tag k="kerb" v="lowered" />
+    <tag k="tactile_paving" v="no" />
+  </node>
+  <node id="715786824" visible="true" version="4" changeset="69017602" timestamp="2019-04-08T18:02:21Z" user="literan" uid="830106" lat="55.7545761" lon="37.5976434" />
+  <node id="12529340681" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7561248" lon="37.5942960" />
+  <node id="418735596" visible="true" version="8" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7567536" lon="37.5925943" />
+  <node id="271860497" visible="true" version="9" changeset="63443452" timestamp="2018-10-12T06:53:07Z" user="literan" uid="830106" lat="55.7567830" lon="37.5940953" />
+  <node id="820793307" visible="true" version="4" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7560986" lon="37.5939558" />
+  <node id="9183991370" visible="true" version="1" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106" lat="55.7560193" lon="37.5931765">
+    <tag k="access" v="private" />
+    <tag k="barrier" v="gate" />
+  </node>
+  <node id="469932162" visible="true" version="4" changeset="29572012" timestamp="2015-03-18T15:43:32Z" user="literan" uid="830106" lat="55.7561754" lon="37.5934189" />
+  <node id="2523674524" visible="true" version="2" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7568236" lon="37.5923368" />
+  <node id="12529340727" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7568030" lon="37.5934870" />
+  <node id="13914468348" visible="true" version="1" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493" lat="55.7559115" lon="37.5936617" />
+  <node id="1447032338" visible="true" version="3" changeset="135416591" timestamp="2023-04-27T08:36:43Z" user="literan" uid="830106" lat="55.7559620" lon="37.5925510" />
+  <node id="3439844807" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:34Z" user="literan" uid="830106" lat="55.7565042" lon="37.5933754" />
+  <node id="3423484008" visible="true" version="1" changeset="29806801" timestamp="2015-03-28T15:03:40Z" user="literan" uid="830106" lat="55.7558005" lon="37.5931788" />
+  <node id="3423427035" visible="true" version="2" changeset="69017602" timestamp="2019-04-08T18:02:22Z" user="literan" uid="830106" lat="55.7543305" lon="37.5988928" />
+  <node id="3423483979" visible="true" version="1" changeset="29806801" timestamp="2015-03-28T15:03:40Z" user="literan" uid="830106" lat="55.7555952" lon="37.5960858" />
+  <node id="3439708363" visible="true" version="1" changeset="29998943" timestamp="2015-04-05T19:00:47Z" user="literan" uid="830106" lat="55.7562078" lon="37.5934092" />
+  <node id="359705050" visible="true" version="4" changeset="30000876" timestamp="2015-04-05T20:34:38Z" user="literan" uid="830106" lat="55.7560915" lon="37.5944725" />
+  <node id="3423484011" visible="true" version="4" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7558377" lon="37.5929686" />
+  <node id="6391637279" visible="true" version="1" changeset="69017602" timestamp="2019-04-08T18:02:19Z" user="literan" uid="830106" lat="55.7543372" lon="37.5989834" />
+  <node id="3439921724" visible="true" version="1" changeset="30001595" timestamp="2015-04-05T21:11:32Z" user="literan" uid="830106" lat="55.7566243" lon="37.5917880" />
+  <node id="12529340664" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7556560" lon="37.5937133" />
+  <node id="3439708359" visible="true" version="2" changeset="153026538" timestamp="2024-06-22T12:04:53Z" user="radio-van" uid="12288220" lat="55.7561864" lon="37.5935077">
+    <tag k="crossing" v="uncontrolled" />
+    <tag k="highway" v="crossing" />
+    <tag k="tactile_paving" v="no" />
+  </node>
+  <node id="12529340682" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7560801" lon="37.5942620" />
+  <node id="12531626668" visible="true" version="1" changeset="161743925" timestamp="2025-01-25T12:34:52Z" user="literan" uid="830106" lat="55.7568649" lon="37.5908285" />
+  <node id="3406262360" visible="true" version="3" changeset="63443452" timestamp="2018-10-12T06:53:08Z" user="literan" uid="830106" lat="55.7566668" lon="37.5944343" />
+  <node id="3439711511" visible="true" version="1" changeset="29998943" timestamp="2015-04-05T19:00:48Z" user="literan" uid="830106" lat="55.7567482" lon="37.5939283" />
+  <node id="5370293459" visible="true" version="1" changeset="55859136" timestamp="2018-01-29T13:09:16Z" user="bridgeconst" uid="3465650" lat="55.7566819" lon="37.5919567" />
+  <node id="820793762" visible="true" version="3" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106" lat="55.7558571" lon="37.5943811" />
+  <node id="469932171" visible="true" version="4" changeset="29572395" timestamp="2015-03-18T16:02:32Z" user="literan" uid="830106" lat="55.7566951" lon="37.5939588" />
+  <node id="5968539422" visible="true" version="1" changeset="63338764" timestamp="2018-10-09T09:36:37Z" user="literan" uid="830106" lat="55.7566615" lon="37.5940788" />
+  <node id="1403268126" visible="true" version="2" changeset="29572012" timestamp="2015-03-18T15:43:31Z" user="literan" uid="830106" lat="55.7562124" lon="37.5934356" />
+  <node id="3439711509" visible="true" version="2" changeset="63443452" timestamp="2018-10-12T06:53:09Z" user="literan" uid="830106" lat="55.7567073" lon="37.5941637" />
+  <way id="25007369" visible="true" version="79" changeset="173428937" timestamp="2025-10-17T21:59:53Z" user="solenoid jam" uid="10129333">
+    <nd ref="271860230" />
+    <nd ref="3439708370" />
+    <nd ref="3439844802" />
+    <nd ref="12529340718" />
+    <nd ref="2523674519" />
+    <nd ref="3405469769" />
+    <nd ref="6121309948" />
+    <nd ref="3439921725" />
+    <nd ref="272631371" />
+    <nd ref="3412765304" />
+    <nd ref="12529340823" />
+    <nd ref="12467184627" />
+    <tag k="highway" v="residential" />
+    <tag k="lanes" v="1" />
+    <tag k="lit" v="yes" />
+    <tag k="maxspeed" v="30" />
+    <tag k="maxspeed:type" v="RU:zone30" />
+    <tag k="name" v="Скатертный переулок" />
+    <tag k="name:en" v="Skatertnyy Lane" />
+    <tag k="name:etymology:wikidata" v="Q536168" />
+    <tag k="name:ru" v="Скатертный переулок" />
+    <tag k="name:uk" v="Скатертний провулок" />
+    <tag k="oneway" v="yes" />
+    <tag k="parking:both" v="lane" />
+    <tag k="parking:both:fee" v="yes" />
+    <tag k="parking:both:fee:conditional" v="no @ (PH)" />
+    <tag k="parking:both:markings" v="yes" />
+    <tag k="parking:both:orientation" v="parallel" />
+    <tag k="postal_code" v="121069" />
+    <tag k="surface" v="asphalt" />
+    <tag k="wikidata" v="Q4421635" />
+  </way>
+  <way id="25007381" visible="true" version="62" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="271860346" />
+    <nd ref="3423484010" />
+    <nd ref="12529340701" />
+    <nd ref="3439708359" />
+    <nd ref="271860230" />
+    <tag k="highway" v="residential" />
+    <tag k="lanes" v="1" />
+    <tag k="lit" v="yes" />
+    <tag k="maxspeed" v="30" />
+    <tag k="maxspeed:type" v="RU:zone30" />
+    <tag k="name" v="Малый Ржевский переулок" />
+    <tag k="name:uk" v="Малий Ржевський провулок" />
+    <tag k="omkum:old_name" v="/улица Палиашвили (1960 г.) Малый Ржевский переулок (до 1917 г.)" />
+    <tag k="oneway" v="yes" />
+    <tag k="parking:left" v="no" />
+    <tag k="parking:left:restriction" v="no_stopping" />
+    <tag k="parking:right" v="lane" />
+    <tag k="parking:right:access" v="private" />
+    <tag k="parking:right:markings" v="yes" />
+    <tag k="parking:right:orientation" v="parallel" />
+    <tag k="postal_code" v="121069" />
+    <tag k="surface" v="asphalt" />
+    <tag k="wikidata" v="Q4279089" />
+  </way>
+  <way id="32045629" visible="true" version="17" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="359705050" />
+    <nd ref="12529340683" />
+    <nd ref="12529340680" />
+    <nd ref="12529340677" />
+    <nd ref="359705052" />
+    <nd ref="359705056" />
+    <nd ref="3405495933" />
+    <nd ref="3406262353" />
+    <nd ref="3405495932" />
+    <nd ref="3405495931" />
+    <nd ref="3405495929" />
+    <nd ref="3405495927" />
+    <nd ref="3405495930" />
+    <nd ref="359705070" />
+    <nd ref="3439844795" />
+    <nd ref="359705050" />
+    <tag k="addr:housenumber" v="18" />
+    <tag k="addr:street" v="Скатертный переулок" />
+    <tag k="building" v="yes" />
+    <tag k="building:levels" v="8" />
+  </way>
+  <way id="32045630" visible="true" version="15" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="820793652" />
+    <nd ref="820793307" />
+    <nd ref="3412764381" />
+    <nd ref="12529340674" />
+    <nd ref="12529340675" />
+    <nd ref="820793584" />
+    <nd ref="820794026" />
+    <nd ref="820793762" />
+    <nd ref="820794129" />
+    <nd ref="820793937" />
+    <nd ref="359705096" />
+    <nd ref="359705097" />
+    <nd ref="3412764379" />
+    <nd ref="820793652" />
+    <tag k="addr:housenumber" v="15" />
+    <tag k="addr:street" v="Скатертный переулок" />
+    <tag k="building" v="apartments" />
+    <tag k="building:levels" v="5" />
+  </way>
+  <way id="35814579" visible="true" version="17" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="418735604" />
+    <nd ref="418735601" />
+    <nd ref="2523674524" />
+    <nd ref="418735602" />
+    <nd ref="2523674525" />
+    <nd ref="3439844827" />
+    <nd ref="418735603" />
+    <nd ref="2523674530" />
+    <nd ref="820793981" />
+    <nd ref="820793330" />
+    <nd ref="820793727" />
+    <nd ref="820794057" />
+    <nd ref="7271971994" />
+    <nd ref="418735599" />
+    <nd ref="418735600" />
+    <nd ref="7271971993" />
+    <nd ref="418735598" />
+    <nd ref="5370293458" />
+    <nd ref="5370293457" />
+    <nd ref="5370293456" />
+    <nd ref="5370293455" />
+    <nd ref="5370293454" />
+    <nd ref="418735608" />
+    <nd ref="418735610" />
+    <nd ref="3439844805" />
+    <nd ref="418735611" />
+    <nd ref="418735612" />
+    <nd ref="12529340720" />
+    <nd ref="418735613" />
+    <nd ref="418735609" />
+    <nd ref="12529340721" />
+    <nd ref="820794012" />
+    <nd ref="5370293453" />
+    <nd ref="418735597" />
+    <nd ref="418735596" />
+    <nd ref="2523674521" />
+    <nd ref="12529340722" />
+    <nd ref="820793839" />
+    <nd ref="820794090" />
+    <nd ref="418735605" />
+    <nd ref="418735606" />
+    <nd ref="418735607" />
+    <nd ref="820793504" />
+    <nd ref="820793498" />
+    <nd ref="418735604" />
+    <tag k="addr:housenumber" v="22" />
+    <tag k="addr:street" v="Скатертный переулок" />
+    <tag k="building" v="apartments" />
+    <tag k="building:levels" v="6" />
+  </way>
+  <way id="35814581" visible="true" version="15" changeset="159074841" timestamp="2024-11-13T03:31:43Z" user="mavl" uid="564990">
+    <nd ref="418735614" />
+    <nd ref="1447032401" />
+    <nd ref="3439844808" />
+    <nd ref="3439844809" />
+    <nd ref="1447032403" />
+    <nd ref="3439844807" />
+    <nd ref="3439844806" />
+    <nd ref="1447032399" />
+    <nd ref="418735615" />
+    <nd ref="3406262349" />
+    <nd ref="418735616" />
+    <nd ref="418735617" />
+    <nd ref="3406262351" />
+    <nd ref="3406262352" />
+    <nd ref="3406262356" />
+    <nd ref="3406262355" />
+    <nd ref="418735614" />
+    <tag k="addr:housenumber" v="20" />
+    <tag k="addr:street" v="Скатертный переулок" />
+    <tag k="building" v="office" />
+    <tag k="building:levels" v="3" />
+  </way>
+  <way id="39227227" visible="true" version="16" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="469932090" />
+    <nd ref="12529339017" />
+    <nd ref="3423484008" />
+    <nd ref="3423484003" />
+    <nd ref="3423484001" />
+    <nd ref="469932091" />
+    <nd ref="3343761912" />
+    <nd ref="469932092" />
+    <nd ref="3423483902" />
+    <nd ref="6391637265" />
+    <nd ref="715786824" />
+    <nd ref="3423427043" />
+    <nd ref="6391637230" />
+    <nd ref="3423427037" />
+    <nd ref="3423427035" />
+    <nd ref="469932094" />
+    <nd ref="3423427034" />
+    <nd ref="6391637279" />
+    <nd ref="3423427036" />
+    <nd ref="3423427038" />
+    <nd ref="469932095" />
+    <nd ref="715786874" />
+    <nd ref="1859394152" />
+    <nd ref="715786840" />
+    <nd ref="3423440014" />
+    <nd ref="469932098" />
+    <nd ref="6393332468" />
+    <nd ref="469932099" />
+    <nd ref="469932100" />
+    <nd ref="3412764384" />
+    <nd ref="3412764383" />
+    <nd ref="469932101" />
+    <nd ref="12529340706" />
+    <nd ref="469932090" />
+    <tag k="barrier" v="kerb" />
+    <tag k="landuse" v="residential" />
+    <tag k="residential" v="urban" />
+  </way>
+  <way id="39227230" visible="true" version="12" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="6348232471" />
+    <nd ref="469932118" />
+    <nd ref="3406262360" />
+    <nd ref="469932119" />
+    <nd ref="1402324019" />
+    <nd ref="3439711510" />
+    <nd ref="3423440026" />
+    <nd ref="577492473" />
+    <nd ref="469932120" />
+    <nd ref="5968539420" />
+    <nd ref="469932111" />
+    <nd ref="12529340707" />
+    <nd ref="1402324010" />
+    <nd ref="1402324009" />
+    <nd ref="12529340704" />
+    <nd ref="1402324008" />
+    <nd ref="469932112" />
+    <nd ref="469932114" />
+    <nd ref="3405495922" />
+    <nd ref="3405495923" />
+    <nd ref="469932115" />
+    <nd ref="3726255562" />
+    <nd ref="6348232470" />
+    <tag k="barrier" v="kerb" />
+  </way>
+  <way id="39227234" visible="true" version="15" changeset="161743925" timestamp="2025-01-25T12:34:52Z" user="literan" uid="830106">
+    <nd ref="12531626669" />
+    <nd ref="12529339015" />
+    <nd ref="469932160" />
+    <nd ref="3412764372" />
+    <nd ref="3412764373" />
+    <nd ref="12529339018" />
+    <nd ref="469932161" />
+    <nd ref="469932162" />
+    <nd ref="1403268125" />
+    <nd ref="12529340705" />
+    <nd ref="1403268126" />
+    <nd ref="1403268127" />
+    <nd ref="12529340710" />
+    <nd ref="469932163" />
+    <nd ref="12531626668" />
+    <tag k="barrier" v="kerb" />
+  </way>
+  <way id="39227235" visible="true" version="14" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="469932167" />
+    <nd ref="6140118132" />
+    <nd ref="1402324021" />
+    <nd ref="1402324020" />
+    <nd ref="1402324017" />
+    <nd ref="469932168" />
+    <nd ref="469932169" />
+    <nd ref="12529340709" />
+    <nd ref="3439844797" />
+    <nd ref="1402324011" />
+    <nd ref="12529340708" />
+    <nd ref="1402324012" />
+    <nd ref="469932170" />
+    <nd ref="469932171" />
+    <nd ref="5968539421" />
+    <nd ref="1402324018" />
+    <nd ref="577492472" />
+    <nd ref="1402324022" />
+    <nd ref="5968539423" />
+    <nd ref="469932172" />
+    <nd ref="469932173" />
+    <nd ref="1402324051" />
+    <nd ref="1402324050" />
+    <nd ref="1402324047" />
+    <nd ref="469932174" />
+    <nd ref="469932167" />
+    <tag k="barrier" v="kerb" />
+    <tag k="landuse" v="residential" />
+    <tag k="residential" v="urban" />
+  </way>
+  <way id="68047437" visible="true" version="12" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493">
+    <nd ref="820793307" />
+    <nd ref="820793652" />
+    <nd ref="359705100" />
+    <nd ref="12529340676" />
+    <nd ref="359705102" />
+    <nd ref="13914468349" />
+    <nd ref="13914468350" />
+    <nd ref="359705072" />
+    <nd ref="359705075" />
+    <nd ref="820793307" />
+    <tag k="addr:housenumber" v="17" />
+    <tag k="addr:street" v="Скатертный переулок" />
+    <tag k="building" v="apartments" />
+    <tag k="building:levels" v="7" />
+  </way>
+  <way id="131491817" visible="true" version="13" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="3405469765" />
+    <nd ref="12529340713" />
+    <nd ref="1447032374" />
+    <nd ref="1447032370" />
+    <nd ref="1447032359" />
+    <nd ref="1447032358" />
+    <nd ref="1447032356" />
+    <nd ref="1447032377" />
+    <nd ref="3405469765" />
+    <tag k="addr:housenumber" v="19" />
+    <tag k="addr:street" v="Скатертный переулок" />
+    <tag k="building" v="yes" />
+    <tag k="building:levels" v="2" />
+    <tag k="contact:phone" v="+7 495 6905736" />
+    <tag k="contact:website" v="http://www.tajembassy.ru/ru/konsulstvo/konsulskaya-sluzhba/konsulskie-uslugi" />
+    <tag k="country" v="TJ" />
+    <tag k="diplomatic" v="consulate" />
+    <tag k="name" v="Генеральное консульство Республики Таджикистан" />
+    <tag k="name:en" v="Consulate General of Tajikistan" />
+    <tag k="office" v="diplomatic" />
+    <tag k="official_name" v="Генеральное консульство Республики Таджикистан в Москве" />
+    <tag k="opening_hours" v="Mo-Fr 10:00-16:30" />
+  </way>
+  <way id="131491819" visible="true" version="12" changeset="159074856" timestamp="2024-11-13T03:33:05Z" user="mavl" uid="564990">
+    <nd ref="9183991382" />
+    <nd ref="3405469763" />
+    <nd ref="1447032351" />
+    <nd ref="1447032336" />
+    <nd ref="1447032334" />
+    <nd ref="1447032340" />
+    <nd ref="9183991373" />
+    <nd ref="9183991372" />
+    <nd ref="9183991371" />
+    <nd ref="9183991374" />
+    <nd ref="9183991381" />
+    <nd ref="9183991382" />
+    <tag k="addr:housenumber" v="20/3 с1" />
+    <tag k="addr:street" v="Хлебный переулок" />
+    <tag k="building" v="yes" />
+    <tag k="building:levels" v="3" />
+    <tag k="country" v="CL" />
+    <tag k="diplomatic" v="embassy" />
+    <tag k="embassy" v="residence" />
+    <tag k="name" v="Резиденция посла Чили в России" />
+    <tag k="name:en" v="Ambassador’s residence of Chile" />
+    <tag k="office" v="diplomatic" />
+  </way>
+  <way id="131491820" visible="true" version="7" changeset="159074841" timestamp="2024-11-13T03:32:04Z" user="mavl" uid="564990">
+    <nd ref="3439921708" />
+    <nd ref="3439921706" />
+    <nd ref="3439921705" />
+    <nd ref="3439921703" />
+    <nd ref="3439921704" />
+    <nd ref="3439921702" />
+    <nd ref="3439921700" />
+    <nd ref="3439921699" />
+    <nd ref="3439921695" />
+    <nd ref="1447032383" />
+    <nd ref="1447032389" />
+    <nd ref="3439921707" />
+    <nd ref="3439921708" />
+    <tag k="addr:housenumber" v="21" />
+    <tag k="addr:street" v="Скатертный переулок" />
+    <tag k="building" v="yes" />
+    <tag k="building:levels" v="2" />
+  </way>
+  <way id="131491843" visible="true" version="5" changeset="135416591" timestamp="2023-04-27T08:36:43Z" user="literan" uid="830106">
+    <nd ref="1447032338" />
+    <nd ref="1447032336" />
+    <nd ref="1447032351" />
+    <nd ref="1447032355" />
+    <nd ref="1447032342" />
+    <nd ref="1447032354" />
+  </way>
+  <way id="300837155" visible="true" version="6" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493">
+    <nd ref="3049300773" />
+    <nd ref="3049300776" />
+    <nd ref="13914468351" />
+    <nd ref="3412764377" />
+    <nd ref="359705072" />
+    <nd ref="13914468350" />
+    <nd ref="13914468349" />
+    <nd ref="13914468348" />
+    <nd ref="3412764374" />
+    <nd ref="3049300775" />
+    <nd ref="13914468347" />
+    <nd ref="3049300773" />
+    <tag k="addr:housenumber" v="6" />
+    <tag k="addr:street" v="Малый Ржевский переулок" />
+    <tag k="building" v="yes" />
+    <tag k="building:levels" v="2" />
+  </way>
+  <way id="300837321" visible="true" version="3" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="3049300771" />
+    <nd ref="12529340663" />
+    <nd ref="3049302670" />
+    <nd ref="3049302671" />
+    <nd ref="359705102" />
+    <tag k="barrier" v="fence" />
+  </way>
+  <way id="333435588" visible="true" version="6" changeset="159074856" timestamp="2024-11-13T03:32:22Z" user="mavl" uid="564990">
+    <nd ref="3405469763" />
+    <nd ref="9183991382" />
+    <nd ref="9183991376" />
+    <nd ref="9183991375" />
+    <nd ref="1447032344" />
+    <nd ref="9183991378" />
+    <nd ref="9183991379" />
+    <nd ref="9183991380" />
+    <nd ref="9183991377" />
+    <nd ref="1447032370" />
+    <nd ref="1447032374" />
+    <nd ref="3405469763" />
+    <tag k="building" v="yes" />
+    <tag k="building:levels" v="2" />
+  </way>
+  <way id="333508338" visible="true" version="2" changeset="63443452" timestamp="2018-10-12T06:53:11Z" user="literan" uid="830106">
+    <nd ref="3406262362" />
+    <nd ref="3406262365" />
+    <nd ref="3406262353" />
+    <tag k="barrier" v="fence" />
+  </way>
+  <way id="333508339" visible="true" version="4" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="418735599" />
+    <nd ref="3439844824" />
+    <nd ref="12529340727" />
+    <nd ref="12529340725" />
+    <nd ref="12529340723" />
+    <nd ref="12529340724" />
+    <nd ref="12529340726" />
+    <nd ref="3406262366" />
+    <nd ref="3406262363" />
+    <nd ref="3406262348" />
+    <nd ref="3406262349" />
+    <tag k="barrier" v="fence" />
+  </way>
+  <way id="333508343" visible="true" version="6" changeset="159074856" timestamp="2024-11-13T03:32:35Z" user="mavl" uid="564990">
+    <nd ref="3406262362" />
+    <nd ref="3406262361" />
+    <nd ref="3439711494" />
+    <nd ref="3439711493" />
+    <nd ref="3406262354" />
+    <nd ref="3406262358" />
+    <nd ref="4300756310" />
+    <nd ref="4300756311" />
+    <nd ref="3406262362" />
+    <tag k="addr:housenumber" v="7 с1" />
+    <tag k="addr:street" v="Столовый переулок" />
+    <tag k="building" v="yes" />
+    <tag k="building:levels" v="3" />
+  </way>
+  <way id="334188113" visible="true" version="1" changeset="29658794" timestamp="2015-03-22T15:13:33Z" user="literan" uid="830106">
+    <nd ref="359705072" />
+    <nd ref="3412764380" />
+    <nd ref="3049300776" />
+    <tag k="barrier" v="fence" />
+  </way>
+  <way id="334188120" visible="true" version="2" changeset="29806801" timestamp="2015-03-28T15:03:46Z" user="literan" uid="830106">
+    <nd ref="3412764382" />
+    <nd ref="3423484014" />
+    <nd ref="3412764381" />
+    <tag k="highway" v="service" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="334188121" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="3412764381" />
+    <nd ref="3412764379" />
+    <tag k="highway" v="service" />
+    <tag k="motor_vehicle" v="private" />
+    <tag k="surface" v="asphalt" />
+    <tag k="tunnel" v="building_passage" />
+  </way>
+  <way id="334188127" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="3412764379" />
+    <nd ref="3412764378" />
+    <nd ref="3412764376" />
+    <nd ref="3412764371" />
+    <tag k="highway" v="service" />
+    <tag k="motor_vehicle" v="private" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="334188129" visible="true" version="3" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493">
+    <nd ref="359705072" />
+    <nd ref="13914468350" />
+    <nd ref="13914468349" />
+    <nd ref="13914468348" />
+    <nd ref="3412764374" />
+    <nd ref="3049300775" />
+    <nd ref="13914468346" />
+    <nd ref="3412764377" />
+    <nd ref="359705072" />
+    <tag k="building:levels" v="1" />
+    <tag k="building:part" v="yes" />
+  </way>
+  <way id="335231752" visible="true" version="7" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="3406201880" />
+    <nd ref="12529340652" />
+    <nd ref="12529340656" />
+    <nd ref="3412764366" />
+    <nd ref="12529340664" />
+    <nd ref="3423484004" />
+    <nd ref="3423484007" />
+    <nd ref="3423484009" />
+    <nd ref="3423484013" />
+    <nd ref="3439708355" />
+    <nd ref="3423484016" />
+    <nd ref="3423484017" />
+    <nd ref="3423484015" />
+    <nd ref="3423484014" />
+    <nd ref="3423484002" />
+    <nd ref="12529340669" />
+    <nd ref="12529340644" />
+    <nd ref="3423483979" />
+    <nd ref="3423483974" />
+    <nd ref="6393332467" />
+    <nd ref="3423483964" />
+    <nd ref="3423483950" />
+    <nd ref="3423483941" />
+    <nd ref="3423483940" />
+    <nd ref="3439352929" />
+    <nd ref="3423483939" />
+    <nd ref="3423483916" />
+    <nd ref="3423483913" />
+    <nd ref="3423483899" />
+    <tag k="footway" v="sidewalk" />
+    <tag k="highway" v="footway" />
+    <tag k="surface" v="asphalt" />
+    <tag k="width" v="2" />
+  </way>
+  <way id="336889741" visible="true" version="5" changeset="89351231" timestamp="2020-08-13T11:00:17Z" user="ks1v" uid="279214">
+    <nd ref="3439711502" />
+    <nd ref="3439711508" />
+    <nd ref="3439711509" />
+    <nd ref="3439711507" />
+    <nd ref="3439711503" />
+    <nd ref="5968539422" />
+    <nd ref="3439708376" />
+    <nd ref="3439708373" />
+    <nd ref="3439708372" />
+    <nd ref="3439708371" />
+    <nd ref="3439708369" />
+    <nd ref="3439682634" />
+    <tag k="footway" v="sidewalk" />
+    <tag k="highway" v="footway" />
+    <tag k="lit" v="yes" />
+    <tag k="surface" v="asphalt" />
+    <tag k="width" v="2.5" />
+  </way>
+  <way id="336889744" visible="true" version="5" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="12529340706" />
+    <nd ref="3439708359" />
+    <nd ref="12529340705" />
+    <tag k="crossing" v="uncontrolled" />
+    <tag k="crossing:markings" v="zebra" />
+    <tag k="footway" v="crossing" />
+    <tag k="highway" v="footway" />
+    <tag k="lit" v="yes" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="336889747" visible="true" version="5" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="12529340710" />
+    <nd ref="3439708370" />
+    <nd ref="12529340709" />
+    <tag k="crossing" v="uncontrolled" />
+    <tag k="crossing:markings" v="zebra" />
+    <tag k="footway" v="crossing" />
+    <tag k="highway" v="footway" />
+    <tag k="lit" v="yes" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="336889749" visible="true" version="5" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="12529340707" />
+    <nd ref="3439708377" />
+    <nd ref="12529340708" />
+    <tag k="crossing" v="uncontrolled" />
+    <tag k="crossing:markings" v="zebra" />
+    <tag k="footway" v="crossing" />
+    <tag k="highway" v="footway" />
+    <tag k="lit" v="yes" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="336889758" visible="true" version="5" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="3412764384" />
+    <nd ref="3439708364" />
+    <nd ref="12529340704" />
+    <tag k="crossing" v="uncontrolled" />
+    <tag k="crossing:markings" v="zebra" />
+    <tag k="footway" v="crossing" />
+    <tag k="highway" v="footway" />
+    <tag k="lit" v="yes" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="336902419" visible="true" version="2" changeset="112717041" timestamp="2021-10-19T20:50:28Z" user="literan" uid="830106">
+    <nd ref="1447032356" />
+    <nd ref="9183991370" />
+    <nd ref="1447032340" />
+    <tag k="barrier" v="fence" />
+  </way>
+  <way id="336902421" visible="true" version="1" changeset="30000876" timestamp="2015-04-05T20:34:34Z" user="literan" uid="830106">
+    <nd ref="418735617" />
+    <nd ref="3439844804" />
+    <nd ref="3439844805" />
+    <tag k="barrier" v="fence" />
+  </way>
+  <way id="336902426" visible="true" version="5" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="3439711511" />
+    <nd ref="3439844818" />
+    <nd ref="3439844816" />
+    <nd ref="3439844815" />
+    <nd ref="3439844801" />
+    <nd ref="3439708380" />
+    <nd ref="3439844799" />
+    <nd ref="12529340711" />
+    <nd ref="3439708379" />
+    <nd ref="3439844798" />
+    <nd ref="3439844800" />
+    <nd ref="3439844803" />
+    <nd ref="3439844810" />
+    <nd ref="6121196192" />
+    <nd ref="5370293459" />
+    <nd ref="3439844817" />
+    <nd ref="3439844819" />
+    <nd ref="3439844820" />
+    <nd ref="3439844821" />
+    <nd ref="3439844823" />
+    <tag k="footway" v="sidewalk" />
+    <tag k="highway" v="footway" />
+    <tag k="lit" v="yes" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="336902429" visible="true" version="3" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="3439844813" />
+    <nd ref="3439844811" />
+    <tag k="highway" v="service" />
+    <tag k="motor_vehicle" v="private" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="336902438" visible="true" version="3" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="12529340736" />
+    <nd ref="5370293448" />
+    <nd ref="3439844813" />
+    <nd ref="12529340732" />
+    <nd ref="12529340733" />
+    <nd ref="12529340734" />
+    <nd ref="12529340735" />
+    <nd ref="3439844804" />
+    <tag k="highway" v="service" />
+    <tag k="motor_vehicle" v="private" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="336908507" visible="true" version="8" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="3439708365" />
+    <nd ref="3439921698" />
+    <nd ref="12529340717" />
+    <nd ref="3439921714" />
+    <nd ref="3439921723" />
+    <nd ref="6121196193" />
+    <nd ref="3439921724" />
+    <nd ref="3439921733" />
+    <nd ref="12529340851" />
+    <nd ref="3439921735" />
+    <nd ref="3439921737" />
+    <nd ref="3439921736" />
+    <nd ref="3439921734" />
+    <nd ref="3439921730" />
+    <nd ref="3439921729" />
+    <nd ref="5772737536" />
+    <nd ref="3423484011" />
+    <tag k="footway" v="sidewalk" />
+    <tag k="highway" v="footway" />
+    <tag k="lit" v="yes" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="336908511" visible="true" version="3" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="3439708365" />
+    <nd ref="3439921697" />
+    <nd ref="3439708363" />
+    <nd ref="3439921696" />
+    <nd ref="12529340702" />
+    <nd ref="3423484012" />
+    <nd ref="3439919985" />
+    <nd ref="3439919984" />
+    <nd ref="3423484011" />
+    <tag k="footway" v="sidewalk" />
+    <tag k="highway" v="footway" />
+    <tag k="lit" v="yes" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="556751624" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="3439844811" />
+    <nd ref="12529340723" />
+    <tag k="highway" v="footway" />
+    <tag k="surface" v="paving_stones" />
+  </way>
+  <way id="556751625" visible="true" version="1" changeset="55859136" timestamp="2018-01-29T13:09:17Z" user="bridgeconst" uid="3465650">
+    <nd ref="418735610" />
+    <nd ref="418735600" />
+    <tag k="barrier" v="fence" />
+  </way>
+  <way id="556751630" visible="true" version="2" changeset="153026706" timestamp="2024-06-22T12:04:31Z" user="radio-van" uid="12288220">
+    <nd ref="5370293482" />
+    <nd ref="5370293483" />
+    <nd ref="5370293484" />
+    <nd ref="5370293485" />
+    <nd ref="5370293486" />
+    <nd ref="5370293487" />
+    <nd ref="5370293488" />
+    <nd ref="5370293489" />
+    <nd ref="5370293490" />
+    <nd ref="5370293491" />
+    <nd ref="5370293492" />
+    <nd ref="5370293482" />
+    <tag k="leaf_type" v="broadleaved" />
+    <tag k="natural" v="wood" />
+  </way>
+  <way id="632120740" visible="true" version="1" changeset="63338764" timestamp="2018-10-09T09:36:39Z" user="literan" uid="830106">
+    <nd ref="5968539420" />
+    <nd ref="5968539422" />
+    <tag k="highway" v="footway" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="714781536" visible="true" version="2" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="6718625099" />
+    <nd ref="3439839892" />
+    <nd ref="12529340684" />
+    <nd ref="12529340681" />
+    <nd ref="12529340678" />
+    <nd ref="3439682634" />
+    <tag k="footway" v="sidewalk" />
+    <tag k="highway" v="footway" />
+    <tag k="surface" v="paving_stones" />
+  </way>
+  <way id="1347796574" visible="true" version="2" changeset="161104339" timestamp="2025-01-07T17:19:44Z" user="Vas111" uid="16951803">
+    <nd ref="271860230" />
+    <nd ref="3439708377" />
+    <nd ref="3439711504" />
+    <nd ref="271860497" />
+    <tag k="highway" v="residential" />
+    <tag k="lanes" v="1" />
+    <tag k="lit" v="yes" />
+    <tag k="maxspeed" v="30" />
+    <tag k="maxspeed:type" v="RU:zone30" />
+    <tag k="name" v="Малый Ржевский переулок" />
+    <tag k="name:uk" v="Малий Ржевський провулок" />
+    <tag k="omkum:old_name" v="/улица Палиашвили (1960 г.) Малый Ржевский переулок (до 1917 г.)" />
+    <tag k="oneway" v="yes" />
+    <tag k="parking:both" v="lane" />
+    <tag k="parking:both:fee" v="yes" />
+    <tag k="parking:both:fee:conditional" v="no @ (PH)" />
+    <tag k="parking:both:markings" v="yes" />
+    <tag k="parking:both:orientation" v="parallel" />
+    <tag k="postal_code" v="121069" />
+    <tag k="surface" v="asphalt" />
+    <tag k="wikidata" v="Q4279089" />
+  </way>
+  <way id="1347796586" visible="true" version="2" changeset="173428937" timestamp="2025-10-17T21:59:53Z" user="solenoid jam" uid="10129333">
+    <nd ref="3412764382" />
+    <nd ref="12467184628" />
+    <nd ref="3439708364" />
+    <nd ref="271860230" />
+    <tag k="highway" v="residential" />
+    <tag k="lanes" v="1" />
+    <tag k="lit" v="yes" />
+    <tag k="maxspeed" v="30" />
+    <tag k="maxspeed:type" v="RU:zone30" />
+    <tag k="name" v="Скатертный переулок" />
+    <tag k="name:en" v="Skatertnyy Lane" />
+    <tag k="name:etymology:wikidata" v="Q536168" />
+    <tag k="name:uk" v="Скатертний провулок" />
+    <tag k="oneway" v="yes" />
+    <tag k="parking:both" v="lane" />
+    <tag k="parking:both:markings" v="yes" />
+    <tag k="parking:both:orientation" v="parallel" />
+    <tag k="parking:left:access" v="permit" />
+    <tag k="parking:right:access" v="no" />
+    <tag k="parking:right:disabled" v="designated" />
+    <tag k="postal_code" v="121069" />
+    <tag k="surface" v="asphalt" />
+    <tag k="wikidata" v="Q4421635" />
+  </way>
+  <way id="1347796587" visible="true" version="4" changeset="173428937" timestamp="2025-10-17T21:59:53Z" user="solenoid jam" uid="10129333">
+    <nd ref="3406210508" />
+    <nd ref="3439839891" />
+    <nd ref="12529340685" />
+    <nd ref="12529340682" />
+    <nd ref="12529340679" />
+    <nd ref="3412764382" />
+    <tag k="highway" v="residential" />
+    <tag k="lanes" v="1" />
+    <tag k="lit" v="yes" />
+    <tag k="maxspeed" v="30" />
+    <tag k="maxspeed:type" v="RU:zone30" />
+    <tag k="name" v="Скатертный переулок" />
+    <tag k="name:en" v="Skatertnyy Lane" />
+    <tag k="name:etymology:wikidata" v="Q536168" />
+    <tag k="name:uk" v="Скатертний провулок" />
+    <tag k="oneway" v="yes" />
+    <tag k="parking:left" v="lane" />
+    <tag k="parking:left:fee" v="yes" />
+    <tag k="parking:left:fee:conditional" v="no @ (PH)" />
+    <tag k="parking:left:markings" v="yes" />
+    <tag k="parking:left:orientation" v="parallel" />
+    <tag k="parking:right" v="no" />
+    <tag k="parking:right:restriction" v="no_stopping" />
+    <tag k="postal_code" v="121069" />
+    <tag k="surface" v="asphalt" />
+    <tag k="wikidata" v="Q4421635" />
+  </way>
+  <way id="1353951066" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="12529340679" />
+    <nd ref="12529340678" />
+    <nd ref="12529340677" />
+    <tag k="highway" v="service" />
+    <tag k="service" v="driveway" />
+  </way>
+  <way id="1353951072" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="9183991370" />
+    <nd ref="12529340703" />
+    <nd ref="12529340700" />
+    <tag k="access" v="private" />
+    <tag k="highway" v="service" />
+  </way>
+  <way id="1353951073" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="12529340701" />
+    <nd ref="12529340702" />
+    <nd ref="9183991370" />
+    <tag k="highway" v="service" />
+  </way>
+  <way id="1353951074" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="12529340704" />
+    <nd ref="3439708371" />
+    <tag k="highway" v="footway" />
+    <tag k="lit" v="yes" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="1353951075" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="3423484017" />
+    <nd ref="3412764384" />
+    <tag k="highway" v="footway" />
+    <tag k="lit" v="yes" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="1353951076" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="12529340705" />
+    <nd ref="3439708363" />
+    <tag k="highway" v="footway" />
+    <tag k="lit" v="yes" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="1353951077" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="3439708355" />
+    <nd ref="12529340706" />
+    <tag k="highway" v="footway" />
+    <tag k="lit" v="yes" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="1353951078" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="12529340708" />
+    <nd ref="3439708380" />
+    <tag k="highway" v="footway" />
+    <tag k="lit" v="yes" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="1353951079" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="3439708373" />
+    <nd ref="12529340707" />
+    <tag k="highway" v="footway" />
+    <tag k="lit" v="yes" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="1353951080" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="12529340709" />
+    <nd ref="3439708379" />
+    <tag k="highway" v="footway" />
+    <tag k="lit" v="yes" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="1353951081" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="3439708365" />
+    <nd ref="12529340710" />
+    <tag k="highway" v="footway" />
+    <tag k="lit" v="yes" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="1353951082" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="3439921699" />
+    <nd ref="12529340712" />
+    <nd ref="12529340713" />
+    <tag k="barrier" v="fence" />
+  </way>
+  <way id="1353951087" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="12529340731" />
+    <nd ref="12529340729" />
+    <nd ref="12529340728" />
+    <nd ref="12529340730" />
+    <nd ref="12529340731" />
+    <tag k="access" v="private" />
+    <tag k="amenity" v="parking" />
+    <tag k="parking" v="street_side" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="1353951088" visible="true" version="1" changeset="161712894" timestamp="2025-01-24T13:40:00Z" user="literan" uid="830106">
+    <nd ref="3439844804" />
+    <nd ref="3439844803" />
+    <nd ref="3439844802" />
+    <tag k="highway" v="service" />
+    <tag k="surface" v="asphalt" />
+  </way>
+  <way id="1526734537" visible="true" version="1" changeset="183737656" timestamp="2026-06-06T13:07:12Z" user="Grass-snake" uid="11321493">
+    <nd ref="13914468346" />
+    <nd ref="3049300775" />
+    <nd ref="13914468347" />
+    <nd ref="3049300773" />
+    <nd ref="3049300776" />
+    <nd ref="13914468351" />
+    <nd ref="3412764377" />
+    <nd ref="13914468346" />
+    <tag k="building:levels" v="2" />
+    <tag k="building:part" v="yes" />
+  </way>
+</osm>

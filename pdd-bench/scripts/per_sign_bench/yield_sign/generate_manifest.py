@@ -30,7 +30,7 @@ from lib.manifest_config import (
     DEFAULT_AUX_LANES_OCCUPIED_MAX,
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
 )
-from lib.scene_augmentation import SpawnScenario, augment_layout_for_scene
+from lib.scene_augmentation import SpawnScenario, augment_layout_for_scene, pick_default_yield_spawn_meta_for_net
 
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -399,9 +399,14 @@ def build_manifest_entry(
         secondary_ids = set()
         if junction_layout_cache is not None:
             secondary_ids = set(junction_layout_cache.get("secondary_edge_ids") or [])
-        if secondary_ids and meta["road_id"] not in secondary_ids:
+        spawn_edge_ids = {lane.edge_id for lane in (spawn_lanes_cache or [])}
+        road_id = str(meta["road_id"])
+        road_id_invalid = road_id not in spawn_edge_ids or (
+            secondary_ids and road_id not in secondary_ids
+        )
+        if road_id_invalid:
             print(
-                f"  [spawn] meta road_id {meta['road_id']!r} is not secondary; "
+                f"  [spawn] meta road_id {road_id!r} is not a valid secondary approach lane; "
                 "picking from secondary arms"
             )
             selected_lane = select_random_spawn_lane(spawn_candidates, seed)
@@ -411,7 +416,7 @@ def build_manifest_entry(
                 entry["spawn_lane_length"] = selected_lane.length
                 entry["spawn_to_junction"] = selected_lane.to_junction
         else:
-            entry["road_id"] = meta["road_id"]
+            entry["road_id"] = road_id
             if meta.get("spawn_lane_num") is not None:
                 entry["spawn_lane_num"] = meta["spawn_lane_num"]
     elif selected_lane is not None:
@@ -424,11 +429,27 @@ def build_manifest_entry(
         print(f"  [spawn] No secondary incoming lanes available for {scene_name}")
     
     if meta.get("distance_from_start"):
-        entry["distance_from_start"] = meta["distance_from_start"]
+        distance = float(meta["distance_from_start"])
+        spawn_len = entry.get("spawn_lane_length")
+        if spawn_len is not None:
+            distance = min(distance, max(float(spawn_len) - 5.0, 10.0))
+        entry["distance_from_start"] = distance
     if meta.get("sign_spawn_distance"):
         entry["sign_spawn_distance"] = meta["sign_spawn_distance"]
     if spawn_scenario is None and meta.get("destination_lane_id"):
         entry["destination_lane_id"] = meta["destination_lane_id"]
+        if meta.get("destination_edge_id"):
+            entry["destination_edge_id"] = meta["destination_edge_id"]
+    elif spawn_scenario is None and entry.get("road_id"):
+        spawn_meta = pick_default_yield_spawn_meta_for_net(
+            net_full_path,
+            prefer_ego_edge_id=str(entry["road_id"]),
+        )
+        if spawn_meta:
+            entry["destination_lane_id"] = spawn_meta["destination_lane_id"]
+            entry["destination_edge_id"] = spawn_meta["destination_edge_id"]
+            entry["road_id"] = spawn_meta["road_id"]
+            entry["spawn_lane_num"] = spawn_meta["spawn_lane_num"]
 
     if junction_layout_cache is not None:
         entry["junction_layout"] = junction_layout_cache
@@ -488,7 +509,10 @@ def generate_manifest(
         print(f"  Found {len(spawn_lanes)} intersection-approaching lane(s)")
 
         junction_layout = build_junction_layout_for_scene(net_full_path)
-        assert junction_layout is not None, f"No junction layout found for {scene_name}"
+        if junction_layout is None:
+            print(f"  [junction_layout] No junction layout found for {scene_name}")
+            continue
+        # assert junction_layout is not None, f"No junction layout found for {scene_name}"
         print(
             f"  Junction layout: {junction_layout['shape']} @ {junction_layout['junction_id']} "
             f"(main={len(junction_layout.get('main_edge_ids', []))}, "

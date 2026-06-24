@@ -67,9 +67,9 @@ def build_catalog_row(scene_dir: Path, meta: dict, var_idx: int = 0) -> dict:
         "net_path": net_path,
         "sign_spawn_distance": 30.0,
         "distance_from_start": 0.0,
-        "destination_lane_id": None,
+        "destination_lane_id": meta.get("destination_lane_id"),
         "n_lanes": 1,
-        "spawn_lane_num": 0,
+        "spawn_lane_num": meta.get("spawn_lane_num", 0),
         "var_idx": var_idx,
         "seed": seed,
         "spawn_velocity_ms": 0.0,
@@ -108,6 +108,8 @@ def build_env(catalog_row: dict, scenes_root: Path, traffic_density: float, max_
         config["vehicle_config"]["spawn_lane_index"] = catalog_row["road_id"]
     if catalog_row.get("spawn_lane_num") is not None:
         config["spawn_lane_num"] = int(catalog_row["spawn_lane_num"])
+    if catalog_row.get("destination_lane_id"):
+        config["vehicle_config"]["destination"] = catalog_row["destination_lane_id"]
 
     class _EnvWithTraffic(TrafficSignSumoEnv):
         @classmethod
