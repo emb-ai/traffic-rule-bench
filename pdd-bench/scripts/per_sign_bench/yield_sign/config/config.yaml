@@ -26,7 +26,7 @@ paths:
 scenario:
   n_variants: 1                   # Variants per scene (non-augmented mode)
   augment: true                   # Enable ego/aux spawn point enumeration
-  max_scenarios_per_scene: 1      # Limit augmented scenarios (null = all)
+  max_scenarios_per_scene: 15     # Limit augmented scenarios (null = all)
   respect_scene_selection: true  # Skip scenes marked reject in scene_selection.json
 
 # =============================================================================
@@ -45,15 +45,15 @@ simulation:
 auxiliary:
   enabled: true                   # Spawn agents on main road
   distance_from_intersection: 20.0  # Distance from junction (m)
-  convoy_size: 1                  # Vehicles per lane
-  lanes_occupied: 1               # Main road lanes to occupy
+  convoy_size: 3                  # Vehicles per lane
+  lanes_occupied: 4               # Main road lanes to occupy
   convoy_gap_m: 10.0              # Gap between convoy vehicles (m)
 
 # =============================================================================
 # GIF Visualization
 # =============================================================================
 gif:
-  enabled: true                   # Generate visualization GIFs
+  enabled: false                   # Generate visualization GIFs
   policy: idm                     # Policy for rendering (good driving, no sign rules)
   max_scenes: null                # Limit GIFs (null = all)
   dry_run: false                  # Print commands without executing
