@@ -11,27 +11,6 @@ from pathlib import Path
 
 RADIUS_DEFAULT = 200  # meters in each direction from center
 
-MOTORWAY_KEEP_TYPES = [
-    "highway.motorway", "highway.motorway_link",
-    "highway.trunk", "highway.trunk_link",
-    "highway.primary", "highway.primary_link",
-    "highway.secondary", "highway.secondary_link",
-    "highway.tertiary", "highway.tertiary_link",
-    "highway.unclassified",
-    "highway.residential",
-    "highway.service",
-]
-
-MOTORWAY_REMOVE_TYPES = [
-    "railway.subway", "railway.rail", "railway.light_rail",
-    "railway.tram", "railway.monorail", "railway.preserved",
-    "highway.footway", "highway.path",
-    "highway.cycleway", "highway.pedestrian", "highway.steps",
-    "highway.track", "highway.bridleway", "highway.corridor",
-]
-
-SERVICE_REMOVE_TYPES = ["highway.service"]
-
 
 def meters_to_degrees(meters: float, lat: float) -> tuple[float, float]:
     """Convert meters to degrees at a given latitude.
@@ -76,10 +55,8 @@ def _find_netconvert() -> str:
     )
 
 
-def load_scene_inputs(
-    scenes_dir: Path, scene_name: str
-) -> tuple[Path, float, float, bool]:
-    """Resolve map.osm, crop center, and optional flags from a scene folder."""
+def load_scene_inputs(scenes_dir: Path, scene_name: str) -> tuple[Path, float, float]:
+    """Resolve map.osm and crop center from a scene folder."""
     scene_dir = scenes_dir / scene_name
     if not scene_dir.is_dir():
         raise FileNotFoundError(f"Scene folder not found: {scene_dir}")
@@ -105,117 +82,7 @@ def load_scene_inputs(
             f"{coords_path} must contain lat/lon (or latitude/longitude), got: {coords}"
         )
 
-    save_service_roads = bool(coords.get("save_service_roads", False))
-
-    return osm_path, float(lat), float(lon), save_service_roads
-
-
-def _way_highway_value(way: ET.Element) -> str | None:
-    for tag in way.findall("tag"):
-        if tag.get("k") == "highway":
-            return tag.get("v")
-    return None
-
-
-def _way_node_refs(way: ET.Element) -> list[str]:
-    return [nd.get("ref") for nd in way.findall("nd") if nd.get("ref")]
-
-
-def _allowed_osm_highways(keep_types: list[str]) -> set[str]:
-    return {road_type.split(".", 1)[1] for road_type in keep_types if road_type != "highway.service"}
-
-
-def _connected_service_way_ids(
-    allowed_way_ids: set[str],
-    service_way_ids: set[str],
-    ways: dict[str, ET.Element],
-    node_to_ways: dict[str, set[str]],
-) -> set[str]:
-    """All service ways reachable from allowed roads through service-only links."""
-    kept: set[str] = set()
-    frontier: list[str] = []
-
-    for allowed_id in allowed_way_ids:
-        for node_ref in _way_node_refs(ways[allowed_id]):
-            for way_id in node_to_ways.get(node_ref, ()):
-                if way_id in service_way_ids and way_id not in kept:
-                    frontier.append(way_id)
-
-    while frontier:
-        way_id = frontier.pop(0)
-        if way_id in kept:
-            continue
-        kept.add(way_id)
-        for node_ref in _way_node_refs(ways[way_id]):
-            for neighbor_id in node_to_ways.get(node_ref, ()):
-                if neighbor_id in service_way_ids and neighbor_id not in kept:
-                    frontier.append(neighbor_id)
-
-    return kept
-
-
-def filter_connected_service_roads(
-    osm_path: Path,
-    *,
-    keep_types: list[str],
-) -> int:
-    """Drop service roads that are not connected to allowed motorized roads."""
-    tree = ET.parse(osm_path)
-    root = tree.getroot()
-
-    ways: dict[str, ET.Element] = {}
-    way_highways: dict[str, str | None] = {}
-    node_to_ways: dict[str, set[str]] = {}
-
-    for way in root.findall("way"):
-        way_id = way.get("id")
-        if not way_id:
-            continue
-        ways[way_id] = way
-        highway = _way_highway_value(way)
-        way_highways[way_id] = highway
-        for node_ref in _way_node_refs(way):
-            node_to_ways.setdefault(node_ref, set()).add(way_id)
-
-    allowed_highways = _allowed_osm_highways(keep_types)
-    allowed_way_ids = {
-        way_id for way_id, highway in way_highways.items() if highway in allowed_highways
-    }
-    service_way_ids = {
-        way_id for way_id, highway in way_highways.items() if highway == "service"
-    }
-
-    kept_service_ids = _connected_service_way_ids(
-        allowed_way_ids,
-        service_way_ids,
-        ways,
-        node_to_ways,
-    )
-
-    removed_service = 0
-    for way in list(root.findall("way")):
-        way_id = way.get("id")
-        if way_id in service_way_ids and way_id not in kept_service_ids:
-            root.remove(way)
-            removed_service += 1
-
-    used_node_ids: set[str] = set()
-    for way in root.findall("way"):
-        for node_ref in _way_node_refs(way):
-            used_node_ids.add(node_ref)
-
-    for node in list(root.findall("node")):
-        if node.get("id") not in used_node_ids:
-            root.remove(node)
-
-    ET.indent(tree, space="  ")
-    tree.write(osm_path, encoding="unicode", xml_declaration=True)
-
-    print(
-        f"   Service roads: kept {len(kept_service_ids)}, "
-        f"removed {removed_service} (unconnected)"
-    )
-    return removed_service
+    return osm_path, float(lat), float(lon)
 
 
 def crop_osm_to_bbox(input_osm_path, output_osm_path, lat, lon, delta_lat, delta_lon):
@@ -290,16 +157,7 @@ def crop_osm_to_bbox(input_osm_path, output_osm_path, lat, lon, delta_lat, delta
     return output_osm_path
 
 
-def convert_osm_to_sumo(
-    osm_path,
-    scene_name,
-    scenes_dir,
-    lat,
-    lon,
-    radius,
-    *,
-    save_service_roads: bool = False,
-):
+def convert_osm_to_sumo(osm_path, scene_name, scenes_dir, lat, lon, radius):
     """Crop OSM around (lat, lon) and convert to SUMO net.xml.
     
     Args:
@@ -331,19 +189,26 @@ def convert_osm_to_sumo(
     print(f"   Cropped: {cropped_osm_path} ({cropped_osm_path.stat().st_size / 1024:.1f} KB)")
     osm_to_convert = cropped_osm_path
 
-    keep_types = list(MOTORWAY_KEEP_TYPES)
-    remove_types = list(MOTORWAY_REMOVE_TYPES)
-    if save_service_roads:
-        print("\n1b. Filtering service roads connected to main network...")
-        filter_connected_service_roads(osm_to_convert, keep_types=keep_types)
-    else:
-        remove_types.extend(SERVICE_REMOVE_TYPES)
-
-    if save_service_roads:
-        print("\n2. Converting OSM to SUMO .net.xml (motorized roads, incl. filtered service)...")
-    else:
-        print("\n2. Converting OSM to SUMO .net.xml (main roads only)...")
+    print("\n2. Converting OSM to SUMO .net.xml (main roads only)...")
     print(f"   Input: {osm_to_convert} ({osm_to_convert.stat().st_size / 1024:.1f} KB)")
+
+    keep_types = [
+        "highway.motorway", "highway.motorway_link",
+        "highway.trunk", "highway.trunk_link",
+        "highway.primary", "highway.primary_link",
+        "highway.secondary", "highway.secondary_link",
+        "highway.tertiary", "highway.tertiary_link",
+        "highway.unclassified",
+        "highway.residential",
+    ]
+
+    remove_types = [
+        "railway.subway", "railway.rail", "railway.light_rail",
+        "railway.tram", "railway.monorail", "railway.preserved",
+        "highway.service", "highway.footway", "highway.path",
+        "highway.cycleway", "highway.pedestrian", "highway.steps",
+        "highway.track", "highway.bridleway", "highway.corridor",
+    ]
 
     geo_boundary = f"{lon - delta_lon},{lat - delta_lat},{lon + delta_lon},{lat + delta_lat}"
     cmd = [
@@ -380,7 +245,6 @@ def convert_osm_to_sumo(
         "latitude": lat,
         "longitude": lon,
         "crop_radius_m": radius,
-        "save_service_roads": save_service_roads,
     }
     with open(scene_dir / "meta.json", "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)
@@ -419,7 +283,7 @@ def main():
     args = parser.parse_args()
     scenes_dir = Path(args.scenes_dir)
 
-    osm_path, lat, lon, save_service_roads = load_scene_inputs(scenes_dir, args.scene)
+    osm_path, lat, lon = load_scene_inputs(scenes_dir, args.scene)
 
     scene_dir = convert_osm_to_sumo(
         osm_path=osm_path,
@@ -428,7 +292,6 @@ def main():
         lat=lat,
         lon=lon,
         radius=args.radius,
-        save_service_roads=save_service_roads,
     )
 
     print(f"\n{'=' * 60}")

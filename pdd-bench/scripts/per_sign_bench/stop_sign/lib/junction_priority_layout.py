@@ -18,7 +18,7 @@ INTERSECTION_JUNCTION_TYPES = {
 
 RoadClass = Literal["main", "secondary"]
 LayoutMode = Literal["main_secondary", "main_main"]
-JunctionShape = Literal["2", "T", "X"]
+JunctionShape = Literal["T", "X"]
 
 
 @dataclass
@@ -55,6 +55,7 @@ class ApproachArm:
     outgoing_to: List[str] = field(default_factory=list)
     left_to: List[str] = field(default_factory=list)
     from_node: str = ""
+    min_lane_length: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -68,6 +69,7 @@ class ApproachArm:
             "outgoing_to": list(self.outgoing_to),
             "left_to": list(self.left_to),
             "from_node": self.from_node,
+            "min_lane_length": float(self.min_lane_length),
         }
 
 
@@ -152,7 +154,7 @@ def _normalize_dir(raw: str) -> str:
     return str(raw or "").strip().lower()
 
 
-def _load_net(net_path: Path) -> tuple[dict, dict, Dict[str, str], list]:
+def _load_net(net_path: Path) -> tuple[dict, dict, dict, list]:
     tree = ET.parse(net_path)
     root = tree.getroot()
 
@@ -178,7 +180,6 @@ def _load_net(net_path: Path) -> tuple[dict, dict, Dict[str, str], list]:
         }
 
     edges: Dict[str, SumoEdge] = {}
-    edge_types: Dict[str, str] = {}
     for edge_el in root.findall("edge"):
         edge_id = edge_el.get("id")
         if not edge_id:
@@ -192,7 +193,6 @@ def _load_net(net_path: Path) -> tuple[dict, dict, Dict[str, str], list]:
             to_node=edge_el.get("to", ""),
             shape=_parse_shape(edge_el.get("shape", "")),
         )
-        edge_types[edge_id] = edge_el.get("type", "")
         for lane_el in edge_el.findall("lane"):
             lane_id = lane_el.get("id", "")
             if not lane_id:
@@ -227,34 +227,7 @@ def _load_net(net_path: Path) -> tuple[dict, dict, Dict[str, str], list]:
             }
         )
 
-    return junctions, edges, edge_types, connections
-
-
-def _is_service_road_type(road_type: str) -> bool:
-    return road_type == "highway.service" or road_type.endswith(".service")
-
-
-def _junction_is_mixed_main_service(
-    junction_id: str,
-    edges: Dict[str, SumoEdge],
-    edge_types: Dict[str, str],
-) -> bool:
-    incoming = _incoming_edges_for_junction(junction_id, edges)
-    has_service = any(_is_service_road_type(edge_types.get(edge.edge_id, "")) for edge in incoming)
-    has_main = any(
-        edge_types.get(edge.edge_id, "") and not _is_service_road_type(edge_types.get(edge.edge_id, ""))
-        for edge in incoming
-    )
-    return has_service and has_main
-
-
-def _junction_distance_to_point(
-    junction_id: str,
-    junctions: dict,
-    point: Tuple[float, float],
-) -> float:
-    cx, cy = junctions[junction_id]["center"]
-    return math.hypot(point[0] - cx, point[1] - cy)
+    return junctions, edges, {}, connections
 
 
 def _incoming_edges_for_junction(junction_id: str, edges: Dict[str, SumoEdge]) -> List[SumoEdge]:
@@ -263,105 +236,30 @@ def _incoming_edges_for_junction(junction_id: str, edges: Dict[str, SumoEdge]) -
     return incoming
 
 
-def _parse_net_location(root: ET.Element) -> Optional[dict]:
-    location = root.find("location")
-    if location is None:
-        return None
-    try:
-        orig = tuple(float(v) for v in location.get("origBoundary", "").split(","))
-        conv = tuple(float(v) for v in location.get("convBoundary", "").split(","))
-    except ValueError:
-        return None
-    if len(orig) != 4 or len(conv) != 4:
-        return None
-    return {"orig": orig, "conv": conv}
-
-
-def _latlon_to_net_xy(lat: float, lon: float, location: dict) -> Tuple[float, float]:
-    min_lon, min_lat, max_lon, max_lat = location["orig"]
-    min_x, min_y, max_x, max_y = location["conv"]
-    x = min_x + (lon - min_lon) / (max_lon - min_lon) * (max_x - min_x)
-    y = min_y + (lat - min_lat) / (max_lat - min_lat) * (max_y - min_y)
-    return x, y
-
-
-def _point_segment_distance(
-    px: float,
-    py: float,
-    ax: float,
-    ay: float,
-    bx: float,
-    by: float,
-) -> float:
-    dx = bx - ax
-    dy = by - ay
-    if dx == 0.0 and dy == 0.0:
-        return math.hypot(px - ax, py - ay)
-    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
-    proj_x = ax + t * dx
-    proj_y = ay + t * dy
-    return math.hypot(px - proj_x, py - proj_y)
-
-
-def _min_dist_to_arm(
-    point: Tuple[float, float],
-    arm: ApproachArm,
-    edges: Dict[str, SumoEdge],
-) -> float:
-    px, py = point
-    edge = edges.get(arm.edge_id)
-    if edge is None:
-        return math.hypot(px - arm.entry_point[0], py - arm.entry_point[1])
-
-    best = float("inf")
-    for lane in edge.lanes:
-        pts = lane.shape or edge.shape
-        if len(pts) < 2:
-            continue
-        for i in range(len(pts) - 1):
-            ax, ay = pts[i]
-            bx, by = pts[i + 1]
-            best = min(best, _point_segment_distance(px, py, ax, ay, bx, by))
-    if best == float("inf"):
-        return math.hypot(px - arm.entry_point[0], py - arm.entry_point[1])
-    return best
-
-
 def _discover_primary_junction(
     junctions: dict,
     edges: Dict[str, SumoEdge],
-    edge_types: Dict[str, str],
-    sign_xy: Optional[Tuple[float, float]] = None,
 ) -> str:
     candidates: List[tuple[str, int]] = []
     for jid, info in junctions.items():
         if info["type"] not in INTERSECTION_JUNCTION_TYPES:
             continue
         arm_count = len(_incoming_edges_for_junction(jid, edges))
-        if arm_count >= 2:
+        if arm_count >= 3:
             candidates.append((jid, arm_count))
 
     if not candidates:
         raise JunctionLayoutError(
-            "No intersection junction with at least 2 incoming arms found in net.xml"
+            "No intersection junction with at least 3 incoming arms found in net.xml"
         )
 
-    if len(candidates) == 1:
-        return candidates[0][0]
+    if len(candidates) != 1:
+        details = ", ".join(f"{jid} ({count} arms)" for jid, count in candidates)
+        raise JunctionLayoutError(
+            f"Expected exactly one intersection junction in crop, found {len(candidates)}: {details}"
+        )
 
-    mixed = [
-        jid for jid, _ in candidates if _junction_is_mixed_main_service(jid, edges, edge_types)
-    ]
-    if mixed:
-        pool = mixed
-    else:
-        pool = [jid for jid, _ in candidates]
-
-    if sign_xy is not None:
-        return min(pool, key=lambda jid: _junction_distance_to_point(jid, junctions, sign_xy))
-
-    pool.sort(key=lambda jid: (-len(_incoming_edges_for_junction(jid, edges)), jid))
-    return pool[0]
+    return candidates[0][0]
 
 
 def _straight_targets(incoming_edge_id: str, connections: list) -> Set[str]:
@@ -442,6 +340,7 @@ def _build_arms(
         lane_keys = [lane.metadrive_key for lane in sorted(edge.lanes, key=lambda l: l.lane_num)]
         entry_lane = max(edge.lanes, key=lambda l: l.length)
         entry_point = _entry_point_for_lane(entry_lane, edge)
+        min_lane_length = min((lane.length for lane in edge.lanes), default=0.0)
         arms.append(
             ApproachArm(
                 edge_id=edge.edge_id,
@@ -453,6 +352,7 @@ def _build_arms(
                 outgoing_to=sorted(outgoing_map.get(edge.edge_id, set())),
                 left_to=sorted(left_map.get(edge.edge_id, set())),
                 from_node=edge.from_node,
+                min_lane_length=min_lane_length,
             )
         )
 
@@ -467,10 +367,8 @@ def _infer_shape(num_arms: int) -> JunctionShape:
         return "X"
     if num_arms == 3:
         return "T"
-    if num_arms == 2:
-        return "2"
     raise JunctionLayoutError(
-        f"Unsupported arm count {num_arms}; expected 2, 3 (T), or 4 (X)"
+        f"Unsupported arm count {num_arms}; expected 3 (T) or 4 (X)"
     )
 
 
@@ -535,52 +433,6 @@ def _assign_main_secondary_t(
     return all_ids - secondary_ids, secondary_ids
 
 
-def _assign_main_secondary_2(
-    arms: List[ApproachArm],
-    edges: Dict[str, SumoEdge],
-    edge_types: Dict[str, str],
-    *,
-    sign_xy: Optional[Tuple[float, float]] = None,
-    secondary_edge_id: Optional[str] = None,
-) -> tuple[Set[str], Set[str]]:
-    all_ids = {arm.edge_id for arm in arms}
-    if len(arms) != 2:
-        raise JunctionLayoutError("2-way junction expected exactly 2 arms")
-
-    if secondary_edge_id is not None:
-        if secondary_edge_id not in all_ids:
-            raise JunctionLayoutError(
-                f"secondary_edge_id {secondary_edge_id!r} is not an incoming arm "
-                f"(expected one of {sorted(all_ids)})"
-            )
-        secondary_ids = {secondary_edge_id}
-        return all_ids - secondary_ids, secondary_ids
-
-    service_arms = [
-        arm for arm in arms if _is_service_road_type(edge_types.get(arm.edge_id, ""))
-    ]
-    main_arms = [
-        arm for arm in arms if edge_types.get(arm.edge_id, "") and arm not in service_arms
-    ]
-    if len(service_arms) == 1 and len(main_arms) == 1:
-        return {main_arms[0].edge_id}, {service_arms[0].edge_id}
-
-    if sign_xy is not None:
-        by_dist = sorted(
-            arms,
-            key=lambda arm: _min_dist_to_arm(sign_xy, arm, edges),
-        )
-        secondary_ids = {by_dist[0].edge_id}
-        return all_ids - secondary_ids, secondary_ids
-
-    shortest = min(
-        arms,
-        key=lambda arm: min((lane.length for lane in edges[arm.edge_id].lanes), default=0.0),
-    )
-    secondary_ids = {shortest.edge_id}
-    return all_ids - secondary_ids, secondary_ids
-
-
 def _apply_classes(arms: List[ApproachArm], main_ids: Set[str], secondary_ids: Set[str]) -> None:
     for arm in arms:
         if arm.edge_id in main_ids:
@@ -598,9 +450,6 @@ def build_junction_priority_layout(
     mode: LayoutMode = "main_secondary",
     ego_edge_id: Optional[str] = None,
     require_ego_secondary: bool = False,
-    sign_lat: Optional[float] = None,
-    sign_lon: Optional[float] = None,
-    secondary_edge_id: Optional[str] = None,
 ) -> JunctionPriorityLayout:
     """
     Build main/secondary layout for the single intersection in a SUMO net.
@@ -610,10 +459,7 @@ def build_junction_priority_layout(
         mode: Currently only ``main_secondary`` is implemented.
         ego_edge_id: Optional spawn edge; when ``require_ego_secondary`` is set,
             raises if that arm is not secondary.
-        require_ego_secondary: Validate ego spawn edge is secondary (stop scenarios).
-        sign_lat: Optional WGS84 latitude of the stop sign (used for 2-arm junctions).
-        sign_lon: Optional WGS84 longitude of the stop sign (used for 2-arm junctions).
-        secondary_edge_id: Optional explicit secondary incoming edge id.
+        require_ego_secondary: Validate ego spawn edge is secondary (yield scenarios).
 
     Returns:
         JunctionPriorityLayout with arms sorted CCW by entry angle.
@@ -625,15 +471,8 @@ def build_junction_priority_layout(
     if not net_path.is_file():
         raise JunctionLayoutError(f"net.xml not found: {net_path}")
 
-    tree = ET.parse(net_path)
-    root = tree.getroot()
-    location = _parse_net_location(root)
-    sign_xy: Optional[Tuple[float, float]] = None
-    if sign_lat is not None and sign_lon is not None and location is not None:
-        sign_xy = _latlon_to_net_xy(float(sign_lat), float(sign_lon), location)
-
-    junctions, edges, edge_types, connections = _load_net(net_path)
-    junction_id = _discover_primary_junction(junctions, edges, edge_types, sign_xy=sign_xy)
+    junctions, edges, _, connections = _load_net(net_path)
+    junction_id = _discover_primary_junction(junctions, edges)
     incoming = _incoming_edges_for_junction(junction_id, edges)
     shape = _infer_shape(len(incoming))
 
@@ -646,17 +485,9 @@ def build_junction_priority_layout(
         main_ids, secondary_ids = _assign_main_secondary_x(
             arms, incoming, edges, straight_map
         )
-    elif shape == "T":
+    else:
         main_ids, secondary_ids = _assign_main_secondary_t(
             arms, incoming, edges, straight_map
-        )
-    else:
-        main_ids, secondary_ids = _assign_main_secondary_2(
-            arms,
-            edges,
-            edge_types,
-            sign_xy=sign_xy,
-            secondary_edge_id=secondary_edge_id,
         )
 
     _apply_classes(arms, main_ids, secondary_ids)
@@ -670,7 +501,7 @@ def build_junction_priority_layout(
         if ego_arm.road_class != "secondary":
             raise JunctionLayoutError(
                 f"ego_edge_id {ego_edge_id!r} is classified as {ego_arm.road_class}, "
-                "expected secondary for stop benchmark"
+                "expected secondary for yield benchmark"
             )
 
     return JunctionPriorityLayout(
