@@ -7,18 +7,30 @@ python tools/filter_scenes/import_catalog_scenes.py --limit 30
 ```
 
 2. Build junction scene pool up to 100 candidates, then review
+
+Cropping runs the same manifest-viability checks as `generate_manifest.py` (junction layout,
+aux lane length, routable ego/aux spawn scenarios). Invalid junctions are skipped before
+review so you do not label scenes that would be dropped later.
+
 ```
-# Crop until >= 100 junction scenes exist
+# Crop until >= 100 manifest-viable junction scenes exist
 python tools/filter_scenes/build_scene_pool.py crop --target 100
 
 # Review keep/reject in browser
 python tools/filter_scenes/review_junction_scenes.py
 
-# After review: add more cores if kept < 100, then review again
-python tools/filter_scenes/build_scene_pool.py fill --target 100
+# For initial bulk growth (no review yet), prefer crop — it loops until target candidates:
+python tools/filter_scenes/build_scene_pool.py crop --target 100
 
-# Check progress anytime
+# Check progress anytime (shows manifest-viable count among candidates)
 python tools/filter_scenes/build_scene_pool.py status --target 100
+```
+
+To disable manifest filtering (old behavior): add `--no-require-manifest-viable` to crop/fill.
+
+Analyze drop reasons on existing scenes:
+```
+python tools/analyze_manifest_drops.py
 ```
 
 3. Optionally move rejected scenes aside

@@ -12,6 +12,7 @@ Selection rules:
   - Each arm must have at least one lane longer than --min-lane-length (default 10 m).
   - Sort: 4-arm junctions first, then 3-arm; within each group by total lane count (desc).
   - Keep at most --max-junctions picks per core scene (default 5).
+  - By default, skip crops that would fail generate_manifest.py (use --no-require-manifest-viable to disable).
 
 Examples:
     python tools/filter_scenes/crop_junction_scene.py
@@ -24,6 +25,7 @@ import argparse
 import json
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -33,6 +35,14 @@ CORE_DIR_DEFAULT = SCENES_DIR_DEFAULT / "core"
 
 sys.path.insert(0, str(YIELD_SIGN_DIR))
 
+from lib.manifest_config import (  # noqa: E402
+    DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+    DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+)
+from lib.manifest_viability import (  # noqa: E402
+    ManifestViabilityResult,
+    check_manifest_viability,
+)
 from lib.junction_crop import (  # noqa: E402
     JunctionLayoutError,
     JunctionPick,
@@ -82,27 +92,33 @@ def render_preview(scene_dir: Path, marker_xy: tuple[float, float], out_path: Pa
 def write_junctions_index(
     core_scene_dir: Path,
     core_scene_name: str,
-    picks: list[JunctionPick],
-    *,
-    scenes_root: Path,
-    preview_name: str,
+    pick_records: list[dict],
 ) -> None:
     entries = []
-    for rank, pick in enumerate(picks):
+    for record in pick_records:
+        pick: JunctionPick = record["pick"]
+        rank = record["rank"]
         scene_name = junction_scene_name(core_scene_name, rank)
-        entries.append(
-            {
-                "rank": rank,
-                "scene_name": scene_name,
-                "junction_id": pick.junction_id,
-                "arm_count": pick.arm_count,
-                "total_lanes": pick.total_lanes,
-                "incoming_edge_ids": list(pick.incoming_edge_ids),
-                "center_xy": [pick.center_xy[0], pick.center_xy[1]],
-                "output_dir": scene_name,
-                "preview": f"{scene_name}/{preview_name}",
-            }
-        )
+        entry = {
+            "rank": rank,
+            "scene_name": scene_name,
+            "junction_id": pick.junction_id,
+            "arm_count": pick.arm_count,
+            "total_lanes": pick.total_lanes,
+            "incoming_edge_ids": list(pick.incoming_edge_ids),
+            "center_xy": [pick.center_xy[0], pick.center_xy[1]],
+            "output_dir": scene_name,
+            "preview": f"{scene_name}/{record.get('preview_name', 'custom_cropped.png')}",
+        }
+        viability: ManifestViabilityResult | None = record.get("viability")
+        if viability is not None:
+            entry["manifest_viable"] = viability.viable
+            if not viability.viable:
+                entry["manifest_skip_reason"] = viability.reason
+                entry["manifest_skip_detail"] = viability.detail
+        if record.get("written"):
+            entry["written"] = True
+        entries.append(entry)
     index_path = core_scene_dir / "junctions.json"
     index_path.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
 
@@ -117,6 +133,9 @@ def process_core_scene(
     preview_name: str,
     dry_run: bool,
     overwrite: bool,
+    require_manifest_viable: bool = True,
+    min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 ) -> int:
     """Crop junction variants for one core scene. Returns number of scenes written."""
     core_scene_name = core_scene_dir.name
@@ -147,41 +166,73 @@ def process_core_scene(
 
     base_meta = meta
     created = 0
+    skipped_manifest = 0
+    pick_records: list[dict] = []
     for rank, pick in enumerate(picks):
         scene_name = junction_scene_name(core_scene_name, rank)
         out_dir = scenes_root / scene_name
+        record: dict = {
+            "rank": rank,
+            "pick": pick,
+            "preview_name": preview_name,
+            "written": False,
+            "viability": None,
+        }
+        pick_records.append(record)
+
         if out_dir.exists():
             if not overwrite:
                 print(f"  [skip existing] {scene_name}")
                 continue
             shutil.rmtree(out_dir)
 
-        crop_scene_to_junction_pick(
-            core_scene_dir,
-            pick,
-            source_net=source_net,
-            radius_m=radius_m,
-            min_lane_length_m=min_lane_length_m,
-            output_dir=out_dir,
-            output_scene_name=scene_name,
-            base_meta=base_meta,
-            backup_original=False,
-            junction_rank=rank,
-            core_scene_name=core_scene_name,
-        )
+        with tempfile.TemporaryDirectory(prefix="yield_crop_") as tmp:
+            tmp_dir = Path(tmp)
+            crop_scene_to_junction_pick(
+                core_scene_dir,
+                pick,
+                source_net=source_net,
+                radius_m=radius_m,
+                min_lane_length_m=min_lane_length_m,
+                output_dir=tmp_dir,
+                output_scene_name=scene_name,
+                base_meta=base_meta,
+                backup_original=False,
+                junction_rank=rank,
+                core_scene_name=core_scene_name,
+            )
+
+            viability: ManifestViabilityResult | None = None
+            if require_manifest_viable:
+                scene_meta = json.loads((tmp_dir / "meta.json").read_text(encoding="utf-8"))
+                net_file = scene_meta.get("net_file", "map.net.xml")
+                viability = check_manifest_viability(
+                    tmp_dir / net_file,
+                    meta=scene_meta,
+                    min_ego_lane_m=min_ego_lane_m,
+                    aux_distance_from_intersection=aux_distance_from_intersection,
+                )
+                record["viability"] = viability
+                if not viability.viable:
+                    print(
+                        f"  [skip manifest] {scene_name}: "
+                        f"{viability.reason} — {viability.detail}"
+                    )
+                    skipped_manifest += 1
+                    continue
+
+            shutil.copytree(tmp_dir, out_dir)
+
         preview_path = out_dir / preview_name
         render_preview(out_dir, pick.center_xy, preview_path)
         print(f"  wrote scenes/{scene_name}/ ({preview_name})")
+        record["written"] = True
         created += 1
 
-    write_junctions_index(
-        core_scene_dir,
-        core_scene_name,
-        picks,
-        scenes_root=scenes_root,
-        preview_name=preview_name,
-    )
+    write_junctions_index(core_scene_dir, core_scene_name, pick_records)
     print(f"  wrote core/{core_scene_name}/junctions.json")
+    if skipped_manifest:
+        print(f"  skipped {skipped_manifest} junction(s) that would fail manifest generation")
     return created
 
 
@@ -242,6 +293,26 @@ def main() -> None:
         help="Replace existing junction scene folders",
     )
     parser.add_argument("--dry-run", action="store_true", help="Only report junction picks, do not write files")
+    parser.add_argument(
+        "--no-require-manifest-viable",
+        action="store_true",
+        help="Write all cropped junctions even if they would be dropped by generate_manifest.py",
+    )
+    parser.add_argument(
+        "--min-ego-lane",
+        type=float,
+        default=DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+        help=f"Min vehicle approach lane length for manifest check (default: {DEFAULT_SPAWN_DISTANCE_BEFORE_END})",
+    )
+    parser.add_argument(
+        "--aux-distance",
+        type=float,
+        default=DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+        help=(
+            "Aux spawn distance from intersection for manifest check "
+            f"(default: {DEFAULT_AUX_DISTANCE_FROM_INTERSECTION})"
+        ),
+    )
     args = parser.parse_args()
 
     if args.max_junctions < 1:
@@ -276,6 +347,9 @@ def main() -> None:
             preview_name=args.preview_name,
             dry_run=args.dry_run,
             overwrite=args.overwrite,
+            require_manifest_viable=not args.no_require_manifest_viable,
+            min_ego_lane_m=args.min_ego_lane,
+            aux_distance_from_intersection=args.aux_distance,
         )
         if created > 0:
             ok += 1

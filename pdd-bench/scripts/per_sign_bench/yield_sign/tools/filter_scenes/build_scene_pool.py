@@ -37,6 +37,11 @@ DEFAULT_TARGET = 100
 
 sys.path.insert(0, str(YIELD_SIGN_DIR))
 
+from lib.manifest_config import (  # noqa: E402
+    DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+    DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+)
+from lib.manifest_viability import check_scene_dir_viability  # noqa: E402
 from lib.scene_selection import VERDICT_PENDING  # noqa: E402
 from tools.filter_scenes.crop_junction_scene import (  # noqa: E402
     CORE_DIR_DEFAULT,
@@ -57,6 +62,7 @@ from tools.filter_scenes.review_junction_scenes import (  # noqa: E402
 class PoolStatus:
     target: int
     candidates: int
+    manifest_viable: int
     kept: int
     rejected: int
     pending: int
@@ -71,16 +77,31 @@ def collect_pool_status(
     *,
     target: int,
     preview_name: str,
+    min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 ) -> PoolStatus:
     records = scene_records(scenes_root, preview_name=preview_name)
     kept = sum(1 for r in records if r["verdict"] != "reject")
     rejected = sum(1 for r in records if r["verdict"] == "reject")
     pending = sum(1 for r in records if r["verdict"] == VERDICT_PENDING)
+    manifest_viable = 0
+    for record in records:
+        scene_dir = scenes_root / record["name"]
+        if not scene_dir.is_dir():
+            continue
+        result = check_scene_dir_viability(
+            scene_dir,
+            min_ego_lane_m=min_ego_lane_m,
+            aux_distance_from_intersection=aux_distance_from_intersection,
+        )
+        if result.viable:
+            manifest_viable += 1
     cores = discover_core_scene_dirs(core_root)
     remaining = uncropped_core_dirs(core_root)
     return PoolStatus(
         target=target,
         candidates=len(records),
+        manifest_viable=manifest_viable,
         kept=kept,
         rejected=rejected,
         pending=pending,
@@ -93,6 +114,7 @@ def collect_pool_status(
 def print_pool_status(status: PoolStatus) -> None:
     print(f"Target kept scenes:  {status.target}")
     print(f"Candidates (total):  {status.candidates}")
+    print(f"  manifest-viable:   {status.manifest_viable}")
     print(f"  kept:              {status.kept}")
     print(f"  rejected:          {status.rejected}")
     print(f"  pending review:    {status.pending}")
@@ -121,6 +143,9 @@ def crop_core_batch(
     preview_name: str,
     dry_run: bool,
     overwrite: bool,
+    require_manifest_viable: bool = True,
+    min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 ) -> tuple[int, int]:
     """Crop uncropped core maps. Returns (junction_scenes_written, cores_processed)."""
     cores = uncropped_core_dirs(core_root)
@@ -139,6 +164,9 @@ def crop_core_batch(
             preview_name=preview_name,
             dry_run=dry_run,
             overwrite=overwrite,
+            require_manifest_viable=require_manifest_viable,
+            min_ego_lane_m=min_ego_lane_m,
+            aux_distance_from_intersection=aux_distance_from_intersection,
         )
         processed += 1
         written += created
@@ -156,6 +184,9 @@ def crop_until_candidates(
     preview_name: str,
     dry_run: bool,
     overwrite: bool,
+    require_manifest_viable: bool = True,
+    min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 ) -> tuple[int, int]:
     """Crop uncropped cores until at least ``target`` reviewable scenes exist."""
     candidates = len(discover_review_scenes(scenes_root, preview_name=preview_name))
@@ -184,13 +215,15 @@ def crop_until_candidates(
             preview_name=preview_name,
             dry_run=dry_run,
             overwrite=overwrite,
+            require_manifest_viable=require_manifest_viable,
+            min_ego_lane_m=min_ego_lane_m,
+            aux_distance_from_intersection=aux_distance_from_intersection,
         )
         total_written += written
         total_cores += cores
         candidates = len(discover_review_scenes(scenes_root, preview_name=preview_name))
         if written == 0:
-            print("  [stop] last core produced no junction scenes")
-            break
+            print("  [skip core] no manifest-viable junctions; trying next core map")
 
     return total_written, total_cores
 
@@ -207,10 +240,18 @@ def fill_after_review(
     dry_run: bool,
     overwrite: bool,
     force: bool,
+    require_manifest_viable: bool = True,
+    min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 ) -> int:
     """Add junction crops from new core maps when kept count is below target."""
     status = collect_pool_status(
-        scenes_root, core_root, target=target, preview_name=preview_name
+        scenes_root,
+        core_root,
+        target=target,
+        preview_name=preview_name,
+        min_ego_lane_m=min_ego_lane_m,
+        aux_distance_from_intersection=aux_distance_from_intersection,
     )
     print_pool_status(status)
 
@@ -249,14 +290,21 @@ def fill_after_review(
             preview_name=preview_name,
             dry_run=dry_run,
             overwrite=overwrite,
+            require_manifest_viable=require_manifest_viable,
+            min_ego_lane_m=min_ego_lane_m,
+            aux_distance_from_intersection=aux_distance_from_intersection,
         )
         total_written += written
         if written == 0:
-            print("  [stop] last core produced no junction scenes")
-            break
+            print("  [skip core] no manifest-viable junctions; trying next core map")
 
     status = collect_pool_status(
-        scenes_root, core_root, target=target, preview_name=preview_name
+        scenes_root,
+        core_root,
+        target=target,
+        preview_name=preview_name,
+        min_ego_lane_m=min_ego_lane_m,
+        aux_distance_from_intersection=aux_distance_from_intersection,
     )
     print(f"\nAdded {total_written} junction scene(s) this run.")
     print_pool_status(status)
@@ -290,6 +338,25 @@ def add_crop_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--overwrite", action="store_true", help="Replace existing junction scene folders")
     parser.add_argument("--dry-run", action="store_true", help="Only report picks, do not write files")
+    parser.add_argument(
+        "--no-require-manifest-viable",
+        action="store_true",
+        help="Write all cropped junctions even if they would be dropped by generate_manifest.py",
+    )
+
+
+def _crop_kwargs(args: argparse.Namespace) -> dict:
+    return {
+        "radius_m": args.radius,
+        "min_lane_length_m": args.min_lane_length,
+        "max_junctions": args.max_junctions,
+        "preview_name": args.preview_name,
+        "dry_run": args.dry_run,
+        "overwrite": args.overwrite,
+        "require_manifest_viable": not args.no_require_manifest_viable,
+        "min_ego_lane_m": args.min_ego_lane,
+        "aux_distance_from_intersection": args.aux_distance,
+    }
 
 
 def main() -> None:
@@ -311,6 +378,21 @@ def main() -> None:
         type=Path,
         default=SCENES_DIR_DEFAULT,
         help=f"Junction scenes root (default: {SCENES_DIR_DEFAULT})",
+    )
+    common.add_argument(
+        "--min-ego-lane",
+        type=float,
+        default=DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+        help=f"Min vehicle approach lane for manifest check (default: {DEFAULT_SPAWN_DISTANCE_BEFORE_END})",
+    )
+    common.add_argument(
+        "--aux-distance",
+        type=float,
+        default=DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+        help=(
+            "Aux spawn distance for manifest check "
+            f"(default: {DEFAULT_AUX_DISTANCE_FROM_INTERSECTION})"
+        ),
     )
 
     parser = argparse.ArgumentParser(
@@ -358,6 +440,8 @@ def main() -> None:
             core_root,
             target=args.target,
             preview_name=PREVIEW_NAME_DEFAULT,
+            min_ego_lane_m=args.min_ego_lane,
+            aux_distance_from_intersection=args.aux_distance,
         )
         print_pool_status(status)
         if status.kept < status.target and status.cores_remaining == 0:
@@ -365,16 +449,12 @@ def main() -> None:
         return
 
     if args.command == "crop":
+        crop_kw = _crop_kwargs(args)
         written, cores = crop_until_candidates(
             scenes_root,
             core_root,
             target=args.target,
-            radius_m=args.radius,
-            min_lane_length_m=args.min_lane_length,
-            max_junctions=args.max_junctions,
-            preview_name=args.preview_name,
-            dry_run=args.dry_run,
-            overwrite=args.overwrite,
+            **crop_kw,
         )
         print(f"\nCrop done: {written} junction scene(s) from {cores} core map(s).")
         status = collect_pool_status(
@@ -382,6 +462,8 @@ def main() -> None:
             core_root,
             target=args.target,
             preview_name=args.preview_name,
+            min_ego_lane_m=args.min_ego_lane,
+            aux_distance_from_intersection=args.aux_distance,
         )
         print_pool_status(status)
         print(
@@ -395,13 +477,8 @@ def main() -> None:
             scenes_root,
             core_root,
             target=args.target,
-            radius_m=args.radius,
-            min_lane_length_m=args.min_lane_length,
-            max_junctions=args.max_junctions,
-            preview_name=args.preview_name,
-            dry_run=args.dry_run,
-            overwrite=args.overwrite,
             force=args.force,
+            **_crop_kwargs(args),
         )
 
 

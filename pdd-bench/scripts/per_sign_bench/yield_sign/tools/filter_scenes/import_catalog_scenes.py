@@ -456,7 +456,7 @@ def main() -> None:
     parser.add_argument(
         "--min-lane-length",
         type=float,
-        default=10.0,
+        default=20.0,
         help="Each arm must have a lane longer than this (default: 10 m)",
     )
     parser.add_argument(
