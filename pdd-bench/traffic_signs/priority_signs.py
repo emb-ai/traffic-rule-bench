@@ -504,7 +504,7 @@ class StopSign(YieldSign):
     """Stop sign (2.5) — yield to main-road traffic in zone + mandatory stop at line."""
 
     STOP_SPEED_THRESHOLD_MPS = 0.5
-    STOP_LINE_PAST_MARGIN_M = 0.3
+    STOP_LINE_PAST_MARGIN = 0.3
 
     def __init__(
         self,
