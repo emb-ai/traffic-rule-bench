@@ -150,6 +150,66 @@ def find_best_four_arm_junction(
     )
 
 
+def collect_intersection_junction_candidates(
+    net_path: Path | str,
+    *,
+    min_lane_length_m: float = 10.0,
+    arm_counts: Tuple[int, ...] = (4, 3),
+) -> List[JunctionPick]:
+    """Return all qualifying 3- and 4-arm junctions in a net."""
+    net_path = Path(net_path)
+    allowed = set(arm_counts)
+    junctions, edges, _, _ = _load_net(net_path)
+
+    candidates: List[JunctionPick] = []
+    for jid, info in junctions.items():
+        if info["type"] not in INTERSECTION_JUNCTION_TYPES:
+            continue
+        incoming = _incoming_edges_for_junction(jid, edges)
+        arm_count = len(incoming)
+        if arm_count not in allowed:
+            continue
+        if not all(any(lane.length > min_lane_length_m for lane in arm.lanes) for arm in incoming):
+            continue
+        total_lanes = sum(len(arm.lanes) for arm in incoming)
+        candidates.append(
+            JunctionPick(
+                junction_id=jid,
+                center_xy=info["center"],
+                total_lanes=total_lanes,
+                incoming_edge_ids=tuple(arm.edge_id for arm in incoming),
+                arm_count=arm_count,
+            )
+        )
+    return candidates
+
+
+def find_ranked_intersection_junctions(
+    net_path: Path | str,
+    *,
+    min_lane_length_m: float = 10.0,
+    arm_counts: Tuple[int, ...] = (4, 3),
+    max_junctions: int = 5,
+) -> List[JunctionPick]:
+    """Rank junctions: 4-arm before 3-arm, then by total incoming lanes (descending)."""
+    if max_junctions < 1:
+        raise ValueError("max_junctions must be at least 1")
+
+    candidates = collect_intersection_junction_candidates(
+        net_path,
+        min_lane_length_m=min_lane_length_m,
+        arm_counts=arm_counts,
+    )
+    if not candidates:
+        raise JunctionLayoutError(
+            f"No 3- or 4-arm junction with all arms having a lane "
+            f"> {min_lane_length_m}m in {net_path}"
+        )
+
+    candidates.sort(key=lambda pick: (-pick.arm_count, -pick.total_lanes, pick.junction_id))
+    return candidates[:max_junctions]
+
+
 def find_best_intersection_junction(
     net_path: Path | str,
     *,
@@ -157,17 +217,12 @@ def find_best_intersection_junction(
     arm_counts: Tuple[int, ...] = (4, 3),
 ) -> JunctionPick:
     """Prefer a 4-arm junction; fall back to 3-arm when none qualify."""
-    last_error: Optional[JunctionLayoutError] = None
-    for arm_count in arm_counts:
-        try:
-            return find_best_junction_with_arm_count(
-                net_path,
-                min_lane_length_m=min_lane_length_m,
-                require_arm_count=arm_count,
-            )
-        except JunctionLayoutError as exc:
-            last_error = exc
-    raise last_error or JunctionLayoutError(f"No suitable junction found in {net_path}")
+    return find_ranked_intersection_junctions(
+        net_path,
+        min_lane_length_m=min_lane_length_m,
+        arm_counts=arm_counts,
+        max_junctions=1,
+    )[0]
 
 
 def try_find_junction_with_arm_count(
@@ -448,23 +503,57 @@ def crop_net_around_latlon(
         raise JunctionLayoutError(f"netconvert did not write {out_path}")
 
 
-def crop_scene_to_junction(
-    scene_dir: Path,
-    *,
-    radius_m: float = 80.0,
-    min_lane_length_m: float = 10.0,
-    output_net_name: str = "map.net.xml",
-    backup_original: bool = True,
-) -> JunctionPick:
-    """Crop scene net around the best 4- or 3-arm junction; write center.json."""
-    from .sumo_utils import load_scene_meta, resolve_net_file
+def resolve_full_source_net(scene_dir: Path, meta: dict) -> Path:
+    """Return the uncropped SUMO net for a scene (backup or catalog net)."""
+    from .sumo_utils import resolve_net_file
 
     scene_dir = scene_dir.resolve()
-    meta = load_scene_meta(scene_dir)
-    source_net_name = resolve_net_file(scene_dir, meta)
-    source_net = scene_dir / source_net_name
+    scene_name = meta.get("scene_name", scene_dir.name)
+    candidates: List[Path] = []
 
-    pick = find_best_intersection_junction(source_net, min_lane_length_m=min_lane_length_m)
+    for path in sorted(scene_dir.glob("*.net.xml.full.bak")):
+        candidates.append(path)
+
+    named = scene_dir / f"{scene_name}.net.xml"
+    if named.is_file():
+        candidates.append(named)
+
+    for path in sorted(scene_dir.glob("*.net.xml")):
+        if path.name != "map.net.xml":
+            candidates.append(path)
+
+    if candidates:
+        return max(candidates, key=lambda path: path.stat().st_size)
+
+    return scene_dir / resolve_net_file(scene_dir, meta)
+
+
+def crop_scene_to_junction_pick(
+    scene_dir: Path,
+    pick: JunctionPick,
+    *,
+    source_net: Path,
+    radius_m: float = 80.0,
+    min_lane_length_m: float = 10.0,
+    output_dir: Optional[Path] = None,
+    output_scene_name: Optional[str] = None,
+    output_net_name: str = "map.net.xml",
+    base_meta: Optional[dict] = None,
+    backup_original: bool = True,
+    junction_rank: Optional[int] = None,
+    core_scene_name: Optional[str] = None,
+) -> JunctionPick:
+    """Crop ``source_net`` around ``pick``; write center.json and meta into ``output_dir``."""
+    from .sumo_utils import load_scene_meta
+
+    scene_dir = scene_dir.resolve()
+    output_dir = (output_dir or scene_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    meta = dict(base_meta if base_meta is not None else load_scene_meta(scene_dir))
+    source_net = source_net.resolve()
+    core_name = core_scene_name or meta.get("scene_name", scene_dir.name)
+
     conv, orig = parse_net_location(source_net)
     center_lat, center_lon = net_xy_to_latlon(
         pick.center_xy[0],
@@ -473,12 +562,12 @@ def crop_scene_to_junction(
         orig,
     )
 
-    if backup_original and source_net_name != output_net_name:
-        backup_path = scene_dir / f"{source_net_name}.full.bak"
+    if backup_original and output_dir == scene_dir and source_net.name != output_net_name:
+        backup_path = scene_dir / f"{source_net.name}.full.bak"
         if not backup_path.exists():
             shutil.copy2(source_net, backup_path)
 
-    out_net = scene_dir / output_net_name
+    out_net = output_dir / output_net_name
     crop_net_to_junction_only(
         source_net,
         pick.junction_id,
@@ -486,15 +575,21 @@ def crop_scene_to_junction(
         arm_length_m=radius_m,
     )
 
-    center_path = scene_dir / "center.json"
+    center_path = output_dir / "center.json"
     center_path.write_text(
         json_dumps({"lat": center_lat, "lon": center_lon}) + "\n",
         encoding="utf-8",
     )
 
+    scene_name = output_scene_name or meta.get("scene_name", scene_dir.name)
+    if output_scene_name is None and output_dir != scene_dir:
+        scene_name = f"{core_name}_j{pick.junction_id}"
+
     meta.update(
         {
-            "scene_name": meta.get("scene_name", scene_dir.name),
+            "scene_name": scene_name,
+            "scene_kind": "junction",
+            "core_scene_name": core_name,
             "net_file": output_net_name,
             "latitude": center_lat,
             "longitude": center_lon,
@@ -504,6 +599,8 @@ def crop_scene_to_junction(
             "junction_center_xy": [pick.center_xy[0], pick.center_xy[1]],
         }
     )
+    if junction_rank is not None:
+        meta["junction_rank"] = junction_rank
 
     from .scene_augmentation import pick_default_yield_spawn_meta_for_net
 
@@ -518,14 +615,40 @@ def crop_scene_to_junction(
         meta.pop("destination_lane_id", None)
         meta.pop("destination_edge_id", None)
 
-    # Catalog distance_from_start is along the original full-map way; invalid after crop.
     meta.pop("distance_from_start", None)
     meta["sign_spawn_distance"] = 30.0
 
-    meta_path = scene_dir / "meta.json"
+    meta_path = output_dir / "meta.json"
     meta_path.write_text(json_dumps(meta) + "\n", encoding="utf-8")
 
     return pick
+
+
+def crop_scene_to_junction(
+    scene_dir: Path,
+    *,
+    radius_m: float = 80.0,
+    min_lane_length_m: float = 10.0,
+    output_net_name: str = "map.net.xml",
+    backup_original: bool = True,
+) -> JunctionPick:
+    """Crop scene net around the best 4- or 3-arm junction; write center.json."""
+    from .sumo_utils import load_scene_meta
+
+    scene_dir = scene_dir.resolve()
+    meta = load_scene_meta(scene_dir)
+    source_net = resolve_full_source_net(scene_dir, meta)
+    pick = find_best_intersection_junction(source_net, min_lane_length_m=min_lane_length_m)
+    return crop_scene_to_junction_pick(
+        scene_dir,
+        pick,
+        source_net=source_net,
+        radius_m=radius_m,
+        min_lane_length_m=min_lane_length_m,
+        output_net_name=output_net_name,
+        base_meta=meta,
+        backup_original=backup_original,
+    )
 
 
 def json_dumps(obj: dict) -> str:

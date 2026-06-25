@@ -17,7 +17,7 @@ from envs.sumo_traffic_manager import SumoTrafficManager
 from agents.policies.comprehensive_rule_expert import ComprehensiveRuleExpertPolicy
 from agents.policies.modified_idm_sign_compliant import ModifiedIDMSignCompliantPolicy
 from agents.policies.rule_compliant_expert import RuleCompliantExpertPolicy
-from metadrive.policy.idm_policy import IDMPolicy
+from metadrive.policy.idm_policy import IDMPolicy, ModifiedIDMPolicy
 from metadrive.policy.expert_policy import ExpertPolicy
 from scripts.per_sign_bench.factorized_space.ego_defaults import (
     apply_ego_defaults,
@@ -255,6 +255,8 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         show_traffic_lights=row.get("show_traffic_lights", False),
         show_npc_vehicles=row.get("show_npc_vehicles", False),
         skip_auto_signs=True,
+        use_pedestrian_manager=False,
+        use_pedestrian_yield_rule=False,
     )
     if row.get("road_id"):
         config["vehicle_config"]["spawn_lane_index"] = row["road_id"]
@@ -1050,7 +1052,7 @@ def run_one_episode(
 
     policy_cls = None
     if policy_type == "idm":
-        policy_cls = IDMPolicy
+        policy_cls = ModifiedIDMPolicy  # Good driving, no sign compliance
     elif policy_type == "modified_idm":
         policy_cls = ModifiedIDMSignCompliantPolicy
     elif policy_type == "comprehensive_rule_expert":

@@ -455,6 +455,51 @@ def select_occupied_main_lanes(
     return ordered[:n]
 
 
+def viable_aux_arms(
+    junction_layout: Optional[dict],
+    aux_distance_from_intersection: float,
+    ego_edge_id: Optional[str] = None,
+) -> List[dict]:
+    """Return main-road arms with lanes long enough for aux spawning.
+    
+    A lane is viable if ``min_lane_length >= aux_distance + MIN_SPAWN_LONGITUDE_M``.
+    """
+    if not junction_layout:
+        return []
+    min_required = aux_distance_from_intersection + MIN_SPAWN_LONGITUDE_M
+    viable: List[dict] = []
+    for arm in junction_layout.get("arms", []):
+        if arm.get("road_class") != "main":
+            continue
+        if ego_edge_id and arm.get("edge_id") == ego_edge_id:
+            continue
+        min_len = arm.get("min_lane_length", 0.0)
+        if min_len >= min_required:
+            viable.append(arm)
+    return viable
+
+
+def has_viable_aux_lanes(
+    junction_layout: Optional[dict],
+    aux_distance_from_intersection: float,
+) -> bool:
+    """Check if a junction layout has any main-road arm with sufficient lane length.
+    
+    Returns True if at least one main-road arm (across all possible ego edges)
+    has lanes long enough for aux spawning.
+    """
+    if not junction_layout:
+        return False
+    min_required = aux_distance_from_intersection + MIN_SPAWN_LONGITUDE_M
+    for arm in junction_layout.get("arms", []):
+        if arm.get("road_class") != "main":
+            continue
+        min_len = arm.get("min_lane_length", 0.0)
+        if min_len >= min_required:
+            return True
+    return False
+
+
 def resolve_aux_spawn_lanes(
     row: dict,
     ego_lane_index: str,

@@ -22,6 +22,7 @@ from lib.lane_keys import make_lane_key
 from lib.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
     DEFAULT_CONVOY_SIZE,
+    has_viable_aux_lanes,
     main_lane_keys_for_aux,
     select_occupied_main_lanes,
 )
@@ -521,6 +522,15 @@ def generate_manifest(
         
         available_main_lane_count = len(main_lane_keys_for_aux(junction_layout))
         print(f"  Main-road lane slots for aux: {available_main_lane_count}")
+
+        if aux_cfg.enabled and not has_viable_aux_lanes(
+            junction_layout, aux_cfg.distance_from_intersection
+        ):
+            print(
+                f"  [aux] No main-road lanes long enough for aux spawning "
+                f"(need >{aux_cfg.distance_from_intersection}m); skipping {scene_name}"
+            )
+            continue
 
         scenarios: List[SpawnScenario] = []
         if scenario_cfg.augment:

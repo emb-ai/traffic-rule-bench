@@ -7,6 +7,25 @@ from pathlib import Path
 from typing import Optional
 
 DEFAULT_NET_FILE = "map.net.xml"
+CORE_SCENES_SUBDIR = "core"
+
+
+def junction_scene_name(core_scene_name: str, rank: int) -> str:
+    """Build a junction crop folder name, e.g. sign_72424 + 0 -> sign_72424_j0."""
+    return f"{core_scene_name}_j{rank}"
+
+
+def is_junction_scene_name(name: str) -> bool:
+    """True for junction crop folders like sign_72424_j0."""
+    if "_j" not in name:
+        return False
+    base, suffix = name.rsplit("_j", 1)
+    return base.startswith("sign_") and suffix.isdigit()
+
+
+def is_core_scene_name(name: str) -> bool:
+    """True for imported catalog scenes like sign_72424 (not junction crops)."""
+    return name.startswith("sign_") and name[5:].isdigit()
 
 
 def resolve_net_file(scene_dir: Path, meta: dict) -> str:
