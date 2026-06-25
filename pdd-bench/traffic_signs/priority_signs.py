@@ -68,8 +68,12 @@ class EndMainRoadSign(BaseTrafficSign):
 
 class YieldSign(BaseTrafficSign):
 
-    EGO_ZONE_BEFORE = 30.0        
-    MAIN_ROAD_ZONE_BEFORE = 20.0     
+    EGO_ZONE_BEFORE = 30.0
+    # Treat yield obligation as cleared when the vehicle center passes this far before
+    # the lane end (~half car length), so a junction entry/crash is not missed while
+    # the rear is still geometrically on the approach lane.
+    EGO_ZONE_END_CENTER_INSET = 4.0
+    MAIN_ROAD_ZONE_BEFORE = 20.0
     MAIN_ROAD_ZONE_AFTER = 15.0     
 
     def __init__(
@@ -435,6 +439,11 @@ class YieldSign(BaseTrafficSign):
         
         return len(conflicting) > 0, conflicting
 
+    def _obligation_zone_end(self, vehicle) -> float:
+        """Last longitudinal position (vehicle center) still under yield obligation."""
+        inset = 0.5 * float(getattr(vehicle, "LENGTH", self.EGO_ZONE_END_CENTER_INSET))
+        return max(self.zone_start, float(self.zone_end) - inset)
+
     def _is_vehicle_in_zone(self, vehicle) -> bool:
         """Check if the vehicle is within the yield zone."""
         vehicle_idx = vehicle.lane.index
@@ -445,7 +454,7 @@ class YieldSign(BaseTrafficSign):
             return False
         
         veh_long = vehicle.lane.local_coordinates(vehicle.position)[0]
-        return self.zone_start <= veh_long <= self.zone_end
+        return self.zone_start <= veh_long <= self._obligation_zone_end(vehicle)
 
     def _is_violating(self, vehicle) -> bool:
         """Check if the vehicle is violating the yield sign."""
@@ -489,112 +498,6 @@ class YieldSign(BaseTrafficSign):
     @property
     def top_down_color_name(self):
         return "red"
-
-
-class StopSign(YieldSign):
-    """Stop sign (2.5) — yield to main-road traffic in zone + mandatory stop at line."""
-
-    STOP_SPEED_THRESHOLD_MPS = 0.5
-    STOP_LINE_PAST_MARGIN_M = 0.3
-
-    def __init__(
-        self,
-        lane,
-        intersection_name: str = None,
-        main_road_lanes: list = None,
-        auto_detect_main_roads: bool = True,
-        **kwargs,
-    ):
-        icon_path = kwargs.pop("icon_path", "2.5.png")
-        super().__init__(
-            lane,
-            intersection_name=intersection_name,
-            main_road_lanes=main_road_lanes,
-            auto_detect_main_roads=auto_detect_main_roads,
-            icon_path=icon_path,
-            **kwargs,
-        )
-        self.priority_type = "stop_secondary"
-        self.stop_line_position = float(self.placement_long)
-        self._vehicle_states_stop: dict = {}
-
-    def _create_visual_model(self):
-        from metadrive.engine.asset_loader import AssetLoader
-
-        model_path = AssetLoader.file_path("models", "traffic_sign", "stop_sign.gltf")
-        model = self.loader.loadModel(model_path)
-        model.setPos(0, 0, self.sign_height)
-        model.setH(-90)
-        self._visual_model = model.instanceTo(self.origin)
-
-    def _is_on_sign_road(self, vehicle) -> bool:
-        veh_lane = getattr(vehicle, "lane", None)
-        if veh_lane is None:
-            return False
-        from traffic_signs.base_traffic_sign import same_road_check
-
-        return same_road_check(
-            getattr(veh_lane, "index", None),
-            getattr(self.lane, "index", None),
-        )
-
-    def _track_stop_before_line(self, vehicle) -> bool:
-        """Return True once the vehicle has made a complete stop before the line."""
-        if not self._is_on_sign_road(vehicle):
-            return False
-        try:
-            veh_long = self.lane.local_coordinates(vehicle.position)[0]
-        except Exception:
-            return False
-
-        vid = vehicle.id
-        in_zone = self.zone_start <= veh_long <= self.zone_end
-        if not in_zone:
-            self._vehicle_states_stop.pop(vid, None)
-            return False
-
-        state = self._vehicle_states_stop.setdefault(vid, {"stopped_before_line": False})
-        stop_long = self.stop_line_position
-        speed = float(getattr(vehicle, "speed", 0.0) or 0.0)
-        if veh_long < stop_long and speed < self.STOP_SPEED_THRESHOLD_MPS:
-            state["stopped_before_line"] = True
-        return bool(state["stopped_before_line"])
-
-    def _is_stop_line_violating(self, vehicle) -> bool:
-        """True if the vehicle crossed the stop line without stopping first."""
-        if not self._is_on_sign_road(vehicle):
-            return False
-        try:
-            veh_long = self.lane.local_coordinates(vehicle.position)[0]
-        except Exception:
-            return False
-
-        if veh_long < self.stop_line_position + self.STOP_LINE_PAST_MARGIN_M:
-            self._track_stop_before_line(vehicle)
-            return False
-
-        stopped = self._track_stop_before_line(vehicle)
-        return not stopped
-
-    def _is_violating(self, vehicle) -> bool:
-        """Yield-zone traffic rule + mandatory stop before the sign line."""
-        if super()._is_violating(vehicle):
-            return True
-        return self._is_stop_line_violating(vehicle)
-
-    def get_rule_description(self) -> str:
-        return (
-            "Stop sign (2.5) - must stop before the sign line and must not leave "
-            "the approach zone while traffic is present on the main road"
-        )
-
-    @property
-    def top_down_color(self):
-        return [255, 255, 255]
-
-    @property
-    def top_down_color_name(self):
-        return "white"
 
 
 class SecondaryRoadSign(BaseTrafficSign):
@@ -724,7 +627,6 @@ __all__ = [
     "EndMainRoadSign",
     "EndMainRoadSmartSign",
     "YieldSign",
-    "StopSign",
     "SecondaryRoadSign",
     "SecondaryRoadLeftSign",
     "SecondaryRoadRightSign",
