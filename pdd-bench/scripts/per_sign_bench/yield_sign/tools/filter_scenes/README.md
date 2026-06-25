@@ -60,3 +60,8 @@ Import only:
 ```
 python tools/filter_scenes/import_catalog_scenes.py --limit 10 --arms 4 3
 ```
+
+Check resulted GIFs after IDM running on scenes:
+```
+python tools/review_benchmark_gifs.py benchmark_output/2_4/2026-06-25_10-53-34
+```

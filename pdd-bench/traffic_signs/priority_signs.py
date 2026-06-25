@@ -68,8 +68,12 @@ class EndMainRoadSign(BaseTrafficSign):
 
 class YieldSign(BaseTrafficSign):
 
-    EGO_ZONE_BEFORE = 30.0        
-    MAIN_ROAD_ZONE_BEFORE = 20.0     
+    EGO_ZONE_BEFORE = 30.0
+    # Treat yield obligation as cleared when the vehicle center passes this far before
+    # the lane end (~half car length), so a junction entry/crash is not missed while
+    # the rear is still geometrically on the approach lane.
+    EGO_ZONE_END_CENTER_INSET = 4.0
+    MAIN_ROAD_ZONE_BEFORE = 20.0
     MAIN_ROAD_ZONE_AFTER = 15.0     
 
     def __init__(
@@ -435,6 +439,11 @@ class YieldSign(BaseTrafficSign):
         
         return len(conflicting) > 0, conflicting
 
+    def _obligation_zone_end(self, vehicle) -> float:
+        """Last longitudinal position (vehicle center) still under yield obligation."""
+        inset = 0.5 * float(getattr(vehicle, "LENGTH", self.EGO_ZONE_END_CENTER_INSET))
+        return max(self.zone_start, float(self.zone_end) - inset)
+
     def _is_vehicle_in_zone(self, vehicle) -> bool:
         """Check if the vehicle is within the yield zone."""
         vehicle_idx = vehicle.lane.index
@@ -445,7 +454,7 @@ class YieldSign(BaseTrafficSign):
             return False
         
         veh_long = vehicle.lane.local_coordinates(vehicle.position)[0]
-        return self.zone_start <= veh_long <= self.zone_end
+        return self.zone_start <= veh_long <= self._obligation_zone_end(vehicle)
 
     def _is_violating(self, vehicle) -> bool:
         """Check if the vehicle is violating the yield sign."""
