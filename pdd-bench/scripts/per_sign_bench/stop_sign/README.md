@@ -1,6 +1,6 @@
-# Yield Sign (2.4) Benchmark
+# Stop Sign (2.5) Benchmark
 
-Benchmark for evaluating autonomous driving policies on yield sign scenarios using real-world OpenStreetMap data.
+Benchmark for evaluating autonomous driving policies on stop sign scenarios using real-world OpenStreetMap data.
 
 ## Setup
 
@@ -11,7 +11,7 @@ conda activate zinkovich-plant2
 ## Folder Structure
 
 ```
-yield_sign/
+stop_sign/
 ├── build_scene.py          # Step 1: OSM → SUMO network
 ├── generate_manifest.py    # Step 2: Create evaluation manifest
 ├── eval_pipeline.py        # Step 3: Run policy evaluation
@@ -69,7 +69,7 @@ python generate_manifest.py gif.enabled=true
 python generate_manifest.py auxiliary.lanes_occupied=2 auxiliary.convoy_size=2
 ```
 
-Output is saved to `benchmark_output/2_4/<timestamp>/`:
+Output is saved to `benchmark_output/2_5/<timestamp>/`:
 - `real_manifest.jsonl` — Scenario definitions
 - `config.yaml` — Resolved configuration
 - `gifs/` — Visualization GIFs (if enabled)
@@ -81,7 +81,7 @@ Evaluate policies on the generated manifest:
 ```bash
 python eval_pipeline.py \
     --policies idm \
-    --manifest benchmark_output/2_4/<timestamp> \
+    --manifest benchmark_output/2_5/<timestamp> \
     --scenes-root scenes
 ```
 

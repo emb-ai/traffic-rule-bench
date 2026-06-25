@@ -30,7 +30,7 @@ Usage examples:
     # Benchmark run folder (reads real_manifest.jsonl, writes to <run_dir>/eval_out/)
     python3 eval_pipeline.py \\
         --policies    idm,modified_idm \\
-        --manifest    benchmark_output/2_4/2026-06-11_13-33-40 \\
+        --manifest    benchmark_output/2_5/2026-06-11_13-33-40 \\
         --scenes-root scenes
 
     # IDM only (5 baselines)

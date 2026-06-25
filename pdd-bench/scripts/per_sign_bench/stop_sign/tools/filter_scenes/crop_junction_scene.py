@@ -29,11 +29,11 @@ import tempfile
 from pathlib import Path
 
 TOOLS_DIR = Path(__file__).resolve().parent
-YIELD_SIGN_DIR = TOOLS_DIR.parent.parent
-SCENES_DIR_DEFAULT = YIELD_SIGN_DIR / "scenes"
+STOP_SIGN_DIR = TOOLS_DIR.parent.parent
+SCENES_DIR_DEFAULT = STOP_SIGN_DIR / "scenes"
 CORE_DIR_DEFAULT = SCENES_DIR_DEFAULT / "core"
 
-sys.path.insert(0, str(YIELD_SIGN_DIR))
+sys.path.insert(0, str(STOP_SIGN_DIR))
 
 from lib.manifest_config import (  # noqa: E402
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
@@ -186,7 +186,7 @@ def process_core_scene(
                 continue
             shutil.rmtree(out_dir)
 
-        with tempfile.TemporaryDirectory(prefix="yield_crop_") as tmp:
+        with tempfile.TemporaryDirectory(prefix="stop_crop_") as tmp:
             tmp_dir = Path(tmp)
             crop_scene_to_junction_pick(
                 core_scene_dir,

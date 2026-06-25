@@ -6,13 +6,13 @@ Parse GIF filenames to extract metadata (scene, seed, policy, variant).
 
 Examples:
     # Review GIFs from a specific benchmark run
-    python tools/review_benchmark_gifs.py benchmark_output/2_4/2026-06-25_10-53-34
+    python tools/review_benchmark_gifs.py benchmark_output/2_5/2026-06-25_10-53-34
 
     # Specify gifs subfolder explicitly
-    python tools/review_benchmark_gifs.py benchmark_output/2_4/2026-06-25_10-53-34/gifs
+    python tools/review_benchmark_gifs.py benchmark_output/2_5/2026-06-25_10-53-34/gifs
 
     # Custom port
-    python tools/review_benchmark_gifs.py benchmark_output/2_4/2026-06-25_10-53-34 --port 9000
+    python tools/review_benchmark_gifs.py benchmark_output/2_5/2026-06-25_10-53-34 --port 9000
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 TOOLS_DIR = Path(__file__).resolve().parent
-YIELD_SIGN_DIR = TOOLS_DIR.parent
+STOP_SIGN_DIR = TOOLS_DIR.parent
 
 
 def parse_gif_filename(filename: str) -> dict[str, Any]:
@@ -615,7 +615,7 @@ def main() -> None:
 
     if args.path is None:
         # Try to find the most recent benchmark run
-        benchmark_output = YIELD_SIGN_DIR / "benchmark_output"
+        benchmark_output = STOP_SIGN_DIR / "benchmark_output"
         if not benchmark_output.is_dir():
             sys.exit(
                 "No path specified and no benchmark_output/ found.\n"

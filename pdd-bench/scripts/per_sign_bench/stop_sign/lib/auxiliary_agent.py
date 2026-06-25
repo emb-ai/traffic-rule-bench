@@ -1,4 +1,4 @@
-"""Auxiliary agents (main road NPCs) for yield sign scenarios."""
+"""Auxiliary agents (main road NPCs) for stop sign scenarios."""
 
 from __future__ import annotations
 

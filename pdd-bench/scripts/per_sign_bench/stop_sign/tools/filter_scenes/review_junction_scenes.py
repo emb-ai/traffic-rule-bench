@@ -33,12 +33,12 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 FILTER_SCENES_DIR = Path(__file__).resolve().parent
-YIELD_SIGN_DIR = FILTER_SCENES_DIR.parent.parent
-SCENES_DIR_DEFAULT = YIELD_SIGN_DIR / "scenes"
+STOP_SIGN_DIR = FILTER_SCENES_DIR.parent.parent
+SCENES_DIR_DEFAULT = STOP_SIGN_DIR / "scenes"
 SELECTION_FILE = "scene_selection.json"
 PREVIEW_NAME_DEFAULT = "custom_cropped.png"
 
-sys.path.insert(0, str(YIELD_SIGN_DIR))
+sys.path.insert(0, str(STOP_SIGN_DIR))
 
 from lib.scene_selection import (  # noqa: E402
     REJECTED_SUBDIR,

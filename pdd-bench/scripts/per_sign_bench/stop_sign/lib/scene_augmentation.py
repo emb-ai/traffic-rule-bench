@@ -181,7 +181,7 @@ def pick_default_yield_spawn_meta(
     min_lane_length: float = 20.0,
     route_index: Optional[VehicleRouteIndex] = None,
 ) -> Optional[dict]:
-    """Pick ego spawn + straight/left destination for a cropped yield scene."""
+    """Pick ego spawn + straight/left destination for a cropped junction scene."""
     spawn_by_edge = build_spawn_lanes_by_edge(spawn_lanes)
     lane_lengths = lane_lengths_from_spawn_lanes(spawn_lanes)
     lane_keys_by_edge = {arm.edge_id: list(arm.lane_keys) for arm in layout.arms}

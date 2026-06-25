@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Classify why cropped yield scenes are dropped during manifest generation."""
+"""Classify why cropped stop scenes are dropped during manifest generation."""
 
 from __future__ import annotations
 

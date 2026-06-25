@@ -1,4 +1,4 @@
-# Yield Sign Benchmark Configuration
+# Stop Sign Benchmark Configuration
 # See README.md for parameter descriptions
 
 defaults:
@@ -17,7 +17,7 @@ hydra:
 # =============================================================================
 paths:
   scenes_dir: scenes
-  output_base: benchmark_output/2_4
+  output_base: benchmark_output/2_5
   experiment_name: ${now:%Y-%m-%d_%H-%M-%S}
 
 # =============================================================================
