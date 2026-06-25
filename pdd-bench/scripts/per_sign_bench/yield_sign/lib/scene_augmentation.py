@@ -13,6 +13,9 @@ from .junction_priority_layout import (
     build_junction_priority_layout,
 )
 from .lane_keys import lane_num_from_key, make_lane_key
+from .sumo_utils import VehicleRouteIndex, is_vehicle_drivable_lane, load_vehicle_route_index
+
+DEFAULT_AUX_DISTANCE_FROM_INTERSECTION = 20.0
 
 
 @dataclass(frozen=True)
@@ -102,6 +105,8 @@ def parse_intersection_approach_lanes(
             continue
 
         for lane in edge.findall("lane"):
+            if not is_vehicle_drivable_lane(lane):
+                continue
             lane_id = lane.get("id", "")
             length = float(lane.get("length", 0.0) or 0.0)
             if length <= 0.0:
@@ -137,15 +142,23 @@ def parse_intersection_approach_lanes(
 
 
 def _ego_destination_edges(layout: JunctionPriorityLayout, ego_edge_id: str) -> List[str]:
-    """Ego destination edges by junction shape: X → straight, T → left turn."""
+    """Ego destination edges by junction shape: X → straight, T → left turn.
+    
+    Excludes the ego's spawn edge and any edges on the same arm to ensure
+    the route actually crosses the junction.
+    """
     arm = layout.arm_for_edge(ego_edge_id)
     if arm is None:
         return []
     if layout.shape == "T":
-        return _filter_real_destination_edges(arm.left_to)
-    if layout.shape == "X":
-        return _filter_real_destination_edges(arm.straight_to)
-    return _filter_real_destination_edges(arm.straight_to or arm.left_to)
+        candidates = _filter_real_destination_edges(arm.left_to)
+    elif layout.shape == "X":
+        candidates = _filter_real_destination_edges(arm.straight_to)
+    else:
+        candidates = _filter_real_destination_edges(arm.straight_to or arm.left_to)
+    
+    # Exclude ego's own edge to ensure route crosses the junction
+    return [edge_id for edge_id in candidates if edge_id != ego_edge_id]
 
 
 def _aux_straight_destination(layout: JunctionPriorityLayout, aux_edge_id: str) -> Optional[str]:
@@ -166,6 +179,7 @@ def pick_default_yield_spawn_meta(
     *,
     prefer_ego_edge_id: Optional[str] = None,
     min_lane_length: float = 20.0,
+    route_index: Optional[VehicleRouteIndex] = None,
 ) -> Optional[dict]:
     """Pick ego spawn + straight/left destination for a cropped yield scene."""
     spawn_by_edge = build_spawn_lanes_by_edge(spawn_lanes)
@@ -192,17 +206,33 @@ def pick_default_yield_spawn_meta(
     best_length = -1.0
     for lane_num in spawn_by_edge.get(ego_edge, [0]):
         length = lane_lengths.get((ego_edge, lane_num), min_lane_length)
-        if length >= min_lane_length and length > best_length:
+        if length < min_lane_length:
+            continue
+        if length > best_length:
             best_length = length
             ego_lane = lane_num
 
-    dest_edges = _filter_real_destination_edges(_ego_destination_edges(layout, ego_edge))
+    dest_edges = _ego_destination_edges(layout, ego_edge)
     if not dest_edges:
         return None
 
-    dest_edge = next((edge_id for edge_id in dest_edges if edge_id != ego_edge), dest_edges[0])
-    dest_lane_key = _pick_outgoing_lane_key(dest_edge, ego_lane, lane_keys_by_edge)
-    if not _is_valid_departure(ego_edge, ego_lane, dest_edge, dest_lane_key):
+    dest_edge: Optional[str] = None
+    dest_lane_key: Optional[str] = None
+    for candidate_dest in dest_edges:
+        if candidate_dest == ego_edge:
+            continue
+        lane_key = _pick_outgoing_lane_key(candidate_dest, ego_lane, lane_keys_by_edge)
+        if not _is_valid_departure(ego_edge, ego_lane, candidate_dest, lane_key):
+            continue
+        if route_index is not None and not route_index.can_reach_edge(
+            ego_edge, ego_lane, candidate_dest
+        ):
+            continue
+        dest_edge = candidate_dest
+        dest_lane_key = lane_key
+        break
+
+    if dest_edge is None or dest_lane_key is None:
         return None
 
     return {
@@ -221,11 +251,13 @@ def pick_default_yield_spawn_meta_for_net(
 ) -> Optional[dict]:
     layout = build_junction_priority_layout(net_path)
     spawn_lanes = parse_intersection_approach_lanes(net_path, min_length=min_lane_length)
+    route_index = load_vehicle_route_index(net_path)
     return pick_default_yield_spawn_meta(
         layout,
         spawn_lanes,
         prefer_ego_edge_id=prefer_ego_edge_id,
         min_lane_length=min_lane_length,
+        route_index=route_index,
     )
 
 
@@ -248,9 +280,14 @@ def enumerate_spawn_scenarios(
     *,
     min_lane_length: float = 20.0,
     lane_lengths: Optional[Dict[Tuple[str, int], float]] = None,
+    route_index: Optional[VehicleRouteIndex] = None,
+    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 ) -> List[SpawnScenario]:
     """Enumerate ego/aux spawn combinations from junction layout arms."""
+    from .auxiliary_agent import min_aux_spawn_lane_length
+
     lane_lengths = lane_lengths or {}
+    min_aux_lane_length = min_aux_spawn_lane_length(aux_distance_from_intersection)
     lane_keys_by_edge: Dict[str, List[str]] = {
         arm.edge_id: list(arm.lane_keys) for arm in layout.arms
     }
@@ -279,12 +316,23 @@ def enumerate_spawn_scenarios(
             aux_lane_nums = spawn_lanes_by_edge.get(aux_edge, [])
             if not aux_lane_nums:
                 continue
+            aux_lane_nums = [
+                lane_num
+                for lane_num in aux_lane_nums
+                if lane_lengths.get((aux_edge, lane_num), min_lane_length) >= min_aux_lane_length
+            ]
+            if not aux_lane_nums:
+                continue
 
             for ego_lane in ego_lane_nums:
                 if lane_lengths.get((ego_edge, ego_lane), min_lane_length) < min_lane_length:
                     continue
 
                 for ego_dest_edge in ego_dest_edges:
+                    # Skip if destination is same as spawn edge (no junction crossing)
+                    if ego_dest_edge == ego_edge:
+                        continue
+                        
                     ego_dest_lane_key = _pick_outgoing_lane_key(
                         ego_dest_edge,
                         ego_lane,
@@ -300,6 +348,11 @@ def enumerate_spawn_scenarios(
                             ego_lane,
                             ego_dest_edge,
                             ego_dest_lane_key,
+                        ):
+                            continue
+
+                        if route_index is not None and not route_index.can_reach_edge(
+                            ego_edge, ego_lane, ego_dest_edge
                         ):
                             continue
 
@@ -350,15 +403,19 @@ def augment_layout_for_scene(
     spawn_lanes: Iterable,
     *,
     min_lane_length: float = 20.0,
+    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 ) -> Tuple[JunctionPriorityLayout, List[SpawnScenario]]:
     """Build layout and enumerate augmented scenarios for one scene."""
     layout = build_junction_priority_layout(net_path)
     spawn_by_edge = build_spawn_lanes_by_edge(spawn_lanes)
     lengths = lane_lengths_from_spawn_lanes(spawn_lanes)
+    route_index = load_vehicle_route_index(net_path)
     scenarios = enumerate_spawn_scenarios(
         layout,
         spawn_by_edge,
         min_lane_length=min_lane_length,
         lane_lengths=lengths,
+        route_index=route_index,
+        aux_distance_from_intersection=aux_distance_from_intersection,
     )
     return layout, scenarios

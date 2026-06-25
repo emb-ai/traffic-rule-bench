@@ -3,11 +3,89 @@
 from __future__ import annotations
 
 import json
+import xml.etree.ElementTree as ET
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Optional
 
 DEFAULT_NET_FILE = "map.net.xml"
 CORE_SCENES_SUBDIR = "core"
+
+# SUMO allow tokens that do not permit motor-vehicle travel on their own.
+_NON_VEHICLE_ALLOW_ONLY = frozenset({"pedestrian"})
+
+
+def is_real_sumo_edge_id(edge_id: str) -> bool:
+    """True for normal road edges (not internal ``:`` edges)."""
+    return bool(edge_id) and not str(edge_id).startswith(":")
+
+
+def is_vehicle_drivable_lane(lane_el: ET.Element) -> bool:
+    """True when a SUMO lane can carry ego/aux vehicles (not pedestrian-only)."""
+    allow = (lane_el.get("allow") or "").strip()
+    if not allow:
+        return True
+    drivable = [token for token in allow.split() if token not in _NON_VEHICLE_ALLOW_ONLY]
+    return bool(drivable)
+
+
+class VehicleRouteIndex:
+    """SUMO connection graph for checking vehicle reachability between lanes."""
+
+    def __init__(self, net_root: ET.Element):
+        self._edge_fn = {
+            edge.get("id", ""): edge.get("function", "normal")
+            for edge in net_root.findall("edge")
+            if edge.get("id")
+        }
+        self._adj: dict[tuple[str, int], list[tuple[str, int]]] = defaultdict(list)
+        for conn in net_root.findall("connection"):
+            from_edge = conn.get("from")
+            to_edge = conn.get("to")
+            if not from_edge or not to_edge:
+                continue
+            if self._edge_fn.get(to_edge) == "walkingarea":
+                continue
+            from_lane = int(conn.get("fromLane", 0) or 0)
+            to_lane = int(conn.get("toLane", 0) or 0)
+            self._adj[(from_edge, from_lane)].append((to_edge, to_lane))
+
+    def can_reach_edge(
+        self,
+        from_edge: str,
+        from_lane: int,
+        to_edge: str,
+        *,
+        max_hops: int = 8,
+    ) -> bool:
+        """Return True if a vehicle can route from spawn lane to any lane on ``to_edge``."""
+        if not is_real_sumo_edge_id(to_edge) or from_edge == to_edge:
+            return False
+
+        start = (from_edge, from_lane)
+        queue: deque[tuple[tuple[str, int], int]] = deque([(start, 0)])
+        visited = {start}
+
+        while queue:
+            (edge, lane), depth = queue.popleft()
+            if depth > max_hops:
+                continue
+            for next_edge, next_lane in self._adj.get((edge, lane), []):
+                if self._edge_fn.get(next_edge) == "walkingarea":
+                    continue
+                if is_real_sumo_edge_id(next_edge) and next_edge == to_edge:
+                    return True
+                state = (next_edge, next_lane)
+                if state in visited:
+                    continue
+                visited.add(state)
+                queue.append((state, depth + 1))
+        return False
+
+
+def load_vehicle_route_index(net_path: Path) -> VehicleRouteIndex:
+    root = ET.parse(net_path).getroot()
+    return VehicleRouteIndex(root)
 
 
 def junction_scene_name(core_scene_name: str, rank: int) -> str:

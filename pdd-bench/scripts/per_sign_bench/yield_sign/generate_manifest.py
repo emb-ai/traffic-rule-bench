@@ -18,13 +18,15 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 from lib.junction_priority_layout import JunctionLayoutError, build_junction_priority_layout
-from lib.lane_keys import make_lane_key
+from lib.lane_keys import lane_edge_id, lane_num_from_key, make_lane_key
 from lib.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
     DEFAULT_CONVOY_SIZE,
     has_viable_aux_lanes,
     main_lane_keys_for_aux,
+    resolve_aux_destination_lane_key,
     select_occupied_main_lanes,
+    viable_aux_lane_keys,
 )
 from lib.manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
@@ -32,6 +34,7 @@ from lib.manifest_config import (
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
 )
 from lib.scene_augmentation import SpawnScenario, augment_layout_for_scene, pick_default_yield_spawn_meta_for_net
+from lib.sumo_utils import is_vehicle_drivable_lane
 
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -141,6 +144,8 @@ def parse_sumo_net_for_spawn_lanes(net_path: Path, min_length: float = 20.0) -> 
             continue
         
         for lane in edge.findall("lane"):
+            if not is_vehicle_drivable_lane(lane):
+                continue
             lane_id = lane.get("id", "")
             length = float(lane.get("length", 0))
             
@@ -470,7 +475,13 @@ def build_manifest_entry(
             ego_edge = entry.get("road_id") or (
                 spawn_scenario.ego_edge_id if spawn_scenario is not None else None
             )
-            available_main = main_lane_keys_for_aux(junction_layout_cache, ego_edge)
+            available_main = viable_aux_lane_keys(
+                junction_layout_cache,
+                aux_cfg.distance_from_intersection,
+                ego_edge,
+            )
+            if not available_main:
+                entry["valid"] = False
             prefer_aux = None
             if spawn_scenario is not None:
                 prefer_aux = make_lane_key(
@@ -480,6 +491,17 @@ def build_manifest_entry(
             entry["aux_occupied_lane_keys"] = select_occupied_main_lanes(
                 available_main, aux_lanes_occupied, prefer_lane_key=prefer_aux
             )
+            if entry["aux_occupied_lane_keys"]:
+                primary_aux = entry["aux_occupied_lane_keys"][0]
+                entry["aux_spawn_lane_index"] = primary_aux
+                entry["aux_road_id"] = lane_edge_id(primary_aux)
+                entry["aux_spawn_lane_num"] = lane_num_from_key(primary_aux)
+                aux_dest = resolve_aux_destination_lane_key(
+                    junction_layout_cache, primary_aux
+                )
+                if aux_dest:
+                    entry["aux_destination_lane_id"] = aux_dest
+                    entry["aux_destination_edge_id"] = lane_edge_id(aux_dest)
     
     entry = {k: v for k, v in entry.items() if v is not None}
     
@@ -520,7 +542,11 @@ def generate_manifest(
             f"secondary={len(junction_layout.get('secondary_edge_ids', []))})"
         )
         
-        available_main_lane_count = len(main_lane_keys_for_aux(junction_layout))
+        available_main_lane_count = len(
+            viable_aux_lane_keys(junction_layout, aux_cfg.distance_from_intersection)
+            if aux_cfg.enabled
+            else main_lane_keys_for_aux(junction_layout)
+        )
         print(f"  Main-road lane slots for aux: {available_main_lane_count}")
 
         if aux_cfg.enabled and not has_viable_aux_lanes(
@@ -534,7 +560,11 @@ def generate_manifest(
 
         scenarios: List[SpawnScenario] = []
         if scenario_cfg.augment:
-            _, scenarios = augment_layout_for_scene(net_full_path, spawn_lanes)
+            _, scenarios = augment_layout_for_scene(
+                net_full_path,
+                spawn_lanes,
+                aux_distance_from_intersection=aux_cfg.distance_from_intersection,
+            )
             if not scenarios:
                 print(f"  [augment] No valid scenarios for {scene_name}; skipping scene")
                 continue
@@ -552,7 +582,11 @@ def generate_manifest(
         )
         for variant, scenario in enumerate(scenarios):
             ego_edge = scenario.ego_edge_id
-            scene_main_lanes = main_lane_keys_for_aux(junction_layout, ego_edge)
+            scene_main_lanes = viable_aux_lane_keys(
+                junction_layout,
+                aux_cfg.distance_from_intersection,
+                ego_edge,
+            ) if aux_cfg.enabled else main_lane_keys_for_aux(junction_layout, ego_edge)
             scene_lane_counts = sizes_up_to(
                 aux_cfg.lanes_occupied,
                 auxiliary_enabled=aux_cfg.enabled,

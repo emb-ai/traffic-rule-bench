@@ -31,7 +31,7 @@ from lib.auxiliary_agent import (
     DEFAULT_CONVOY_SIZE,
     DEFAULT_SPAWN_VELOCITY_MS,
     add_auxiliary_agents,
-    resolve_aux_spawn_lanes,
+    resolve_aux_spawn_plan,
 )
 from lib.manifest_config import DEFAULT_AUX_LANES_OCCUPIED_MAX
 from lib.junction_sign_placement import (
@@ -1083,6 +1083,23 @@ def run_one_episode(
         if spawn_distance > 0:
             _reposition_ego_before_lane_end(base_env, spawn_distance)
 
+        # Validate route: check that destination is different from spawn
+        nav = getattr(base_env.vehicle, "navigation", None)
+        if nav is not None:
+            checkpoints = getattr(nav, "checkpoints", [])
+            spawn_lane_idx = getattr(base_env.vehicle.lane, "index", None)
+            if checkpoints and spawn_lane_idx:
+                if len(checkpoints) <= 1 or checkpoints[-1] == spawn_lane_idx or checkpoints[0] == checkpoints[-1]:
+                    scene_id = row.get("scene_id", "unknown")
+                    dest = row.get("destination_lane_id", "unknown")
+                    print(f"[RouteValidation] INVALID: {scene_id} - route loops back to spawn. "
+                          f"spawn={spawn_lane_idx}, dest={dest}, checkpoints={checkpoints[:3]}...")
+                    return {
+                        "ok": False,
+                        "error": f"Invalid route: spawn and destination are the same or unreachable",
+                        "scene_id": scene_id,
+                    }
+
         # Place main/yield signs on all junction arms from layout
         sign_distance = float(row.get("sign_distance_before_end", 20.0))
         _place_junction_priority_signs(
@@ -1148,16 +1165,18 @@ def run_one_episode(
                 else str(getattr(base_env.vehicle.lane, "index", ""))
             )
 
-            aux_spawn_lanes = resolve_aux_spawn_lanes(
-                row,
-                ego_lane_index=str(ego_lane_index),
-                incoming_lanes=incoming_lanes,
-                aux_lanes_occupied=aux_lanes_occupied,
+            aux_spawn_lanes, aux_destination_lanes, alternate_spawn_dest_map = (
+                resolve_aux_spawn_plan(
+                    row,
+                    ego_lane_index=str(ego_lane_index),
+                    incoming_lanes=incoming_lanes,
+                    aux_lanes_occupied=aux_lanes_occupied,
+                    aux_distance_from_intersection=aux_distance_from_intersection,
+                )
             )
-
-            aux_destination_lanes = None
-            if row.get("aux_destination_lane_id"):
-                aux_destination_lanes = [row["aux_destination_lane_id"]] * len(aux_spawn_lanes)
+            aux_destination_lanes = [
+                dest or None for dest in aux_destination_lanes
+            ]
 
             if aux_spawn_lanes:
                 aux_agent_mgr = add_auxiliary_agents(
@@ -1173,6 +1192,7 @@ def run_one_episode(
                     ego_release_distance_before_end=aux_release_when_ego_within_m,
                     convoy_size=aux_convoy_size,
                     convoy_gap_m=aux_convoy_gap_m,
+                    alternate_spawn_dest_map=alternate_spawn_dest_map,
                 )
                 if aux_agent_mgr is not None:
                     print(
