@@ -69,7 +69,14 @@ def parse_sumo_net(net_path: Path):
     return edges, junctions
 
 
-def render_network(edges, junctions, out_path: Path, figsize=(12, 12), dpi=150):
+def render_network(
+    edges,
+    junctions,
+    out_path: Path,
+    figsize=(12, 12),
+    dpi=150,
+    marker_xy: tuple[float, float] | None = None,
+):
     """Render the road network to an image."""
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
     ax.set_facecolor("#f0f0f0")
@@ -96,6 +103,18 @@ def render_network(edges, junctions, out_path: Path, figsize=(12, 12), dpi=150):
         lc_center = LineCollection(lines, colors="#ffffff", linewidths=0.5, 
                                    alpha=0.5, linestyles="dashed")
         ax.add_collection(lc_center)
+
+    if marker_xy is not None:
+        ax.plot(
+            marker_xy[0],
+            marker_xy[1],
+            "o",
+            color="red",
+            markersize=14,
+            markeredgecolor="#8b0000",
+            markeredgewidth=1.5,
+            zorder=10,
+        )
     
     ax.autoscale()
     ax.set_aspect("equal")

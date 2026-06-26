@@ -55,6 +55,7 @@ class ApproachArm:
     outgoing_to: List[str] = field(default_factory=list)
     left_to: List[str] = field(default_factory=list)
     from_node: str = ""
+    min_lane_length: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -68,6 +69,7 @@ class ApproachArm:
             "outgoing_to": list(self.outgoing_to),
             "left_to": list(self.left_to),
             "from_node": self.from_node,
+            "min_lane_length": float(self.min_lane_length),
         }
 
 
@@ -338,6 +340,7 @@ def _build_arms(
         lane_keys = [lane.metadrive_key for lane in sorted(edge.lanes, key=lambda l: l.lane_num)]
         entry_lane = max(edge.lanes, key=lambda l: l.length)
         entry_point = _entry_point_for_lane(entry_lane, edge)
+        min_lane_length = min((lane.length for lane in edge.lanes), default=0.0)
         arms.append(
             ApproachArm(
                 edge_id=edge.edge_id,
@@ -349,6 +352,7 @@ def _build_arms(
                 outgoing_to=sorted(outgoing_map.get(edge.edge_id, set())),
                 left_to=sorted(left_map.get(edge.edge_id, set())),
                 from_node=edge.from_node,
+                min_lane_length=min_lane_length,
             )
         )
 

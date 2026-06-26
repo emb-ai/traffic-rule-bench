@@ -1197,14 +1197,23 @@ class TrafficSignSumoEnv(BaseEnv):
                 )
             )
             if route_failed:
-                destination = self._pick_destination_with_min_hops(
-                    spawn_lane.index,
-                    road_network,
-                    min_hops=min_hops,
-                    max_hops=max_hops,
-                    exclude_lane_indices=[explicit_destination],
-                )
-                nav.set_route(spawn_lane.index, destination)
+                if explicit_destination is not None:
+                    # Don't override explicit destination - log warning instead
+                    logging.warning(
+                        f"[Navigation] Route from {spawn_lane.index} to explicit destination "
+                        f"{explicit_destination} failed (checkpoints loop back). "
+                        f"Scene may have invalid routing."
+                    )
+                else:
+                    # Only fall back to random destination if no explicit one was given
+                    destination = self._pick_destination_with_min_hops(
+                        spawn_lane.index,
+                        road_network,
+                        min_hops=min_hops,
+                        max_hops=max_hops,
+                        exclude_lane_indices=[explicit_destination],
+                    )
+                    nav.set_route(spawn_lane.index, destination)
             nav.update_localization(self.vehicle)
         except Exception:
             pass

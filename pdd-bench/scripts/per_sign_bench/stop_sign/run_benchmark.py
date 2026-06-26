@@ -17,7 +17,7 @@ from envs.sumo_traffic_manager import SumoTrafficManager
 from agents.policies.comprehensive_rule_expert import ComprehensiveRuleExpertPolicy
 from agents.policies.modified_idm_sign_compliant import ModifiedIDMSignCompliantPolicy
 from agents.policies.rule_compliant_expert import RuleCompliantExpertPolicy
-from metadrive.policy.idm_policy import IDMPolicy
+from metadrive.policy.idm_policy import IDMPolicy, ModifiedIDMPolicy
 from metadrive.policy.expert_policy import ExpertPolicy
 from scripts.per_sign_bench.factorized_space.ego_defaults import (
     apply_ego_defaults,
@@ -31,7 +31,7 @@ from lib.auxiliary_agent import (
     DEFAULT_CONVOY_SIZE,
     DEFAULT_SPAWN_VELOCITY_MS,
     add_auxiliary_agents,
-    resolve_aux_spawn_lanes,
+    resolve_aux_spawn_plan,
 )
 from lib.manifest_config import DEFAULT_AUX_LANES_OCCUPIED_MAX
 from lib.junction_sign_placement import (
@@ -255,6 +255,8 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         show_traffic_lights=row.get("show_traffic_lights", False),
         show_npc_vehicles=row.get("show_npc_vehicles", False),
         skip_auto_signs=True,
+        use_pedestrian_manager=False,
+        use_pedestrian_yield_rule=False,
     )
     if row.get("road_id"):
         config["vehicle_config"]["spawn_lane_index"] = row["road_id"]
@@ -993,7 +995,7 @@ def _place_junction_priority_signs(
                 use_random_lane=False,
                 intersection_name=junction_id,
                 main_road_lanes=main_lanes,
-                auto_detect_main_roads=True,
+                auto_detect_main_roads=False,
             )
             if sign is not None:
                 sign.is_priority_sign = False
@@ -1050,7 +1052,7 @@ def run_one_episode(
 
     policy_cls = None
     if policy_type == "idm":
-        policy_cls = IDMPolicy
+        policy_cls = ModifiedIDMPolicy  # Good driving, no sign compliance
     elif policy_type == "modified_idm":
         policy_cls = ModifiedIDMSignCompliantPolicy
     elif policy_type == "comprehensive_rule_expert":
@@ -1080,6 +1082,23 @@ def run_one_episode(
         spawn_distance = float(row.get("spawn_distance_before_end", 0) or 0)
         if spawn_distance > 0:
             _reposition_ego_before_lane_end(base_env, spawn_distance)
+
+        # Validate route: check that destination is different from spawn
+        nav = getattr(base_env.vehicle, "navigation", None)
+        if nav is not None:
+            checkpoints = getattr(nav, "checkpoints", [])
+            spawn_lane_idx = getattr(base_env.vehicle.lane, "index", None)
+            if checkpoints and spawn_lane_idx:
+                if len(checkpoints) <= 1 or checkpoints[-1] == spawn_lane_idx or checkpoints[0] == checkpoints[-1]:
+                    scene_id = row.get("scene_id", "unknown")
+                    dest = row.get("destination_lane_id", "unknown")
+                    print(f"[RouteValidation] INVALID: {scene_id} - route loops back to spawn. "
+                          f"spawn={spawn_lane_idx}, dest={dest}, checkpoints={checkpoints[:3]}...")
+                    return {
+                        "ok": False,
+                        "error": f"Invalid route: spawn and destination are the same or unreachable",
+                        "scene_id": scene_id,
+                    }
 
         # Place main/stop signs on all junction arms from layout
         sign_distance = float(row.get("sign_distance_before_end", 20.0))
@@ -1146,16 +1165,18 @@ def run_one_episode(
                 else str(getattr(base_env.vehicle.lane, "index", ""))
             )
 
-            aux_spawn_lanes = resolve_aux_spawn_lanes(
-                row,
-                ego_lane_index=str(ego_lane_index),
-                incoming_lanes=incoming_lanes,
-                aux_lanes_occupied=aux_lanes_occupied,
+            aux_spawn_lanes, aux_destination_lanes, alternate_spawn_dest_map = (
+                resolve_aux_spawn_plan(
+                    row,
+                    ego_lane_index=str(ego_lane_index),
+                    incoming_lanes=incoming_lanes,
+                    aux_lanes_occupied=aux_lanes_occupied,
+                    aux_distance_from_intersection=aux_distance_from_intersection,
+                )
             )
-
-            aux_destination_lanes = None
-            if row.get("aux_destination_lane_id"):
-                aux_destination_lanes = [row["aux_destination_lane_id"]] * len(aux_spawn_lanes)
+            aux_destination_lanes = [
+                dest or None for dest in aux_destination_lanes
+            ]
 
             if aux_spawn_lanes:
                 aux_agent_mgr = add_auxiliary_agents(
@@ -1171,6 +1192,7 @@ def run_one_episode(
                     ego_release_distance_before_end=aux_release_when_ego_within_m,
                     convoy_size=aux_convoy_size,
                     convoy_gap_m=aux_convoy_gap_m,
+                    alternate_spawn_dest_map=alternate_spawn_dest_map,
                 )
                 if aux_agent_mgr is not None:
                     print(
