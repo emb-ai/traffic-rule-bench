@@ -1,4 +1,4 @@
-"""Helpers for placing yield / main-road signs at junction approaches."""
+"""Helpers for placing main-road signs at junction approaches."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Auxiliary agents (main road NPCs) for yield sign scenarios."""
+"""Auxiliary agents for main-road (2.1 / right-hand rule) scenarios."""
 
 from __future__ import annotations
 
@@ -487,6 +487,59 @@ def select_occupied_main_lanes(
     return ordered[:n]
 
 
+from .junction_priority_layout import right_arm_edge_id
+
+
+def right_lane_keys_for_aux(
+    junction_layout: Optional[dict],
+    ego_edge_id: Optional[str] = None,
+) -> List[str]:
+    """Lane keys on the incoming arm to ego's right (right-hand conflict)."""
+    if not junction_layout or not ego_edge_id:
+        return []
+    right_edge = right_arm_edge_id(junction_layout, ego_edge_id)
+    if not right_edge:
+        return []
+    for arm in junction_layout.get("arms", []):
+        if arm.get("edge_id") == right_edge:
+            return sorted(arm.get("lane_keys", []))
+    return []
+
+
+def viable_right_aux_lane_keys(
+    junction_layout: Optional[dict],
+    aux_distance_from_intersection: float,
+    ego_edge_id: Optional[str] = None,
+) -> List[str]:
+    """Right-arm lane keys with enough length for aux spawning."""
+    if not junction_layout or not ego_edge_id:
+        return []
+    right_edge = right_arm_edge_id(junction_layout, ego_edge_id)
+    if not right_edge:
+        return []
+    min_required = min_aux_spawn_lane_length(aux_distance_from_intersection)
+    for arm in junction_layout.get("arms", []):
+        if arm.get("edge_id") != right_edge:
+            continue
+        min_len = float(arm.get("min_lane_length") or 0.0)
+        if min_len < min_required:
+            return []
+        return sorted(arm.get("lane_keys", []))
+    return []
+
+
+def has_viable_right_aux_lanes(
+    junction_layout: Optional[dict],
+    aux_distance_from_intersection: float,
+    ego_edge_id: Optional[str] = None,
+) -> bool:
+    return bool(
+        viable_right_aux_lane_keys(
+            junction_layout, aux_distance_from_intersection, ego_edge_id
+        )
+    )
+
+
 def viable_aux_arms(
     junction_layout: Optional[dict],
     aux_distance_from_intersection: float,
@@ -562,6 +615,23 @@ def resolve_aux_spawn_lanes(
         ego_edge = str(row["road_id"])
 
     junction_layout = row.get("junction_layout")
+    if junction_layout and junction_layout.get("mode") == "main_main":
+        right_keys = viable_right_aux_lane_keys(
+            junction_layout, aux_distance, ego_edge
+        )
+        if not right_keys:
+            right_keys = row.get("right_lane_keys") or right_lane_keys_for_aux(
+                junction_layout, ego_edge
+            )
+        occupied = row.get("aux_occupied_lane_keys")
+        if occupied:
+            filtered = [key for key in occupied if key in right_keys] if right_keys else list(occupied)
+            if filtered:
+                return filtered[:lanes_n]
+        if right_keys:
+            return select_occupied_main_lanes(right_keys, lanes_n)
+        return []
+
     viable_keys = viable_aux_lane_keys(junction_layout, aux_distance, ego_edge)
     viable_set = set(viable_keys)
 

@@ -29,11 +29,11 @@ import tempfile
 from pathlib import Path
 
 TOOLS_DIR = Path(__file__).resolve().parent
-YIELD_SIGN_DIR = TOOLS_DIR.parent.parent
-SCENES_DIR_DEFAULT = YIELD_SIGN_DIR / "scenes"
+MAIN_SIGN_DIR = TOOLS_DIR.parent.parent
+SCENES_DIR_DEFAULT = MAIN_SIGN_DIR / "scenes"
 CORE_DIR_DEFAULT = SCENES_DIR_DEFAULT / "core"
 
-sys.path.insert(0, str(YIELD_SIGN_DIR))
+sys.path.insert(0, str(MAIN_SIGN_DIR))
 
 from lib.manifest_config import (  # noqa: E402
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
@@ -237,12 +237,22 @@ def process_core_scene(
 
 
 def uncropped_core_dirs(core_root: Path) -> list[Path]:
-    """Core scenes that have not been cropped yet (no junctions.json)."""
-    return [
-        core_dir
-        for core_dir in discover_core_scene_dirs(core_root)
-        if not (core_dir / "junctions.json").is_file()
-    ]
+    """Core scenes that have not been cropped yet, or prior crop wrote no junction scenes."""
+    uncropped: list[Path] = []
+    for core_dir in discover_core_scene_dirs(core_root):
+        index_path = core_dir / "junctions.json"
+        if not index_path.is_file():
+            uncropped.append(core_dir)
+            continue
+        try:
+            entries = json.loads(index_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            uncropped.append(core_dir)
+            continue
+        if any(entry.get("written") for entry in entries):
+            continue
+        uncropped.append(core_dir)
+    return uncropped
 
 
 def main() -> None:

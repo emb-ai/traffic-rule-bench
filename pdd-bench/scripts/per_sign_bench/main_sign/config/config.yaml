@@ -1,4 +1,4 @@
-# Yield Sign Benchmark Configuration
+# Main Sign (2.1) Benchmark Configuration
 # See README.md for parameter descriptions
 
 defaults:
@@ -17,7 +17,7 @@ hydra:
 # =============================================================================
 paths:
   scenes_dir: scenes
-  output_base: benchmark_output/2_4
+  output_base: benchmark_output/2_1
   experiment_name: ${now:%Y-%m-%d_%H-%M-%S}
 
 # =============================================================================
@@ -43,7 +43,7 @@ simulation:
 # Auxiliary Agents (Main Road Traffic)
 # =============================================================================
 auxiliary:
-  enabled: true                   # Spawn agents on main road
+  enabled: true                   # Spawn agents on right-hand conflicting arm
   distance_from_intersection: 20.0  # Distance from junction (m)
   convoy_size: 3                  # Vehicles per lane
   lanes_occupied: 4               # Main road lanes to occupy

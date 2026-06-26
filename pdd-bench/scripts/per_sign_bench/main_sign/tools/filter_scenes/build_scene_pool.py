@@ -32,10 +32,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 FILTER_SCENES_DIR = Path(__file__).resolve().parent
-YIELD_SIGN_DIR = FILTER_SCENES_DIR.parent.parent
+MAIN_SIGN_DIR = FILTER_SCENES_DIR.parent.parent
 DEFAULT_TARGET = 100
 
-sys.path.insert(0, str(YIELD_SIGN_DIR))
+sys.path.insert(0, str(MAIN_SIGN_DIR))
 
 from lib.manifest_config import (  # noqa: E402
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,

@@ -24,8 +24,9 @@ from scripts.per_sign_bench.factorized_space.ego_defaults import (
     apply_ego_sampled,
     sample_ego_params,
 )
-from traffic_signs.priority_signs import MainRoadSign, YieldSign
+from traffic_signs.priority_signs import MainRoadSign, RightHandYieldSign
 from lib.lane_keys import make_lane_key
+from lib.junction_priority_layout import right_arm_edge_id
 from lib.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
     DEFAULT_CONVOY_SIZE,
@@ -36,7 +37,6 @@ from lib.auxiliary_agent import (
 from lib.manifest_config import DEFAULT_AUX_LANES_OCCUPIED_MAX
 from lib.junction_sign_placement import (
     SIGN_SHOULDER_OFFSET_M,
-    arms_for_road_class,
     collect_lanes_for_keys,
     lateral_offset_beside_lane,
     resolve_sign_lane_for_edge,
@@ -177,48 +177,6 @@ def collect_rows(
             counts[sign_code] += 1
 
     return rows
-
-
-def _ensure_secondary_ego_spawn(row: dict, scenes_root: Path) -> None:
-    """Ensure manifest spawn edge is on a secondary junction arm (mutates row in place)."""
-    layout = _get_junction_layout(row, scenes_root)
-    if not layout:
-        return
-
-    secondary_ids = set(layout.get("secondary_edge_ids") or [])
-    road_id = row.get("road_id")
-    if road_id and road_id in secondary_ids:
-        return
-
-    seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
-    pool: list[tuple[str, int]] = []
-    for arm in layout.get("arms", []):
-        if arm.get("road_class") != "secondary":
-            continue
-        edge_id = arm["edge_id"]
-        lane_keys = arm.get("lane_keys") or []
-        if not lane_keys:
-            pool.append((edge_id, int(row.get("spawn_lane_num", 0) or 0)))
-            continue
-        for lane_key in lane_keys:
-            try:
-                lane_num = int(str(lane_key).rsplit("_", 1)[1])
-            except (ValueError, IndexError):
-                lane_num = 0
-            pool.append((edge_id, lane_num))
-
-    if not pool:
-        print("[EgoSpawn] No secondary arms in layout; keeping original spawn")
-        return
-
-    edge_id, lane_num = pool[seed % len(pool)]
-    if road_id and road_id != edge_id:
-        print(
-            f"[EgoSpawn] Repicked spawn from main/non-secondary {road_id!r} "
-            f"-> secondary {edge_id!r} lane {lane_num}"
-        )
-    row["road_id"] = edge_id
-    row["spawn_lane_num"] = lane_num
 
 
 def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSignSumoEnv:
@@ -867,7 +825,7 @@ def _get_junction_layout(row: dict, scenes_root: Path) -> dict | None:
     net_file = Path(str(net_path))
     full_path = net_file if net_file.is_absolute() else scenes_root / net_file
     try:
-        layout = build_junction_priority_layout(full_path)
+        layout = build_junction_priority_layout(full_path, mode="main_main")
     except JunctionLayoutError as exc:
         print(f"[JunctionLayout] Failed to build layout: {exc}")
         return None
@@ -879,10 +837,10 @@ def _clear_sign_manager(sign_mgr) -> None:
     sign_mgr.rules.clear()
 
 
-def _place_yield_sign_on_spawn_lane(
+def _place_main_sign_on_spawn_lane(
     env, distance_before_end: float = 20.0, show_model: bool = True
 ) -> bool:
-    """Fallback: place a single YieldSign beside the ego approach road."""
+    """Fallback: place a single MainRoadSign beside the ego approach road."""
     try:
         vehicle = env.agent
         if vehicle is None or vehicle.lane is None:
@@ -896,34 +854,33 @@ def _place_yield_sign_on_spawn_lane(
         lane = vehicle.lane
         placement_long = sign_placement_long(lane, distance_before_end)
         sign = sign_mgr.add_sign(
-            YieldSign,
+            MainRoadSign,
             lane=lane,
             longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
             lateral_offset=lateral_offset_beside_lane(lane, placement_long),
             show_model=show_model,
             use_random_lane=False,
-            auto_detect_main_roads=False,
         )
         if sign is not None:
             sign.is_priority_sign = False
         return sign is not None
     except Exception as e:
-        print(f"[YieldSign] Failed to place sign: {e}")
+        print(f"[MainRoadSign] Failed to place sign: {e}")
         return False
 
 
-def _place_junction_priority_signs(
+def _place_equal_priority_main_signs(
     env,
     row: dict,
     scenes_root: Path,
     distance_before_end: float = 20.0,
     show_model: bool = True,
 ) -> bool:
-    """Place one MainRoadSign / YieldSign per incoming road edge (not per lane line)."""
+    """Place MainRoadSign (2.1) on every incoming arm — equal priority intersection."""
     layout = _get_junction_layout(row, scenes_root)
     if layout is None:
-        print("[JunctionSigns] No layout available, falling back to ego-only yield sign")
-        return _place_yield_sign_on_spawn_lane(
+        print("[JunctionSigns] No layout available, falling back to ego-only main sign")
+        return _place_main_sign_on_spawn_lane(
             env, distance_before_end=distance_before_end, show_model=show_model
         )
 
@@ -933,29 +890,17 @@ def _place_junction_priority_signs(
 
     _clear_sign_manager(sign_mgr)
 
-    main_arms = arms_for_road_class(layout, "main")
-    secondary_arms = arms_for_road_class(layout, "secondary")
-    if not main_arms or not secondary_arms:
-        print("[JunctionSigns] Missing main/secondary arms, falling back to ego-only yield sign")
-        return _place_yield_sign_on_spawn_lane(
-            env, distance_before_end=distance_before_end, show_model=show_model
-        )
-
-    main_lanes = []
-    for arm in main_arms:
-        main_lanes.extend(collect_lanes_for_keys(env, arm.get("lane_keys", [])))
-
-    if not main_lanes:
-        print("[JunctionSigns] Could not resolve main lanes, falling back to ego-only yield sign")
-        return _place_yield_sign_on_spawn_lane(
+    all_arms = layout.get("arms", [])
+    if not all_arms:
+        print("[JunctionSigns] No arms in layout, falling back to ego-only main sign")
+        return _place_main_sign_on_spawn_lane(
             env, distance_before_end=distance_before_end, show_model=show_model
         )
 
     junction_id = layout.get("junction_id", "")
     placed_main = 0
-    placed_yield = 0
 
-    for arm in main_arms:
+    for arm in all_arms:
         edge_id = arm.get("edge_id", "")
         lane = resolve_sign_lane_for_edge(env, edge_id, arm.get("lane_keys", []))
         if lane is None:
@@ -978,37 +923,93 @@ def _place_junction_priority_signs(
         except Exception as exc:
             print(f"[JunctionSigns] Failed MainRoadSign on edge {edge_id}: {exc}")
 
-    for arm in secondary_arms:
-        edge_id = arm.get("edge_id", "")
-        lane = resolve_sign_lane_for_edge(env, edge_id, arm.get("lane_keys", []))
-        if lane is None:
-            print(f"[JunctionSigns] Skipping yield sign, lane not found for edge: {edge_id}")
-            continue
-        placement_long = sign_placement_long(lane, distance_before_end)
-        try:
-            sign = sign_mgr.add_sign(
-                YieldSign,
-                lane=lane,
-                longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
-                lateral_offset=lateral_offset_beside_lane(lane, placement_long),
-                show_model=show_model,
-                use_random_lane=False,
-                intersection_name=junction_id,
-                main_road_lanes=main_lanes,
-                auto_detect_main_roads=False,
-            )
-            if sign is not None:
-                sign.is_priority_sign = False
-            placed_yield += 1
-        except Exception as exc:
-            print(f"[JunctionSigns] Failed YieldSign on edge {edge_id}: {exc}")
-
     print(
-        f"[JunctionSigns] Placed {placed_main} MainRoadSign(s) and {placed_yield} YieldSign(s) "
+        f"[JunctionSigns] Placed {placed_main} MainRoadSign(s) "
         f"at junction {junction_id} ({layout.get('shape')}), "
         f"shoulder offset={SIGN_SHOULDER_OFFSET_M}m"
     )
-    return placed_main > 0 or placed_yield > 0
+    return placed_main > 0
+
+
+def _place_right_hand_yield_tracker(
+    env,
+    row: dict,
+    scenes_root: Path,
+    distance_before_end: float = 20.0,
+) -> bool:
+    """Invisible RightHandYieldSign on ego lane for violation metrics."""
+    layout = _get_junction_layout(row, scenes_root)
+    if layout is None:
+        return False
+
+    ego_edge = row.get("road_id")
+    if not ego_edge:
+        return False
+
+    right_edge = right_arm_edge_id(layout, str(ego_edge))
+    if not right_edge:
+        print(f"[RightHandRule] No right arm for ego edge {ego_edge!r}")
+        return False
+
+    right_lane_keys = []
+    for arm in layout.get("arms", []):
+        if arm.get("edge_id") == right_edge:
+            right_lane_keys = list(arm.get("lane_keys", []))
+            break
+
+    right_lanes = collect_lanes_for_keys(env, right_lane_keys)
+    if not right_lanes:
+        print(f"[RightHandRule] Could not resolve lanes for right arm {right_edge}")
+        return False
+
+    vehicle = env.agent
+    if vehicle is None or vehicle.lane is None:
+        return False
+
+    sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
+    if sign_mgr is None:
+        return False
+
+    lane = vehicle.lane
+    placement_long = sign_placement_long(lane, distance_before_end)
+    try:
+        sign = sign_mgr.add_sign(
+            RightHandYieldSign,
+            lane=lane,
+            longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
+            lateral_offset=lateral_offset_beside_lane(lane, placement_long),
+            show_model=False,
+            use_random_lane=False,
+            intersection_name=layout.get("junction_id", ""),
+            right_road_lanes=right_lanes,
+        )
+        if sign is not None:
+            sign.is_priority_sign = False
+        print(
+            f"[RightHandRule] Tracker on ego {ego_edge}, "
+            f"yield-to-right arm {right_edge} ({len(right_lanes)} lane(s))"
+        )
+        return sign is not None
+    except Exception as exc:
+        print(f"[RightHandRule] Failed to place tracker: {exc}")
+        return False
+
+
+def _place_junction_priority_signs(
+    env,
+    row: dict,
+    scenes_root: Path,
+    distance_before_end: float = 20.0,
+    show_model: bool = True,
+) -> bool:
+    """Place MainRoadSign (2.1) on every incoming arm."""
+    return _place_equal_priority_main_signs(
+        env,
+        row,
+        scenes_root=scenes_root,
+        distance_before_end=distance_before_end,
+        show_model=show_model,
+    )
 
 
 def run_one_episode(
@@ -1044,7 +1045,6 @@ def run_one_episode(
     except ImportError:
         pass
 
-    _ensure_secondary_ego_spawn(row, scenes_root)
     env = _build_sumo_env(row, scenes_root=scenes_root, max_steps=max_steps)
 
     raw_env = env
@@ -1100,7 +1100,7 @@ def run_one_episode(
                         "scene_id": scene_id,
                     }
 
-        # Place main/yield signs on all junction arms from layout
+        # Place MainRoadSign on all junction arms; invisible right-hand yield tracker on ego
         sign_distance = float(row.get("sign_distance_before_end", 20.0))
         _place_junction_priority_signs(
             base_env,
@@ -1108,6 +1108,12 @@ def run_one_episode(
             scenes_root=scenes_root,
             distance_before_end=sign_distance,
             show_model=not hide_signs,
+        )
+        _place_right_hand_yield_tracker(
+            base_env,
+            row,
+            scenes_root=scenes_root,
+            distance_before_end=sign_distance,
         )
 
         # Analyze and print junction lanes (for debugging/info only)
@@ -1401,30 +1407,30 @@ def run_one_episode(
                 }
                 
                 ego_in_yield_zone = False
-                ego_violating_yield = False
-                main_road_has_traffic = False
-                
+                ego_violating_right_hand = False
+                right_arm_has_traffic = False
+
                 if sign_mgr is not None and vehicle is not None:
-                    yield_signs = [
+                    yield_trackers = [
                         sign for sign in sign_mgr.signs
-                        if "yield" in type(sign).__name__.lower()
+                        if isinstance(sign, RightHandYieldSign)
                     ]
-                    text_dict["Yield signs"] = len(yield_signs)
+                    text_dict["Right-hand trackers"] = len(yield_trackers)
                     text_dict["Main road signs"] = sum(
                         1 for sign in sign_mgr.signs
-                        if "mainroad" in type(sign).__name__.lower()
+                        if isinstance(sign, MainRoadSign)
                     )
-                    for sign in yield_signs:
+                    for sign in yield_trackers:
                         has_traffic, _ = sign.has_main_road_traffic(exclude_vehicle=vehicle)
-                        main_road_has_traffic = main_road_has_traffic or has_traffic
+                        right_arm_has_traffic = right_arm_has_traffic or has_traffic
                         if sign._is_vehicle_in_zone(vehicle):
                             ego_in_yield_zone = True
                         if sign._is_violating(vehicle):
-                            ego_violating_yield = True
-                
-                text_dict["Main road traffic"] = main_road_has_traffic
+                            ego_violating_right_hand = True
+
+                text_dict["Right-arm traffic"] = right_arm_has_traffic
                 text_dict["Ego in yield zone"] = ego_in_yield_zone
-                text_dict["Yield violation"] = ego_violating_yield
+                text_dict["Right-hand violation"] = ego_violating_right_hand
                 
                 # Add auxiliary agent status
                 if aux_agent_mgr is not None:
@@ -1758,7 +1764,7 @@ import time
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run policies on real SUMO maps (yield sign benchmark)")
+    parser = argparse.ArgumentParser(description="Run policies on real SUMO maps (main sign / 2.1 benchmark)")
     parser.add_argument("--policy", required=True,
                         choices=["idm", "modified_idm", "comprehensive_rule_expert",
                                  "rule_compliant", "ppo_lidar",
@@ -1772,7 +1778,7 @@ def main():
                         help="Base dir that contains <preset>/")
     parser.add_argument("--scenes-root", type=str, default=str(BENCH_DIR / "scenes"))
     parser.add_argument("--sign-type", type=str, default=None,
-                        help="Single sign code, e.g. 2.4")
+                        help="Single sign code, e.g. 2.1")
     parser.add_argument("--sign-types", type=str, default="",
                         help="Comma-separated sign codes")
     parser.add_argument("--max-scenes-per-sign", type=int, default=None)

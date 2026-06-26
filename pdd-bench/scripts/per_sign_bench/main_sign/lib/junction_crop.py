@@ -602,9 +602,9 @@ def crop_scene_to_junction_pick(
     if junction_rank is not None:
         meta["junction_rank"] = junction_rank
 
-    from .scene_augmentation import pick_default_yield_spawn_meta_for_net
+    from .scene_augmentation import pick_default_main_spawn_meta_for_net
 
-    spawn_meta = pick_default_yield_spawn_meta_for_net(
+    spawn_meta = pick_default_main_spawn_meta_for_net(
         out_net,
         prefer_ego_edge_id=meta.get("road_id"),
         min_lane_length=min_lane_length_m,

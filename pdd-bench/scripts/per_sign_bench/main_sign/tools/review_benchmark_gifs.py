@@ -29,7 +29,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 TOOLS_DIR = Path(__file__).resolve().parent
-YIELD_SIGN_DIR = TOOLS_DIR.parent
+MAIN_SIGN_DIR = TOOLS_DIR.parent
 
 
 def parse_gif_filename(filename: str) -> dict[str, Any]:
@@ -615,7 +615,7 @@ def main() -> None:
 
     if args.path is None:
         # Try to find the most recent benchmark run
-        benchmark_output = YIELD_SIGN_DIR / "benchmark_output"
+        benchmark_output = MAIN_SIGN_DIR / "benchmark_output"
         if not benchmark_output.is_dir():
             sys.exit(
                 "No path specified and no benchmark_output/ found.\n"

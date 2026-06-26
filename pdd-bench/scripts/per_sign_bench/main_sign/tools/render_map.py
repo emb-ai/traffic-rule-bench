@@ -10,14 +10,14 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.collections import LineCollection
 
-# Path setup - tools/ is inside yield_sign/
+# Path setup - tools/ is inside main_sign/
 TOOLS_DIR = Path(__file__).resolve().parent
-YIELD_SIGN_DIR = TOOLS_DIR.parent
-sys.path.insert(0, str(YIELD_SIGN_DIR))
+MAIN_SIGN_DIR = TOOLS_DIR.parent
+sys.path.insert(0, str(MAIN_SIGN_DIR))
 
 from lib.sumo_utils import resolve_net_file, load_scene_meta, resolve_scene_dir
 
-SCENES_DIR_DEFAULT = YIELD_SIGN_DIR / "scenes"
+SCENES_DIR_DEFAULT = MAIN_SIGN_DIR / "scenes"
 
 
 def parse_sumo_net(net_path: Path):

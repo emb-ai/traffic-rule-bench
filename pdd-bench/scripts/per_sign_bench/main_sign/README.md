@@ -1,6 +1,6 @@
-# Yield Sign (2.4) Benchmark
+# Main Road Sign / Equal Priority (2.1) Benchmark
 
-Benchmark for evaluating autonomous driving policies on yield sign scenarios using real-world OpenStreetMap data.
+Benchmark for evaluating autonomous driving policies at equal-priority intersections (MainRoadSign on all approaches) using real-world OpenStreetMap data.
 
 ## Setup
 
@@ -11,11 +11,11 @@ conda activate zinkovich-plant2
 ## Folder Structure
 
 ```
-yield_sign/
+main_sign/
 ├── build_scene.py          # Step 1: OSM → SUMO network
 ├── generate_manifest.py    # Step 2: Create evaluation manifest
 ├── eval_pipeline.py        # Step 3: Run policy evaluation
-├── run_benchmark_real.py   # Benchmark runner (used internally)
+├── run_benchmark.py        # Benchmark runner (used internally)
 ├── lib/                    # Core library modules
 │   ├── auxiliary_agent.py
 │   ├── junction_priority_layout.py
@@ -45,76 +45,34 @@ Convert OSM to SUMO network:
 python build_scene.py <scene_name> --radius <meters>
 ```
 
-Example:
-```bash
-python build_scene.py savvinskaya_3 --radius 100
-```
-
-This creates:
-- `map.net.xml` — SUMO network
-- `cropped.osm` — Cropped OSM (for reference)
-- `meta.json` — Scene metadata
-
 ### Step 2: Generate Evaluation Manifest
-
-Generate scenarios with ego/auxiliary agent configurations:
 
 ```bash
 python generate_manifest.py
 ```
 
-With options (Hydra config):
-```bash
-python generate_manifest.py gif.enabled=true
-python generate_manifest.py auxiliary.lanes_occupied=2 auxiliary.convoy_size=2
-```
-
-Output is saved to `benchmark_output/2_4/<timestamp>/`:
-- `real_manifest.jsonl` — Scenario definitions
-- `config.yaml` — Resolved configuration
-- `gifs/` — Visualization GIFs (if enabled)
+Output is saved to `benchmark_output/2_1/<timestamp>/`.
 
 ### Step 3: Run Policy Evaluation
-
-Evaluate policies on the generated manifest:
 
 ```bash
 python eval_pipeline.py \
     --policies idm \
-    --manifest benchmark_output/2_4/<timestamp> \
+    --manifest benchmark_output/2_1/<timestamp> \
     --scenes-root scenes
 ```
 
 ## Debug Tools
 
-### Test Scene with Policy
-
-Run a simulation to verify scene setup:
-
 ```bash
 python -m tools.run_simulation <scene_name>
-python -m tools.run_simulation <scene_name> --policy carl
-python -m tools.run_simulation <scene_name> --policy plant2 --max-steps 400
-```
-
-### Render Static Map
-
-Generate a static map image:
-
-```bash
 python -m tools.render_map <scene_name>
-python -m tools.render_map <scene_name> --out custom_output.png
 ```
 
-## Configuration
+## Sign rule (2.1)
 
-See `config/config.yaml` for available options:
-- `scenario.*` — Scenario generation settings
-- `simulation.*` — Simulation parameters
-- `auxiliary.*` — Auxiliary agent configuration
-- `gif.*` — GIF rendering options
+All incoming roads carry **MainRoadSign** (equal priority). The sign itself is informational and never violated.
 
-Override via command line:
-```bash
-python generate_manifest.py simulation.horizon=800 auxiliary.convoy_size=3
-```
+Conflict resolution follows the **right-hand rule**: traffic from the right has priority. Violations are tracked by an invisible `RightHandYieldSign` on the ego approach — same zone logic as yield (2.4), but monitoring traffic on the **right** conflicting arm only.
+
+Auxiliary agents are spawned **only on the right incoming arm** relative to ego's spawn lane (not on the left).

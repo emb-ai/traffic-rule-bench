@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-"""Import yield-sign catalog scenes into yield_sign/scenes/core with junction filtering.
+"""Import main-sign catalog scenes into main_sign/scenes/core with junction filtering.
 
-Scans the catalog (default: pdd-bench/scenes/2.4), keeps only scenes with a valid
+Scans the catalog (default: pdd-bench/scenes/2.1), keeps only scenes with a valid
 3- and/or 4-arm junction (each arm has a lane longer than --min-lane-length),
-then copies them into yield_sign/scenes/core/, renders custom.png, and optionally
+then copies them into main_sign/scenes/core/, renders custom.png, and optionally
 runs a simulation GIF.
 
-When both 3 and 4 are requested, the catalog is scanned in two passes:
-  1. All scenes with a qualifying 4-arm junction (catalog order)
-  2. If --limit is not reached, scenes with a qualifying 3-arm junction only
-
 Use crop_junction_scene.py afterward to emit junction crops as sibling folders
-under yield_sign/scenes/ (e.g. sign_72424_j0, sign_72424_j1).
+under main_sign/scenes/ (e.g. sign_72424_j0, sign_72424_j1).
 
 Examples:
     # Import next 10 qualifying catalog scenes not yet in scenes/core/
@@ -42,12 +38,12 @@ from typing import Optional
 
 FILTER_SCENES_DIR = Path(__file__).resolve().parent
 TOOLS_DIR = FILTER_SCENES_DIR.parent
-YIELD_SIGN_DIR = TOOLS_DIR.parent
-PDD_BENCH_DIR = YIELD_SIGN_DIR.parent.parent.parent
-DEFAULT_SOURCE = PDD_BENCH_DIR / "scenes" / "2.4"
-DEFAULT_DEST = YIELD_SIGN_DIR / "scenes" / "core"
+MAIN_SIGN_DIR = TOOLS_DIR.parent
+PDD_BENCH_DIR = MAIN_SIGN_DIR.parent.parent.parent
+DEFAULT_SOURCE = PDD_BENCH_DIR / "scenes" / "2.1"
+DEFAULT_DEST = MAIN_SIGN_DIR / "scenes" / "core"
 
-sys.path.insert(0, str(YIELD_SIGN_DIR))
+sys.path.insert(0, str(MAIN_SIGN_DIR))
 
 from lib.junction_crop import (  # noqa: E402
     try_find_junction_for_arm_counts,
@@ -334,7 +330,7 @@ def resolve_import_candidates(
 
 
 def normalize_meta(meta: dict, scene_name: str, analysis: SceneAnalysis | None = None) -> dict:
-    """Ensure yield_sign-compatible meta fields."""
+    """Ensure main_sign-compatible meta fields."""
     out = dict(meta)
     out["scene_name"] = scene_name
     out["scene_kind"] = "core"
@@ -405,7 +401,7 @@ def run_simulation(
     if model_path:
         cmd += ["--model-path", model_path]
     print(f"\n$ {' '.join(cmd)}")
-    subprocess.run(cmd, check=True, cwd=str(YIELD_SIGN_DIR))
+    subprocess.run(cmd, check=True, cwd=str(MAIN_SIGN_DIR))
 
 
 def main() -> None:
