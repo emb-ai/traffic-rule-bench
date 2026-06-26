@@ -146,14 +146,18 @@ def crop_core_batch(
     require_manifest_viable: bool = True,
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
-) -> tuple[int, int]:
-    """Crop uncropped core maps. Returns (junction_scenes_written, cores_processed)."""
-    cores = uncropped_core_dirs(core_root)
+    retry_failed: bool = False,
+    cores: list[Path] | None = None,
+) -> tuple[int, int, list[str]]:
+    """Crop uncropped core maps. Returns (junction_scenes_written, cores_processed, names)."""
+    if cores is None:
+        cores = uncropped_core_dirs(core_root, retry_failed=retry_failed)
     if max_cores is not None:
         cores = cores[:max_cores]
 
     written = 0
     processed = 0
+    processed_names: list[str] = []
     for core_dir in cores:
         created = process_core_scene(
             core_dir,
@@ -169,8 +173,9 @@ def crop_core_batch(
             aux_distance_from_intersection=aux_distance_from_intersection,
         )
         processed += 1
+        processed_names.append(core_dir.name)
         written += created
-    return written, processed
+    return written, processed, processed_names
 
 
 def crop_until_candidates(
@@ -187,6 +192,7 @@ def crop_until_candidates(
     require_manifest_viable: bool = True,
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+    retry_failed: bool = False,
 ) -> tuple[int, int]:
     """Crop uncropped cores until at least ``target`` reviewable scenes exist."""
     candidates = len(discover_review_scenes(scenes_root, preview_name=preview_name))
@@ -196,8 +202,13 @@ def crop_until_candidates(
 
     total_written = 0
     total_cores = 0
+    skipped_failed: set[str] = set()
     while candidates < target:
-        remaining = uncropped_core_dirs(core_root)
+        remaining = [
+            core_dir
+            for core_dir in uncropped_core_dirs(core_root, retry_failed=retry_failed)
+            if core_dir.name not in skipped_failed
+        ]
         if not remaining:
             print(
                 f"\nWarning: only {candidates} candidate scene(s) available "
@@ -205,7 +216,7 @@ def crop_until_candidates(
             )
             break
 
-        written, cores = crop_core_batch(
+        written, cores, names = crop_core_batch(
             core_root,
             scenes_root,
             max_cores=1,
@@ -218,11 +229,15 @@ def crop_until_candidates(
             require_manifest_viable=require_manifest_viable,
             min_ego_lane_m=min_ego_lane_m,
             aux_distance_from_intersection=aux_distance_from_intersection,
+            retry_failed=retry_failed,
+            cores=remaining[:1],
         )
         total_written += written
         total_cores += cores
         candidates = len(discover_review_scenes(scenes_root, preview_name=preview_name))
         if written == 0:
+            if names:
+                skipped_failed.add(names[0])
             print("  [skip core] no manifest-viable junctions; trying next core map")
 
     return total_written, total_cores
@@ -243,6 +258,7 @@ def fill_after_review(
     require_manifest_viable: bool = True,
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+    retry_failed: bool = False,
 ) -> int:
     """Add junction crops from new core maps when kept count is below target."""
     status = collect_pool_status(
@@ -270,8 +286,13 @@ def fill_after_review(
     print(f"\nAdding at least {need} new candidate scene(s) from uncropped core maps...")
 
     total_written = 0
+    skipped_failed: set[str] = set()
     while total_written < need:
-        remaining = uncropped_core_dirs(core_root)
+        remaining = [
+            core_dir
+            for core_dir in uncropped_core_dirs(core_root, retry_failed=retry_failed)
+            if core_dir.name not in skipped_failed
+        ]
         if not remaining:
             print(
                 f"\nWarning: cannot reach target {status.target}: "
@@ -280,7 +301,7 @@ def fill_after_review(
             )
             break
 
-        written, _ = crop_core_batch(
+        written, _, names = crop_core_batch(
             core_root,
             scenes_root,
             max_cores=1,
@@ -293,9 +314,13 @@ def fill_after_review(
             require_manifest_viable=require_manifest_viable,
             min_ego_lane_m=min_ego_lane_m,
             aux_distance_from_intersection=aux_distance_from_intersection,
+            retry_failed=retry_failed,
+            cores=remaining[:1],
         )
         total_written += written
         if written == 0:
+            if names:
+                skipped_failed.add(names[0])
             print("  [skip core] no manifest-viable junctions; trying next core map")
 
     status = collect_pool_status(
@@ -343,6 +368,11 @@ def add_crop_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Write all cropped junctions even if they would be dropped by generate_manifest.py",
     )
+    parser.add_argument(
+        "--retry-failed-cores",
+        action="store_true",
+        help="Re-attempt cores that have junctions.json but wrote no scenes (one pass per core)",
+    )
 
 
 def _crop_kwargs(args: argparse.Namespace) -> dict:
@@ -356,6 +386,7 @@ def _crop_kwargs(args: argparse.Namespace) -> dict:
         "require_manifest_viable": not args.no_require_manifest_viable,
         "min_ego_lane_m": args.min_ego_lane,
         "aux_distance_from_intersection": args.aux_distance,
+        "retry_failed": args.retry_failed_cores,
     }
 
 

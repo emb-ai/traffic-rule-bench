@@ -236,13 +236,19 @@ def process_core_scene(
     return created
 
 
-def uncropped_core_dirs(core_root: Path) -> list[Path]:
-    """Core scenes that have not been cropped yet, or prior crop wrote no junction scenes."""
+def uncropped_core_dirs(core_root: Path, *, retry_failed: bool = False) -> list[Path]:
+    """Core scenes not yet cropped (no ``junctions.json``).
+
+    With ``retry_failed=True``, also include cores whose prior crop wrote no junction
+    scenes (all picks failed manifest viability). Use after fixing viability rules.
+    """
     uncropped: list[Path] = []
     for core_dir in discover_core_scene_dirs(core_root):
         index_path = core_dir / "junctions.json"
         if not index_path.is_file():
             uncropped.append(core_dir)
+            continue
+        if not retry_failed:
             continue
         try:
             entries = json.loads(index_path.read_text(encoding="utf-8"))
