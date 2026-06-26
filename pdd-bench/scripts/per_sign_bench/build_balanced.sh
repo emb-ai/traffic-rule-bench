@@ -3,10 +3,11 @@
 #   1) snapshot scenes_uniq -> scenes_balanced (never touch the original; the
 #      running eval reads .net.xml straight from scenes_uniq)
 #   2) (idempotent) persist 5.21/3.24 placement fixes on the copy
-#   3) redistribute 3.24->4.6, 3.24->5.31, 5.21->5.31 so {3.24,5.21,5.31,4.6}
-#      each end at N = floor(total/4)
-#   4) build the SUMO manifest UNCAPPED (--n-per-category huge -> physical counts
-#      kept; 3.25/5.22 stay natural) with --n-variations 10 (×10 NPC-seed/map)
+#   3) redistribute (cap mode): bring 4.6 & 5.31 UP to N, donors 3.24 & 5.21
+#      give only what's needed and keep their surplus (>= N); N is the max equal
+#      count = min((|3.24|+|4.6|)//2, (|5.21|+|5.31|)//2). No scenes dropped.
+#   4) build the SUMO manifest with --n-per-category N (caps the donor surplus,
+#      e.g. 5.21 & 5.22, so all four codes end at N) and --n-variations 10.
 #
 #   nohup bash build_balanced.sh > /tmp/build_balanced.log 2>&1 & disown
 #   tail -f /tmp/build_balanced.log
@@ -23,7 +24,6 @@ SC=scenes_balanced         # working copy we redistribute in place
 OUT=benchmark_output_speed/balanced
 CODES=3.24,3.25,5.21,5.22,5.31,4.6
 MIN_ROAD_KMH=20            # 3.24->4.6 donors need road OSM speed >= this
-BIG_CAP=1000000           # n-per-category large enough to NEVER cap (keep physical counts)
 
 log(){ echo "[$(date '+%F %T')] $*"; }
 
@@ -52,19 +52,25 @@ log "reorient 5.21 (apply) ..."
 log "reorient 3.24 (apply) ..."
 "$PY" scripts/osm_scene_collection/reorient_zone_signs.py --scenes-root "$SC" --codes 3.24 --apply
 
-# 3) redistribute to equal N (dry-run first for the log, then apply)
+# 3) redistribute (cap mode): recipients 4.6/5.31 -> N, donors kept >= N.
+#    dry-run first for the log, capture N, then apply.
 log "redistribute (dry-run preview) ..."
 "$PY" scripts/osm_scene_collection/redistribute_scenes.py \
-  --root "$SC" --target auto --min-road-kmh "$MIN_ROAD_KMH" --seed 42
+  --root "$SC" --mode cap --target auto --min-road-kmh "$MIN_ROAD_KMH" --seed 42
+N=$("$PY" scripts/osm_scene_collection/redistribute_scenes.py \
+  --root "$SC" --mode cap --target auto --print-n)
+log "max equal N=$N"
 log "redistribute (apply) ..."
 "$PY" scripts/osm_scene_collection/redistribute_scenes.py \
-  --root "$SC" --target auto --min-road-kmh "$MIN_ROAD_KMH" --seed 42 --apply
+  --root "$SC" --mode cap --target auto --min-road-kmh "$MIN_ROAD_KMH" --seed 42 --apply
 
-# 4) manifest: catalog + materialize, ×10 variations, NO capping
-log "build manifest -> $OUT/sumo_manifest.jsonl (×10, uncapped) ..."
+# 4) manifest: catalog + materialize, ×10 variations, cap each code to N
+#    (caps the donor surplus 5.21/5.22 so the four codes end at N; 3.25 stays
+#    natural if < N).
+log "build manifest -> $OUT/sumo_manifest.jsonl (×10, cap N=$N) ..."
 "$PY" scripts/per_sign_bench/sumo_space/sumo_pipeline.py \
   --scenes-root "$SC" \
-  --n-per-category "$BIG_CAP" --n-variations 10 \
+  --n-per-category "$N" --n-variations 10 \
   --sign-categories "$CODES" \
   --output-dir "$OUT" --n-workers 16 --seed 42
 

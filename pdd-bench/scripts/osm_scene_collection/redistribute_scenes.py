@@ -148,12 +148,22 @@ def main() -> None:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--root", required=True,
                     help="Scenes root to mutate IN PLACE (use a COPY, e.g. scenes_balanced).")
+    ap.add_argument("--mode", choices=["cap", "equal"], default="cap",
+                    help="cap (default): bring recipients (4.6, 5.31) UP to N; donors "
+                         "(3.24, 5.21) give exactly what's needed and KEEP any surplus "
+                         "(>= N) to be capped to N at manifest build (--n-per-category=N); "
+                         "no scenes dropped. equal: exact equality by pure move (only "
+                         "N=floor(total/4) when all donations are non-negative).")
     ap.add_argument("--target", default="auto",
-                    help="Equal count N per code: 'auto' = floor(total/4), or an integer.")
+                    help="Count N per code: 'auto' (mode-dependent) or an integer. "
+                         "cap auto = min((|3.24|+|4.6|)//2, (|5.21|+|5.31|)//2); "
+                         "equal auto = floor(total/4).")
     ap.add_argument("--min-road-kmh", type=float, default=20.0,
                     help="3.24->4.6 donors must have road OSM speed >= this (default 20).")
     ap.add_argument("--seed", type=int, default=42,
                     help="Unused for selection (deterministic by sign_id); kept for parity.")
+    ap.add_argument("--print-n", action="store_true",
+                    help="Print the computed target N and exit (for build scripts).")
     ap.add_argument("--apply", action="store_true",
                     help="Actually move folders (default: dry-run preview).")
     args = ap.parse_args()
@@ -169,17 +179,18 @@ def main() -> None:
     ms = enumerate_code(root, MS)
     a, b, c, d = len(sp), len(rz), len(zl), len(ms)
     total = a + b + c + d
-
-    print(f"root: {root}")
-    print(f"counts (all codes): {_counts_line(root)}")
-    print(f"equalized four: {SP}={a}  {RZ}={b}  {ZL}={c}  {MS}={d}  total={total}")
-
     if total == 0:
         print("ERROR: no scenes in the four equalized codes.", file=sys.stderr)
         sys.exit(2)
 
+    # Target N.
     if args.target == "auto":
-        N = total // 4
+        if args.mode == "cap":
+            # Max equal N reachable when donors keep their surplus (capped at build):
+            # 4.6 & 3.24 share (a+d); 5.31 & 5.21 share (b+c).
+            N = min((a + d) // 2, (b + c) // 2)
+        else:
+            N = total // 4
     else:
         try:
             N = int(args.target)
@@ -187,44 +198,69 @@ def main() -> None:
             print(f"ERROR: --target must be 'auto' or an integer, got {args.target!r}",
                   file=sys.stderr)
             sys.exit(2)
-    rem = total - 4 * N            # parked in 5.31; for 'auto' rem in 0..3
 
-    # Targets: 3.24=N, 5.21=N, 4.6=N, 5.31=N+rem.
-    n_sp = n_rz = n_ms = N
-    n_zl = N + rem
-    x_46 = n_ms - d               # 3.24 -> 4.6
-    y_531 = b - n_rz              # 5.21 -> 5.31
-    x_531a = (n_zl - c) - y_531   # 3.24 -> 5.31
+    if args.print_n:        # for build scripts: clean integer on stdout, nothing else
+        print(N)
+        return
 
-    print(f"\ntarget N={N} (5.31 absorbs remainder -> {n_zl})")
-    print(f"planned moves:  3.24->4.6 x_46={x_46}   "
-          f"5.21->5.31 y_531={y_531}   3.24->5.31 x_531a={x_531a}")
+    print(f"root: {root}")
+    print(f"counts (all codes): {_counts_line(root)}")
+    print(f"equalized four: {SP}={a}  {RZ}={b}  {ZL}={c}  {MS}={d}  total={total}")
 
-    # Feasibility (pure move, conserve total).
-    problems = []
-    if x_46 < 0:
-        problems.append(f"4.6 already has {d} > N={N}; can't shrink by moving here.")
-    if y_531 < 0:
-        problems.append(f"5.21 has {b} < N={N}; it can't be a 5.31 donor (would need to receive).")
-    if x_531a < 0:
-        problems.append(f"3.24->5.31 negative ({x_531a}); 5.21 alone over-fills 5.31.")
-    sp_final = a - x_46 - x_531a
-    if sp_final != n_sp:
-        problems.append(f"3.24 would end at {sp_final}, not N={n_sp} "
-                        f"(only N=floor(total/4) is exactly feasible by pure move).")
-
-    # 4.6 donor pool: 3.24 scenes whose road is fast enough.
+    # 4.6 donor pool: 3.24 scenes whose road is fast enough for a min-speed sign.
     ms_eligible = [s for s in sp if _edge_speed_kmh(s.net_abs, s.road_id) >= args.min_road_kmh]
+
+    problems: List[str] = []
+    if args.mode == "cap":
+        # Recipients reach N exactly; donors give only what's needed and keep the
+        # rest (>= N), which the build caps to N. No drops, no 3.24->5.31 unless
+        # 5.21 can't cover 5.31's deficit.
+        x_46 = N - d                                  # 3.24 -> 4.6
+        need_531 = N - c                              # 5.31 deficit
+        y_531 = min(max(need_531, 0), max(b - N, 0))  # from 5.21, keeping 5.21 >= N
+        x_531a = max(need_531 - y_531, 0)             # remainder from 3.24
+        if x_46 < 0:
+            problems.append(f"4.6 has {d} > N={N}; lower N.")
+        if need_531 < 0:
+            problems.append(f"5.31 has {c} > N={N}; lower N.")
+        if a - x_46 - x_531a < N:
+            problems.append(f"3.24 would fall below N={N} (has {a}, gives {x_46 + x_531a}).")
+        if b - y_531 < N:
+            problems.append(f"5.21 would fall below N={N} (has {b}, gives {y_531}).")
+    else:  # equal
+        rem = total - 4 * N                           # remainder parked in 5.31
+        x_46 = N - d
+        y_531 = b - N
+        x_531a = (N + rem - c) - y_531
+        if x_46 < 0:
+            problems.append(f"4.6 has {d} > N={N}.")
+        if y_531 < 0:
+            problems.append(f"5.21 has {b} < N={N} (can't be a donor).")
+        if x_531a < 0:
+            problems.append(f"3.24->5.31 negative ({x_531a}); 5.21 alone over-fills 5.31.")
+        if a - x_46 - x_531a != N:
+            problems.append(f"3.24 ends at {a - x_46 - x_531a}, not N={N} "
+                            f"(only N=floor(total/4) is exactly feasible by pure move).")
+
     if x_46 > len(ms_eligible):
         problems.append(f"need {x_46} 3.24->4.6 donors with road>= {args.min_road_kmh:g} km/h, "
                         f"only {len(ms_eligible)} eligible.")
 
+    after = {SP: a - x_46 - x_531a, RZ: b - y_531,
+             ZL: c + x_531a + y_531, MS: d + x_46}
+    print(f"\nmode={args.mode}  target N={N}")
+    print(f"planned moves:  3.24->4.6={x_46}   5.21->5.31={y_531}   3.24->5.31={x_531a}")
+    print(f"after moves (physical): {SP}={after[SP]}  {RZ}={after[RZ]}  "
+          f"{ZL}={after[ZL]}  {MS}={after[MS]}")
+    if args.mode == "cap":
+        print(f"  -> build with --n-per-category={N} caps the surplus "
+              f"(e.g. {RZ} {after[RZ]}->{N}); 4 codes end at {N}.")
+
     if problems:
-        print("\nINFEASIBLE for an exact equal split via pure move:", file=sys.stderr)
+        print("\nINFEASIBLE:", file=sys.stderr)
         for p in problems:
             print(f"  - {p}", file=sys.stderr)
-        print("Pick a smaller --target N (<= floor(total/4)) or adjust flows.",
-              file=sys.stderr)
+        print("Adjust --target N or --mode.", file=sys.stderr)
         sys.exit(1)
 
     # Deterministic donor selection.
@@ -234,19 +270,11 @@ def main() -> None:
     zl_donors_sp = sp_rest[:x_531a]
     zl_donors_rz = rz[:y_531]
 
-    print(f"\nselected donors: 4.6<-3.24 {len(ms_donors)}   "
+    print(f"selected donors: 4.6<-3.24 {len(ms_donors)}   "
           f"5.31<-3.24 {len(zl_donors_sp)}   5.31<-5.21 {len(zl_donors_rz)}")
-    for label, donors in (("3.24->4.6", ms_donors[:3]),
-                          ("3.24->5.31", zl_donors_sp[:3]),
-                          ("5.21->5.31", zl_donors_rz[:3])):
-        ids = ", ".join(f"sign_{s.sign_id}" for s in donors)
-        if ids:
-            print(f"  e.g. {label}: {ids} ...")
 
     if not args.apply:
-        print(f"\nDRY-RUN. expected after: {SP}={n_sp}  {RZ}={n_rz}  "
-              f"{ZL}={n_zl}  {MS}={n_ms}")
-        print("re-run with --apply to move.")
+        print("\nDRY-RUN. re-run with --apply to move.")
         return
 
     moved = 0
