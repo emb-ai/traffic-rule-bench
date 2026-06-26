@@ -21,7 +21,7 @@ python generate_manifest.py paths.experiment_name=my_experiment
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `scenes_dir` | `null` (= `./scenes`) | Input scenes directory |
-| `output_base` | `benchmark_output/2_1` | Base output directory |
+| `output_base` | `benchmark_output/2_4` | Base output directory |
 | `experiment_name` | `<timestamp>` | Experiment folder name |
 
 ### `scenario`
@@ -43,10 +43,10 @@ python generate_manifest.py paths.experiment_name=my_experiment
 ### `auxiliary`
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `enabled` | `true` | Enable auxiliary agents on ego's right incoming arm |
+| `enabled` | `true` | Enable auxiliary (main road) agents |
 | `distance_from_intersection` | `20.0` | Aux spawn distance from junction |
 | `convoy_size` | `1` | Vehicles per lane (convoy depth) |
-| `lanes_occupied` | `1` | Number of right-arm lanes with aux agents |
+| `lanes_occupied` | `1` | Number of main lanes with aux agents |
 | `convoy_gap_m` | `10.0` | Gap between convoy vehicles |
 
 ### `gif`
@@ -65,7 +65,7 @@ python generate_manifest.py paths.experiment_name=my_experiment
 Each run creates a timestamped folder:
 
 ```
-benchmark_output/2_1/<experiment_name>/
+benchmark_output/2_4/<experiment_name>/
 ├── real_manifest.jsonl      # Scenario definitions
 ├── manifest.json            # Manifest metadata
 ├── real_manifest_summary.json

@@ -1,4 +1,4 @@
-# Main Road Sign (Equal Priority / 2.1) Benchmark Configuration
+# Yield Sign Benchmark Configuration
 # See README.md for parameter descriptions
 
 defaults:
@@ -17,7 +17,7 @@ hydra:
 # =============================================================================
 paths:
   scenes_dir: scenes
-  output_base: benchmark_output/2_1
+  output_base: benchmark_output/2_4
   experiment_name: ${now:%Y-%m-%d_%H-%M-%S}
 
 # =============================================================================
@@ -26,7 +26,8 @@ paths:
 scenario:
   n_variants: 1                   # Variants per scene (non-augmented mode)
   augment: true                   # Enable ego/aux spawn point enumeration
-  max_scenarios_per_scene: 100    # Limit total manifest rows per scene (after aux expansion)
+  max_scenarios_per_scene: 15     # Limit augmented scenarios (null = all)
+  respect_scene_selection: true  # Skip scenes marked reject in scene_selection.json
 
 # =============================================================================
 # Simulation Parameters
@@ -39,21 +40,21 @@ simulation:
   spawn_distance_before_end: 20.0 # Ego spawn offset from lane end (m)
 
 # =============================================================================
-# Auxiliary Agents (Right Incoming Arm Traffic)
+# Auxiliary Agents (Main Road Traffic)
 # =============================================================================
 auxiliary:
-  enabled: true                   # Spawn agents on ego's right incoming arm only
+  enabled: true                   # Spawn agents on main road
   distance_from_intersection: 20.0  # Distance from junction (m)
   convoy_size: 3                  # Vehicles per lane
-  lanes_occupied: 4               # Right-arm lanes to occupy
+  lanes_occupied: 4               # Main road lanes to occupy
   convoy_gap_m: 10.0              # Gap between convoy vehicles (m)
 
 # =============================================================================
 # GIF Visualization
 # =============================================================================
 gif:
-  enabled: true                  # Generate visualization GIFs
-  policy: idm                     # Policy for rendering
+  enabled: false                   # Generate visualization GIFs
+  policy: idm                     # Policy for rendering (good driving, no sign rules)
   max_scenes: null                # Limit GIFs (null = all)
   dry_run: false                  # Print commands without executing
   hide_signs: true                # Hide traffic signs in visualization
