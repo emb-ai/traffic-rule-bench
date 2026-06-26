@@ -203,6 +203,10 @@ def main() -> None:
     p.add_argument("--out-dir", default=None,
                    help=("output directory (default: ./eval_out, or "
                          f"<run_dir>/{RUN_EVAL_OUT_DIRNAME} when --manifest is a folder)"))
+    p.add_argument("--no-auxiliary-agent", action="store_true",
+                   help="Disable auxiliary agents on main road")
+    p.add_argument("--save-gifs", action="store_true",
+                   help="Write per-episode GIFs via run_benchmark.py (slower; off by default)")
     args = p.parse_args()
 
     manifest_paths: list[Path] = []
@@ -307,8 +311,11 @@ def main() -> None:
             "--benchmark-output", str(bench_root),
             "--emit-replay-sidecar",
             "--replay-root",      str(replay_root),
-            "--save-gifs",
         ]
+        if not args.no_auxiliary_agent:
+            cmd.append("--auxiliary-agent")
+        if args.save_gifs:
+            cmd.append("--save-gifs")
         if policy in NN_NEED_CHECKPOINT:
             cmd += ["--model-path", model_paths[policy]]
         if policy in ("plant2", "plant2_rule"):

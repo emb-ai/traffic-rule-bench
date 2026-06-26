@@ -68,8 +68,12 @@ class EndMainRoadSign(BaseTrafficSign):
 
 class YieldSign(BaseTrafficSign):
 
-    EGO_ZONE_BEFORE = 30.0        
-    MAIN_ROAD_ZONE_BEFORE = 20.0     
+    EGO_ZONE_BEFORE = 30.0
+    # Treat yield obligation as cleared when the vehicle center passes this far before
+    # the lane end (~half car length), so a junction entry/crash is not missed while
+    # the rear is still geometrically on the approach lane.
+    EGO_ZONE_END_CENTER_INSET = 4.0
+    MAIN_ROAD_ZONE_BEFORE = 20.0
     MAIN_ROAD_ZONE_AFTER = 15.0     
 
     def __init__(
@@ -435,6 +439,11 @@ class YieldSign(BaseTrafficSign):
         
         return len(conflicting) > 0, conflicting
 
+    def _obligation_zone_end(self, vehicle) -> float:
+        """Last longitudinal position (vehicle center) still under yield obligation."""
+        inset = 0.5 * float(getattr(vehicle, "LENGTH", self.EGO_ZONE_END_CENTER_INSET))
+        return max(self.zone_start, float(self.zone_end) - inset)
+
     def _is_vehicle_in_zone(self, vehicle) -> bool:
         """Check if the vehicle is within the yield zone."""
         vehicle_idx = vehicle.lane.index
@@ -445,7 +454,7 @@ class YieldSign(BaseTrafficSign):
             return False
         
         veh_long = vehicle.lane.local_coordinates(vehicle.position)[0]
-        return self.zone_start <= veh_long <= self.zone_end
+        return self.zone_start <= veh_long <= self._obligation_zone_end(vehicle)
 
     def _is_violating(self, vehicle) -> bool:
         """Check if the vehicle is violating the yield sign."""
@@ -529,7 +538,7 @@ class StopSign(YieldSign):
     """Stop sign (2.5) — yield to main-road traffic in zone + mandatory stop at line."""
 
     STOP_SPEED_THRESHOLD_MPS = 0.5
-    STOP_LINE_PAST_MARGIN_M = 0.3
+    STOP_LINE_PAST_MARGIN = 0.3
 
     def __init__(
         self,
@@ -603,7 +612,7 @@ class StopSign(YieldSign):
         except Exception:
             return False
 
-        if veh_long < self.stop_line_position + self.STOP_LINE_PAST_MARGIN_M:
+        if veh_long < self.stop_line_position + self.STOP_LINE_PAST_MARGIN:
             self._track_stop_before_line(vehicle)
             return False
 
@@ -656,7 +665,7 @@ class SecondaryRoadSign(BaseTrafficSign):
 
 
 class SecondaryRoadLeftSign(BaseTrafficSign):
-    """Sign 2.3.2 – Secondary road on the left (T crossroad variant)."""
+    """Sign 2.3.3 – Secondary road on the left (T crossroad variant)."""
 
     def __init__(self, lane, intersection_name: str = None, **kwargs):
         super().__init__(lane, icon_path="2.3.3.png", **kwargs)
@@ -668,7 +677,7 @@ class SecondaryRoadLeftSign(BaseTrafficSign):
         return False
 
     def get_rule_description(self) -> str:
-        return "Secondary road on the left (2.3.2) - you have priority"
+        return "Secondary road on the left (2.3.3) - you have priority"
 
     @property
     def top_down_color(self):
@@ -680,7 +689,7 @@ class SecondaryRoadLeftSign(BaseTrafficSign):
 
 
 class SecondaryRoadRightSign(BaseTrafficSign):
-    """Sign 2.3.3 – Secondary road on the right (T crossroad variant)."""
+    """Sign 2.3.2 – Secondary road on the right (T crossroad variant)."""
 
     def __init__(self, lane, intersection_name: str = None, **kwargs):
         super().__init__(lane, icon_path="2.3.2.png", **kwargs)
@@ -692,7 +701,7 @@ class SecondaryRoadRightSign(BaseTrafficSign):
         return False
 
     def get_rule_description(self) -> str:
-        return "Secondary road on the right (2.3.3) - you have priority"
+        return "Secondary road on the right (2.3.2) - you have priority"
 
     @property
     def top_down_color(self):

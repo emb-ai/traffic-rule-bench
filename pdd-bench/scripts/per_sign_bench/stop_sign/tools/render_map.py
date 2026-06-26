@@ -20,56 +20,6 @@ from lib.sumo_utils import resolve_net_file, load_scene_meta, resolve_scene_dir
 SCENES_DIR_DEFAULT = STOP_SIGN_DIR / "scenes"
 
 
-def parse_net_location(net_path: Path) -> dict | None:
-    """Read SUMO net ``location`` bounds for lat/lon → local XY conversion."""
-    import xml.etree.ElementTree as ET
-
-    loc = ET.parse(net_path).getroot().find("location")
-    if loc is None:
-        return None
-    try:
-        orig = tuple(float(v) for v in loc.get("origBoundary", "").split(","))
-        conv = tuple(float(v) for v in loc.get("convBoundary", "").split(","))
-    except (TypeError, ValueError):
-        return None
-    if len(orig) != 4 or len(conv) != 4:
-        return None
-    return {"orig": orig, "conv": conv}
-
-
-def latlon_to_net_xy(lat: float, lon: float, location: dict) -> tuple[float, float]:
-    """Map WGS84 point to local net coordinates using ``origBoundary`` / ``convBoundary``."""
-    lon_min, lat_min, lon_max, lat_max = location["orig"]
-    x_min, y_min, x_max, y_max = location["conv"]
-    if lon_max == lon_min or lat_max == lat_min:
-        return (x_min + x_max) / 2.0, (y_min + y_max) / 2.0
-    x = (lon - lon_min) / (lon_max - lon_min) * (x_max - x_min) + x_min
-    y = (lat - lat_min) / (lat_max - lat_min) * (y_max - y_min) + y_min
-    return x, y
-
-
-def _points_within_radius(points, cx: float, cy: float, radius_m: float) -> bool:
-    r2 = radius_m * radius_m
-    return any((x - cx) ** 2 + (y - cy) ** 2 <= r2 for x, y in points)
-
-
-def filter_network_by_radius(
-    edges,
-    junctions,
-    cx: float,
-    cy: float,
-    radius_m: float,
-):
-    """Keep lanes / junction polygons that intersect the crop circle."""
-    kept_edges = [e for e in edges if _points_within_radius(e["points"], cx, cy, radius_m)]
-    kept_junctions = []
-    for junc in junctions:
-        pts = junc.get("points") or [(junc.get("x", 0.0), junc.get("y", 0.0))]
-        if _points_within_radius(pts, cx, cy, radius_m):
-            kept_junctions.append(junc)
-    return kept_edges, kept_junctions
-
-
 def parse_sumo_net(net_path: Path):
     """Parse SUMO net.xml and extract edges/lanes for rendering."""
     import xml.etree.ElementTree as ET
@@ -125,10 +75,7 @@ def render_network(
     out_path: Path,
     figsize=(12, 12),
     dpi=150,
-    *,
-    center: tuple[float, float] | None = None,
-    radius_m: float | None = None,
-    show_center: bool = True,
+    marker_xy: tuple[float, float] | None = None,
 ):
     """Render the road network to an image."""
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
@@ -142,10 +89,12 @@ def render_network(
             ax.add_patch(polygon)
     
     lines = []
+    widths = []
     for edge in edges:
         pts = edge["points"]
         if len(pts) >= 2:
             lines.append(pts)
+            widths.append(edge["width"])
     
     if lines:
         lc = LineCollection(lines, colors="#404040", linewidths=2.0, alpha=0.9)
@@ -155,24 +104,19 @@ def render_network(
                                    alpha=0.5, linestyles="dashed")
         ax.add_collection(lc_center)
 
-    if center is not None and radius_m is not None:
-        cx, cy = center
-        ax.set_xlim(cx - radius_m, cx + radius_m)
-        ax.set_ylim(cy - radius_m, cy + radius_m)
-        circle = mpatches.Circle(
-            (cx, cy),
-            radius_m,
-            fill=False,
-            edgecolor="#cc0000",
-            linewidth=1.0,
-            linestyle="--",
-            alpha=0.35,
+    if marker_xy is not None:
+        ax.plot(
+            marker_xy[0],
+            marker_xy[1],
+            "o",
+            color="red",
+            markersize=14,
+            markeredgecolor="#8b0000",
+            markeredgewidth=1.5,
+            zorder=10,
         )
-        ax.add_patch(circle)
-        if show_center:
-            ax.plot(cx, cy, marker="+", color="#cc0000", markersize=14, markeredgewidth=2)
-    else:
-        ax.autoscale()
+    
+    ax.autoscale()
     ax.set_aspect("equal")
     ax.axis("off")
     

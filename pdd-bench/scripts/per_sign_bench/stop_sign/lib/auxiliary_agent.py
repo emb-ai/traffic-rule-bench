@@ -21,6 +21,18 @@ MIN_SPAWN_LONGITUDE_M = 3.0
 AuxPolicyType = Literal["idm", "stationary"]
 
 
+def min_aux_spawn_lane_length(aux_distance_from_intersection: float) -> float:
+    """Minimum incoming lane length required to place an aux convoy."""
+    return float(aux_distance_from_intersection) + MIN_SPAWN_LONGITUDE_M
+
+
+def is_viable_aux_lane_length(
+    lane_length: float,
+    aux_distance_from_intersection: float,
+) -> bool:
+    return float(lane_length) >= min_aux_spawn_lane_length(aux_distance_from_intersection)
+
+
 def apply_aux_cruise_speed(aux_policy, speed_ms: float) -> None:
     """Set auxiliary IDM cruise target to a fixed speed (m/s)."""
     if aux_policy is None:
@@ -156,6 +168,7 @@ class AuxiliaryAgentsManager(BaseManager):
         ego_release_distance_before_end: float = DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END,
         convoy_size: int = DEFAULT_CONVOY_SIZE,
         convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
+        alternate_spawn_dest_map: Optional[dict] = None,
     ):
         super().__init__()
         self._requested_spawn_lane_indices = list(spawn_lane_indices)
@@ -166,6 +179,7 @@ class AuxiliaryAgentsManager(BaseManager):
             spawn_velocity_ms if spawn_velocity_ms is not None else DEFAULT_SPAWN_VELOCITY_MS
         )
         self._destination_lanes = list(destination_lanes or [])
+        self._alternate_spawn_dest_map = dict(alternate_spawn_dest_map or {})
         self._ego_vehicle = ego_vehicle
         self._ego_spawn_lane_index = ego_spawn_lane_index
         self._ego_release_distance_before_end = float(ego_release_distance_before_end)
@@ -302,38 +316,56 @@ class AuxiliaryAgentsManager(BaseManager):
         self._aux_policies = []
 
         for idx, spawn_lane_index in enumerate(self._requested_spawn_lane_indices):
-            lane = road_network.get_lane(spawn_lane_index)
-            lead_spawn_long = lane.length - self._distance_from_intersection
-
-            if idx < len(self._destination_lanes) and self._destination_lanes[idx]:
-                destination_lane = self._destination_lanes[idx]
-            else:
-                destination_lane = pick_destination_outgoing_lane(
-                    spawn_lane_index, self._outgoing_lanes, road_network
-                )
+            candidate_lanes = [spawn_lane_index]
+            for alt_lane in self._alternate_spawn_dest_map:
+                if alt_lane not in candidate_lanes:
+                    candidate_lanes.append(alt_lane)
 
             spawned_on_lane = 0
-            for convoy_idx in range(self._convoy_size):
-                spawn_long = lead_spawn_long - convoy_idx * self._convoy_gap_m
-                if spawn_long < MIN_SPAWN_LONGITUDE_M:
-                    if convoy_idx == 0:
+            used_lane = None
+            used_destination = None
+            for candidate_lane in candidate_lanes:
+                lane = road_network.get_lane(candidate_lane)
+                lead_spawn_long = lane.length - self._distance_from_intersection
+                if lead_spawn_long < MIN_SPAWN_LONGITUDE_M:
+                    if candidate_lane == spawn_lane_index:
                         logging.warning(
-                            f"[AuxAgent] Lane {spawn_lane_index} too short for convoy "
-                            f"(lead at {lead_spawn_long:.1f}m)"
+                            f"[AuxAgent] Lane {candidate_lane} too short for convoy "
+                            f"(lead at {lead_spawn_long:.1f}m, sim length={lane.length:.1f}m)"
                         )
-                    break
-                if self._spawn_vehicle_on_lane(
-                    spawn_lane_index,
-                    spawn_long,
-                    destination_lane,
-                    convoy_idx,
-                ):
-                    spawned_on_lane += 1
+                    continue
 
-            if spawned_on_lane:
+                if candidate_lane in self._alternate_spawn_dest_map:
+                    destination_lane = self._alternate_spawn_dest_map[candidate_lane]
+                elif idx < len(self._destination_lanes) and self._destination_lanes[idx]:
+                    destination_lane = self._destination_lanes[idx]
+                else:
+                    destination_lane = pick_destination_outgoing_lane(
+                        candidate_lane, self._outgoing_lanes, road_network
+                    )
+
+                spawned_on_lane = 0
+                for convoy_idx in range(self._convoy_size):
+                    spawn_long = lead_spawn_long - convoy_idx * self._convoy_gap_m
+                    if spawn_long < MIN_SPAWN_LONGITUDE_M:
+                        break
+                    if self._spawn_vehicle_on_lane(
+                        candidate_lane,
+                        spawn_long,
+                        destination_lane,
+                        convoy_idx,
+                    ):
+                        spawned_on_lane += 1
+
+                if spawned_on_lane:
+                    used_lane = candidate_lane
+                    used_destination = destination_lane
+                    break
+
+            if spawned_on_lane and used_lane:
                 print(
-                    f"[AuxAgent] Convoy x{spawned_on_lane} on {spawn_lane_index} "
-                    f"-> {destination_lane} ({self._policy}, gap={self._convoy_gap_m:.1f}m)"
+                    f"[AuxAgent] Convoy x{spawned_on_lane} on {used_lane} "
+                    f"-> {used_destination} ({self._policy}, gap={self._convoy_gap_m:.1f}m)"
                 )
 
     def before_step(self):
@@ -455,29 +487,105 @@ def select_occupied_main_lanes(
     return ordered[:n]
 
 
+def viable_aux_arms(
+    junction_layout: Optional[dict],
+    aux_distance_from_intersection: float,
+    ego_edge_id: Optional[str] = None,
+) -> List[dict]:
+    """Return main-road arms with lanes long enough for aux spawning.
+    
+    A lane is viable if ``min_lane_length >= aux_distance + MIN_SPAWN_LONGITUDE_M``.
+    """
+    if not junction_layout:
+        return []
+    min_required = min_aux_spawn_lane_length(aux_distance_from_intersection)
+    viable: List[dict] = []
+    for arm in junction_layout.get("arms", []):
+        if arm.get("road_class") != "main":
+            continue
+        if ego_edge_id and arm.get("edge_id") == ego_edge_id:
+            continue
+        min_len = arm.get("min_lane_length", 0.0)
+        if min_len >= min_required:
+            viable.append(arm)
+    return viable
+
+
+def viable_aux_lane_keys(
+    junction_layout: Optional[dict],
+    aux_distance_from_intersection: float,
+    ego_edge_id: Optional[str] = None,
+) -> List[str]:
+    """Lane keys on main-road arms with enough length for aux spawning."""
+    keys: List[str] = []
+    for arm in viable_aux_arms(junction_layout, aux_distance_from_intersection, ego_edge_id):
+        keys.extend(arm.get("lane_keys", []))
+    return sorted(keys)
+
+
+def has_viable_aux_lanes(
+    junction_layout: Optional[dict],
+    aux_distance_from_intersection: float,
+) -> bool:
+    """Check if a junction layout has any main-road arm with sufficient lane length.
+    
+    Returns True if at least one main-road arm (across all possible ego edges)
+    has lanes long enough for aux spawning.
+    """
+    if not junction_layout:
+        return False
+    min_required = min_aux_spawn_lane_length(aux_distance_from_intersection)
+    for arm in junction_layout.get("arms", []):
+        if arm.get("road_class") != "main":
+            continue
+        min_len = arm.get("min_lane_length", 0.0)
+        if min_len >= min_required:
+            return True
+    return False
+
+
 def resolve_aux_spawn_lanes(
     row: dict,
     ego_lane_index: str,
     incoming_lanes: Optional[List[dict]] = None,
     aux_lanes_occupied: int = 1,
+    aux_distance_from_intersection: float = DEFAULT_DISTANCE_FROM_INTERSECTION,
 ) -> List[str]:
     """Resolve which lane indices should carry auxiliary convoys for this episode."""
     lanes_n = int(row.get("aux_lanes_occupied", aux_lanes_occupied) or aux_lanes_occupied)
-
-    scenario_lane = row.get("aux_spawn_lane_index")
-    if scenario_lane and lanes_n == 1:
-        return [str(scenario_lane)]
-
-    occupied = row.get("aux_occupied_lane_keys")
-    if occupied:
-        return list(occupied)[:lanes_n]
+    aux_distance = float(
+        row.get("aux_distance_from_intersection", aux_distance_from_intersection)
+    )
 
     ego_edge = lane_edge_id(str(ego_lane_index)) if ego_lane_index else None
     if row.get("road_id"):
         ego_edge = str(row["road_id"])
 
     junction_layout = row.get("junction_layout")
-    main_keys = main_lane_keys_for_aux(
+    viable_keys = viable_aux_lane_keys(junction_layout, aux_distance, ego_edge)
+    viable_set = set(viable_keys)
+
+    def _filter_viable(keys: List[str]) -> List[str]:
+        if not viable_set:
+            return keys
+        return [key for key in keys if key in viable_set]
+
+    scenario_lane = row.get("aux_spawn_lane_index")
+    if scenario_lane and lanes_n == 1:
+        lane = str(scenario_lane)
+        if not viable_set or lane in viable_set:
+            return [lane]
+        if viable_keys:
+            return viable_keys[:1]
+        return []
+
+    occupied = row.get("aux_occupied_lane_keys")
+    if occupied:
+        filtered = _filter_viable(list(occupied))
+        if filtered:
+            return filtered[:lanes_n]
+
+    main_keys = viable_keys or main_lane_keys_for_aux(
         junction_layout,
         ego_edge_id=ego_edge,
         main_lane_keys=row.get("main_lane_keys"),
@@ -491,12 +599,104 @@ def resolve_aux_spawn_lanes(
     if not spawn_lane and row.get("aux_road_id") is not None:
         aux_lane_num = int(row.get("aux_spawn_lane_num", 0) or 0)
         spawn_lane = make_lane_key(str(row["aux_road_id"]), aux_lane_num)
-    if spawn_lane is None and incoming_lanes:
+    if spawn_lane is not None:
+        spawn_lane = str(spawn_lane)
+        if not viable_set or spawn_lane in viable_set:
+            return [spawn_lane]
+        if viable_keys:
+            return viable_keys[:1]
+        return []
+    if incoming_lanes:
         for lane in incoming_lanes:
             if lane["edge_id"] not in str(ego_lane_index):
-                spawn_lane = lane["lane_name"]
-                break
-    return [spawn_lane] if spawn_lane else []
+                candidate = lane["lane_name"]
+                if not viable_set or candidate in viable_set:
+                    return [candidate]
+        if viable_keys:
+            return viable_keys[:1]
+    return []
+
+
+def resolve_aux_destination_lane_key(
+    junction_layout: Optional[dict],
+    spawn_lane_key: str,
+) -> Optional[str]:
+    """Straight-through destination lane key for an aux spawn lane."""
+    if not junction_layout:
+        return None
+
+    edge_id = lane_edge_id(spawn_lane_key)
+    lane_num = lane_num_from_key(spawn_lane_key)
+    arm = None
+    for candidate in junction_layout.get("arms", []):
+        if candidate.get("edge_id") == edge_id:
+            arm = candidate
+            break
+    if arm is None:
+        return None
+
+    straight_to = [
+        edge
+        for edge in arm.get("straight_to", [])
+        if edge and not str(edge).startswith(":")
+    ]
+    if not straight_to:
+        return None
+
+    dest_edge = straight_to[0]
+    for candidate in junction_layout.get("arms", []):
+        if candidate.get("edge_id") != dest_edge:
+            continue
+        keys = candidate.get("lane_keys", [])
+        for key in keys:
+            if lane_num_from_key(key) == lane_num:
+                return key
+        if keys:
+            return keys[min(lane_num, len(keys) - 1)]
+    return make_lane_key(dest_edge, lane_num)
+
+
+def resolve_aux_spawn_plan(
+    row: dict,
+    ego_lane_index: str,
+    incoming_lanes: Optional[List[dict]] = None,
+    aux_lanes_occupied: int = 1,
+    aux_distance_from_intersection: float = DEFAULT_DISTANCE_FROM_INTERSECTION,
+) -> tuple[List[str], List[str], dict]:
+    """Resolve aux spawn lanes, destinations, and alternate spawn->dest fallbacks."""
+    spawn_lanes = resolve_aux_spawn_lanes(
+        row,
+        ego_lane_index=ego_lane_index,
+        incoming_lanes=incoming_lanes,
+        aux_lanes_occupied=aux_lanes_occupied,
+        aux_distance_from_intersection=aux_distance_from_intersection,
+    )
+    junction_layout = row.get("junction_layout")
+    ego_edge = lane_edge_id(str(ego_lane_index)) if ego_lane_index else None
+    if row.get("road_id"):
+        ego_edge = str(row["road_id"])
+
+    viable_keys = viable_aux_lane_keys(
+        junction_layout,
+        float(row.get("aux_distance_from_intersection", aux_distance_from_intersection)),
+        ego_edge,
+    )
+    alternate_spawn_dest_map: dict = {}
+    for lane_key in viable_keys:
+        dest = resolve_aux_destination_lane_key(junction_layout, lane_key)
+        if dest:
+            alternate_spawn_dest_map[lane_key] = dest
+
+    destination_lanes: List[str] = []
+    for idx, spawn_lane in enumerate(spawn_lanes):
+        dest = alternate_spawn_dest_map.get(spawn_lane)
+        if not dest and idx == 0 and row.get("aux_destination_lane_id"):
+            manifest_spawn = row.get("aux_spawn_lane_index")
+            if manifest_spawn and spawn_lane == str(manifest_spawn):
+                dest = str(row["aux_destination_lane_id"])
+        destination_lanes.append(dest or "")
+
+    return spawn_lanes, destination_lanes, alternate_spawn_dest_map
 
 
 def add_auxiliary_agents(
@@ -512,6 +712,7 @@ def add_auxiliary_agents(
     ego_release_distance_before_end: float = DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END,
     convoy_size: int = DEFAULT_CONVOY_SIZE,
     convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
+    alternate_spawn_dest_map: Optional[dict] = None,
 ) -> Optional[AuxiliaryAgentsManager]:
     """Add auxiliary agents on incoming lanes (optionally as a convoy per lane)."""
     if not spawn_lane_indices:
@@ -533,6 +734,7 @@ def add_auxiliary_agents(
         ego_release_distance_before_end=ego_release_distance_before_end,
         convoy_size=convoy_size,
         convoy_gap_m=convoy_gap_m,
+        alternate_spawn_dest_map=alternate_spawn_dest_map,
     )
     env.engine.register_manager("auxiliary_agent_manager", manager)
     manager.after_reset()
