@@ -1,6 +1,6 @@
-# Secondary Road Sign (2.3) Benchmark
+# Yield Sign (2.4) Benchmark
 
-Benchmark for evaluating autonomous driving policies at **T-junctions** with secondary-road warning signs on main approaches and yield signs on the secondary stem. Logic matches the yield sign (2.4) benchmark; only sign naming and junction shape differ.
+Benchmark for evaluating autonomous driving policies on yield sign scenarios using real-world OpenStreetMap data.
 
 ## Setup
 
@@ -11,14 +11,23 @@ conda activate zinkovich-plant2
 ## Folder Structure
 
 ```
-secondary_sign/
+yield_sign/
 ├── build_scene.py          # Step 1: OSM → SUMO network
 ├── generate_manifest.py    # Step 2: Create evaluation manifest
 ├── eval_pipeline.py        # Step 3: Run policy evaluation
-├── run_benchmark.py        # Benchmark runner (used internally)
+├── run_benchmark_real.py   # Benchmark runner (used internally)
 ├── lib/                    # Core library modules
+│   ├── auxiliary_agent.py
+│   ├── junction_priority_layout.py
+│   ├── manifest_config.py
+│   ├── scene_augmentation.py
+│   └── sumo_utils.py
+├── tools/                  # Debug/visualization utilities
+│   ├── run_simulation.py   # Test scene with policy
+│   └── render_map.py       # Render static map image
 ├── config/                 # Hydra configuration
-├── scenes/                 # Scene data (T-junction OSM + SUMO networks)
+│   └── config.yaml
+├── scenes/                 # Scene data (OSM + SUMO networks)
 └── benchmark_output/       # Evaluation results
 ```
 
@@ -26,35 +35,86 @@ secondary_sign/
 
 ### Step 1: Build Scene from OSM
 
-Each scene must be a **T junction** (3 incoming arms). Scene folder needs `map.osm`, `center.json`, and after build `map.net.xml`.
+Each scene folder in `scenes/` must contain:
+- `map.osm` — OpenStreetMap extract
+- `center.json` — Crop center: `{"lat": ..., "lon": ...}`
+
+Convert OSM to SUMO network:
 
 ```bash
 python build_scene.py <scene_name> --radius <meters>
 ```
 
+Example:
+```bash
+python build_scene.py savvinskaya_3 --radius 100
+```
+
+This creates:
+- `map.net.xml` — SUMO network
+- `cropped.osm` — Cropped OSM (for reference)
+- `meta.json` — Scene metadata
+
 ### Step 2: Generate Evaluation Manifest
+
+Generate scenarios with ego/auxiliary agent configurations:
 
 ```bash
 python generate_manifest.py
 ```
 
-Non-T scenes are rejected with an assertion. Output: `benchmark_output/2_3/<timestamp>/`.
+With options (Hydra config):
+```bash
+python generate_manifest.py gif.enabled=true
+python generate_manifest.py auxiliary.lanes_occupied=2 auxiliary.convoy_size=2
+```
+
+Output is saved to `benchmark_output/2_4/<timestamp>/`:
+- `real_manifest.jsonl` — Scenario definitions
+- `config.yaml` — Resolved configuration
+- `gifs/` — Visualization GIFs (if enabled)
 
 ### Step 3: Run Policy Evaluation
+
+Evaluate policies on the generated manifest:
 
 ```bash
 python eval_pipeline.py \
     --policies idm \
-    --manifest benchmark_output/2_3/<timestamp> \
+    --manifest benchmark_output/2_4/<timestamp> \
     --scenes-root scenes
 ```
 
-## Sign rule (2.3)
+## Debug Tools
 
-Same priority logic as yield (2.4):
+### Test Scene with Policy
 
-- **Main arms**: informational secondary-road signs — **2.3.1** (`SecondaryRoadSign`) when the stem is on the left, **2.3.2** (`SecondaryRoadRightSign`) when on the right.
-- **Secondary arm**: **YieldSign** (2.4) — must not leave the approach zone while main-road traffic is present.
-- **Ego** spawns on the secondary arm; **auxiliary agents** spawn on main-road lanes.
+Run a simulation to verify scene setup:
 
-Only **T-shaped** junctions are supported (`assert shape == "T"` in layout build and manifest generation).
+```bash
+python -m tools.run_simulation <scene_name>
+python -m tools.run_simulation <scene_name> --policy carl
+python -m tools.run_simulation <scene_name> --policy plant2 --max-steps 400
+```
+
+### Render Static Map
+
+Generate a static map image:
+
+```bash
+python -m tools.render_map <scene_name>
+python -m tools.render_map <scene_name> --out custom_output.png
+```
+
+## Configuration
+
+See `config/config.yaml` for available options:
+- `scenario.*` — Scenario generation settings
+- `simulation.*` — Simulation parameters
+- `auxiliary.*` — Auxiliary agent configuration
+- `gif.*` — GIF rendering options
+
+Override via command line:
+```bash
+python generate_manifest.py simulation.horizon=800 auxiliary.convoy_size=3
+```

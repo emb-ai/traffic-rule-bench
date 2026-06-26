@@ -1,1 +1,1 @@
-# stop_sign package
+# yield_sign package
