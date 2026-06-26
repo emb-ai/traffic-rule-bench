@@ -1,0 +1,1801 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="Overpass API 0.7.62.11 87bfad18">
+<note>The data included in this document is from www.openstreetmap.org. The data is made available under ODbL.</note>
+<meta osm_base="2026-06-26T14:09:15Z"/>
+
+  <node id="393490270" lat="55.5575618" lon="37.2571954" version="5" timestamp="2014-09-10T06:42:07Z" changeset="25342239" uid="336354" user="esaulenka"/>
+  <node id="393490271" lat="55.5570027" lon="37.2595830" version="6" timestamp="2014-09-10T06:42:07Z" changeset="25342239" uid="336354" user="esaulenka"/>
+  <node id="1380769071" lat="55.5575490" lon="37.2566059" version="1" timestamp="2011-07-31T19:26:22Z" changeset="8884298" uid="347929" user="347929"/>
+  <node id="1380769323" lat="55.5585477" lon="37.2563745" version="1" timestamp="2011-07-31T19:26:27Z" changeset="8884298" uid="347929" user="347929"/>
+  <node id="1779582196" lat="55.5591474" lon="37.2564333" version="2" timestamp="2014-09-10T06:42:06Z" changeset="25342239" uid="336354" user="esaulenka"/>
+  <node id="1779582210" lat="55.5597553" lon="37.2579027" version="1" timestamp="2012-06-07T19:10:20Z" changeset="11828566" uid="448257" user="mikles"/>
+  <node id="1779582225" lat="55.5608811" lon="37.2599137" version="2" timestamp="2014-09-10T06:42:06Z" changeset="25342239" uid="336354" user="esaulenka"/>
+  <node id="2285831084" lat="55.5577799" lon="37.2597080" version="1" timestamp="2013-04-29T16:03:22Z" changeset="15910267" uid="233639" user="Cyantooth"/>
+  <node id="2285831086" lat="55.5578001" lon="37.2598060" version="1" timestamp="2013-04-29T16:03:22Z" changeset="15910267" uid="233639" user="Cyantooth"/>
+  <node id="2285831090" lat="55.5578572" lon="37.2598327" version="1" timestamp="2013-04-29T16:03:22Z" changeset="15910267" uid="233639" user="Cyantooth"/>
+  <node id="2285831096" lat="55.5580605" lon="37.2579971" version="1" timestamp="2013-04-29T16:03:22Z" changeset="15910267" uid="233639" user="Cyantooth"/>
+  <node id="2285831100" lat="55.5581193" lon="37.2578456" version="1" timestamp="2013-04-29T16:03:22Z" changeset="15910267" uid="233639" user="Cyantooth"/>
+  <node id="2285831103" lat="55.5582318" lon="37.2577862" version="1" timestamp="2013-04-29T16:03:22Z" changeset="15910267" uid="233639" user="Cyantooth"/>
+  <node id="2285831108" lat="55.5587676" lon="37.2576065" version="2" timestamp="2018-08-06T07:54:51Z" changeset="61394038" uid="336354" user="esaulenka"/>
+  <node id="2285831111" lat="55.5587891" lon="37.2574785" version="2" timestamp="2018-08-06T07:54:51Z" changeset="61394038" uid="336354" user="esaulenka"/>
+  <node id="2285831113" lat="55.5588096" lon="37.2577164" version="2" timestamp="2018-08-06T07:54:51Z" changeset="61394038" uid="336354" user="esaulenka"/>
+  <node id="2285831114" lat="55.5588835" lon="37.2577729" version="2" timestamp="2018-08-06T07:54:51Z" changeset="61394038" uid="336354" user="esaulenka"/>
+  <node id="2285831116" lat="55.5588664" lon="37.2574310" version="2" timestamp="2018-08-06T07:54:51Z" changeset="61394038" uid="336354" user="esaulenka"/>
+  <node id="2285831117" lat="55.5589202" lon="37.2596173" version="2" timestamp="2018-08-06T07:54:51Z" changeset="61394038" uid="336354" user="esaulenka"/>
+  <node id="2285831119" lat="55.5589302" lon="37.2577280" version="2" timestamp="2018-08-06T07:54:51Z" changeset="61394038" uid="336354" user="esaulenka"/>
+  <node id="2285831121" lat="55.5589352" lon="37.2574636" version="2" timestamp="2018-08-06T07:54:51Z" changeset="61394038" uid="336354" user="esaulenka"/>
+  <node id="2285831126" lat="55.5589571" lon="37.2576062" version="2" timestamp="2018-08-06T07:54:51Z" changeset="61394038" uid="336354" user="esaulenka"/>
+  <node id="2285831201" lat="55.5601704" lon="37.2593367" version="1" timestamp="2013-04-29T16:03:24Z" changeset="15910267" uid="233639" user="Cyantooth"/>
+  <node id="2285831211" lat="55.5603434" lon="37.2591911" version="1" timestamp="2013-04-29T16:03:24Z" changeset="15910267" uid="233639" user="Cyantooth"/>
+  <node id="2285831224" lat="55.5604492" lon="37.2589892" version="1" timestamp="2013-04-29T16:03:24Z" changeset="15910267" uid="233639" user="Cyantooth"/>
+  <node id="2285831232" lat="55.5604778" lon="37.2579080" version="1" timestamp="2013-04-29T16:03:24Z" changeset="15910267" uid="233639" user="Cyantooth"/>
+  <node id="2285831234" lat="55.5604963" lon="37.2577001" version="1" timestamp="2013-04-29T16:03:24Z" changeset="15910267" uid="233639" user="Cyantooth"/>
+  <node id="2285831236" lat="55.5605047" lon="37.2586743" version="1" timestamp="2013-04-29T16:03:24Z" changeset="15910267" uid="233639" user="Cyantooth"/>
+  <node id="2285831244" lat="55.5605634" lon="37.2575664" version="1" timestamp="2013-04-29T16:03:24Z" changeset="15910267" uid="233639" user="Cyantooth"/>
+  <node id="2286504207" lat="55.5571291" lon="37.2563792" version="1" timestamp="2013-04-30T08:32:21Z" changeset="15917967" uid="233639" user="Cyantooth"/>
+  <node id="2286504208" lat="55.5572357" lon="37.2566173" version="1" timestamp="2013-04-30T08:32:21Z" changeset="15917967" uid="233639" user="Cyantooth"/>
+  <node id="2286504209" lat="55.5573479" lon="37.2567298" version="1" timestamp="2013-04-30T08:32:21Z" changeset="15917967" uid="233639" user="Cyantooth"/>
+  <node id="3069734800" lat="55.5570342" lon="37.2568056" version="1" timestamp="2014-09-10T06:41:57Z" changeset="25342239" uid="336354" user="esaulenka"/>
+  <node id="3069734809" lat="55.5589414" lon="37.2560387" version="1" timestamp="2014-09-10T06:41:57Z" changeset="25342239" uid="336354" user="esaulenka"/>
+  <node id="3069734829" lat="55.5597711" lon="37.2572933" version="1" timestamp="2014-09-10T06:41:58Z" changeset="25342239" uid="336354" user="esaulenka"/>
+  <node id="3069735633" lat="55.5598684" lon="37.2562006" version="1" timestamp="2014-09-10T06:41:58Z" changeset="25342239" uid="336354" user="esaulenka"/>
+  <node id="3069735645" lat="55.5604062" lon="37.2574248" version="1" timestamp="2014-09-10T06:41:58Z" changeset="25342239" uid="336354" user="esaulenka"/>
+  <node id="8820252213" lat="55.5587117" lon="37.2561706" version="1" timestamp="2021-06-10T08:28:21Z" changeset="106140292" uid="1083727" user="UncleSam27"/>
+  <node id="8859495300" lat="55.5585962" lon="37.2598932" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859495303" lat="55.5587460" lon="37.2598848" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884071" lat="55.5574845" lon="37.2599534" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8859884072" lat="55.5576598" lon="37.2593423" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8859884073" lat="55.5574845" lon="37.2593157" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8859884074" lat="55.5574544" lon="37.2596877" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8859884075" lat="55.5576298" lon="37.2596966" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8859884080" lat="55.5578163" lon="37.2585721" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884081" lat="55.5577577" lon="37.2589505" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884082" lat="55.5576060" lon="37.2588770" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884083" lat="55.5576646" lon="37.2584986" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884084" lat="55.5579521" lon="37.2580178" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884085" lat="55.5577139" lon="37.2578507" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884086" lat="55.5576305" lon="37.2582222" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884087" lat="55.5578688" lon="37.2583893" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884088" lat="55.5582865" lon="37.2584134" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884089" lat="55.5582804" lon="37.2587547" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884090" lat="55.5580751" lon="37.2587433" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884091" lat="55.5580812" lon="37.2584020" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884096" lat="55.5587713" lon="37.2591020" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884097" lat="55.5585784" lon="37.2590954" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884098" lat="55.5585746" lon="37.2594408" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884099" lat="55.5587675" lon="37.2594474" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884100" lat="55.5584873" lon="37.2581064" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884101" lat="55.5586168" lon="37.2582590" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884102" lat="55.5587008" lon="37.2580362" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8859884103" lat="55.5585713" lon="37.2578836" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012318" lat="55.5589834" lon="37.2568841" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012319" lat="55.5591283" lon="37.2570317" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012320" lat="55.5592205" lon="37.2566435" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012321" lat="55.5590580" lon="37.2565115" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012330" lat="55.5592373" lon="37.2578191" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012331" lat="55.5591532" lon="37.2578657" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012332" lat="55.5591334" lon="37.2577542" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012333" lat="55.5592176" lon="37.2577077" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012334" lat="55.5590035" lon="37.2577857" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012335" lat="55.5590157" lon="37.2579291" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012336" lat="55.5591103" lon="37.2579040" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012337" lat="55.5590982" lon="37.2577607" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012338" lat="55.5592591" lon="37.2582731" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012339" lat="55.5590477" lon="37.2583123" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012340" lat="55.5590282" lon="37.2579835" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012341" lat="55.5592396" lon="37.2579443" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012342" lat="55.5593411" lon="37.2588007" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012343" lat="55.5591992" lon="37.2588112" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012344" lat="55.5592071" lon="37.2591479" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012345" lat="55.5590223" lon="37.2591615" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012346" lat="55.5590276" lon="37.2593846" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012347" lat="55.5593543" lon="37.2593605" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012348" lat="55.5597048" lon="37.2589244" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012349" lat="55.5595375" lon="37.2589439" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012350" lat="55.5595485" lon="37.2592382" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012351" lat="55.5597158" lon="37.2592187" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012352" lat="55.5599713" lon="37.2587552" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012353" lat="55.5597825" lon="37.2587863" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012354" lat="55.5597825" lon="37.2591900" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012355" lat="55.5599055" lon="37.2591900" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012356" lat="55.5599055" lon="37.2590658" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012357" lat="55.5599801" lon="37.2590425" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012358" lat="55.5595370" lon="37.2579888" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012359" lat="55.5595496" lon="37.2582222" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012360" lat="55.5596702" lon="37.2582018" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012361" lat="55.5596576" lon="37.2579684" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012366" lat="55.5601118" lon="37.2590658" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012367" lat="55.5600591" lon="37.2590735" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012368" lat="55.5600547" lon="37.2592210" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012369" lat="55.5601206" lon="37.2592133" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012370" lat="55.5602392" lon="37.2590269" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012371" lat="55.5601557" lon="37.2590269" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012372" lat="55.5601645" lon="37.2591667" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012373" lat="55.5602479" lon="37.2591356" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012374" lat="55.5601953" lon="37.2584679" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012375" lat="55.5601294" lon="37.2584912" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012376" lat="55.5601382" lon="37.2588872" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012377" lat="55.5602172" lon="37.2588717" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012378" lat="55.5602216" lon="37.2587630" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012379" lat="55.5602918" lon="37.2587630" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012380" lat="55.5602875" lon="37.2586698" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012381" lat="55.5602172" lon="37.2586620" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012382" lat="55.5603972" lon="37.2581030" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012383" lat="55.5601777" lon="37.2581807" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012384" lat="55.5602304" lon="37.2585223" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012385" lat="55.5604192" lon="37.2584835" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012391" lat="55.5604548" lon="37.2565799" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012392" lat="55.5604438" lon="37.2565109" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012393" lat="55.5602180" lon="37.2566122" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012394" lat="55.5602259" lon="37.2566775" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012395" lat="55.5604202" lon="37.2564524" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012396" lat="55.5603870" lon="37.2564114" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012397" lat="55.5603478" lon="37.2563925" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012398" lat="55.5603074" lon="37.2563980" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012399" lat="55.5602704" lon="37.2564273" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012400" lat="55.5602411" lon="37.2564769" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012401" lat="55.5602229" lon="37.2565410" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012402" lat="55.5602450" lon="37.2567352" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012403" lat="55.5602733" lon="37.2567793" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012404" lat="55.5603081" lon="37.2568055" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012405" lat="55.5603457" lon="37.2568110" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012406" lat="55.5603825" lon="37.2567954" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012407" lat="55.5604146" lon="37.2567601" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012408" lat="55.5604388" lon="37.2567088" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012409" lat="55.5604526" lon="37.2566466" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012410" lat="55.5607249" lon="37.2569448" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012411" lat="55.5607203" lon="37.2569220" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012412" lat="55.5606464" lon="37.2569853" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012413" lat="55.5606534" lon="37.2570053" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012414" lat="55.5607117" lon="37.2569031" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012415" lat="55.5607000" lon="37.2568902" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012416" lat="55.5606866" lon="37.2568849" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012417" lat="55.5606729" lon="37.2568877" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012418" lat="55.5606606" lon="37.2568983" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012419" lat="55.5606509" lon="37.2569156" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012420" lat="55.5606449" lon="37.2569374" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012421" lat="55.5606434" lon="37.2569616" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012422" lat="55.5606637" lon="37.2570203" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012423" lat="55.5606761" lon="37.2570287" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012424" lat="55.5606894" lon="37.2570297" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012425" lat="55.5607022" lon="37.2570231" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012426" lat="55.5607131" lon="37.2570097" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012427" lat="55.5607210" lon="37.2569908" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012428" lat="55.5607251" lon="37.2569684" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012538" lat="55.5608574" lon="37.2575134" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012539" lat="55.5607958" lon="37.2575924" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012540" lat="55.5607484" lon="37.2574766" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012541" lat="55.5608100" lon="37.2573976" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012542" lat="55.5608220" lon="37.2578409" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012543" lat="55.5606571" lon="37.2578808" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012544" lat="55.5606700" lon="37.2580476" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012545" lat="55.5605736" lon="37.2580709" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012546" lat="55.5605895" lon="37.2582763" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012547" lat="55.5608508" lon="37.2582130" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012548" lat="55.5608220" lon="37.2585680" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012549" lat="55.5606536" lon="37.2584894" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012550" lat="55.5606186" lon="37.2588770" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012551" lat="55.5607870" lon="37.2589276" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012556" lat="55.5606822" lon="37.2593096" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012557" lat="55.5605360" lon="37.2591523" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012558" lat="55.5604058" lon="37.2595063" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012559" lat="55.5605583" lon="37.2596748" version="1" timestamp="2021-06-23T11:45:10Z" changeset="106835691" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860012560" lat="55.5602613" lon="37.2595137" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012561" lat="55.5602964" lon="37.2598727" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012562" lat="55.5600307" lon="37.2599539" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860012563" lat="55.5599957" lon="37.2595949" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131342" lat="55.5576548" lon="37.2591386" version="1" timestamp="2021-06-23T12:29:28Z" changeset="106838428" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860131343" lat="55.5576398" lon="37.2592714" version="1" timestamp="2021-06-23T12:29:28Z" changeset="106838428" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860131344" lat="55.5572240" lon="37.2592714" version="1" timestamp="2021-06-23T12:29:28Z" changeset="106838428" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860131345" lat="55.5572541" lon="37.2590146" version="1" timestamp="2021-06-23T12:29:28Z" changeset="106838428" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860131346" lat="55.5581198" lon="37.2591435" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131347" lat="55.5582148" lon="37.2593771" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131348" lat="55.5580790" lon="37.2595499" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131349" lat="55.5579839" lon="37.2593163" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131394" lat="55.5579521" lon="37.2574902" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131395" lat="55.5580445" lon="37.2577255" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131396" lat="55.5581990" lon="37.2575358" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131397" lat="55.5581066" lon="37.2573005" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131398" lat="55.5586594" lon="37.2567902" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131399" lat="55.5585099" lon="37.2570037" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131400" lat="55.5585655" lon="37.2571252" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131401" lat="55.5584570" lon="37.2572802" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131402" lat="55.5585463" lon="37.2574756" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131403" lat="55.5586969" lon="37.2572604" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131404" lat="55.5586344" lon="37.2571238" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131405" lat="55.5587418" lon="37.2569704" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131406" lat="55.5593044" lon="37.2570662" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131407" lat="55.5594863" lon="37.2572925" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131408" lat="55.5595559" lon="37.2571174" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131409" lat="55.5593740" lon="37.2568911" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131410" lat="55.5592686" lon="37.2571433" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131411" lat="55.5593583" lon="37.2575288" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131412" lat="55.5591812" lon="37.2576576" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131413" lat="55.5590915" lon="37.2572721" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131414" lat="55.5598352" lon="37.2583903" version="1" timestamp="2021-06-23T12:29:28Z" changeset="106838428" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860131415" lat="55.5597254" lon="37.2584447" version="1" timestamp="2021-06-23T12:29:28Z" changeset="106838428" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860131416" lat="55.5597211" lon="37.2582583" version="1" timestamp="2021-06-23T12:29:28Z" changeset="106838428" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860131717" lat="55.5598352" lon="37.2582428" version="1" timestamp="2021-06-23T12:29:28Z" changeset="106838428" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860131718" lat="55.5603577" lon="37.2579012" version="1" timestamp="2021-06-23T12:29:28Z" changeset="106838428" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860131719" lat="55.5601250" lon="37.2579555" version="1" timestamp="2021-06-23T12:29:28Z" changeset="106838428" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860131720" lat="55.5600943" lon="37.2575596" version="1" timestamp="2021-06-23T12:29:28Z" changeset="106838428" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860131721" lat="55.5603178" lon="37.2574897" version="1" timestamp="2021-06-23T12:29:28Z" changeset="106838428" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860131722" lat="55.5603178" lon="37.2574897" version="1" timestamp="2021-06-23T12:29:28Z" changeset="106838428" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860131726" lat="55.5608231" lon="37.2563091" version="1" timestamp="2021-06-23T12:29:28Z" changeset="106838428" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860131728" lat="55.5607353" lon="37.2560917" version="1" timestamp="2021-06-23T12:29:28Z" changeset="106838428" uid="13430280" user="Новикова Валерия"/>
+  <node id="8860131780" lat="55.5596949" lon="37.2597210" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131783" lat="55.5594837" lon="37.2597578" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131784" lat="55.5593978" lon="37.2597510" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8860131787" lat="55.5591728" lon="37.2597888" version="2" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen"/>
+  <node id="8870253719" lat="55.5571425" lon="37.2566235" version="2" timestamp="2024-07-03T08:30:18Z" changeset="153490618" uid="8923706" user="Elizen"/>
+  <way id="58709847" version="23" timestamp="2025-06-17T09:12:13Z" changeset="167728628" uid="14661320" user="Aprelevka Boy">
+    <nd ref="3069735734"/>
+    <nd ref="3069735678"/>
+    <nd ref="3069735658"/>
+    <nd ref="2286504216"/>
+    <nd ref="2286504217"/>
+    <nd ref="1779582223"/>
+    <nd ref="1779582205"/>
+    <nd ref="2286504212"/>
+    <nd ref="11645238783"/>
+    <nd ref="1779582185"/>
+    <nd ref="1779582176"/>
+    <nd ref="2286504211"/>
+    <nd ref="1779582202"/>
+    <nd ref="2286504214"/>
+    <nd ref="1779582222"/>
+    <nd ref="727516343"/>
+    <nd ref="1779582169"/>
+    <nd ref="8820252189"/>
+    <nd ref="8820252188"/>
+    <nd ref="8820252201"/>
+    <nd ref="1779582167"/>
+    <nd ref="8820252198"/>
+    <nd ref="8820252199"/>
+    <nd ref="8820252197"/>
+    <nd ref="5811838805"/>
+    <nd ref="1779582200"/>
+    <nd ref="5811838786"/>
+    <nd ref="1779582208"/>
+    <nd ref="1779582211"/>
+    <nd ref="1779582216"/>
+    <nd ref="12920907339"/>
+    <nd ref="12920907341"/>
+    <nd ref="12920907340"/>
+    <nd ref="12920907342"/>
+    <nd ref="12920907343"/>
+    <nd ref="3069735656"/>
+    <nd ref="1779582227"/>
+    <nd ref="3069735654"/>
+    <nd ref="3069735647"/>
+    <nd ref="3069735643"/>
+    <nd ref="1779582218"/>
+    <nd ref="1779582224"/>
+    <nd ref="1779582230"/>
+    <nd ref="1779582237"/>
+    <nd ref="1779582241"/>
+    <nd ref="1779582236"/>
+    <nd ref="3069735665"/>
+    <nd ref="3069735667"/>
+    <nd ref="1341190287"/>
+    <nd ref="3069735737"/>
+    <nd ref="1341190523"/>
+    <nd ref="3069735679"/>
+    <nd ref="1341189850"/>
+    <nd ref="3069735746"/>
+    <nd ref="1341190364"/>
+    <nd ref="3069735773"/>
+    <nd ref="1341189558"/>
+    <nd ref="1341189939"/>
+    <nd ref="727516347"/>
+    <nd ref="11883726588"/>
+    <nd ref="1341189173"/>
+    <nd ref="1341189076"/>
+    <nd ref="727516356"/>
+    <nd ref="5811839836"/>
+    <nd ref="5811839834"/>
+    <nd ref="5811839832"/>
+    <nd ref="5811839829"/>
+    <nd ref="5811839830"/>
+    <nd ref="5811839833"/>
+    <nd ref="5811839828"/>
+    <nd ref="5811839817"/>
+    <nd ref="5811839816"/>
+    <nd ref="5811839813"/>
+    <nd ref="5811839814"/>
+    <nd ref="5811839815"/>
+    <nd ref="5811839818"/>
+    <nd ref="5811839819"/>
+    <nd ref="5811839820"/>
+    <nd ref="5811839831"/>
+    <nd ref="5811839835"/>
+    <nd ref="1341190457"/>
+    <nd ref="5811839826"/>
+    <nd ref="5811839827"/>
+    <nd ref="727516366"/>
+    <nd ref="5811839825"/>
+    <nd ref="5811839824"/>
+    <nd ref="5811839823"/>
+    <nd ref="5811839822"/>
+    <nd ref="5811839821"/>
+    <nd ref="727516148"/>
+    <nd ref="727516152"/>
+    <nd ref="5811839812"/>
+    <nd ref="727516161"/>
+    <nd ref="727516164"/>
+    <nd ref="727516169"/>
+    <nd ref="727516173"/>
+    <nd ref="11390328634"/>
+    <nd ref="727516179"/>
+    <nd ref="8406462545"/>
+    <nd ref="727516183"/>
+    <nd ref="11390328633"/>
+    <nd ref="727516186"/>
+    <nd ref="12026862655"/>
+    <nd ref="727516188"/>
+    <nd ref="727516191"/>
+    <nd ref="5811839877"/>
+    <nd ref="5811839876"/>
+    <nd ref="5811839875"/>
+    <nd ref="5811839874"/>
+    <nd ref="5811839873"/>
+    <nd ref="5811839872"/>
+    <nd ref="5811839871"/>
+    <nd ref="5811839870"/>
+    <nd ref="5811839869"/>
+    <nd ref="5811839868"/>
+    <nd ref="5811839867"/>
+    <nd ref="5811839866"/>
+    <nd ref="5811839865"/>
+    <nd ref="5811839864"/>
+    <nd ref="5811839863"/>
+    <nd ref="5811839862"/>
+    <nd ref="5811839861"/>
+    <nd ref="5811839860"/>
+    <nd ref="5811839859"/>
+    <nd ref="5811839858"/>
+    <nd ref="5811839857"/>
+    <nd ref="5811839852"/>
+    <nd ref="5811839851"/>
+    <nd ref="5811839850"/>
+    <nd ref="5811839849"/>
+    <nd ref="5811839848"/>
+    <nd ref="5811839847"/>
+    <nd ref="5811839846"/>
+    <nd ref="5811839845"/>
+    <nd ref="5811839844"/>
+    <nd ref="5811839843"/>
+    <nd ref="5811839842"/>
+    <nd ref="5811839841"/>
+    <nd ref="5811839840"/>
+    <nd ref="5811839839"/>
+    <nd ref="5811839838"/>
+    <nd ref="5811839837"/>
+    <nd ref="727516282"/>
+    <nd ref="1780247263"/>
+    <nd ref="2285831437"/>
+    <nd ref="2285831418"/>
+    <nd ref="727516288"/>
+    <nd ref="2285831385"/>
+    <nd ref="5811840187"/>
+    <nd ref="5811840188"/>
+    <nd ref="5811840189"/>
+    <nd ref="2285831368"/>
+    <nd ref="2285831375"/>
+    <nd ref="727516292"/>
+    <nd ref="2285831362"/>
+    <nd ref="8860449762"/>
+    <nd ref="2285831306"/>
+    <nd ref="5811840190"/>
+    <nd ref="5811840191"/>
+    <nd ref="5811840192"/>
+    <nd ref="727516302"/>
+    <nd ref="2285831250"/>
+    <nd ref="8860131797"/>
+    <nd ref="2285831249"/>
+    <nd ref="2285831268"/>
+    <nd ref="2285831269"/>
+    <nd ref="727516309"/>
+    <nd ref="1779582213"/>
+    <nd ref="1779582203"/>
+    <nd ref="1779582199"/>
+    <nd ref="1779582215"/>
+    <nd ref="3069735644"/>
+    <nd ref="1779582225"/>
+    <nd ref="3069735657"/>
+    <nd ref="3069735659"/>
+    <nd ref="3069735668"/>
+    <nd ref="3069735672"/>
+    <nd ref="3069735671"/>
+    <nd ref="3069735677"/>
+    <nd ref="3069735675"/>
+    <nd ref="3069735739"/>
+    <nd ref="3069735779"/>
+    <nd ref="3069735785"/>
+    <nd ref="3069735784"/>
+    <nd ref="3069735803"/>
+    <nd ref="3069735800"/>
+    <nd ref="3069735795"/>
+    <nd ref="3069735788"/>
+    <nd ref="3069735782"/>
+    <nd ref="8860738472"/>
+    <nd ref="8860738471"/>
+    <nd ref="3069735735"/>
+    <nd ref="3069735674"/>
+    <nd ref="3069735676"/>
+    <nd ref="3069735741"/>
+    <nd ref="3069735752"/>
+    <nd ref="3069735764"/>
+    <nd ref="3069735778"/>
+    <nd ref="3069735767"/>
+    <nd ref="3069735765"/>
+    <nd ref="3069735768"/>
+    <nd ref="3069735759"/>
+    <nd ref="8820258122"/>
+    <nd ref="3069735748"/>
+    <nd ref="3069735740"/>
+    <nd ref="3069735738"/>
+    <nd ref="3069735734"/>
+    <tag k="leaf_type" v="mixed"/>
+    <tag k="natural" v="wood"/>
+  </way>
+  <way id="219420453" version="4" timestamp="2024-04-30T10:11:42Z" changeset="150699433" uid="6411134" user="Mikola Sankin">
+    <nd ref="2285831402"/>
+    <nd ref="2285831392"/>
+    <nd ref="2285831386"/>
+    <nd ref="2285831379"/>
+    <nd ref="10175250844"/>
+    <nd ref="2285831266"/>
+    <nd ref="2285831244"/>
+    <nd ref="2285831234"/>
+    <nd ref="2285831232"/>
+    <nd ref="2285831236"/>
+    <nd ref="2285831224"/>
+    <nd ref="2285831211"/>
+    <nd ref="2285831201"/>
+    <nd ref="2285831117"/>
+    <nd ref="2285831090"/>
+    <nd ref="2285831086"/>
+    <nd ref="2285831084"/>
+    <nd ref="2285831096"/>
+    <nd ref="2285831100"/>
+    <nd ref="2285831103"/>
+    <nd ref="2285831108"/>
+    <tag k="access" v="private"/>
+    <tag k="highway" v="residential"/>
+  </way>
+  <way id="219420475" version="4" timestamp="2024-04-30T10:11:42Z" changeset="150699433" uid="6411134" user="Mikola Sankin">
+    <nd ref="2285831108"/>
+    <nd ref="2285831113"/>
+    <nd ref="2285831114"/>
+    <nd ref="2285831119"/>
+    <nd ref="2285831126"/>
+    <nd ref="2285831121"/>
+    <nd ref="2285831116"/>
+    <nd ref="2285831111"/>
+    <nd ref="2285831108"/>
+    <tag k="access" v="private"/>
+    <tag k="highway" v="residential"/>
+    <tag k="junction" v="roundabout"/>
+  </way>
+  <way id="219500121" version="1" timestamp="2013-04-30T08:32:22Z" changeset="15917967" uid="233639" user="Cyantooth">
+    <nd ref="1779582152"/>
+    <nd ref="2286504207"/>
+    <nd ref="2286504208"/>
+    <nd ref="2286504209"/>
+    <tag k="highway" v="service"/>
+  </way>
+  <way id="302705840" version="4" timestamp="2021-06-23T16:43:43Z" changeset="106850766" uid="13430280" user="Новикова Валерия">
+    <nd ref="3069735733"/>
+    <nd ref="3069735736"/>
+    <nd ref="3069735743"/>
+    <nd ref="3069735760"/>
+    <nd ref="3069735758"/>
+    <nd ref="8860131746"/>
+    <nd ref="3069735742"/>
+    <nd ref="727516323"/>
+    <nd ref="3069735640"/>
+    <nd ref="3069735633"/>
+    <nd ref="3069735645"/>
+    <nd ref="8860131722"/>
+    <nd ref="1779582210"/>
+    <nd ref="3069734829"/>
+    <nd ref="1779582196"/>
+    <nd ref="727516329"/>
+    <nd ref="3069735636"/>
+    <nd ref="3069734809"/>
+    <nd ref="3069734806"/>
+    <nd ref="8860691743"/>
+    <nd ref="8860691744"/>
+    <nd ref="3069734822"/>
+    <nd ref="1779582188"/>
+    <nd ref="3069734825"/>
+    <nd ref="3069735648"/>
+    <nd ref="3069735653"/>
+    <nd ref="3069735662"/>
+    <nd ref="3069735673"/>
+    <nd ref="3069735733"/>
+    <tag k="natural" v="wood"/>
+  </way>
+  <way id="614398034" version="4" timestamp="2024-04-30T10:11:42Z" changeset="150699433" uid="6411134" user="Mikola Sankin">
+    <nd ref="2285831138"/>
+    <nd ref="2285831127"/>
+    <nd ref="2285831123"/>
+    <nd ref="2285831117"/>
+    <nd ref="2285831114"/>
+    <tag k="access" v="private"/>
+    <tag k="highway" v="residential"/>
+    <tag k="surface" v="asphalt"/>
+  </way>
+  <way id="952928036" version="13" timestamp="2024-07-03T08:30:18Z" changeset="153490618" uid="8923706" user="Elizen">
+    <nd ref="8820258124"/>
+    <nd ref="8820258125"/>
+    <nd ref="8820258126"/>
+    <nd ref="8820258127"/>
+    <nd ref="8820258128"/>
+    <nd ref="8820258129"/>
+    <nd ref="8820258130"/>
+    <nd ref="8820258131"/>
+    <nd ref="8820258132"/>
+    <nd ref="8820258133"/>
+    <nd ref="8820252212"/>
+    <nd ref="8820252213"/>
+  </way>
+  <way id="957455862" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8859495300"/>
+    <nd ref="8859495301"/>
+    <nd ref="8859495302"/>
+    <nd ref="8859495303"/>
+    <nd ref="8859495300"/>
+  </way>
+  <way id="957522862" version="2" timestamp="2021-08-13T10:23:48Z" changeset="109620783" uid="481934" user="iWowik">
+    <nd ref="8859884068"/>
+    <nd ref="8859884069"/>
+    <nd ref="8859884070"/>
+    <nd ref="8859884071"/>
+    <nd ref="8859884068"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="73"/>
+    <tag k="addr:region" v="Москва"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="addr:subdistrict" v="поселение Филимонковское"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522863" version="2" timestamp="2021-08-13T10:23:48Z" changeset="109620783" uid="481934" user="iWowik">
+    <nd ref="8859884072"/>
+    <nd ref="8859884073"/>
+    <nd ref="8859884074"/>
+    <nd ref="8859884075"/>
+    <nd ref="8859884072"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="72"/>
+    <tag k="addr:region" v="Москва"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="addr:subdistrict" v="поселение Филимонковское"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522865" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8859884080"/>
+    <nd ref="8859884081"/>
+    <nd ref="8859884082"/>
+    <nd ref="8859884083"/>
+    <nd ref="8859884080"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="71"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522866" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8859884084"/>
+    <nd ref="8859884085"/>
+    <nd ref="8859884086"/>
+    <nd ref="8859884087"/>
+    <nd ref="8859884084"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="70"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:region" v="Москва"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522867" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8859884088"/>
+    <nd ref="8859884089"/>
+    <nd ref="8859884090"/>
+    <nd ref="8859884091"/>
+    <nd ref="8859884088"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="79"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522869" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8859884096"/>
+    <nd ref="8859884097"/>
+    <nd ref="8859884098"/>
+    <nd ref="8859884099"/>
+    <nd ref="8859884096"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="77"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522870" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8859884100"/>
+    <nd ref="8859884101"/>
+    <nd ref="8859884102"/>
+    <nd ref="8859884103"/>
+    <nd ref="8859884100"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="78"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522897" version="2" timestamp="2021-08-13T10:23:48Z" changeset="109620783" uid="481934" user="iWowik">
+    <nd ref="8860012318"/>
+    <nd ref="8860012319"/>
+    <nd ref="8860012320"/>
+    <nd ref="8860012321"/>
+    <nd ref="8860012318"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="67"/>
+    <tag k="addr:region" v="Москва"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="addr:subdistrict" v="поселение Филимонковское"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522900" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860012330"/>
+    <nd ref="8860012331"/>
+    <nd ref="8860012332"/>
+    <nd ref="8860012333"/>
+    <nd ref="8860012330"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="65А"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522901" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860012334"/>
+    <nd ref="8860012335"/>
+    <nd ref="8860012336"/>
+    <nd ref="8860012337"/>
+    <nd ref="8860012334"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="65 с1"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522902" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860012338"/>
+    <nd ref="8860012339"/>
+    <nd ref="8860012340"/>
+    <nd ref="8860012341"/>
+    <nd ref="8860012338"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="65"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522903" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860012342"/>
+    <nd ref="8860012343"/>
+    <nd ref="8860012344"/>
+    <nd ref="8860012345"/>
+    <nd ref="8860012346"/>
+    <nd ref="8860012347"/>
+    <nd ref="8860012342"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="64"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522904" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860012348"/>
+    <nd ref="8860012349"/>
+    <nd ref="8860012350"/>
+    <nd ref="8860012351"/>
+    <nd ref="8860012348"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="63"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522905" version="2" timestamp="2021-08-13T10:23:48Z" changeset="109620783" uid="481934" user="iWowik">
+    <nd ref="8860012352"/>
+    <nd ref="8860012353"/>
+    <nd ref="8860012354"/>
+    <nd ref="8860012355"/>
+    <nd ref="8860012356"/>
+    <nd ref="8860012357"/>
+    <nd ref="8860012352"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="62"/>
+    <tag k="addr:region" v="Москва"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="addr:subdistrict" v="поселение Филимонковское"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522906" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860012358"/>
+    <nd ref="8860012359"/>
+    <nd ref="8860012360"/>
+    <nd ref="8860012361"/>
+    <nd ref="8860012358"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="65 с3"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522908" version="2" timestamp="2021-08-13T10:23:48Z" changeset="109620783" uid="481934" user="iWowik">
+    <nd ref="8860012366"/>
+    <nd ref="8860012367"/>
+    <nd ref="8860012368"/>
+    <nd ref="8860012369"/>
+    <nd ref="8860012366"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="62 с2"/>
+    <tag k="addr:region" v="Москва"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="addr:subdistrict" v="поселение Филимонковское"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522909" version="2" timestamp="2021-08-13T10:23:48Z" changeset="109620783" uid="481934" user="iWowik">
+    <nd ref="8860012370"/>
+    <nd ref="8860012371"/>
+    <nd ref="8860012372"/>
+    <nd ref="8860012373"/>
+    <nd ref="8860012370"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="61 с2"/>
+    <tag k="addr:region" v="Москва"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="addr:subdistrict" v="поселение Филимонковское"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522910" version="2" timestamp="2021-08-13T10:23:48Z" changeset="109620783" uid="481934" user="iWowik">
+    <nd ref="8860012374"/>
+    <nd ref="8860012375"/>
+    <nd ref="8860012376"/>
+    <nd ref="8860012377"/>
+    <nd ref="8860012378"/>
+    <nd ref="8860012379"/>
+    <nd ref="8860012380"/>
+    <nd ref="8860012381"/>
+    <nd ref="8860012374"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="61 с1"/>
+    <tag k="addr:region" v="Москва"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="addr:subdistrict" v="поселение Филимонковское"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522911" version="2" timestamp="2021-08-13T10:23:48Z" changeset="109620783" uid="481934" user="iWowik">
+    <nd ref="8860012382"/>
+    <nd ref="8860012383"/>
+    <nd ref="8860012384"/>
+    <nd ref="8860012385"/>
+    <nd ref="8860012382"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="61"/>
+    <tag k="addr:region" v="Москва"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="addr:subdistrict" v="поселение Филимонковское"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522913" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860012402"/>
+    <nd ref="8860012403"/>
+    <nd ref="8860012404"/>
+    <nd ref="8860012405"/>
+    <nd ref="8860012406"/>
+    <nd ref="8860012407"/>
+    <nd ref="8860012408"/>
+    <nd ref="8860012409"/>
+    <nd ref="8860012391"/>
+    <nd ref="8860012392"/>
+    <nd ref="8860012395"/>
+    <nd ref="8860012396"/>
+    <nd ref="8860012397"/>
+    <nd ref="8860012398"/>
+    <nd ref="8860012399"/>
+    <nd ref="8860012400"/>
+    <nd ref="8860012401"/>
+    <nd ref="8860012393"/>
+    <nd ref="8860012394"/>
+    <nd ref="8860012402"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="58"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522914" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860012422"/>
+    <nd ref="8860012423"/>
+    <nd ref="8860012424"/>
+    <nd ref="8860012425"/>
+    <nd ref="8860012426"/>
+    <nd ref="8860012427"/>
+    <nd ref="8860012428"/>
+    <nd ref="8860012410"/>
+    <nd ref="8860012411"/>
+    <nd ref="8860012414"/>
+    <nd ref="8860012415"/>
+    <nd ref="8860012416"/>
+    <nd ref="8860012417"/>
+    <nd ref="8860012418"/>
+    <nd ref="8860012419"/>
+    <nd ref="8860012420"/>
+    <nd ref="8860012421"/>
+    <nd ref="8860012412"/>
+    <nd ref="8860012413"/>
+    <nd ref="8860012422"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="58 с2"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522942" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860012538"/>
+    <nd ref="8860012539"/>
+    <nd ref="8860012540"/>
+    <nd ref="8860012541"/>
+    <nd ref="8860012538"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="57А"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522943" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860012542"/>
+    <nd ref="8860012543"/>
+    <nd ref="8860012544"/>
+    <nd ref="8860012545"/>
+    <nd ref="8860012546"/>
+    <nd ref="8860012547"/>
+    <nd ref="8860012542"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="57"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522944" version="2" timestamp="2021-08-13T10:23:48Z" changeset="109620783" uid="481934" user="iWowik">
+    <nd ref="8860012548"/>
+    <nd ref="8860012549"/>
+    <nd ref="8860012550"/>
+    <nd ref="8860012551"/>
+    <nd ref="8860012548"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="56"/>
+    <tag k="addr:region" v="Москва"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="addr:subdistrict" v="поселение Филимонковское"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522946" version="2" timestamp="2021-08-13T10:23:48Z" changeset="109620783" uid="481934" user="iWowik">
+    <nd ref="8860012556"/>
+    <nd ref="8860012557"/>
+    <nd ref="8860012558"/>
+    <nd ref="8860012559"/>
+    <nd ref="8860012556"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="55"/>
+    <tag k="addr:region" v="Москва"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="addr:subdistrict" v="поселение Филимонковское"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957522947" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860012560"/>
+    <nd ref="8860012561"/>
+    <nd ref="8860012562"/>
+    <nd ref="8860012563"/>
+    <nd ref="8860012560"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="54"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957534181" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860131342"/>
+    <nd ref="8860131343"/>
+    <nd ref="8860131344"/>
+    <nd ref="8860131345"/>
+    <nd ref="8860131342"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="72А"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957534182" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860131346"/>
+    <nd ref="8860131347"/>
+    <nd ref="8860131348"/>
+    <nd ref="8860131349"/>
+    <nd ref="8860131346"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="80"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957534193" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860131394"/>
+    <nd ref="8860131395"/>
+    <nd ref="8860131396"/>
+    <nd ref="8860131397"/>
+    <nd ref="8860131394"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="69"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957534194" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860131398"/>
+    <nd ref="8860131399"/>
+    <nd ref="8860131400"/>
+    <nd ref="8860131401"/>
+    <nd ref="8860131402"/>
+    <nd ref="8860131403"/>
+    <nd ref="8860131404"/>
+    <nd ref="8860131405"/>
+    <nd ref="8860131398"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="68"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957534195" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860131406"/>
+    <nd ref="8860131407"/>
+    <nd ref="8860131408"/>
+    <nd ref="8860131409"/>
+    <nd ref="8860131406"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="66А"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957534196" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860131410"/>
+    <nd ref="8860131411"/>
+    <nd ref="8860131412"/>
+    <nd ref="8860131413"/>
+    <nd ref="8860131410"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="66"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957534197" version="2" timestamp="2021-08-13T10:23:48Z" changeset="109620783" uid="481934" user="iWowik">
+    <nd ref="8860131414"/>
+    <nd ref="8860131415"/>
+    <nd ref="8860131416"/>
+    <nd ref="8860131717"/>
+    <nd ref="8860131414"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="62 с1"/>
+    <tag k="addr:region" v="Москва"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="addr:subdistrict" v="поселение Филимонковское"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957534198" version="2" timestamp="2021-08-13T10:23:48Z" changeset="109620783" uid="481934" user="iWowik">
+    <nd ref="8860131718"/>
+    <nd ref="8860131719"/>
+    <nd ref="8860131720"/>
+    <nd ref="8860131721"/>
+    <nd ref="8860131718"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="60"/>
+    <tag k="addr:region" v="Москва"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="addr:subdistrict" v="поселение Филимонковское"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957534199" version="2" timestamp="2021-08-13T10:23:48Z" changeset="109620783" uid="481934" user="iWowik">
+    <nd ref="8860131723"/>
+    <nd ref="8860131724"/>
+    <nd ref="8860131725"/>
+    <nd ref="8860131726"/>
+    <nd ref="8860131723"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="14"/>
+    <tag k="addr:region" v="Москва"/>
+    <tag k="addr:street" v="Живописная улица"/>
+    <tag k="addr:subdistrict" v="поселение Филимонковское"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957534200" version="2" timestamp="2021-08-13T10:23:48Z" changeset="109620783" uid="481934" user="iWowik">
+    <nd ref="8860131727"/>
+    <nd ref="8860131728"/>
+    <nd ref="8860131729"/>
+    <nd ref="8860131730"/>
+    <nd ref="8860131727"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="15"/>
+    <tag k="addr:region" v="Москва"/>
+    <tag k="addr:street" v="Живописная улица"/>
+    <tag k="addr:subdistrict" v="поселение Филимонковское"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957534213" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860131780"/>
+    <nd ref="8860131781"/>
+    <nd ref="8860131782"/>
+    <nd ref="8860131783"/>
+    <nd ref="8860131780"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="53"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="957534214" version="3" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <nd ref="8860131784"/>
+    <nd ref="8860131785"/>
+    <nd ref="8860131786"/>
+    <nd ref="8860131787"/>
+    <nd ref="8860131784"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="52"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+  </way>
+  <way id="958666165" version="3" timestamp="2024-07-03T08:30:18Z" changeset="153490618" uid="8923706" user="Elizen">
+    <nd ref="8820252213"/>
+    <nd ref="8870253719"/>
+    <nd ref="8870253718"/>
+    <nd ref="12030760364"/>
+    <nd ref="8870253717"/>
+    <nd ref="8870220616"/>
+    <nd ref="8870220615"/>
+    <nd ref="8870253730"/>
+    <nd ref="8870253729"/>
+    <nd ref="8870253728"/>
+    <nd ref="8870253727"/>
+    <nd ref="8870253726"/>
+    <nd ref="8870253725"/>
+    <nd ref="8870253724"/>
+    <nd ref="12030760363"/>
+    <nd ref="12030760361"/>
+    <nd ref="12030760362"/>
+    <nd ref="12030760360"/>
+    <nd ref="8870253723"/>
+    <nd ref="8870253722"/>
+    <nd ref="8870253721"/>
+    <nd ref="12030771975"/>
+    <nd ref="12030771974"/>
+    <nd ref="12030771973"/>
+    <nd ref="12030771972"/>
+    <nd ref="12030771971"/>
+    <nd ref="12030771970"/>
+    <nd ref="8870253720"/>
+    <nd ref="12030771969"/>
+    <nd ref="12030760368"/>
+    <nd ref="12030760367"/>
+    <nd ref="12030760366"/>
+    <nd ref="12030760365"/>
+    <nd ref="8820258124"/>
+  </way>
+  <way id="976786447" version="16" timestamp="2025-06-17T09:26:03Z" changeset="167729112" uid="14661320" user="Aprelevka Boy">
+    <nd ref="490523678"/>
+    <nd ref="490523677"/>
+    <nd ref="5718227485"/>
+    <nd ref="490523676"/>
+    <nd ref="5459880968"/>
+    <nd ref="5718227484"/>
+    <nd ref="490523675"/>
+    <nd ref="6906416149"/>
+    <nd ref="490523666"/>
+    <nd ref="5718227483"/>
+    <nd ref="5718227482"/>
+    <nd ref="5718227481"/>
+    <nd ref="490523665"/>
+    <nd ref="490523664"/>
+    <nd ref="490523663"/>
+    <nd ref="490523662"/>
+    <nd ref="490523661"/>
+    <nd ref="12163533811"/>
+    <nd ref="490523660"/>
+    <nd ref="12163533805"/>
+    <nd ref="490523659"/>
+    <nd ref="490523658"/>
+    <nd ref="490523657"/>
+    <nd ref="490523656"/>
+    <nd ref="12681654279"/>
+    <nd ref="12681654278"/>
+    <nd ref="12681654280"/>
+    <nd ref="490523655"/>
+    <nd ref="1806659581"/>
+    <nd ref="1806659582"/>
+    <nd ref="1806659584"/>
+    <nd ref="12681654277"/>
+    <nd ref="1806659585"/>
+    <nd ref="1806659583"/>
+    <nd ref="1806659578"/>
+    <nd ref="1806659577"/>
+    <nd ref="1806659580"/>
+    <nd ref="490523653"/>
+    <nd ref="490523650"/>
+    <nd ref="490523649"/>
+    <nd ref="490523648"/>
+    <nd ref="490523647"/>
+    <nd ref="490523646"/>
+    <nd ref="490523645"/>
+    <nd ref="11295861774"/>
+    <nd ref="11295861775"/>
+    <nd ref="490523644"/>
+    <nd ref="490523643"/>
+    <nd ref="490523642"/>
+    <nd ref="490523641"/>
+    <nd ref="490523640"/>
+    <nd ref="490523639"/>
+    <nd ref="490523638"/>
+    <nd ref="490523637"/>
+    <nd ref="11295831097"/>
+    <nd ref="490523636"/>
+    <nd ref="490523635"/>
+    <nd ref="5718230050"/>
+    <nd ref="5718230049"/>
+    <nd ref="490523634"/>
+    <nd ref="490523633"/>
+    <nd ref="490523632"/>
+    <nd ref="5718230048"/>
+    <nd ref="5718230046"/>
+    <nd ref="5718230047"/>
+    <nd ref="490523631"/>
+    <nd ref="490523630"/>
+    <nd ref="490523629"/>
+    <nd ref="5718230045"/>
+    <nd ref="490523628"/>
+    <nd ref="490523627"/>
+    <nd ref="490523626"/>
+    <nd ref="490523625"/>
+    <nd ref="393490123"/>
+    <nd ref="5718230044"/>
+    <nd ref="393490121"/>
+    <nd ref="5718230043"/>
+    <nd ref="5718230042"/>
+    <nd ref="11295831129"/>
+    <nd ref="393490118"/>
+    <nd ref="393490116"/>
+    <nd ref="393490107"/>
+    <nd ref="5718230041"/>
+    <nd ref="393490105"/>
+    <nd ref="5718230040"/>
+    <nd ref="471059879"/>
+    <nd ref="471059880"/>
+    <nd ref="393490103"/>
+    <nd ref="393490102"/>
+    <nd ref="393490100"/>
+    <nd ref="393490097"/>
+    <nd ref="393490096"/>
+    <nd ref="393490094"/>
+    <nd ref="393490092"/>
+    <nd ref="471059878"/>
+    <nd ref="471059877"/>
+    <nd ref="2525293716"/>
+    <nd ref="471059876"/>
+    <nd ref="393490091"/>
+    <nd ref="393490089"/>
+    <nd ref="393490087"/>
+    <nd ref="393490085"/>
+    <nd ref="471059864"/>
+    <nd ref="393490083"/>
+    <nd ref="11295831108"/>
+    <nd ref="11295831096"/>
+    <nd ref="393490081"/>
+    <nd ref="11295831137"/>
+    <nd ref="471059865"/>
+    <nd ref="471059866"/>
+    <nd ref="393490080"/>
+    <nd ref="12268338182"/>
+    <nd ref="11035254011"/>
+    <nd ref="11035254017"/>
+    <nd ref="11035254016"/>
+    <nd ref="393490076"/>
+    <nd ref="393490318"/>
+    <nd ref="393490317"/>
+    <nd ref="393490316"/>
+    <nd ref="1431806926"/>
+    <nd ref="1431806919"/>
+    <nd ref="393490315"/>
+    <nd ref="393490314"/>
+    <nd ref="1803317586"/>
+    <nd ref="1431806917"/>
+    <nd ref="11295831029"/>
+    <nd ref="1431806894"/>
+    <nd ref="1431806969"/>
+    <nd ref="1431806966"/>
+    <nd ref="11295831028"/>
+    <nd ref="1431806945"/>
+    <nd ref="1431807028"/>
+    <nd ref="393490312"/>
+    <nd ref="698667078"/>
+    <nd ref="1431807029"/>
+    <nd ref="1431807030"/>
+    <nd ref="1431807031"/>
+    <nd ref="1431807033"/>
+    <nd ref="1431807032"/>
+    <nd ref="1431807046"/>
+    <nd ref="1431807048"/>
+    <nd ref="1431807049"/>
+    <nd ref="1431806520"/>
+    <nd ref="1431806530"/>
+    <nd ref="1431806533"/>
+    <nd ref="1431806539"/>
+    <nd ref="1431806540"/>
+    <nd ref="1431806542"/>
+    <nd ref="1431806543"/>
+    <nd ref="1431806545"/>
+    <nd ref="1431806548"/>
+    <nd ref="698667077"/>
+    <nd ref="393490311"/>
+    <nd ref="698667076"/>
+    <nd ref="393490310"/>
+    <nd ref="393490309"/>
+    <nd ref="393490308"/>
+    <nd ref="698667062"/>
+    <nd ref="393490307"/>
+    <nd ref="1431806560"/>
+    <nd ref="1431806631"/>
+    <nd ref="12720281729"/>
+    <nd ref="1431806635"/>
+    <nd ref="1431806636"/>
+    <nd ref="393490303"/>
+    <nd ref="1431806624"/>
+    <nd ref="1431806623"/>
+    <nd ref="11295769387"/>
+    <nd ref="1431806637"/>
+    <nd ref="11295769381"/>
+    <nd ref="1431806638"/>
+    <nd ref="1431806640"/>
+    <nd ref="1431806653"/>
+    <nd ref="1431806655"/>
+    <nd ref="1431806658"/>
+    <nd ref="1431806660"/>
+    <nd ref="393490302"/>
+    <nd ref="1431806665"/>
+    <nd ref="1431806669"/>
+    <nd ref="1431806678"/>
+    <nd ref="1431806693"/>
+    <nd ref="393490301"/>
+    <nd ref="1431806704"/>
+    <nd ref="1431806700"/>
+    <nd ref="1431806741"/>
+    <nd ref="1431806748"/>
+    <nd ref="1431806757"/>
+    <nd ref="393490300"/>
+    <nd ref="1431806764"/>
+    <nd ref="393490299"/>
+    <nd ref="393490298"/>
+    <nd ref="1431806817"/>
+    <nd ref="1431806775"/>
+    <nd ref="1431806811"/>
+    <nd ref="1431806822"/>
+    <nd ref="1431806844"/>
+    <nd ref="393490297"/>
+    <nd ref="1431806847"/>
+    <nd ref="393490296"/>
+    <nd ref="6943290030"/>
+    <nd ref="393490295"/>
+    <nd ref="393490294"/>
+    <nd ref="393490293"/>
+    <nd ref="1431806870"/>
+    <nd ref="1431806863"/>
+    <nd ref="12720305444"/>
+    <nd ref="1431806886"/>
+    <nd ref="1431806954"/>
+    <nd ref="5150115860"/>
+    <nd ref="1431806963"/>
+    <nd ref="1431806970"/>
+    <nd ref="1431806975"/>
+    <nd ref="1431806982"/>
+    <nd ref="1431806993"/>
+    <nd ref="1431806999"/>
+    <nd ref="1431807021"/>
+    <nd ref="1431807024"/>
+    <nd ref="12026881943"/>
+    <nd ref="1431807047"/>
+    <nd ref="1431806525"/>
+    <nd ref="5150115850"/>
+    <nd ref="1431806528"/>
+    <nd ref="1431806531"/>
+    <nd ref="1431806544"/>
+    <nd ref="1431806549"/>
+    <nd ref="5150115851"/>
+    <nd ref="1431806554"/>
+    <nd ref="1431806568"/>
+    <nd ref="1431806575"/>
+    <nd ref="1431806578"/>
+    <nd ref="1431806591"/>
+    <nd ref="1779581978"/>
+    <nd ref="1431806598"/>
+    <nd ref="5150115852"/>
+    <nd ref="5150115853"/>
+    <nd ref="5150115855"/>
+    <nd ref="5150115854"/>
+    <nd ref="5150115856"/>
+    <nd ref="1779581971"/>
+    <nd ref="1431806604"/>
+    <nd ref="1431806643"/>
+    <nd ref="1431806683"/>
+    <nd ref="5150115857"/>
+    <nd ref="5150115858"/>
+    <nd ref="1431806687"/>
+    <nd ref="5150115859"/>
+    <nd ref="713851698"/>
+    <nd ref="713851696"/>
+    <nd ref="713851691"/>
+    <nd ref="713851687"/>
+    <nd ref="713851684"/>
+    <nd ref="5145654480"/>
+    <nd ref="1431806777"/>
+    <nd ref="5145654471"/>
+    <nd ref="5145654470"/>
+    <nd ref="1431806785"/>
+    <nd ref="1431806794"/>
+    <nd ref="1431806953"/>
+    <nd ref="393490291"/>
+    <nd ref="393490290"/>
+    <nd ref="393490289"/>
+    <nd ref="1431806976"/>
+    <nd ref="694470610"/>
+    <nd ref="393490288"/>
+    <nd ref="5183671713"/>
+    <nd ref="5183671667"/>
+    <nd ref="5183671696"/>
+    <nd ref="5183671702"/>
+    <nd ref="5183671701"/>
+    <nd ref="5183671698"/>
+    <nd ref="5183671700"/>
+    <nd ref="5183671699"/>
+    <nd ref="5183671697"/>
+    <nd ref="5183671695"/>
+    <nd ref="5183671694"/>
+    <nd ref="5183671693"/>
+    <nd ref="5183671692"/>
+    <nd ref="5183671669"/>
+    <nd ref="5183671691"/>
+    <nd ref="5183671690"/>
+    <nd ref="5183671670"/>
+    <nd ref="5183671689"/>
+    <nd ref="5183671687"/>
+    <nd ref="5183671688"/>
+    <nd ref="5183671668"/>
+    <nd ref="393490287"/>
+    <nd ref="1431806980"/>
+    <nd ref="1431806907"/>
+    <nd ref="1431806900"/>
+    <nd ref="1431806563"/>
+    <nd ref="1431806738"/>
+    <nd ref="1431806922"/>
+    <nd ref="1431806891"/>
+    <nd ref="1431806952"/>
+    <nd ref="1431806985"/>
+    <nd ref="1431806909"/>
+    <nd ref="1431806565"/>
+    <nd ref="1431807044"/>
+    <nd ref="393490286"/>
+    <nd ref="3069734817"/>
+    <nd ref="3069734821"/>
+    <nd ref="393490285"/>
+    <nd ref="713855749"/>
+    <nd ref="3069735649"/>
+    <nd ref="3069735646"/>
+    <nd ref="3069735641"/>
+    <nd ref="3069735635"/>
+    <nd ref="3069734830"/>
+    <nd ref="3069734831"/>
+    <nd ref="393490284"/>
+    <nd ref="3069735638"/>
+    <nd ref="393490283"/>
+    <nd ref="3069735655"/>
+    <nd ref="3069735661"/>
+    <nd ref="3069735664"/>
+    <nd ref="393490282"/>
+    <nd ref="5811840218"/>
+    <nd ref="5811840219"/>
+    <nd ref="5811840217"/>
+    <nd ref="3069735680"/>
+    <nd ref="5811840216"/>
+    <nd ref="5811840215"/>
+    <nd ref="5811840214"/>
+    <nd ref="5811840213"/>
+    <nd ref="5811840209"/>
+    <nd ref="5811840205"/>
+    <nd ref="5811840204"/>
+    <nd ref="5811840202"/>
+    <nd ref="5811840197"/>
+    <nd ref="5811840198"/>
+    <nd ref="5811840199"/>
+    <nd ref="5811840201"/>
+    <nd ref="5811840200"/>
+    <nd ref="5811840203"/>
+    <nd ref="5811840206"/>
+    <nd ref="5811840207"/>
+    <nd ref="5811840208"/>
+    <nd ref="5811840212"/>
+    <nd ref="393490281"/>
+    <nd ref="5811840211"/>
+    <nd ref="5811840210"/>
+    <nd ref="3069735754"/>
+    <nd ref="3069735749"/>
+    <nd ref="3069735756"/>
+    <nd ref="3069735757"/>
+    <nd ref="3069735744"/>
+    <nd ref="3069735747"/>
+    <nd ref="3069735762"/>
+    <nd ref="3069735777"/>
+    <nd ref="1780247314"/>
+    <nd ref="3069735763"/>
+    <nd ref="393490280"/>
+    <nd ref="1780247393"/>
+    <nd ref="1780247275"/>
+    <nd ref="1780247351"/>
+    <nd ref="1780247371"/>
+    <nd ref="1780247198"/>
+    <nd ref="1780247221"/>
+    <nd ref="393490279"/>
+    <nd ref="1780247312"/>
+    <nd ref="393490278"/>
+    <nd ref="3069735670"/>
+    <nd ref="3069735660"/>
+    <nd ref="8859495056"/>
+    <nd ref="3069735651"/>
+    <nd ref="3069735639"/>
+    <nd ref="3069734827"/>
+    <nd ref="3069734832"/>
+    <nd ref="3069735652"/>
+    <nd ref="3069735650"/>
+    <nd ref="3069735642"/>
+    <nd ref="3069734820"/>
+    <nd ref="3069734816"/>
+    <nd ref="3069734824"/>
+    <nd ref="3069734828"/>
+    <nd ref="3069735637"/>
+    <nd ref="3069735634"/>
+    <nd ref="3069734826"/>
+    <nd ref="3069734823"/>
+    <nd ref="3069734815"/>
+    <nd ref="3069734813"/>
+    <nd ref="3069734808"/>
+    <nd ref="3069734805"/>
+    <nd ref="8859495122"/>
+    <nd ref="3069734811"/>
+    <nd ref="3069734810"/>
+    <nd ref="3069734803"/>
+    <nd ref="8859495138"/>
+    <nd ref="3069734802"/>
+    <nd ref="8859495136"/>
+    <nd ref="3069734814"/>
+    <nd ref="3069734812"/>
+    <nd ref="3069734819"/>
+    <nd ref="3069734818"/>
+    <nd ref="3069734807"/>
+    <nd ref="3069734801"/>
+    <nd ref="393490275"/>
+    <nd ref="8859495213"/>
+    <nd ref="3069734793"/>
+    <nd ref="8859495212"/>
+    <nd ref="3069734786"/>
+    <nd ref="3069734785"/>
+    <nd ref="8859495229"/>
+    <nd ref="3069734783"/>
+    <nd ref="3069734782"/>
+    <nd ref="393490274"/>
+    <nd ref="3069734784"/>
+    <nd ref="3069734787"/>
+    <nd ref="8859495236"/>
+    <nd ref="3069734792"/>
+    <nd ref="8859495244"/>
+    <nd ref="393490273"/>
+    <nd ref="3069734798"/>
+    <nd ref="3069734796"/>
+    <nd ref="3069734790"/>
+    <nd ref="3069734789"/>
+    <nd ref="3069734794"/>
+    <nd ref="3069734795"/>
+    <nd ref="393490272"/>
+    <nd ref="1779582145"/>
+    <nd ref="5811839533"/>
+    <nd ref="1779582163"/>
+    <nd ref="393490271"/>
+    <nd ref="393490270"/>
+    <nd ref="3069734800"/>
+    <nd ref="3069734799"/>
+    <nd ref="3069734797"/>
+    <nd ref="3069734791"/>
+    <nd ref="3069734788"/>
+    <nd ref="393490269"/>
+    <nd ref="393490268"/>
+    <nd ref="393490267"/>
+    <nd ref="3069734781"/>
+    <nd ref="393490266"/>
+    <nd ref="8862431356"/>
+    <nd ref="6866949545"/>
+    <nd ref="6866949544"/>
+    <nd ref="393490265"/>
+    <nd ref="5811839520"/>
+    <nd ref="5811839519"/>
+    <nd ref="5811839518"/>
+    <nd ref="5811839517"/>
+    <nd ref="5811839516"/>
+    <nd ref="5811839515"/>
+    <nd ref="5811839514"/>
+    <nd ref="5811839513"/>
+    <nd ref="5811839512"/>
+    <nd ref="5811839511"/>
+    <nd ref="5811839510"/>
+    <nd ref="5811839509"/>
+    <nd ref="5811839508"/>
+    <nd ref="5811839507"/>
+    <nd ref="5811839506"/>
+    <nd ref="393490264"/>
+    <nd ref="393490263"/>
+    <nd ref="5811839505"/>
+    <nd ref="393490262"/>
+    <nd ref="5811839504"/>
+    <nd ref="5811839503"/>
+    <nd ref="5811839502"/>
+    <nd ref="393490261"/>
+    <nd ref="393490260"/>
+    <nd ref="5811839501"/>
+    <nd ref="393490259"/>
+    <nd ref="5811839500"/>
+    <nd ref="5811839499"/>
+    <nd ref="5811839498"/>
+    <nd ref="5811839497"/>
+    <nd ref="5811839496"/>
+    <nd ref="5811839495"/>
+    <nd ref="393490258"/>
+    <nd ref="5811839494"/>
+    <nd ref="2285830968"/>
+    <nd ref="393490257"/>
+    <nd ref="5811839493"/>
+    <nd ref="5811839492"/>
+    <nd ref="2285830983"/>
+    <nd ref="5811839491"/>
+    <nd ref="5811839490"/>
+    <nd ref="5811839489"/>
+    <nd ref="5811839488"/>
+    <nd ref="8820252207"/>
+    <nd ref="393490256"/>
+    <nd ref="5811839487"/>
+    <nd ref="393490255"/>
+    <nd ref="5811839486"/>
+    <nd ref="5811839485"/>
+    <nd ref="393490254"/>
+    <nd ref="5811839483"/>
+    <nd ref="5811839484"/>
+    <nd ref="393490253"/>
+    <nd ref="5811839482"/>
+    <nd ref="5811839481"/>
+    <nd ref="393490252"/>
+    <nd ref="5811839480"/>
+    <nd ref="1341190700"/>
+    <nd ref="1341190222"/>
+    <nd ref="393490250"/>
+    <nd ref="393490249"/>
+    <nd ref="1803317666"/>
+    <nd ref="1803317665"/>
+    <nd ref="1803317671"/>
+    <nd ref="1803317677"/>
+    <nd ref="393490248"/>
+    <nd ref="1341190663"/>
+    <nd ref="393490247"/>
+    <nd ref="1803317633"/>
+    <nd ref="1803317629"/>
+    <nd ref="1803317630"/>
+    <nd ref="1803317623"/>
+    <nd ref="2440636494"/>
+    <nd ref="1341189430"/>
+    <nd ref="393490246"/>
+    <nd ref="393490244"/>
+    <nd ref="393490241"/>
+    <nd ref="393490238"/>
+    <nd ref="7438958793"/>
+    <nd ref="7438958792"/>
+    <nd ref="9023369546"/>
+    <nd ref="12920907379"/>
+    <nd ref="12920907378"/>
+    <nd ref="393490233"/>
+    <nd ref="12920907377"/>
+    <nd ref="2440636513"/>
+    <nd ref="393490231"/>
+    <nd ref="1779581876"/>
+    <nd ref="393490228"/>
+    <nd ref="2440636482"/>
+    <nd ref="2440636485"/>
+    <nd ref="2440636487"/>
+    <nd ref="2440636490"/>
+    <nd ref="393490225"/>
+    <nd ref="12026880633"/>
+    <nd ref="11023161080"/>
+    <nd ref="393490223"/>
+    <nd ref="2440636496"/>
+    <nd ref="2440636498"/>
+    <nd ref="2440636505"/>
+    <nd ref="393490222"/>
+    <nd ref="2440636508"/>
+    <nd ref="393490221"/>
+    <nd ref="2440636510"/>
+    <nd ref="2440636515"/>
+    <nd ref="393490220"/>
+    <nd ref="2440636523"/>
+    <nd ref="2440636527"/>
+    <nd ref="2440636529"/>
+    <nd ref="2440636549"/>
+    <nd ref="1779582069"/>
+    <nd ref="393490218"/>
+    <nd ref="2440636574"/>
+    <nd ref="2440636555"/>
+    <nd ref="2440636534"/>
+    <nd ref="2440636525"/>
+    <nd ref="393490217"/>
+    <nd ref="393490216"/>
+    <nd ref="2440636521"/>
+    <nd ref="2440636517"/>
+    <nd ref="393490215"/>
+    <nd ref="393490214"/>
+    <nd ref="11012831204"/>
+    <nd ref="393490213"/>
+    <nd ref="393490212"/>
+    <nd ref="393490211"/>
+    <nd ref="2440636519"/>
+    <nd ref="393490210"/>
+    <nd ref="393490209"/>
+    <nd ref="393490208"/>
+    <nd ref="393490207"/>
+    <nd ref="393490206"/>
+    <nd ref="2440636540"/>
+    <nd ref="1834384467"/>
+    <nd ref="1834384465"/>
+    <nd ref="1834384464"/>
+    <nd ref="393490190"/>
+    <nd ref="1779582046"/>
+  </way>
+  <way id="1132393155" version="2" timestamp="2024-10-14T18:23:28Z" changeset="157891050" uid="1832883" user="Noro Hibu">
+    <nd ref="1380770150"/>
+    <nd ref="1380769930"/>
+    <nd ref="1380769684"/>
+    <nd ref="1380769571"/>
+    <nd ref="1380769323"/>
+    <nd ref="1380769071"/>
+    <nd ref="1380769003"/>
+    <nd ref="1380768733"/>
+    <nd ref="1380768497"/>
+    <nd ref="1380768307"/>
+    <nd ref="1380768303"/>
+    <nd ref="1380768120"/>
+    <nd ref="1380768630"/>
+    <nd ref="1380769268"/>
+    <nd ref="1380769373"/>
+    <nd ref="1380769358"/>
+    <nd ref="1380769321"/>
+    <nd ref="1380769433"/>
+    <nd ref="1380769584"/>
+    <nd ref="1380769472"/>
+    <nd ref="1380769830"/>
+  </way>
+  <way id="1298731365" version="1" timestamp="2024-07-03T08:30:18Z" changeset="153490618" uid="8923706" user="Elizen">
+    <nd ref="8820252213"/>
+    <nd ref="8820252214"/>
+    <nd ref="8820252215"/>
+    <nd ref="8820252216"/>
+    <nd ref="8820258117"/>
+    <nd ref="8820258118"/>
+    <nd ref="8820258119"/>
+    <nd ref="8820258120"/>
+    <nd ref="8820258121"/>
+    <nd ref="8820258122"/>
+    <nd ref="8820258123"/>
+    <nd ref="8820258124"/>
+  </way>
+  <relation id="2303734" version="13" timestamp="2023-09-12T09:17:22Z" changeset="141153337" uid="830106" user="literan">
+    <member type="way" ref="129835637" role="outer"/>
+    <member type="way" ref="119417386" role="outer"/>
+    <member type="way" ref="172544760" role="outer"/>
+    <member type="way" ref="737637244" role="outer"/>
+    <member type="way" ref="737637245" role="outer"/>
+    <member type="way" ref="119290368" role="outer"/>
+    <member type="way" ref="1205121818" role="outer"/>
+    <member type="way" ref="172544765" role="outer"/>
+    <member type="way" ref="567114172" role="outer"/>
+    <member type="way" ref="172544787" role="outer"/>
+    <member type="way" ref="1133386729" role="outer"/>
+    <member type="way" ref="976786448" role="outer"/>
+    <member type="way" ref="976786447" role="outer"/>
+    <member type="way" ref="172544770" role="outer"/>
+    <member type="way" ref="172544767" role="outer"/>
+    <member type="way" ref="172544778" role="outer"/>
+    <member type="way" ref="119290370" role="inner"/>
+    <tag k="leaf_cycle" v="mixed"/>
+    <tag k="leaf_type" v="mixed"/>
+    <tag k="natural" v="wood"/>
+    <tag k="type" v="multipolygon"/>
+  </relation>
+  <relation id="2554999" version="19" timestamp="2023-09-16T23:04:43Z" changeset="141361414" uid="8726248" user="traveleditor">
+    <member type="way" ref="62784346" role="inner"/>
+    <member type="way" ref="1132393155" role="outer"/>
+    <member type="way" ref="1132393153" role="outer"/>
+    <member type="way" ref="189183026" role="outer"/>
+    <member type="way" ref="189183028" role="outer"/>
+    <member type="way" ref="189183024" role="outer"/>
+    <member type="way" ref="189183036" role="outer"/>
+    <member type="way" ref="1132393152" role="outer"/>
+    <member type="way" ref="1132393157" role="outer"/>
+    <tag k="name" v="Бурцево"/>
+    <tag k="place" v="village"/>
+    <tag k="population" v="15"/>
+    <tag k="type" v="multipolygon"/>
+  </relation>
+  <relation id="15283854" version="2" timestamp="2024-07-03T08:30:18Z" changeset="153490618" uid="8923706" user="Elizen">
+    <member type="way" ref="1298731365" role="outer"/>
+    <member type="way" ref="958666165" role="outer"/>
+    <member type="way" ref="733277706" role="outer"/>
+    <tag k="addr:country" v="RU"/>
+    <tag k="name" v="Акиньшино"/>
+    <tag k="name:en" v="Akin’shino"/>
+    <tag k="name:ru" v="Акиньшино"/>
+    <tag k="note" v="approximate position"/>
+    <tag k="place" v="hamlet"/>
+    <tag k="type" v="multipolygon"/>
+    <tag k="wikidata" v="Q13359460"/>
+    <tag k="wikipedia" v="ru:Акиньшино (Москва)"/>
+  </relation>
+  <relation id="15321138" version="2" timestamp="2023-10-18T03:01:53Z" changeset="142739373" uid="9451067" user="b-jazz-bot">
+    <member type="way" ref="62784346" role="inner"/>
+    <member type="way" ref="1132393154" role="outer"/>
+    <member type="way" ref="1132393153" role="outer"/>
+    <member type="way" ref="1132393155" role="outer"/>
+    <member type="way" ref="1132393157" role="outer"/>
+    <tag k="alt_name" v="Коттеджный посёлок «La PROMENADE»"/>
+    <tag k="name" v="Коттеджный посёлок «Променад»"/>
+    <tag k="place" v="neighbourhood"/>
+    <tag k="type" v="multipolygon"/>
+    <tag k="website" v="https://www.la-promenad.ru/genplan.html"/>
+  </relation>
+  <relation id="15321143" version="1" timestamp="2023-01-16T07:42:44Z" changeset="131325612" uid="8923706" user="Elizen">
+    <member type="way" ref="957455863" role="outer"/>
+    <member type="way" ref="957455862" role="outer"/>
+    <tag k="addr:city" v="Бурцево"/>
+    <tag k="addr:housenumber" v="76"/>
+    <tag k="addr:postcode" v="108821"/>
+    <tag k="addr:street" v="Заречная улица"/>
+    <tag k="building" v="house"/>
+    <tag k="type" v="multipolygon"/>
+  </relation>
+  <relation id="17798948" version="1" timestamp="2024-07-03T08:30:18Z" changeset="153490618" uid="8923706" user="Elizen">
+    <member type="way" ref="952928036" role="outer"/>
+    <member type="way" ref="1298731365" role="outer"/>
+    <tag k="landuse" v="residential"/>
+    <tag k="name" v="Покровский лес"/>
+    <tag k="place" v="neighbourhood"/>
+    <tag k="residential" v="rural"/>
+    <tag k="type" v="multipolygon"/>
+  </relation>
+
+</osm>
