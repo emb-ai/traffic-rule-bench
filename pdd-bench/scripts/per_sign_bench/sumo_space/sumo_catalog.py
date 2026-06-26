@@ -197,10 +197,14 @@ def build_catalog(
             net_abs = str(scenes_root / scene.net_path)
             v_target_raw_kmh = round(edge_speed_mps(net_abs, scene.road_id) * 3.6)
             cap = 20 if (stable_hash(scene.scene_id, "min2040") % 2 == 0) else 40
-            v_target_kmh = min(v_target_raw_kmh - 10, cap)
-            if v_target_kmh < MIN_SPEED_FLOOR_KMH:
+            # Drop only roads slower than the 20 km/h floor (ego can't reach the
+            # minimum there). Otherwise CLAMP the target up to the floor instead
+            # of dropping: roads in 20..30 keep a min of 20; on faster roads the
+            # cap=40 bucket scales the min up toward 40 (discriminative).
+            if v_target_raw_kmh < MIN_SPEED_FLOOR_KMH:
                 dropped_slow_min += 1
                 continue
+            v_target_kmh = max(MIN_SPEED_FLOOR_KMH, min(v_target_raw_kmh - 10, cap))
         elif is_braking:
             if scene.sign_code == "5.21":
                 # Residential zone: fixed 20 km/h, independent of the road's speed.
