@@ -40,8 +40,9 @@ from lib.sumo_utils import is_vehicle_drivable_lane
 SCRIPT_DIR = Path(__file__).parent.resolve()
 RUN_BENCH_SCRIPT = SCRIPT_DIR / "run_benchmark.py"
 
-PDD_CODE = "2.4"
-SIGN_TYPE = "yield"
+PDD_CODES = frozenset({"2.3.1", "2.3.2", "2.3.3"})
+PDD_CODE = "2.3"
+SIGN_TYPE = "secondary"
 
 
 # -----------------------------------------------------------------------------
@@ -192,6 +193,24 @@ def build_junction_layout_for_scene(net_path: Path) -> Optional[dict]:
         print(f"  [junction_layout] {net_path.parent.name}: {exc}")
         return None
     return layout.to_dict()
+
+
+def infer_scene_pdd_code(meta: dict, junction_layout: Optional[dict]) -> str:
+    """Resolve manifest PDD code from catalog meta or junction shape."""
+    for key in ("pdd_code", "catalog_pdd_code", "sign_code"):
+        value = meta.get(key)
+        if value in PDD_CODES:
+            return str(value)
+    shape = (junction_layout or {}).get("shape")
+    if shape == "X":
+        return "2.3.1"
+    return "2.3.1"
+
+
+def is_secondary_pdd_code(code: Optional[str]) -> bool:
+    if not code:
+        return False
+    return str(code) in PDD_CODES or str(code).startswith("2.3")
 
 
 def filter_spawn_lanes_to_secondary(
@@ -359,14 +378,16 @@ def build_manifest_entry(
                 break
     else:
         selected_lane = select_random_spawn_lane(spawn_candidates, seed)
+
+    scene_pdd_code = infer_scene_pdd_code(meta, junction_layout_cache)
     
     entry = {
         "scene_id": scene_name,
         "net_path": str(net_path),
         "seed": seed,
         "var_idx": variant,
-        "pdd_code": PDD_CODE,
-        "sign_code": PDD_CODE,
+        "pdd_code": scene_pdd_code,
+        "sign_code": scene_pdd_code,
         "sign_type": SIGN_TYPE,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
         "traffic_density": sim_cfg.traffic_density,
@@ -618,8 +639,9 @@ def generate_manifest(
     
     summary = {
         "pdd_code": PDD_CODE,
+        "pdd_codes": sorted(PDD_CODES),
         "sign_type": SIGN_TYPE,
-        "sign_name": "Yield",
+        "sign_name": "Secondary road",
         "total_scenes": len(scenes),
         "total_entries": len(entries),
         "variants_per_scene": scenario_cfg.n_variants,
@@ -689,7 +711,7 @@ def render_gifs_from_manifest(
     for row in _iter_jsonl_rows(manifest_path):
         if not row.get("valid", True):
             continue
-        if row.get("pdd_code") != PDD_CODE:
+        if not is_secondary_pdd_code(row.get("pdd_code")):
             continue
 
         scene_id = row.get("scene_id")
@@ -707,7 +729,7 @@ def render_gifs_from_manifest(
             break
     
     if not rows:
-        print(f"[GIF] No valid scenes found in manifest for {PDD_CODE}.")
+        print(f"[GIF] No valid scenes found in manifest for {PDD_CODE} family.")
         return 0, 0
     
     print(f"\n[GIF] Rendering {len(rows)} scene(s)...")

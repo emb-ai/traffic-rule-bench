@@ -24,7 +24,13 @@ from scripts.per_sign_bench.factorized_space.ego_defaults import (
     apply_ego_sampled,
     sample_ego_params,
 )
-from traffic_signs.priority_signs import MainRoadSign, YieldSign
+from traffic_signs.priority_signs import (
+    SecondaryRoadLeftSign,
+    SecondaryRoadRightSign,
+    SecondaryRoadSign,
+    YieldSign,
+)
+from lib.junction_priority_layout import secondary_side_from_main_arm
 from lib.lane_keys import make_lane_key
 from lib.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
@@ -912,6 +918,32 @@ def _place_yield_sign_on_spawn_lane(
         return False
 
 
+def _secondary_sign_class_for_main_arm(layout: dict, main_edge_id: str):
+    """X junction: 2.3.1 on all main arms. T junction: 2.3.2 left / 2.3.3 right of stem."""
+    shape = layout.get("shape")
+    if shape == "X":
+        return SecondaryRoadSign
+
+    secondary_ids = list(layout.get("secondary_edge_ids") or [])
+    if len(secondary_ids) != 1:
+        return SecondaryRoadSign
+
+    side = secondary_side_from_main_arm(layout, main_edge_id, secondary_ids[0])
+    if side == "right":
+        return SecondaryRoadRightSign
+    if side == "left":
+        return SecondaryRoadLeftSign
+    return SecondaryRoadSign
+
+
+def _secondary_sign_label(sign_cls) -> str:
+    if sign_cls is SecondaryRoadRightSign:
+        return "2.3.3"
+    if sign_cls is SecondaryRoadLeftSign:
+        return "2.3.2"
+    return "2.3.1"
+
+
 def _place_junction_priority_signs(
     env,
     row: dict,
@@ -919,7 +951,7 @@ def _place_junction_priority_signs(
     distance_before_end: float = 20.0,
     show_model: bool = True,
 ) -> bool:
-    """Place one MainRoadSign / YieldSign per incoming road edge (not per lane line)."""
+    """Place 2.3.x signs on main arms and YieldSign (2.4) on secondary arms."""
     layout = _get_junction_layout(row, scenes_root)
     if layout is None:
         print("[JunctionSigns] No layout available, falling back to ego-only yield sign")
@@ -952,19 +984,21 @@ def _place_junction_priority_signs(
         )
 
     junction_id = layout.get("junction_id", "")
-    placed_main = 0
+    placed_secondary = 0
     placed_yield = 0
 
     for arm in main_arms:
         edge_id = arm.get("edge_id", "")
         lane = resolve_sign_lane_for_edge(env, edge_id, arm.get("lane_keys", []))
         if lane is None:
-            print(f"[JunctionSigns] Skipping main sign, lane not found for edge: {edge_id}")
+            print(f"[JunctionSigns] Skipping secondary-road sign, lane not found for edge: {edge_id}")
             continue
         placement_long = sign_placement_long(lane, distance_before_end)
+        sign_cls = _secondary_sign_class_for_main_arm(layout, edge_id)
+        sign_label = _secondary_sign_label(sign_cls)
         try:
             sign = sign_mgr.add_sign(
-                MainRoadSign,
+                sign_cls,
                 lane=lane,
                 longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
                 lateral_offset=lateral_offset_beside_lane(lane, placement_long),
@@ -974,9 +1008,10 @@ def _place_junction_priority_signs(
             )
             if sign is not None:
                 sign.is_priority_sign = False
-            placed_main += 1
+            placed_secondary += 1
+            print(f"[JunctionSigns] Placed {sign_label} on main edge {edge_id}")
         except Exception as exc:
-            print(f"[JunctionSigns] Failed MainRoadSign on edge {edge_id}: {exc}")
+            print(f"[JunctionSigns] Failed {sign_label} on edge {edge_id}: {exc}")
 
     for arm in secondary_arms:
         edge_id = arm.get("edge_id", "")
@@ -1004,11 +1039,11 @@ def _place_junction_priority_signs(
             print(f"[JunctionSigns] Failed YieldSign on edge {edge_id}: {exc}")
 
     print(
-        f"[JunctionSigns] Placed {placed_main} MainRoadSign(s) and {placed_yield} YieldSign(s) "
+        f"[JunctionSigns] Placed {placed_secondary} secondary-road sign(s) and {placed_yield} YieldSign(s) "
         f"at junction {junction_id} ({layout.get('shape')}), "
         f"shoulder offset={SIGN_SHOULDER_OFFSET_M}m"
     )
-    return placed_main > 0 or placed_yield > 0
+    return placed_secondary > 0 or placed_yield > 0
 
 
 def run_one_episode(
@@ -1100,7 +1135,7 @@ def run_one_episode(
                         "scene_id": scene_id,
                     }
 
-        # Place main/yield signs on all junction arms from layout
+        # Place 2.3.x / yield signs on all junction arms from layout
         sign_distance = float(row.get("sign_distance_before_end", 20.0))
         _place_junction_priority_signs(
             base_env,
@@ -1407,12 +1442,12 @@ def run_one_episode(
                 if sign_mgr is not None and vehicle is not None:
                     yield_signs = [
                         sign for sign in sign_mgr.signs
-                        if "yield" in type(sign).__name__.lower()
+                        if isinstance(sign, YieldSign)
                     ]
                     text_dict["Yield signs"] = len(yield_signs)
-                    text_dict["Main road signs"] = sum(
+                    text_dict["Secondary road signs"] = sum(
                         1 for sign in sign_mgr.signs
-                        if "mainroad" in type(sign).__name__.lower()
+                        if isinstance(sign, (SecondaryRoadSign, SecondaryRoadLeftSign, SecondaryRoadRightSign))
                     )
                     for sign in yield_signs:
                         has_traffic, _ = sign.has_main_road_traffic(exclude_vehicle=vehicle)
@@ -1758,7 +1793,7 @@ import time
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run policies on real SUMO maps (yield sign benchmark)")
+    parser = argparse.ArgumentParser(description="Run policies on real SUMO maps (secondary road / 2.3 benchmark)")
     parser.add_argument("--policy", required=True,
                         choices=["idm", "modified_idm", "comprehensive_rule_expert",
                                  "rule_compliant", "ppo_lidar",
@@ -1772,7 +1807,7 @@ def main():
                         help="Base dir that contains <preset>/")
     parser.add_argument("--scenes-root", type=str, default=str(BENCH_DIR / "scenes"))
     parser.add_argument("--sign-type", type=str, default=None,
-                        help="Single sign code, e.g. 2.4")
+                        help="Single sign code, e.g. 2.3.1")
     parser.add_argument("--sign-types", type=str, default="",
                         help="Comma-separated sign codes")
     parser.add_argument("--max-scenes-per-sign", type=int, default=None)

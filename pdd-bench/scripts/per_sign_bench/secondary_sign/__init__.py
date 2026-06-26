@@ -1,1 +1,1 @@
-# yield_sign package
+# secondary_sign package

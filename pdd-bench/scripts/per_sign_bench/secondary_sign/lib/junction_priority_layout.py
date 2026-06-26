@@ -501,7 +501,7 @@ def build_junction_priority_layout(
         if ego_arm.road_class != "secondary":
             raise JunctionLayoutError(
                 f"ego_edge_id {ego_edge_id!r} is classified as {ego_arm.road_class}, "
-                "expected secondary for yield benchmark"
+                "expected secondary for secondary-road benchmark"
             )
 
     return JunctionPriorityLayout(
@@ -514,6 +514,28 @@ def build_junction_priority_layout(
         main_edge_ids=main_ids,
         secondary_edge_ids=secondary_ids,
     )
+
+
+def secondary_side_from_main_arm(
+    junction_layout: dict,
+    main_edge_id: str,
+    secondary_edge_id: str,
+) -> Optional[Literal["left", "right"]]:
+    """Whether the secondary stem is on the left or right of a main approach."""
+    arms = junction_layout.get("arms", [])
+    main_arm = next((arm for arm in arms if arm.get("edge_id") == main_edge_id), None)
+    sec_arm = next((arm for arm in arms if arm.get("edge_id") == secondary_edge_id), None)
+    if main_arm is None or sec_arm is None:
+        return None
+
+    main_angle = float(main_arm["entry_angle"])
+    sec_angle = float(sec_arm["entry_angle"])
+    diff = (sec_angle - main_angle) % (2.0 * math.pi)
+    if 0.3 < diff < math.pi:
+        return "right"
+    if math.pi < diff < (2.0 * math.pi - 0.3):
+        return "left"
+    return None
 
 
 def load_junction_priority_layout(path: Path | str) -> JunctionPriorityLayout:

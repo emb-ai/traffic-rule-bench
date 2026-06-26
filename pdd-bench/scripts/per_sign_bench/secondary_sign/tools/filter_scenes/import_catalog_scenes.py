@@ -1,33 +1,15 @@
 #!/usr/bin/env python3
-"""Import yield-sign catalog scenes into yield_sign/scenes/core with junction filtering.
+"""Import secondary-road catalog scenes into secondary_sign/scenes/core.
 
-Scans the catalog (default: pdd-bench/scenes/2.4), keeps only scenes with a valid
-3- and/or 4-arm junction (each arm has a lane longer than --min-lane-length),
-then copies them into yield_sign/scenes/core/, renders custom.png, and optionally
-runs a simulation GIF.
+By default scans three catalogs with equal round-robin selection:
+  pdd-bench/scenes/2.3.1  (attachment of secondary road — X junctions)
+  pdd-bench/scenes/2.3.2  (secondary on the left — T junctions)
+  pdd-bench/scenes/2.3.3  (secondary on the right — T junctions)
 
-When both 3 and 4 are requested, the catalog is scanned in two passes:
-  1. All scenes with a qualifying 4-arm junction (catalog order)
-  2. If --limit is not reached, scenes with a qualifying 3-arm junction only
+When --limit N is set without naming scenes, imports ~N/3 from each catalog;
+if one catalog is exhausted, continues with the remaining catalogs.
 
-Use crop_junction_scene.py afterward to emit junction crops as sibling folders
-under yield_sign/scenes/ (e.g. sign_72424_j0, sign_72424_j1).
-
-Examples:
-    # Import next 10 qualifying catalog scenes not yet in scenes/core/
-    python tools/filter_scenes/import_catalog_scenes.py --limit 10
-
-    # Prefer 4-arm, else accept 3-arm (default)
-    python tools/filter_scenes/import_catalog_scenes.py --limit 10 --arms 4 3
-
-    # Import specific scenes (still checked unless --no-junction-filter)
-    python tools/filter_scenes/import_catalog_scenes.py sign_79054 75605
-
-    # Import by numeric sign id
-    python tools/filter_scenes/import_catalog_scenes.py --sign-ids 79054 75605
-
-    # Preview only, no simulation
-    python tools/filter_scenes/import_catalog_scenes.py sign_79054 --no-simulation
+Use crop_junction_scene.py afterward to emit junction crops under scenes/.
 """
 from __future__ import annotations
 
@@ -42,12 +24,15 @@ from typing import Optional
 
 FILTER_SCENES_DIR = Path(__file__).resolve().parent
 TOOLS_DIR = FILTER_SCENES_DIR.parent
-YIELD_SIGN_DIR = TOOLS_DIR.parent
-PDD_BENCH_DIR = YIELD_SIGN_DIR.parent.parent.parent
-DEFAULT_SOURCE = PDD_BENCH_DIR / "scenes" / "2.4"
-DEFAULT_DEST = YIELD_SIGN_DIR / "scenes" / "core"
+SECONDARY_SIGN_DIR = TOOLS_DIR.parent
+PDD_BENCH_DIR = SECONDARY_SIGN_DIR.parent.parent.parent
+CATALOG_PDD_CODES = ("2.3.1", "2.3.2", "2.3.3")
+DEFAULT_SOURCES = {
+    code: PDD_BENCH_DIR / "scenes" / code for code in CATALOG_PDD_CODES
+}
+DEFAULT_DEST = SECONDARY_SIGN_DIR / "scenes" / "core"
 
-sys.path.insert(0, str(YIELD_SIGN_DIR))
+sys.path.insert(0, str(SECONDARY_SIGN_DIR))
 
 from lib.junction_crop import (  # noqa: E402
     try_find_junction_for_arm_counts,
@@ -66,6 +51,13 @@ class SceneAnalysis:
     total_lanes: Optional[int] = None
     incoming_edge_ids: Optional[list[str]] = None
     reason: Optional[str] = None
+
+
+@dataclass
+class CatalogImportItem:
+    source_dir: Path
+    catalog_pdd_code: str
+    analysis: SceneAnalysis
 
 
 def _scene_name_from_sign_id(sign_id: int | str) -> str:
@@ -333,11 +325,116 @@ def resolve_import_candidates(
     return matched
 
 
-def normalize_meta(meta: dict, scene_name: str, analysis: SceneAnalysis | None = None) -> dict:
-    """Ensure yield_sign-compatible meta fields."""
+def interleave_catalog_candidates(
+    per_catalog: dict[str, list[SceneAnalysis]],
+    sources: dict[str, Path],
+    *,
+    limit: int | None,
+) -> list[CatalogImportItem]:
+    """Round-robin across catalogs; drain leftovers when one is exhausted."""
+    codes = list(per_catalog.keys())
+    indices = {code: 0 for code in codes}
+    result: list[CatalogImportItem] = []
+
+    while limit is None or len(result) < limit:
+        progressed = False
+        for code in codes:
+            queue = per_catalog.get(code, [])
+            idx = indices[code]
+            if idx >= len(queue):
+                continue
+            result.append(
+                CatalogImportItem(
+                    source_dir=sources[code],
+                    catalog_pdd_code=code,
+                    analysis=queue[idx],
+                )
+            )
+            indices[code] = idx + 1
+            progressed = True
+            if limit is not None and len(result) >= limit:
+                break
+        if not progressed:
+            break
+    return result
+
+
+def resolve_multi_catalog_import(
+    dest_root: Path,
+    names: list[str],
+    sign_ids: list[int],
+    limit: int | None,
+    *,
+    skip_existing: bool,
+    arm_counts: tuple[int, ...],
+    min_lane_length_m: float,
+    junction_filter: bool,
+    sources: dict[str, Path],
+) -> list[CatalogImportItem]:
+    if names or sign_ids:
+        found: list[CatalogImportItem] = []
+        for code, source_dir in sources.items():
+            if not source_dir.is_dir():
+                continue
+            batch = resolve_import_candidates(
+                source_dir,
+                dest_root,
+                names,
+                sign_ids,
+                limit,
+                skip_existing=skip_existing,
+                arm_counts=arm_counts,
+                min_lane_length_m=min_lane_length_m,
+                junction_filter=junction_filter,
+            )
+            for analysis in batch:
+                found.append(
+                    CatalogImportItem(
+                        source_dir=source_dir,
+                        catalog_pdd_code=code,
+                        analysis=analysis,
+                    )
+                )
+        if limit is not None:
+            return found[:limit]
+        return found
+
+    per_catalog: dict[str, list[SceneAnalysis]] = {}
+    for code, source_dir in sources.items():
+        if not source_dir.is_dir():
+            print(f"  [warn] catalog missing: {source_dir}")
+            per_catalog[code] = []
+            continue
+        per_catalog[code] = resolve_import_candidates(
+            source_dir,
+            dest_root,
+            [],
+            [],
+            None,
+            skip_existing=skip_existing,
+            arm_counts=arm_counts,
+            min_lane_length_m=min_lane_length_m,
+            junction_filter=junction_filter,
+        )
+    return interleave_catalog_candidates(per_catalog, sources, limit=limit)
+
+
+def normalize_meta(
+    meta: dict,
+    scene_name: str,
+    analysis: SceneAnalysis | None = None,
+    *,
+    catalog_pdd_code: str | None = None,
+) -> dict:
+    """Ensure secondary_sign-compatible meta fields."""
     out = dict(meta)
     out["scene_name"] = scene_name
     out["scene_kind"] = "core"
+    if catalog_pdd_code:
+        out["catalog_pdd_code"] = catalog_pdd_code
+        out["pdd_code"] = catalog_pdd_code
+        out["sign_code"] = catalog_pdd_code
+        out["sign_type"] = "secondary"
     if out.get("sign_type") and not out.get("pdd_code"):
         out["pdd_code"] = out["sign_type"]
     if analysis is not None and analysis.matched:
@@ -354,6 +451,7 @@ def copy_scene(
     *,
     overwrite: bool,
     analysis: SceneAnalysis | None = None,
+    catalog_pdd_code: str | None = None,
 ) -> Path:
     src = source_dir / scene_name
     dst = dest_root / scene_name
@@ -366,7 +464,7 @@ def copy_scene(
 
     meta_path = dst / "meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    meta = normalize_meta(meta, scene_name, analysis)
+    meta = normalize_meta(meta, scene_name, analysis, catalog_pdd_code=catalog_pdd_code)
     meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     print(f"  copied -> {dst}")
     return dst
@@ -405,7 +503,7 @@ def run_simulation(
     if model_path:
         cmd += ["--model-path", model_path]
     print(f"\n$ {' '.join(cmd)}")
-    subprocess.run(cmd, check=True, cwd=str(YIELD_SIGN_DIR))
+    subprocess.run(cmd, check=True, cwd=str(SECONDARY_SIGN_DIR))
 
 
 def main() -> None:
@@ -422,8 +520,9 @@ def main() -> None:
     parser.add_argument(
         "--source",
         type=Path,
-        default=DEFAULT_SOURCE,
-        help=f"Catalog root (default: {DEFAULT_SOURCE})",
+        nargs="*",
+        default=None,
+        help="Catalog root(s). Default: scenes/2.3.1, scenes/2.3.2, scenes/2.3.3 (round-robin)",
     )
     parser.add_argument(
         "--dest",
@@ -499,16 +598,23 @@ def main() -> None:
 
     arm_counts = parse_arm_counts(args.arms)
     junction_filter = not args.no_junction_filter
-    source_dir = args.source.expanduser().resolve()
     dest_root = args.dest.expanduser().resolve()
     dest_root.mkdir(parents=True, exist_ok=True)
 
-    if not source_dir.is_dir():
-        sys.exit(f"Source catalog not found: {source_dir}")
+    if args.source:
+        sources: dict[str, Path] = {}
+        for src in args.source:
+            src = src.expanduser().resolve()
+            code = src.name if src.name in CATALOG_PDD_CODES else src.name
+            sources[code] = src
+    else:
+        sources = dict(DEFAULT_SOURCES)
 
     run_sim = args.run_simulation and not args.no_simulation
 
-    print(f"Source: {source_dir}")
+    print("Sources:")
+    for code, src in sources.items():
+        print(f"  {code}: {src}")
     print(f"Dest:   {dest_root}")
     if junction_filter:
         print(f"Arms:   {arm_counts_label(arm_counts)} (min lane {args.min_lane_length} m)")
@@ -518,8 +624,7 @@ def main() -> None:
     print(f"Run simulation:  {run_sim}")
     print("Scanning catalog...")
 
-    to_import = resolve_import_candidates(
-        source_dir,
+    to_import = resolve_multi_catalog_import(
         dest_root,
         list(args.scenes),
         list(args.sign_ids),
@@ -528,6 +633,7 @@ def main() -> None:
         arm_counts=arm_counts,
         min_lane_length_m=args.min_lane_length,
         junction_filter=junction_filter,
+        sources=sources,
     )
 
     if not to_import:
@@ -537,19 +643,30 @@ def main() -> None:
             if junction_filter
             else ""
         )
+        catalog_counts = ", ".join(
+            f"{code}={len(discover_source_scenes(path))}"
+            for code, path in sources.items()
+            if path.is_dir()
+        )
         sys.exit(
             "No scenes to import. Pass scene names, --sign-ids, or --limit N.\n"
-            f"Catalog: {len(discover_source_scenes(source_dir))} scene(s), "
-            f"already in dest: {already}{filter_note}.\n"
-            f"Available: {', '.join(p.name for p in discover_source_scenes(source_dir)[:8])}..."
+            f"Catalog counts: {catalog_counts or 'none'}, "
+            f"already in dest: {already}{filter_note}."
         )
 
-    print(f"Import: {', '.join(a.scene_name for a in to_import)}")
+    print(
+        "Import: "
+        + ", ".join(
+            f"{item.analysis.scene_name}@{item.catalog_pdd_code}"
+            for item in to_import
+        )
+    )
 
     imported = 0
-    for analysis in to_import:
+    for item in to_import:
+        analysis = item.analysis
         scene_name = analysis.scene_name
-        print(f"\n=== {scene_name} ===")
+        print(f"\n=== {scene_name} ({item.catalog_pdd_code}) ===")
         if junction_filter and analysis.matched:
             print(
                 f"  junction {analysis.junction_id} ({analysis.arm_count}-arm), "
@@ -557,11 +674,12 @@ def main() -> None:
             )
 
         scene_dir = copy_scene(
-            source_dir,
+            item.source_dir,
             dest_root,
             scene_name,
             overwrite=args.overwrite,
             analysis=analysis if junction_filter else None,
+            catalog_pdd_code=item.catalog_pdd_code,
         )
         imported += 1
 

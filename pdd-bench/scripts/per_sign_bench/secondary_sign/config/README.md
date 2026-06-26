@@ -21,7 +21,7 @@ python generate_manifest.py paths.experiment_name=my_experiment
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `scenes_dir` | `null` (= `./scenes`) | Input scenes directory |
-| `output_base` | `benchmark_output/2_4` | Base output directory |
+| `output_base` | `benchmark_output/2_3` | Base output directory |
 | `experiment_name` | `<timestamp>` | Experiment folder name |
 
 ### `scenario`
@@ -65,7 +65,7 @@ python generate_manifest.py paths.experiment_name=my_experiment
 Each run creates a timestamped folder:
 
 ```
-benchmark_output/2_4/<experiment_name>/
+benchmark_output/2_3/<experiment_name>/
 ├── real_manifest.jsonl      # Scenario definitions
 ├── manifest.json            # Manifest metadata
 ├── real_manifest_summary.json

@@ -665,7 +665,7 @@ class SecondaryRoadSign(BaseTrafficSign):
 
 
 class SecondaryRoadLeftSign(BaseTrafficSign):
-    """Sign 2.3.2 – Secondary road on the left (T crossroad variant)."""
+    """Sign 2.3.3 – Secondary road on the left (T crossroad variant)."""
 
     def __init__(self, lane, intersection_name: str = None, **kwargs):
         super().__init__(lane, icon_path="2.3.3.png", **kwargs)
@@ -677,7 +677,7 @@ class SecondaryRoadLeftSign(BaseTrafficSign):
         return False
 
     def get_rule_description(self) -> str:
-        return "Secondary road on the left (2.3.2) - you have priority"
+        return "Secondary road on the left (2.3.3) - you have priority"
 
     @property
     def top_down_color(self):
@@ -689,7 +689,7 @@ class SecondaryRoadLeftSign(BaseTrafficSign):
 
 
 class SecondaryRoadRightSign(BaseTrafficSign):
-    """Sign 2.3.3 – Secondary road on the right (T crossroad variant)."""
+    """Sign 2.3.2 – Secondary road on the right (T crossroad variant)."""
 
     def __init__(self, lane, intersection_name: str = None, **kwargs):
         super().__init__(lane, icon_path="2.3.2.png", **kwargs)
@@ -701,7 +701,7 @@ class SecondaryRoadRightSign(BaseTrafficSign):
         return False
 
     def get_rule_description(self) -> str:
-        return "Secondary road on the right (2.3.3) - you have priority"
+        return "Secondary road on the right (2.3.2) - you have priority"
 
     @property
     def top_down_color(self):

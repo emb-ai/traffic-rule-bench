@@ -10,17 +10,17 @@ from pathlib import Path
 import numpy as np
 import torch
 
-# Path setup - tools/ is inside yield_sign/
+# Path setup - tools/ is inside secondary_sign/
 TOOLS_DIR = Path(__file__).resolve().parent
-YIELD_SIGN_DIR = TOOLS_DIR.parent
-PDD_BENCH_DIR = YIELD_SIGN_DIR.parent.parent.parent
+SECONDARY_SIGN_DIR = TOOLS_DIR.parent
+PDD_BENCH_DIR = SECONDARY_SIGN_DIR.parent.parent.parent
 SDC_ROOT = PDD_BENCH_DIR.parent
-SCENES_ROOT = YIELD_SIGN_DIR / "scenes"
+SCENES_ROOT = SECONDARY_SIGN_DIR / "scenes"
 CHECKPOINTS_DIR = PDD_BENCH_DIR / "checkpoints"
 
 # Add paths for imports
 sys.path.insert(0, str(PDD_BENCH_DIR))
-sys.path.insert(0, str(YIELD_SIGN_DIR))
+sys.path.insert(0, str(SECONDARY_SIGN_DIR))
 
 from lib.sumo_utils import resolve_net_file, load_scene_meta, find_first_edge_id, DEFAULT_NET_FILE
 
@@ -61,7 +61,7 @@ def build_catalog_row(scene_dir: Path, meta: dict, var_idx: int = 0) -> dict:
     
     return {
         "scene_id": f"sumo_{scene_name}",
-        "sign_code": "2.4",  # yield sign
+        "sign_code": "2.3.1",  # secondary road (catalog default)
         "sign_id": 0,
         "road_id": road_id,
         "net_path": net_path,
@@ -93,7 +93,7 @@ def build_env(catalog_row: dict, scenes_root: Path, traffic_density: float, max_
         use_mesh_terrain=False,
         log_level=logging.CRITICAL,
         map_name=map_path,
-        sign_type="2.4",  # yield sign
+        sign_type="2.3.1",  # secondary road
         sign_spawn_distance=sign_spawn_distance,
         traffic_density=traffic_density,
         horizon=max_steps,
