@@ -35,11 +35,13 @@ BRAKING_SPAWN_CODES = {"3.24", "5.21", "5.31"}
 ACCEL_SPAWN_CODES = {"4.6"}
 ACCEL_DEFICIT_KMH = 15.0        # ego spawns this far BELOW the minimum speed
 ACCEL_V0_FLOOR_KMH = 5.0        # but never slower than this
-# Short upstream approach: unlike braking (ego must reach v_target BY the sign),
-# for a MIN-speed sign the ego accelerates IN the zone (after the sign). So we
-# only need it established at v0 just before the sign — a small fixed approach,
-# leaving the post-sign edge as the zone where it must reach the minimum.
-ACCEL_APPROACH_M = 8.0
+# Upstream approach (runway) for a MIN-speed sign: ego spawns this far before
+# the sign at v0=(min-deficit) and must accelerate UP to the minimum. The zone
+# only begins +10 m past the sign, so the runway to reach the min before the
+# zone is ACCEL_APPROACH_M + 10. Needs to be long enough that a compliant policy
+# at full throttle reaches the minimum (up to 60 km/h from min-15) BEFORE the
+# zone starts — otherwise it enters below the min and violates at the zone start.
+ACCEL_APPROACH_M = 20.0
 MIN_SPEED_FLOOR_KMH = 35.0      # drop 4.6 scenes whose realistic min (road-10, cap) is below
                                 # this — a min <= base cruise (~30) isn't discriminative
 
