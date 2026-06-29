@@ -688,6 +688,58 @@ class SecondaryRoadLeftSign(BaseTrafficSign):
         return "yellow"
 
 
+class RoundaboutSign(BaseTrafficSign):
+    """Sign 4.3 — roundabout ahead (informational plate on the approach)."""
+
+    def __init__(self, lane, intersection_name: str = None, **kwargs):
+        super().__init__(lane, icon_path="4.3.png", **kwargs)
+        self.intersection_name = intersection_name
+        self.is_priority_sign = True
+        self.priority_type = "roundabout_ahead"
+
+    def _is_violating(self, vehicle) -> bool:
+        return False
+
+    def get_rule_description(self) -> str:
+        return "Roundabout ahead (4.3) — yield to traffic on the circle"
+
+    @property
+    def top_down_color(self):
+        return [255, 204, 0]
+
+    @property
+    def top_down_color_name(self):
+        return "yellow"
+
+
+class RoundaboutYieldSign(YieldSign):
+    """Invisible yield tracker for 4.3 — ego on spoke yields to ring traffic."""
+
+    def __init__(
+        self,
+        lane,
+        intersection_name: str = None,
+        ring_road_lanes: list = None,
+        **kwargs,
+    ):
+        kwargs.setdefault("show_model", False)
+        kwargs.setdefault("icon_path", "4.3.png")
+        super().__init__(
+            lane,
+            intersection_name=intersection_name,
+            main_road_lanes=ring_road_lanes,
+            auto_detect_main_roads=False,
+            **kwargs,
+        )
+        self.priority_type = "roundabout_yield"
+
+    def get_rule_description(self) -> str:
+        return (
+            "Roundabout (4.3) — must not leave the approach zone "
+            "while traffic is present on the traffic circle"
+        )
+
+
 class SecondaryRoadRightSign(BaseTrafficSign):
     """Sign 2.3.2 – Secondary road on the right (T crossroad variant)."""
 
@@ -768,6 +820,8 @@ __all__ = [
     "EndMainRoadSmartSign",
     "YieldSign",
     "RightHandYieldSign",
+    "RoundaboutSign",
+    "RoundaboutYieldSign",
     "StopSign",
     "SecondaryRoadSign",
     "SecondaryRoadLeftSign",

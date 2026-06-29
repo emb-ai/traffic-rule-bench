@@ -24,7 +24,7 @@ from scripts.per_sign_bench.factorized_space.ego_defaults import (
     apply_ego_sampled,
     sample_ego_params,
 )
-from traffic_signs.priority_signs import MainRoadSign, YieldSign
+from traffic_signs.priority_signs import RoundaboutSign, RoundaboutYieldSign
 from lib.lane_keys import make_lane_key
 from lib.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
@@ -180,14 +180,14 @@ def collect_rows(
 
 
 def _ensure_secondary_ego_spawn(row: dict, scenes_root: Path) -> None:
-    """Ensure manifest spawn edge is on a secondary junction arm (mutates row in place)."""
+    """Ensure ego spawns on a spoke approach, not on the traffic circle (mutates row)."""
     layout = _get_junction_layout(row, scenes_root)
     if not layout:
         return
 
-    secondary_ids = set(layout.get("secondary_edge_ids") or [])
+    main_ids = set(layout.get("main_edge_ids") or [])
     road_id = row.get("road_id")
-    if road_id and road_id in secondary_ids:
+    if road_id and road_id not in main_ids:
         return
 
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
@@ -208,14 +208,14 @@ def _ensure_secondary_ego_spawn(row: dict, scenes_root: Path) -> None:
             pool.append((edge_id, lane_num))
 
     if not pool:
-        print("[EgoSpawn] No secondary arms in layout; keeping original spawn")
+        print("[EgoSpawn] No spoke arms in layout; keeping original spawn")
         return
 
     edge_id, lane_num = pool[seed % len(pool)]
     if road_id and road_id != edge_id:
         print(
-            f"[EgoSpawn] Repicked spawn from main/non-secondary {road_id!r} "
-            f"-> secondary {edge_id!r} lane {lane_num}"
+            f"[EgoSpawn] Repicked spawn from ring/main {road_id!r} "
+            f"-> spoke {edge_id!r} lane {lane_num}"
         )
     row["road_id"] = edge_id
     row["spawn_lane_num"] = lane_num
@@ -856,9 +856,12 @@ def _reposition_ego_before_lane_end(env, distance_before_end: float) -> bool:
 
 
 def _get_junction_layout(row: dict, scenes_root: Path) -> dict | None:
-    """Load junction layout from manifest row or build from scene net.xml."""
+    """Load roundabout layout from manifest row or build from scene net.xml + meta."""
     if row.get("junction_layout"):
-        return row["junction_layout"]
+        layout = row["junction_layout"]
+        if layout.get("shape") == "O" and layout.get("mode") == "roundabout":
+            return layout
+        return None
 
     net_path = row.get("net_path")
     if not net_path:
@@ -866,10 +869,45 @@ def _get_junction_layout(row: dict, scenes_root: Path) -> dict | None:
 
     net_file = Path(str(net_path))
     full_path = net_file if net_file.is_absolute() else scenes_root / net_file
+    scene_meta: dict | None = None
+    scene_dir = full_path.parent
+    meta_path = scene_dir / "meta.json"
+    if meta_path.is_file():
+        try:
+            scene_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            scene_meta = None
+
+    ring_ids = spoke_ids = entry_junction = None
+    ego_edge = row.get("road_id")
+    if scene_meta:
+        ring_ids = scene_meta.get("roundabout_ring_edges")
+        spoke_ids = scene_meta.get("roundabout_spoke_edges")
+        entry_junction = scene_meta.get("roundabout_entry_junction")
+        ego_edge = (
+            scene_meta.get("catalog_sign_road_id")
+            or scene_meta.get("road_id")
+            or ego_edge
+        )
+
     try:
-        layout = build_junction_priority_layout(full_path)
+        layout = build_junction_priority_layout(
+            full_path,
+            mode="roundabout",
+            ego_edge_id=ego_edge,
+            ring_edge_ids=ring_ids,
+            spoke_edge_ids=spoke_ids,
+            entry_junction_id=entry_junction,
+        )
     except JunctionLayoutError as exc:
         print(f"[JunctionLayout] Failed to build layout: {exc}")
+        return None
+
+    if layout.shape != "O" or layout.mode != "roundabout":
+        print(
+            f"[JunctionLayout] Rejecting non-roundabout layout "
+            f"(shape={layout.shape}, mode={layout.mode})"
+        )
         return None
     return layout.to_dict()
 
@@ -879,10 +917,10 @@ def _clear_sign_manager(sign_mgr) -> None:
     sign_mgr.rules.clear()
 
 
-def _place_yield_sign_on_spawn_lane(
+def _place_roundabout_sign_on_spawn_lane(
     env, distance_before_end: float = 20.0, show_model: bool = True
 ) -> bool:
-    """Fallback: place a single YieldSign beside the ego approach road."""
+    """Fallback: place a single RoundaboutSign beside the ego approach road."""
     try:
         vehicle = env.agent
         if vehicle is None or vehicle.lane is None:
@@ -896,7 +934,7 @@ def _place_yield_sign_on_spawn_lane(
         lane = vehicle.lane
         placement_long = sign_placement_long(lane, distance_before_end)
         sign = sign_mgr.add_sign(
-            YieldSign,
+            RoundaboutSign,
             lane=lane,
             longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
             lateral_offset=lateral_offset_beside_lane(lane, placement_long),
@@ -908,22 +946,22 @@ def _place_yield_sign_on_spawn_lane(
             sign.is_priority_sign = False
         return sign is not None
     except Exception as e:
-        print(f"[YieldSign] Failed to place sign: {e}")
+        print(f"[RoundaboutSign] Failed to place sign: {e}")
         return False
 
 
-def _place_junction_priority_signs(
+def _place_roundabout_signs(
     env,
     row: dict,
     scenes_root: Path,
     distance_before_end: float = 20.0,
     show_model: bool = True,
 ) -> bool:
-    """Place one MainRoadSign / YieldSign per incoming road edge (not per lane line)."""
+    """Place RoundaboutSign (4.3) on ego spoke + invisible yield tracker on ego lane."""
     layout = _get_junction_layout(row, scenes_root)
     if layout is None:
-        print("[JunctionSigns] No layout available, falling back to ego-only yield sign")
-        return _place_yield_sign_on_spawn_lane(
+        print("[RoundaboutSigns] No layout available, falling back to ego-only sign")
+        return _place_roundabout_sign_on_spawn_lane(
             env, distance_before_end=distance_before_end, show_model=show_model
         )
 
@@ -935,36 +973,45 @@ def _place_junction_priority_signs(
 
     main_arms = arms_for_road_class(layout, "main")
     secondary_arms = arms_for_road_class(layout, "secondary")
-    if not main_arms or not secondary_arms:
-        print("[JunctionSigns] Missing main/secondary arms, falling back to ego-only yield sign")
-        return _place_yield_sign_on_spawn_lane(
+    if not main_arms:
+        print("[RoundaboutSigns] No ring arms in layout, falling back to ego-only sign")
+        return _place_roundabout_sign_on_spawn_lane(
             env, distance_before_end=distance_before_end, show_model=show_model
         )
 
-    main_lanes = []
+    ring_lanes = []
     for arm in main_arms:
-        main_lanes.extend(collect_lanes_for_keys(env, arm.get("lane_keys", [])))
+        ring_lanes.extend(collect_lanes_for_keys(env, arm.get("lane_keys", [])))
 
-    if not main_lanes:
-        print("[JunctionSigns] Could not resolve main lanes, falling back to ego-only yield sign")
-        return _place_yield_sign_on_spawn_lane(
+    if not ring_lanes:
+        print("[RoundaboutSigns] Could not resolve ring lanes, falling back to ego-only sign")
+        return _place_roundabout_sign_on_spawn_lane(
             env, distance_before_end=distance_before_end, show_model=show_model
         )
 
     junction_id = layout.get("junction_id", "")
-    placed_main = 0
-    placed_yield = 0
+    ego_edge = str(row.get("road_id") or "")
+    placed_plate = 0
 
-    for arm in main_arms:
+    # Visible 4.3 plate on every spoke approach (or ego spoke only if unknown)
+    plate_arms = secondary_arms
+    if ego_edge:
+        ego_arm = next((a for a in secondary_arms if a.get("edge_id") == ego_edge), None)
+        if ego_arm is not None:
+            plate_arms = [ego_arm]
+        elif ego_edge not in layout.get("main_edge_ids", []):
+            plate_arms = [{"edge_id": ego_edge, "lane_keys": []}]
+
+    for arm in plate_arms:
         edge_id = arm.get("edge_id", "")
         lane = resolve_sign_lane_for_edge(env, edge_id, arm.get("lane_keys", []))
         if lane is None:
-            print(f"[JunctionSigns] Skipping main sign, lane not found for edge: {edge_id}")
+            print(f"[RoundaboutSigns] Skipping plate, lane not found for edge: {edge_id}")
             continue
         placement_long = sign_placement_long(lane, distance_before_end)
         try:
             sign = sign_mgr.add_sign(
-                MainRoadSign,
+                RoundaboutSign,
                 lane=lane,
                 longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
                 lateral_offset=lateral_offset_beside_lane(lane, placement_long),
@@ -974,41 +1021,36 @@ def _place_junction_priority_signs(
             )
             if sign is not None:
                 sign.is_priority_sign = False
-            placed_main += 1
+            placed_plate += 1
         except Exception as exc:
-            print(f"[JunctionSigns] Failed MainRoadSign on edge {edge_id}: {exc}")
+            print(f"[RoundaboutSigns] Failed RoundaboutSign on edge {edge_id}: {exc}")
 
-    for arm in secondary_arms:
-        edge_id = arm.get("edge_id", "")
-        lane = resolve_sign_lane_for_edge(env, edge_id, arm.get("lane_keys", []))
-        if lane is None:
-            print(f"[JunctionSigns] Skipping yield sign, lane not found for edge: {edge_id}")
-            continue
-        placement_long = sign_placement_long(lane, distance_before_end)
+    # Invisible yield tracker on ego lane
+    ego_lane = getattr(env.agent, "lane", None)
+    if ego_lane is not None:
+        placement_long = sign_placement_long(ego_lane, distance_before_end)
         try:
-            sign = sign_mgr.add_sign(
-                YieldSign,
-                lane=lane,
-                longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
-                lateral_offset=lateral_offset_beside_lane(lane, placement_long),
-                show_model=show_model,
+            tracker = sign_mgr.add_sign(
+                RoundaboutYieldSign,
+                lane=ego_lane,
+                longitudinal_offset=sign_longitudinal_offset(ego_lane, distance_before_end),
+                lateral_offset=lateral_offset_beside_lane(ego_lane, placement_long),
+                show_model=False,
                 use_random_lane=False,
                 intersection_name=junction_id,
-                main_road_lanes=main_lanes,
-                auto_detect_main_roads=False,
+                ring_road_lanes=ring_lanes,
             )
-            if sign is not None:
-                sign.is_priority_sign = False
-            placed_yield += 1
+            if tracker is not None:
+                tracker.is_priority_sign = True
         except Exception as exc:
-            print(f"[JunctionSigns] Failed YieldSign on edge {edge_id}: {exc}")
+            print(f"[RoundaboutSigns] Failed yield tracker on ego lane: {exc}")
 
     print(
-        f"[JunctionSigns] Placed {placed_main} MainRoadSign(s) and {placed_yield} YieldSign(s) "
-        f"at junction {junction_id} ({layout.get('shape')}), "
-        f"shoulder offset={SIGN_SHOULDER_OFFSET_M}m"
+        f"[RoundaboutSigns] Placed {placed_plate} RoundaboutSign(s) + yield tracker "
+        f"at entry {junction_id} (shape={layout.get('shape')}), "
+        f"ring_lanes={len(ring_lanes)}, shoulder offset={SIGN_SHOULDER_OFFSET_M}m"
     )
-    return placed_main > 0 or placed_yield > 0
+    return placed_plate > 0
 
 
 def run_one_episode(
@@ -1102,7 +1144,7 @@ def run_one_episode(
 
         # Place main/yield signs on all junction arms from layout
         sign_distance = float(row.get("sign_distance_before_end", 20.0))
-        _place_junction_priority_signs(
+        _place_roundabout_signs(
             base_env,
             row,
             scenes_root=scenes_root,

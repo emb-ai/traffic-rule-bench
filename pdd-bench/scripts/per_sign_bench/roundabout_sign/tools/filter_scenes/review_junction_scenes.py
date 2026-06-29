@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Browse scene previews and mark which to keep or reject.
+"""Browse roundabout scene previews and mark which to keep or reject.
 
-Starts a small local web UI that shows custom_cropped.png for each scene
-folder directly under scenes/ (any name, e.g. sign_72424_j0 or savvinskaya_3).
+Starts a small local web UI that shows custom_cropped.png for each cropped
+roundabout folder directly under scenes/ (e.g. sign_77277_rb_s00).
 Decisions are saved to scenes/scene_selection.json. Use --apply to move
 rejected scenes aside.
 
@@ -33,12 +33,12 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 FILTER_SCENES_DIR = Path(__file__).resolve().parent
-YIELD_SIGN_DIR = FILTER_SCENES_DIR.parent.parent
-SCENES_DIR_DEFAULT = YIELD_SIGN_DIR / "scenes"
+ROUNDABOUT_SIGN_DIR = FILTER_SCENES_DIR.parent.parent
+SCENES_DIR_DEFAULT = ROUNDABOUT_SIGN_DIR / "scenes"
 SELECTION_FILE = "scene_selection.json"
 PREVIEW_NAME_DEFAULT = "custom_cropped.png"
 
-sys.path.insert(0, str(YIELD_SIGN_DIR))
+sys.path.insert(0, str(ROUNDABOUT_SIGN_DIR))
 
 from lib.scene_selection import (  # noqa: E402
     REJECTED_SUBDIR,
@@ -50,7 +50,11 @@ from lib.scene_selection import (  # noqa: E402
     save_scene_selection,
     set_scene_verdict,
 )
-from lib.sumo_utils import load_scene_meta  # noqa: E402
+from lib.sumo_utils import (  # noqa: E402
+    is_roundabout_scene_meta,
+    is_tx_junction_scene_meta,
+    load_scene_meta,
+)
 
 
 def selection_path(scenes_root: Path) -> Path:
@@ -74,7 +78,7 @@ def discover_review_scenes(
     *,
     preview_name: str,
 ) -> list[dict[str, Any]]:
-    """Return scene folders with a preview image (any name under scenes/)."""
+    """Return cropped roundabout scene folders with a preview image."""
     scenes: list[dict[str, Any]] = []
     if not scenes_root.is_dir():
         return scenes
@@ -97,14 +101,24 @@ def discover_review_scenes(
             except Exception:
                 meta = {}
 
+        if is_tx_junction_scene_meta(meta):
+            continue
+        if not is_roundabout_scene_meta(meta):
+            continue
+
+        ring_edges = meta.get("roundabout_ring_edges") or []
+        spoke_edges = meta.get("roundabout_spoke_edges") or []
+
         scenes.append(
             {
                 "name": name,
                 "preview": preview_name,
                 "core_scene_name": meta.get("core_scene_name", ""),
-                "junction_rank": meta.get("junction_rank"),
-                "junction_id": meta.get("junction_id", ""),
-                "junction_arm_count": meta.get("junction_arm_count"),
+                "roundabout_entry_junction": meta.get("roundabout_entry_junction", ""),
+                "roundabout_sign_spoke_edge": meta.get("roundabout_sign_spoke_edge", ""),
+                "roundabout_spoke_rank": meta.get("roundabout_spoke_rank"),
+                "ring_edge_count": len(ring_edges) if isinstance(ring_edges, list) else None,
+                "spoke_edge_count": len(spoke_edges) if isinstance(spoke_edges, list) else None,
                 "sign_id": meta.get("sign_id"),
             }
         )
@@ -400,9 +414,10 @@ REVIEW_HTML = """<!DOCTYPE html>
     function metaLine(scene) {
       const parts = [];
       if (scene.core_scene_name) parts.push(`core: ${scene.core_scene_name}`);
-      if (scene.junction_arm_count != null) parts.push(`${scene.junction_arm_count}-arm`);
-      if (scene.junction_rank != null) parts.push(`rank ${scene.junction_rank}`);
-      if (scene.junction_id) parts.push(`junc ${scene.junction_id}`);
+      if (scene.ring_edge_count != null) parts.push(`ring ${scene.ring_edge_count}e`);
+      if (scene.spoke_edge_count != null) parts.push(`${scene.spoke_edge_count} spokes`);
+      if (scene.roundabout_sign_spoke_edge) parts.push(`sign ${scene.roundabout_sign_spoke_edge}`);
+      if (scene.roundabout_spoke_rank != null) parts.push(`spoke ${scene.roundabout_spoke_rank}`);
       return parts.join(" · ") || "—";
     }
 

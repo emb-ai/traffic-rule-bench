@@ -17,8 +17,8 @@ INTERSECTION_JUNCTION_TYPES = {
 }
 
 RoadClass = Literal["main", "secondary"]
-LayoutMode = Literal["main_secondary", "main_main"]
-JunctionShape = Literal["T", "X"]
+LayoutMode = Literal["roundabout"]
+JunctionShape = Literal["O"]
 
 
 @dataclass
@@ -236,30 +236,33 @@ def _incoming_edges_for_junction(junction_id: str, edges: Dict[str, SumoEdge]) -
     return incoming
 
 
-def _discover_primary_junction(
-    junctions: dict,
-    edges: Dict[str, SumoEdge],
-) -> str:
-    candidates: List[tuple[str, int]] = []
-    for jid, info in junctions.items():
-        if info["type"] not in INTERSECTION_JUNCTION_TYPES:
-            continue
-        arm_count = len(_incoming_edges_for_junction(jid, edges))
-        if arm_count >= 3:
-            candidates.append((jid, arm_count))
-
-    if not candidates:
+def build_junction_priority_layout(
+    net_path: Path | str,
+    mode: LayoutMode = "roundabout",
+    ego_edge_id: Optional[str] = None,
+    require_ego_secondary: bool = False,
+    ring_edge_ids: Optional[Iterable[str]] = None,
+    spoke_edge_ids: Optional[Iterable[str]] = None,
+    entry_junction_id: Optional[str] = None,
+) -> JunctionPriorityLayout:
+    """Build roundabout (O) layout: ring edges are main, spokes are secondary."""
+    if mode != "roundabout":
         raise JunctionLayoutError(
-            "No intersection junction with at least 3 incoming arms found in net.xml"
+            f"PDD 4.3 roundabout benchmark only supports traffic-circle (O) layouts; "
+            f"got mode={mode!r}"
         )
 
-    if len(candidates) != 1:
-        details = ", ".join(f"{jid} ({count} arms)" for jid, count in candidates)
-        raise JunctionLayoutError(
-            f"Expected exactly one intersection junction in crop, found {len(candidates)}: {details}"
-        )
+    net_path = Path(net_path)
+    from .roundabout_topology import build_roundabout_layout
 
-    return candidates[0][0]
+    return build_roundabout_layout(
+        net_path,
+        sign_edge_id=ego_edge_id,
+        require_ego_secondary=require_ego_secondary,
+        ring_edge_ids=ring_edge_ids,
+        spoke_edge_ids=spoke_edge_ids,
+        entry_junction_id=entry_junction_id,
+    )
 
 
 def _straight_targets(incoming_edge_id: str, connections: list) -> Set[str]:
@@ -296,226 +299,6 @@ def _left_targets(incoming_edge_id: str, connections: list) -> Set[str]:
     return targets
 
 
-def _are_through_partners(
-    left: SumoEdge,
-    right: SumoEdge,
-    edges: Dict[str, SumoEdge],
-    straight_map: Dict[str, Set[str]],
-) -> bool:
-    for out_id in straight_map.get(left.edge_id, set()):
-        out_edge = edges.get(out_id)
-        if out_edge is not None and out_edge.to_node == right.from_node:
-            return True
-    for out_id in straight_map.get(right.edge_id, set()):
-        out_edge = edges.get(out_id)
-        if out_edge is not None and out_edge.to_node == left.from_node:
-            return True
-    return False
-
-
-def _find_through_pairs(
-    incoming: List[SumoEdge],
-    edges: Dict[str, SumoEdge],
-    straight_map: Dict[str, Set[str]],
-) -> List[tuple[str, str]]:
-    pairs: List[tuple[str, str]] = []
-    for i, ei in enumerate(incoming):
-        for ej in incoming[i + 1 :]:
-            if _are_through_partners(ei, ej, edges, straight_map):
-                pairs.append((ei.edge_id, ej.edge_id))
-    return pairs
-
-
-def _build_arms(
-    junction_id: str,
-    junctions: dict,
-    incoming: List[SumoEdge],
-    straight_map: Dict[str, Set[str]],
-    outgoing_map: Dict[str, Set[str]],
-    left_map: Dict[str, Set[str]],
-) -> List[ApproachArm]:
-    center = junctions[junction_id]["center"]
-    arms: List[ApproachArm] = []
-    for edge in incoming:
-        lane_keys = [lane.metadrive_key for lane in sorted(edge.lanes, key=lambda l: l.lane_num)]
-        entry_lane = max(edge.lanes, key=lambda l: l.length)
-        entry_point = _entry_point_for_lane(entry_lane, edge)
-        min_lane_length = min((lane.length for lane in edge.lanes), default=0.0)
-        arms.append(
-            ApproachArm(
-                edge_id=edge.edge_id,
-                lane_keys=lane_keys,
-                entry_point=entry_point,
-                entry_angle=_angle_of_point(center, entry_point),
-                arm_index=-1,
-                straight_to=sorted(straight_map.get(edge.edge_id, set())),
-                outgoing_to=sorted(outgoing_map.get(edge.edge_id, set())),
-                left_to=sorted(left_map.get(edge.edge_id, set())),
-                from_node=edge.from_node,
-                min_lane_length=min_lane_length,
-            )
-        )
-
-    arms.sort(key=lambda arm: arm.entry_angle)
-    for idx, arm in enumerate(arms):
-        arm.arm_index = idx
-    return arms
-
-
-def _infer_shape(num_arms: int) -> JunctionShape:
-    if num_arms == 4:
-        return "X"
-    if num_arms == 3:
-        return "T"
-    raise JunctionLayoutError(
-        f"Unsupported arm count {num_arms}; expected 3 (T) or 4 (X)"
-    )
-
-
-def _assign_main_secondary_x(
-    arms: List[ApproachArm],
-    incoming: List[SumoEdge],
-    edges: Dict[str, SumoEdge],
-    straight_map: Dict[str, Set[str]],
-) -> tuple[Set[str], Set[str]]:
-    through_pairs = _find_through_pairs(incoming, edges, straight_map)
-    all_ids = {arm.edge_id for arm in arms}
-
-    if through_pairs:
-        main_ids = set(through_pairs[0])
-        secondary_ids = all_ids - main_ids
-        if len(secondary_ids) != 2:
-            raise JunctionLayoutError(
-                f"Expected 2 secondary arms for X junction, got {sorted(secondary_ids)}"
-            )
-        return main_ids, secondary_ids
-
-    if len(arms) != 4:
-        raise JunctionLayoutError("X junction expected 4 arms")
-
-    # Circular fallback: opposite slots share class.
-    main_ids = {arms[0].edge_id, arms[2].edge_id}
-    secondary_ids = {arms[1].edge_id, arms[3].edge_id}
-    return main_ids, secondary_ids
-
-
-def _assign_main_secondary_t(
-    arms: List[ApproachArm],
-    incoming: List[SumoEdge],
-    edges: Dict[str, SumoEdge],
-    straight_map: Dict[str, Set[str]],
-) -> tuple[Set[str], Set[str]]:
-    through_pairs = _find_through_pairs(incoming, edges, straight_map)
-    all_ids = {arm.edge_id for arm in arms}
-
-    if through_pairs:
-        main_ids = set(through_pairs[0])
-        secondary_ids = all_ids - main_ids
-        if len(secondary_ids) != 1:
-            # Ambiguous T: prefer the arm with no straight exit as the stem.
-            no_straight = [arm.edge_id for arm in arms if not arm.straight_to]
-            if len(no_straight) == 1:
-                secondary_ids = {no_straight[0]}
-                main_ids = all_ids - secondary_ids
-        return main_ids, secondary_ids
-
-    no_straight = [arm.edge_id for arm in arms if not arm.straight_to]
-    if len(no_straight) == 1:
-        secondary_ids = {no_straight[0]}
-        return all_ids - secondary_ids, secondary_ids
-
-    # Last resort: shortest incoming arm is the stem (secondary).
-    shortest = min(
-        arms,
-        key=lambda arm: min((lane.length for lane in edges[arm.edge_id].lanes), default=0.0),
-    )
-    secondary_ids = {shortest.edge_id}
-    return all_ids - secondary_ids, secondary_ids
-
-
-def _apply_classes(arms: List[ApproachArm], main_ids: Set[str], secondary_ids: Set[str]) -> None:
-    for arm in arms:
-        if arm.edge_id in main_ids:
-            arm.road_class = "main"
-        elif arm.edge_id in secondary_ids:
-            arm.road_class = "secondary"
-        else:
-            raise JunctionLayoutError(
-                f"Arm {arm.edge_id} was not assigned main or secondary"
-            )
-
-
-def build_junction_priority_layout(
-    net_path: Path | str,
-    mode: LayoutMode = "main_secondary",
-    ego_edge_id: Optional[str] = None,
-    require_ego_secondary: bool = False,
-) -> JunctionPriorityLayout:
-    """
-    Build main/secondary layout for the single intersection in a SUMO net.
-
-    Args:
-        net_path: Path to map.net.xml
-        mode: Currently only ``main_secondary`` is implemented.
-        ego_edge_id: Optional spawn edge; when ``require_ego_secondary`` is set,
-            raises if that arm is not secondary.
-        require_ego_secondary: Validate ego spawn edge is secondary (yield scenarios).
-
-    Returns:
-        JunctionPriorityLayout with arms sorted CCW by entry angle.
-    """
-    if mode != "main_secondary":
-        raise JunctionLayoutError(f"Unsupported layout mode: {mode}")
-
-    net_path = Path(net_path)
-    if not net_path.is_file():
-        raise JunctionLayoutError(f"net.xml not found: {net_path}")
-
-    junctions, edges, _, connections = _load_net(net_path)
-    junction_id = _discover_primary_junction(junctions, edges)
-    incoming = _incoming_edges_for_junction(junction_id, edges)
-    shape = _infer_shape(len(incoming))
-
-    straight_map = {edge.edge_id: _straight_targets(edge.edge_id, connections) for edge in incoming}
-    outgoing_map = {edge.edge_id: _outgoing_targets(edge.edge_id, connections) for edge in incoming}
-    left_map = {edge.edge_id: _left_targets(edge.edge_id, connections) for edge in incoming}
-    arms = _build_arms(junction_id, junctions, incoming, straight_map, outgoing_map, left_map)
-
-    if shape == "X":
-        main_ids, secondary_ids = _assign_main_secondary_x(
-            arms, incoming, edges, straight_map
-        )
-    else:
-        main_ids, secondary_ids = _assign_main_secondary_t(
-            arms, incoming, edges, straight_map
-        )
-
-    _apply_classes(arms, main_ids, secondary_ids)
-
-    if ego_edge_id is not None and require_ego_secondary:
-        ego_arm = next((arm for arm in arms if arm.edge_id == ego_edge_id), None)
-        if ego_arm is None:
-            raise JunctionLayoutError(
-                f"ego_edge_id {ego_edge_id!r} is not an incoming arm of junction {junction_id}"
-            )
-        if ego_arm.road_class != "secondary":
-            raise JunctionLayoutError(
-                f"ego_edge_id {ego_edge_id!r} is classified as {ego_arm.road_class}, "
-                "expected secondary for yield benchmark"
-            )
-
-    return JunctionPriorityLayout(
-        junction_id=junction_id,
-        junction_type=junctions[junction_id]["type"],
-        shape=shape,
-        mode=mode,
-        center=junctions[junction_id]["center"],
-        arms=arms,
-        main_edge_ids=main_ids,
-        secondary_edge_ids=secondary_ids,
-    )
-
-
 def load_junction_priority_layout(path: Path | str) -> JunctionPriorityLayout:
     """Load a serialized layout JSON written via ``layout.to_dict()``."""
     path = Path(path)
@@ -543,7 +326,7 @@ def load_junction_priority_layout(path: Path | str) -> JunctionPriorityLayout:
         junction_id=data["junction_id"],
         junction_type=data.get("junction_type", "unknown"),
         shape=data["shape"],
-        mode=data.get("mode", "main_secondary"),
+        mode=data.get("mode", "roundabout"),
         center=(float(data["center"][0]), float(data["center"][1])),
         arms=arms,
         main_edge_ids=set(data.get("main_edge_ids", [])),
@@ -573,7 +356,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     import argparse
     import json
 
-    parser = argparse.ArgumentParser(description="Analyze junction main/secondary layout")
+    parser = argparse.ArgumentParser(description="Analyze roundabout (O) traffic-circle layout")
     parser.add_argument("net_path", type=Path, help="Path to map.net.xml")
     parser.add_argument("--ego-edge-id", type=str, default=None, help="Ego spawn edge (info only)")
     parser.add_argument(

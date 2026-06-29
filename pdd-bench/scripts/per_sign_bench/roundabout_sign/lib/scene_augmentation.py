@@ -142,35 +142,160 @@ def parse_intersection_approach_lanes(
 
 
 def _ego_destination_edges(layout: JunctionPriorityLayout, ego_edge_id: str) -> List[str]:
-    """Ego destination edges by junction shape: X → straight, T → left turn.
-    
-    Excludes the ego's spawn edge and any edges on the same arm to ensure
-    the route actually crosses the junction.
-    """
+    """Ego destination for roundabout: enter the traffic circle (ring edges)."""
     arm = layout.arm_for_edge(ego_edge_id)
-    if arm is None:
-        return []
-    if layout.shape == "T":
-        candidates = _filter_real_destination_edges(arm.left_to)
-    elif layout.shape == "X":
-        candidates = _filter_real_destination_edges(arm.straight_to)
-    else:
-        candidates = _filter_real_destination_edges(arm.straight_to or arm.left_to)
-    
-    # Exclude ego's own edge to ensure route crosses the junction
-    return [edge_id for edge_id in candidates if edge_id != ego_edge_id]
+    main_ids = layout.main_edge_ids
+    if arm is not None:
+        candidates = _filter_real_destination_edges(
+            list(arm.outgoing_to) + list(arm.left_to) + list(arm.straight_to)
+        )
+        ring_dests = [e for e in candidates if e in main_ids and e != ego_edge_id]
+        if ring_dests:
+            return ring_dests
+    return sorted(e for e in main_ids if e != ego_edge_id)
 
 
 def _aux_straight_destination(layout: JunctionPriorityLayout, aux_edge_id: str) -> Optional[str]:
     arm = layout.arm_for_edge(aux_edge_id)
-    if arm is None or not arm.straight_to:
+    if arm is None:
         return None
-    real = _filter_real_destination_edges(arm.straight_to)
-    return real[0] if real else None
+    main_ids = layout.main_edge_ids
+    for bucket in (arm.straight_to, arm.outgoing_to, arm.left_to):
+        for edge_id in _filter_real_destination_edges(bucket):
+            if edge_id in main_ids and edge_id != aux_edge_id:
+                return edge_id
+    return None
+
+
+def _roundabout_ego_spawn_edges(
+    layout: JunctionPriorityLayout,
+    spawn_by_edge: Dict[str, List[int]],
+    *,
+    prefer_ego_edge_id: Optional[str] = None,
+) -> List[str]:
+    """Spoke approaches and the catalog sign-road chain (never ring edges)."""
+    spokes = sorted(e for e in layout.secondary_edge_ids if e in spawn_by_edge)
+    if prefer_ego_edge_id:
+        prefix = prefer_ego_edge_id.split("#", 1)[0]
+        chain = [
+            e
+            for e in spawn_by_edge
+            if e not in layout.main_edge_ids
+            and (e == prefer_ego_edge_id or e.startswith(prefix + "#"))
+        ]
+        spokes = sorted(set(spokes) | set(chain))
+    if spokes:
+        return spokes
+    return sorted(e for e in spawn_by_edge if e not in layout.main_edge_ids)
+
+
+def parse_roundabout_spawn_lanes(
+    net_path: Path,
+    *,
+    spoke_edge_ids: Optional[Iterable[str]] = None,
+    sign_road_id: Optional[str] = None,
+    min_length: float = 10.0,
+) -> List[ApproachSpawnLane]:
+    """Spawn lanes on roundabout spokes and the catalog sign approach (any junction type)."""
+    base = parse_intersection_approach_lanes(net_path, min_length=min_length)
+    by_edge = {lane.edge_id: lane for lane in base}
+
+    if not net_path.is_file():
+        return base
+
+    allowed: set[str] = set(spoke_edge_ids or [])
+    if sign_road_id:
+        prefix = sign_road_id.split("#", 1)[0]
+        root = ET.parse(net_path).getroot()
+        for edge in root.findall("edge"):
+            edge_id = edge.get("id", "")
+            if not edge_id or edge_id.startswith(":"):
+                continue
+            if edge_id == sign_road_id or edge_id.startswith(prefix + "#"):
+                allowed.add(edge_id)
+
+    if not allowed:
+        return base
+
+    root = ET.parse(net_path).getroot()
+    extra: List[ApproachSpawnLane] = []
+    for edge in root.findall("edge"):
+        edge_id = edge.get("id")
+        if not edge_id or edge_id.startswith(":") or edge_id not in allowed:
+            continue
+        if edge.get("function", "normal") == "internal":
+            continue
+        if edge_id in by_edge:
+            continue
+        for lane in edge.findall("lane"):
+            if not is_vehicle_drivable_lane(lane):
+                continue
+            length = float(lane.get("length", 0.0) or 0.0)
+            if length < min_length:
+                continue
+            try:
+                lane_num = int(lane.get("id", "").rsplit("_", 1)[1])
+            except (ValueError, IndexError):
+                lane_num = 0
+            extra.append(
+                ApproachSpawnLane(edge_id=edge_id, lane_num=lane_num, length=length)
+            )
+
+    return base + extra
 
 
 def _filter_real_destination_edges(edge_ids: Iterable[str]) -> List[str]:
     return [edge_id for edge_id in edge_ids if _is_real_edge_id(edge_id)]
+
+
+def _resolve_prefer_ego_edge(
+    prefer_ego_edge_id: Optional[str],
+    ego_candidates: List[str],
+    spawn_by_edge: Dict[str, List[int]],
+    lane_lengths: Dict[Tuple[str, int], float],
+    min_lane_length: float,
+) -> Optional[str]:
+    """Pick spawn edge: prefer catalog road, else longer segment on same approach chain."""
+    if not prefer_ego_edge_id:
+        return None
+
+    def best_lane(edge_id: str) -> tuple[float, int]:
+        lane_nums = spawn_by_edge.get(edge_id, [0])
+        best_num = lane_nums[0]
+        best_len = -1.0
+        for lane_num in lane_nums:
+            length = lane_lengths.get((edge_id, lane_num), 0.0)
+            if length > best_len:
+                best_len = length
+                best_num = lane_num
+        return best_len, best_num
+
+    if prefer_ego_edge_id in ego_candidates:
+        length, _ = best_lane(prefer_ego_edge_id)
+        if length >= min_lane_length:
+            return prefer_ego_edge_id
+
+    prefix = prefer_ego_edge_id.split("#", 1)[0]
+    chain = [e for e in ego_candidates if e == prefer_ego_edge_id or e.startswith(prefix + "#")]
+    if chain:
+        best_edge: Optional[str] = None
+        best_length = -1.0
+        for edge_id in chain:
+            length, _ = best_lane(edge_id)
+            if length > best_length:
+                best_length = length
+                best_edge = edge_id
+        if best_edge is not None:
+            return best_edge
+
+    best_edge = None
+    best_length = -1.0
+    for edge_id in chain:
+        length, _ = best_lane(edge_id)
+        if length >= min_lane_length and length > best_length:
+            best_length = length
+            best_edge = edge_id
+    return best_edge
 
 
 def pick_default_yield_spawn_meta(
@@ -186,13 +311,21 @@ def pick_default_yield_spawn_meta(
     lane_lengths = lane_lengths_from_spawn_lanes(spawn_lanes)
     lane_keys_by_edge = {arm.edge_id: list(arm.lane_keys) for arm in layout.arms}
 
-    ego_edge: Optional[str] = None
-    if prefer_ego_edge_id and prefer_ego_edge_id in layout.secondary_edge_ids:
-        ego_edge = prefer_ego_edge_id
+    ego_candidates = _roundabout_ego_spawn_edges(
+        layout, spawn_by_edge, prefer_ego_edge_id=prefer_ego_edge_id
+    )
+
+    ego_edge: Optional[str] = _resolve_prefer_ego_edge(
+        prefer_ego_edge_id,
+        ego_candidates,
+        spawn_by_edge,
+        lane_lengths,
+        min_lane_length,
+    )
 
     if ego_edge is None:
         best_length = -1.0
-        for edge_id in sorted(layout.secondary_edge_ids):
+        for edge_id in ego_candidates:
             for lane_num in spawn_by_edge.get(edge_id, []):
                 length = lane_lengths.get((edge_id, lane_num), 0.0)
                 if length >= min_lane_length and length > best_length:
@@ -248,9 +381,24 @@ def pick_default_yield_spawn_meta_for_net(
     *,
     prefer_ego_edge_id: Optional[str] = None,
     min_lane_length: float = 20.0,
+    ring_edge_ids: Optional[Iterable[str]] = None,
+    spoke_edge_ids: Optional[Iterable[str]] = None,
+    entry_junction_id: Optional[str] = None,
 ) -> Optional[dict]:
-    layout = build_junction_priority_layout(net_path)
-    spawn_lanes = parse_intersection_approach_lanes(net_path, min_length=min_lane_length)
+    layout = build_junction_priority_layout(
+        net_path,
+        mode="roundabout",
+        ego_edge_id=prefer_ego_edge_id,
+        ring_edge_ids=ring_edge_ids,
+        spoke_edge_ids=spoke_edge_ids,
+        entry_junction_id=entry_junction_id,
+    )
+    spawn_lanes = parse_roundabout_spawn_lanes(
+        net_path,
+        spoke_edge_ids=spoke_edge_ids or layout.secondary_edge_ids,
+        sign_road_id=prefer_ego_edge_id,
+        min_length=min_lane_length,
+    )
     route_index = load_vehicle_route_index(net_path)
     return pick_default_yield_spawn_meta(
         layout,
@@ -292,7 +440,9 @@ def enumerate_spawn_scenarios(
         arm.edge_id: list(arm.lane_keys) for arm in layout.arms
     }
 
-    secondary_edges = sorted(layout.secondary_edge_ids)
+    secondary_edges = _roundabout_ego_spawn_edges(
+        layout, spawn_lanes_by_edge, prefer_ego_edge_id=None
+    )
     main_edges = sorted(layout.main_edge_ids)
     scenarios: List[SpawnScenario] = []
 
@@ -402,11 +552,25 @@ def augment_layout_for_scene(
     net_path: Path,
     spawn_lanes: Iterable,
     *,
+    scene_meta: Optional[dict] = None,
     min_lane_length: float = 20.0,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 ) -> Tuple[JunctionPriorityLayout, List[SpawnScenario]]:
-    """Build layout and enumerate augmented scenarios for one scene."""
-    layout = build_junction_priority_layout(net_path)
+    """Build roundabout layout and enumerate augmented scenarios for one scene."""
+    meta = scene_meta or {}
+    prefer_ego = meta.get("catalog_sign_road_id") or meta.get("road_id")
+    layout = build_junction_priority_layout(
+        net_path,
+        mode="roundabout",
+        ego_edge_id=prefer_ego,
+        ring_edge_ids=meta.get("roundabout_ring_edges"),
+        spoke_edge_ids=meta.get("roundabout_spoke_edges"),
+        entry_junction_id=meta.get("roundabout_entry_junction"),
+    )
+    if layout.shape != "O" or layout.mode != "roundabout":
+        raise JunctionLayoutError(
+            f"Expected roundabout (O) layout, got shape={layout.shape!r} mode={layout.mode!r}"
+        )
     spawn_by_edge = build_spawn_lanes_by_edge(spawn_lanes)
     lengths = lane_lengths_from_spawn_lanes(spawn_lanes)
     route_index = load_vehicle_route_index(net_path)

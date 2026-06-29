@@ -191,3 +191,22 @@ def find_first_edge_id(net_path: Path) -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+def is_roundabout_scene_meta(meta: dict) -> bool:
+    """True when meta describes a cropped/imported traffic-circle scene (O)."""
+    if meta.get("scene_kind") == "roundabout":
+        return True
+    ring = meta.get("roundabout_ring_edges")
+    return isinstance(ring, list) and len(ring) >= 3
+
+
+def is_tx_junction_scene_meta(meta: dict) -> bool:
+    """True for legacy T/X junction crops that must not enter the 4.3 benchmark."""
+    if meta.get("scene_kind") == "junction":
+        return True
+    if meta.get("junction_arm_count") in (3, 4):
+        return True
+    if meta.get("junction_id") and not meta.get("roundabout_entry_junction"):
+        return True
+    return False

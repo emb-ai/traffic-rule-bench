@@ -40,8 +40,8 @@ from lib.sumo_utils import is_vehicle_drivable_lane
 SCRIPT_DIR = Path(__file__).parent.resolve()
 RUN_BENCH_SCRIPT = SCRIPT_DIR / "run_benchmark.py"
 
-PDD_CODE = "2.4"
-SIGN_TYPE = "yield"
+PDD_CODE = "4.3"
+SIGN_TYPE = "roundabout"
 
 
 # -----------------------------------------------------------------------------
@@ -184,10 +184,29 @@ def parse_sumo_net_for_spawn_lanes(net_path: Path, min_length: float = 20.0) -> 
 # -----------------------------------------------------------------------------
 # Junction layout utilities
 # -----------------------------------------------------------------------------
-def build_junction_layout_for_scene(net_path: Path) -> Optional[dict]:
-    """Build main/secondary junction layout from a scene net.xml."""
+def build_junction_layout_for_scene(
+    net_path: Path,
+    *,
+    prefer_ego_edge_id: Optional[str] = None,
+    scene_meta: Optional[dict] = None,
+) -> Optional[dict]:
+    """Build roundabout main/spoke layout from a scene net.xml."""
+    ring_ids = None
+    spoke_ids = None
+    entry_junction = None
+    if scene_meta:
+        ring_ids = scene_meta.get("roundabout_ring_edges")
+        spoke_ids = scene_meta.get("roundabout_spoke_edges")
+        entry_junction = scene_meta.get("roundabout_entry_junction")
     try:
-        layout = build_junction_priority_layout(net_path)
+        layout = build_junction_priority_layout(
+            net_path,
+            mode="roundabout",
+            ego_edge_id=prefer_ego_edge_id or scene_meta.get("catalog_sign_road_id") if scene_meta else prefer_ego_edge_id,
+            ring_edge_ids=ring_ids,
+            spoke_edge_ids=spoke_ids,
+            entry_junction_id=entry_junction,
+        )
     except JunctionLayoutError as exc:
         print(f"  [junction_layout] {net_path.parent.name}: {exc}")
         return None
@@ -198,9 +217,12 @@ def filter_spawn_lanes_to_secondary(
     spawn_lanes: List[SumoLaneInfo],
     junction_layout: Optional[dict],
 ) -> List[SumoLaneInfo]:
-    """Keep only lanes on secondary junction arms."""
+    """Keep ego spawn lanes: spokes and sign approach (not on the ring)."""
     if not junction_layout:
         return spawn_lanes
+    main_ids = set(junction_layout.get("main_edge_ids") or [])
+    if junction_layout.get("mode") == "roundabout" or junction_layout.get("shape") == "O":
+        return [lane for lane in spawn_lanes if lane.edge_id not in main_ids]
     secondary_ids = set(junction_layout.get("secondary_edge_ids") or [])
     if not secondary_ids:
         return []
@@ -274,16 +296,26 @@ def sizes_up_to(
 # Scene discovery and metadata
 # -----------------------------------------------------------------------------
 def discover_scenes(scenes_dir: Path) -> List[Path]:
-    """Find all valid scene directories containing meta.json and map.net.xml."""
+    """Find cropped roundabout scene directories (O only; skips core and T/X junction crops)."""
+    from lib.sumo_utils import is_roundabout_scene_meta, is_tx_junction_scene_meta
+
     scenes = []
     for entry in sorted(scenes_dir.iterdir()):
         if not entry.is_dir():
+            continue
+        if entry.name == "core":
             continue
         meta_path = entry / "meta.json"
         if not meta_path.exists():
             continue
         with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
+        if is_tx_junction_scene_meta(meta):
+            print(f"  [skip] {entry.name}: T/X junction scene (not valid for 4.3 roundabout)")
+            continue
+        if not is_roundabout_scene_meta(meta):
+            print(f"  [skip] {entry.name}: not a roundabout scene (missing traffic circle metadata)")
+            continue
         net_file = meta.get("net_file", "map.net.xml")
         net_path = entry / net_file
         if net_path.exists():
@@ -531,11 +563,20 @@ def generate_manifest(
         spawn_lanes = parse_sumo_net_for_spawn_lanes(net_full_path)
         print(f"  Found {len(spawn_lanes)} intersection-approaching lane(s)")
 
-        junction_layout = build_junction_layout_for_scene(net_full_path)
+        junction_layout = build_junction_layout_for_scene(
+            net_full_path,
+            prefer_ego_edge_id=meta.get("road_id"),
+            scene_meta=meta,
+        )
         if junction_layout is None:
-            print(f"  [junction_layout] No junction layout found for {scene_name}")
+            print(f"  [junction_layout] No roundabout layout found for {scene_name}")
             continue
-        # assert junction_layout is not None, f"No junction layout found for {scene_name}"
+        if junction_layout.get("shape") != "O" or junction_layout.get("mode") != "roundabout":
+            print(
+                f"  [skip] {scene_name}: not a traffic circle "
+                f"(shape={junction_layout.get('shape')}, mode={junction_layout.get('mode')})"
+            )
+            continue
         print(
             f"  Junction layout: {junction_layout['shape']} @ {junction_layout['junction_id']} "
             f"(main={len(junction_layout.get('main_edge_ids', []))}, "

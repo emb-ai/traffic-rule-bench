@@ -1,22 +1,22 @@
-The sequence of commands that are needed to run the scene pool workflow:
+The sequence of commands that are needed to run the roundabout (4.3) scene pool workflow:
 
-1. Import qualifying catalog scenes into scenes/core/ (3/4-arm junction check built in)
+1. Import qualifying catalog scenes into scenes/core/ (SUMO ``<roundabout>`` filter required)
 ```
-# Import enough core maps (e.g. 25 cores × up to 5 junctions ≈ 125 candidates)
+# Import core maps with SUMO roundabouts reachable from the sign road
 python tools/filter_scenes/import_catalog_scenes.py --limit 30
 ```
 
-2. Build junction scene pool up to 100 candidates, then review
+2. Build roundabout scene pool up to 100 candidates, then review
 
-Cropping runs the same manifest-viability checks as `generate_manifest.py` (junction layout,
-aux lane length, routable ego/aux spawn scenarios). Invalid junctions are skipped before
+Cropping runs the same manifest-viability checks as `generate_manifest.py` (O layout,
+aux lane length, routable ego/aux spawn scenarios). Invalid roundabouts are skipped before
 review so you do not label scenes that would be dropped later.
 
 ```
-# Crop until >= 100 manifest-viable junction scenes exist
+# Crop until >= 100 manifest-viable roundabout scenes exist
 python tools/filter_scenes/build_scene_pool.py crop --target 100
 
-# Review keep/reject in browser
+# Review keep/reject in browser (roundabout crops only)
 python tools/filter_scenes/review_junction_scenes.py
 
 # For initial bulk growth (no review yet), prefer crop — it loops until target candidates:
@@ -40,7 +40,7 @@ python tools/filter_scenes/review_junction_scenes.py --apply
 
 and check how many scenes are generated in the result:
 ```
-ls -1d sign*/ 2>/dev/null | wc -l
+ls -1d sign*_rb_s*/ 2>/dev/null | wc -l
 ```
 
 
@@ -58,10 +58,10 @@ python tools/filter_scenes/crop_junction_scene.py
 
 Import only:
 ```
-python tools/filter_scenes/import_catalog_scenes.py --limit 10 --arms 4 3
+python tools/filter_scenes/import_catalog_scenes.py --limit 10
 ```
 
 Check resulted GIFs after IDM running on scenes:
 ```
-python tools/review_benchmark_gifs.py benchmark_output/2_4/2026-06-25_17-07-31
+python tools/review_benchmark_gifs.py benchmark_output/4_3/2026-06-25_17-07-31
 ```

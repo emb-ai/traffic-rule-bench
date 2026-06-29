@@ -1,120 +1,34 @@
-# Yield Sign (2.4) Benchmark
+# Roundabout Sign (4.3) Benchmark
 
-Benchmark for evaluating autonomous driving policies on yield sign scenarios using real-world OpenStreetMap data.
+PDD **4.3 Круговое движение** — ego approaches a traffic circle on a **secondary spoke** and must **yield to vehicles on the ring** (main road).
 
-## Setup
+## Scene pipeline
 
-```bash
-conda activate zinkovich-plant2
-```
+1. **Catalog** — OSM scenes in `pdd-bench/scenes/4.3/` (`build_sign_scenes_from_osm_async.py --sign-types "4.3"`).
+2. **Import** — `tools/filter_scenes/import_catalog_scenes.py` copies qualifying maps into `scenes/core/` (SUMO net must contain a ``<roundabout>`` block reachable from the sign road).
+3. **Crop** — `tools/filter_scenes/crop_junction_scene.py` keeps only the traffic circle + spokes, emitting one scene per attached road (`scenes/sign_<id>_rb_s00/`, `_rb_s01/`, …) with the 4.3 sign on that spoke.
+4. **Manifest** — `generate_manifest.py` (Hydra config in `config/config.yaml`).
+5. **Run** — `run_benchmark.py` places **4.3** icon on the ego spoke and an invisible **RoundaboutYieldSign** tracker (ring = main road).
 
-## Folder Structure
+## Layout rules
 
-```
-yield_sign/
-├── build_scene.py          # Step 1: OSM → SUMO network
-├── generate_manifest.py    # Step 2: Create evaluation manifest
-├── eval_pipeline.py        # Step 3: Run policy evaluation
-├── run_benchmark_real.py   # Benchmark runner (used internally)
-├── lib/                    # Core library modules
-│   ├── auxiliary_agent.py
-│   ├── junction_priority_layout.py
-│   ├── manifest_config.py
-│   ├── scene_augmentation.py
-│   └── sumo_utils.py
-├── tools/                  # Debug/visualization utilities
-│   ├── run_simulation.py   # Test scene with policy
-│   └── render_map.py       # Render static map image
-├── config/                 # Hydra configuration
-│   └── config.yaml
-├── scenes/                 # Scene data (OSM + SUMO networks)
-└── benchmark_output/       # Evaluation results
-```
+| Role | Roads |
+|------|--------|
+| Ego (secondary) | Spoke approaching the circle (catalog `road_id` chain) |
+| Aux (main) | Traffic circle ring edges |
+| Sign | 4.3 on ego approach; yield verified against ring lanes |
 
-## Workflow
-
-### Step 1: Build Scene from OSM
-
-Each scene folder in `scenes/` must contain:
-- `map.osm` — OpenStreetMap extract
-- `center.json` — Crop center: `{"lat": ..., "lon": ...}`
-
-Convert OSM to SUMO network:
+## Quick start
 
 ```bash
-python build_scene.py <scene_name> --radius <meters>
-```
+cd pdd-bench/scripts/per_sign_bench/roundabout_sign
 
-Example:
-```bash
-python build_scene.py savvinskaya_3 --radius 100
-```
+# Import from catalog
+python tools/filter_scenes/import_catalog_scenes.py --limit 5
 
-This creates:
-- `map.net.xml` — SUMO network
-- `cropped.osm` — Cropped OSM (for reference)
-- `meta.json` — Scene metadata
+# Crop roundabouts
+python tools/filter_scenes/crop_junction_scene.py --limit 5
 
-### Step 2: Generate Evaluation Manifest
-
-Generate scenarios with ego/auxiliary agent configurations:
-
-```bash
-python generate_manifest.py
-```
-
-With options (Hydra config):
-```bash
+# Build manifest + optional GIFs
 python generate_manifest.py gif.enabled=true
-python generate_manifest.py auxiliary.lanes_occupied=2 auxiliary.convoy_size=2
-```
-
-Output is saved to `benchmark_output/2_4/<timestamp>/`:
-- `real_manifest.jsonl` — Scenario definitions
-- `config.yaml` — Resolved configuration
-- `gifs/` — Visualization GIFs (if enabled)
-
-### Step 3: Run Policy Evaluation
-
-Evaluate policies on the generated manifest:
-
-```bash
-python eval_pipeline.py \
-    --policies idm \
-    --manifest benchmark_output/2_4/<timestamp> \
-    --scenes-root scenes
-```
-
-## Debug Tools
-
-### Test Scene with Policy
-
-Run a simulation to verify scene setup:
-
-```bash
-python -m tools.run_simulation <scene_name>
-python -m tools.run_simulation <scene_name> --policy carl
-python -m tools.run_simulation <scene_name> --policy plant2 --max-steps 400
-```
-
-### Render Static Map
-
-Generate a static map image:
-
-```bash
-python -m tools.render_map <scene_name>
-python -m tools.render_map <scene_name> --out custom_output.png
-```
-
-## Configuration
-
-See `config/config.yaml` for available options:
-- `scenario.*` — Scenario generation settings
-- `simulation.*` — Simulation parameters
-- `auxiliary.*` — Auxiliary agent configuration
-- `gif.*` — GIF rendering options
-
-Override via command line:
-```bash
-python generate_manifest.py simulation.horizon=800 auxiliary.convoy_size=3
 ```

@@ -1,23 +1,17 @@
 #!/usr/bin/env python3
-"""Crop core catalog scenes into separate junction scene folders under scenes/.
+"""Crop core 4.3 catalog scenes into per-spoke roundabout benchmark folders.
 
-Reads full maps from scenes/core/ (import_catalog_scenes.py output) and writes
-one folder per picked junction directly under scenes/, e.g.:
-  scenes/core/sign_72424/           # untouched core map
-  scenes/sign_72424_j0/             # best 4-arm junction crop
-  scenes/sign_72424_j1/             # next-ranked junction crop
+Reads full maps from scenes/core/ and writes one cropped folder per attached road:
+  scenes/core/sign_77277/          # untouched core map
+  scenes/sign_77277_rb_s00/        # sign on spoke 0
+  scenes/sign_77277_rb_s01/        # sign on spoke 1
+  ...
 
-Selection rules:
-  - Consider all junctions with exactly 3 or 4 incoming arms.
-  - Each arm must have at least one lane longer than --min-lane-length (default 10 m).
-  - Sort: 4-arm junctions first, then 3-arm; within each group by total lane count (desc).
-  - Keep at most --max-junctions picks per core scene (default 5).
-  - By default, skip crops that would fail generate_manifest.py (use --no-require-manifest-viable to disable).
+Each crop keeps only the traffic circle and attached spoke roads.
 
 Examples:
     python tools/filter_scenes/crop_junction_scene.py
-    python tools/filter_scenes/crop_junction_scene.py sign_72424 sign_73117 --radius 100
-    python tools/filter_scenes/crop_junction_scene.py --limit 3 --max-junctions 5
+    python tools/filter_scenes/crop_junction_scene.py sign_77277 --spoke-length 100
 """
 from __future__ import annotations
 
@@ -29,30 +23,26 @@ import tempfile
 from pathlib import Path
 
 TOOLS_DIR = Path(__file__).resolve().parent
-YIELD_SIGN_DIR = TOOLS_DIR.parent.parent
-SCENES_DIR_DEFAULT = YIELD_SIGN_DIR / "scenes"
+ROUNDABOUT_SIGN_DIR = TOOLS_DIR.parent.parent
+SCENES_DIR_DEFAULT = ROUNDABOUT_SIGN_DIR / "scenes"
 CORE_DIR_DEFAULT = SCENES_DIR_DEFAULT / "core"
 
-sys.path.insert(0, str(YIELD_SIGN_DIR))
+sys.path.insert(0, str(ROUNDABOUT_SIGN_DIR))
 
 from lib.manifest_config import (  # noqa: E402
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
 )
-from lib.manifest_viability import (  # noqa: E402
-    ManifestViabilityResult,
-    check_manifest_viability,
-)
+from lib.manifest_viability import check_manifest_viability  # noqa: E402
 from lib.junction_crop import (  # noqa: E402
     JunctionLayoutError,
-    JunctionPick,
-    crop_scene_to_junction_pick,
-    find_ranked_intersection_junctions,
+    crop_scene_to_roundabout,
     resolve_full_source_net,
+    roundabout_spoke_scene_name,
 )
+from lib.roundabout_topology import detect_roundabout  # noqa: E402
 from lib.sumo_utils import (  # noqa: E402
     is_core_scene_name,
-    junction_scene_name,
     load_scene_meta,
     resolve_net_file,
     resolve_scene_dir,
@@ -89,47 +79,29 @@ def render_preview(scene_dir: Path, marker_xy: tuple[float, float], out_path: Pa
     )
 
 
-def write_junctions_index(
-    core_scene_dir: Path,
-    core_scene_name: str,
-    pick_records: list[dict],
-) -> None:
-    entries = []
-    for record in pick_records:
-        pick: JunctionPick = record["pick"]
-        rank = record["rank"]
-        scene_name = junction_scene_name(core_scene_name, rank)
-        entry = {
-            "rank": rank,
-            "scene_name": scene_name,
-            "junction_id": pick.junction_id,
-            "arm_count": pick.arm_count,
-            "total_lanes": pick.total_lanes,
-            "incoming_edge_ids": list(pick.incoming_edge_ids),
-            "center_xy": [pick.center_xy[0], pick.center_xy[1]],
-            "output_dir": scene_name,
-            "preview": f"{scene_name}/{record.get('preview_name', 'custom_cropped.png')}",
-        }
-        viability: ManifestViabilityResult | None = record.get("viability")
-        if viability is not None:
-            entry["manifest_viable"] = viability.viable
-            if not viability.viable:
-                entry["manifest_skip_reason"] = viability.reason
-                entry["manifest_skip_detail"] = viability.detail
-        if record.get("written"):
-            entry["written"] = True
-        entries.append(entry)
+def existing_roundabout_scenes(scenes_root: Path, core_scene_name: str) -> list[Path]:
+    patterns = [
+        f"{core_scene_name}_rb_s*",
+        f"{core_scene_name}_rb",
+    ]
+    found: list[Path] = []
+    for pattern in patterns:
+        found.extend(scenes_root.glob(pattern))
+    return sorted({p for p in found if p.is_dir()})
+
+
+def write_roundabout_index(core_scene_dir: Path, records: list[dict]) -> None:
     index_path = core_scene_dir / "junctions.json"
-    index_path.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
+    index_path.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
 
 
 def process_core_scene(
     core_scene_dir: Path,
     scenes_root: Path,
     *,
-    radius_m: float,
+    spoke_extension_m: float,
+    max_spoke_length_m: float,
     min_lane_length_m: float,
-    max_junctions: int,
     preview_name: str,
     dry_run: bool,
     overwrite: bool,
@@ -137,72 +109,90 @@ def process_core_scene(
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 ) -> int:
-    """Crop junction variants for one core scene. Returns number of scenes written."""
+    """Crop one scene per spoke attached to the traffic circle. Returns scenes written."""
     core_scene_name = core_scene_dir.name
     print(f"\n=== {core_scene_name} (core) ===")
+
     try:
         meta = load_scene_meta(core_scene_dir)
         source_net = resolve_full_source_net(core_scene_dir, meta)
-        picks = find_ranked_intersection_junctions(
-            source_net,
-            min_lane_length_m=min_lane_length_m,
-            max_junctions=max_junctions,
-        )
+        source_pick = detect_roundabout(source_net, sign_edge_id=meta.get("road_id"))
     except (FileNotFoundError, JunctionLayoutError) as exc:
         print(f"  [skip] {exc}")
         return 0
 
-    print(f"  source net: {source_net.name}")
-    print(f"  picked {len(picks)} junction(s) (max {max_junctions}):")
-    for rank, pick in enumerate(picks):
-        scene_name = junction_scene_name(core_scene_name, rank)
-        print(
-            f"    [{rank}] {pick.junction_id} ({pick.arm_count}-arm, "
-            f"{pick.total_lanes} lane(s)) -> scenes/{scene_name}"
-        )
+    spokes = list(source_pick.spoke_edge_ids)
+    print(
+        f"  source net: {source_net.name}, "
+        f"{len(source_pick.ring_edge_ids)} ring edge(s), {len(spokes)} spoke(s)"
+    )
+    if not spokes:
+        print("  [skip] no spokes on traffic circle")
+        return 0
 
     if dry_run:
-        return len(picks)
+        return len(spokes)
 
-    base_meta = meta
-    created = 0
-    skipped_manifest = 0
-    pick_records: list[dict] = []
-    for rank, pick in enumerate(picks):
-        scene_name = junction_scene_name(core_scene_name, rank)
+    if overwrite:
+        for old_dir in existing_roundabout_scenes(scenes_root, core_scene_name):
+            shutil.rmtree(old_dir)
+
+    records: list[dict] = []
+    written = 0
+
+    for rank, spoke_edge_id in enumerate(spokes):
+        scene_name = roundabout_spoke_scene_name(core_scene_name, rank)
         out_dir = scenes_root / scene_name
+        if out_dir.exists() and not overwrite:
+            print(f"  [skip existing] {scene_name}")
+            records.append(
+                {
+                    "scene_name": scene_name,
+                    "spoke_edge": spoke_edge_id,
+                    "spoke_rank": rank,
+                    "written": False,
+                    "skipped": "exists",
+                }
+            )
+            continue
+
         record: dict = {
-            "rank": rank,
-            "pick": pick,
-            "preview_name": preview_name,
+            "scene_name": scene_name,
+            "spoke_edge": spoke_edge_id,
+            "spoke_rank": rank,
             "written": False,
-            "viability": None,
         }
-        pick_records.append(record)
 
-        if out_dir.exists():
-            if not overwrite:
-                print(f"  [skip existing] {scene_name}")
-                continue
-            shutil.rmtree(out_dir)
-
-        with tempfile.TemporaryDirectory(prefix="yield_crop_") as tmp:
+        with tempfile.TemporaryDirectory(prefix="roundabout_crop_") as tmp:
             tmp_dir = Path(tmp)
-            crop_scene_to_junction_pick(
-                core_scene_dir,
-                pick,
-                source_net=source_net,
-                radius_m=radius_m,
-                min_lane_length_m=min_lane_length_m,
-                output_dir=tmp_dir,
-                output_scene_name=scene_name,
-                base_meta=base_meta,
-                backup_original=False,
-                junction_rank=rank,
-                core_scene_name=core_scene_name,
+            try:
+                pick = crop_scene_to_roundabout(
+                    core_scene_dir,
+                    ego_spoke_edge_id=spoke_edge_id,
+                    spoke_rank=rank,
+                    spoke_extension_m=spoke_extension_m,
+                    max_spoke_length_m=max_spoke_length_m,
+                    min_lane_length_m=min_lane_length_m,
+                    output_dir=tmp_dir,
+                    output_scene_name=scene_name,
+                    backup_original=False,
+                    source_pick=source_pick,
+                )
+            except JunctionLayoutError as exc:
+                print(f"  [skip] {scene_name}: {exc}")
+                record["error"] = str(exc)
+                records.append(record)
+                continue
+
+            record.update(
+                {
+                    "entry_junction": pick.entry_junction_id,
+                    "ring_edges": len(pick.ring_edge_ids),
+                    "spokes": len(pick.spoke_edge_ids),
+                    "center_xy": [pick.center_xy[0], pick.center_xy[1]],
+                }
             )
 
-            viability: ManifestViabilityResult | None = None
             if require_manifest_viable:
                 scene_meta = json.loads((tmp_dir / "meta.json").read_text(encoding="utf-8"))
                 net_file = scene_meta.get("net_file", "map.net.xml")
@@ -212,28 +202,29 @@ def process_core_scene(
                     min_ego_lane_m=min_ego_lane_m,
                     aux_distance_from_intersection=aux_distance_from_intersection,
                 )
-                record["viability"] = viability
+                record["manifest_viable"] = viability.viable
                 if not viability.viable:
                     print(
-                        f"  [skip manifest] {scene_name}: "
+                        f"  [skip manifest] {scene_name} ({spoke_edge_id}): "
                         f"{viability.reason} — {viability.detail}"
                     )
-                    skipped_manifest += 1
+                    records.append(record)
                     continue
 
+            if out_dir.exists():
+                shutil.rmtree(out_dir)
             shutil.copytree(tmp_dir, out_dir)
 
         preview_path = out_dir / preview_name
         render_preview(out_dir, pick.center_xy, preview_path)
-        print(f"  wrote scenes/{scene_name}/ ({preview_name})")
+        print(f"  wrote scenes/{scene_name}/ sign on {spoke_edge_id} ({preview_name})")
         record["written"] = True
-        created += 1
+        record["preview"] = f"{scene_name}/{preview_name}"
+        records.append(record)
+        written += 1
 
-    write_junctions_index(core_scene_dir, core_scene_name, pick_records)
-    print(f"  wrote core/{core_scene_name}/junctions.json")
-    if skipped_manifest:
-        print(f"  skipped {skipped_manifest} junction(s) that would fail manifest generation")
-    return created
+    write_roundabout_index(core_scene_dir, records)
+    return written
 
 
 def uncropped_core_dirs(core_root: Path) -> list[Path]:
@@ -247,7 +238,7 @@ def uncropped_core_dirs(core_root: Path) -> list[Path]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Crop core scenes into separate junction folders under scenes/",
+        description="Crop core scenes into per-spoke roundabout folders under scenes/",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -266,57 +257,46 @@ def main() -> None:
         "--scenes-dir",
         type=Path,
         default=SCENES_DIR_DEFAULT,
-        help=f"Output scenes root for junction crops (default: {SCENES_DIR_DEFAULT})",
+        help=f"Output scenes root (default: {SCENES_DIR_DEFAULT})",
     )
     parser.add_argument("--limit", type=int, default=None, help="Process first N core scenes when none named")
-    parser.add_argument("--radius", type=float, default=80.0, help="Max arm length in meters (default: 80)")
+    parser.add_argument(
+        "--spoke-length",
+        type=float,
+        default=80.0,
+        help="Max upstream length on each spoke arm in meters (default: 80)",
+    )
     parser.add_argument(
         "--min-lane-length",
         type=float,
         default=10.0,
-        help="Each arm must have a lane longer than this (default: 10 m)",
-    )
-    parser.add_argument(
-        "--max-junctions",
-        type=int,
-        default=5,
-        help="Maximum junctions to crop per core scene (default: 5)",
+        help="Minimum approach lane length when picking spawn meta (default: 10 m)",
     )
     parser.add_argument(
         "--preview-name",
         default="custom_cropped.png",
-        help="Cropped-map preview filename inside each junction scene (default: custom_cropped.png)",
+        help="Cropped-map preview filename (default: custom_cropped.png)",
     )
-    parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Replace existing junction scene folders",
-    )
-    parser.add_argument("--dry-run", action="store_true", help="Only report junction picks, do not write files")
+    parser.add_argument("--overwrite", action="store_true", help="Replace existing cropped scene folders")
+    parser.add_argument("--dry-run", action="store_true", help="Only report, do not write files")
     parser.add_argument(
         "--no-require-manifest-viable",
         action="store_true",
-        help="Write all cropped junctions even if they would be dropped by generate_manifest.py",
+        help="Write crops even if generate_manifest would drop them",
     )
     parser.add_argument(
         "--min-ego-lane",
         type=float,
         default=DEFAULT_SPAWN_DISTANCE_BEFORE_END,
-        help=f"Min vehicle approach lane length for manifest check (default: {DEFAULT_SPAWN_DISTANCE_BEFORE_END})",
+        help=f"Min ego approach lane length for manifest check (default: {DEFAULT_SPAWN_DISTANCE_BEFORE_END})",
     )
     parser.add_argument(
         "--aux-distance",
         type=float,
         default=DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
-        help=(
-            "Aux spawn distance from intersection for manifest check "
-            f"(default: {DEFAULT_AUX_DISTANCE_FROM_INTERSECTION})"
-        ),
+        help=f"Aux spawn distance for manifest check (default: {DEFAULT_AUX_DISTANCE_FROM_INTERSECTION})",
     )
     args = parser.parse_args()
-
-    if args.max_junctions < 1:
-        sys.exit("--max-junctions must be at least 1")
 
     core_root = args.core_dir.expanduser().resolve()
     scenes_root = args.scenes_dir.expanduser().resolve()
@@ -341,9 +321,9 @@ def main() -> None:
         created = process_core_scene(
             core_scene_dir,
             scenes_root,
-            radius_m=args.radius,
+            spoke_extension_m=args.spoke_length,
+            max_spoke_length_m=args.spoke_length,
             min_lane_length_m=args.min_lane_length,
-            max_junctions=args.max_junctions,
             preview_name=args.preview_name,
             dry_run=args.dry_run,
             overwrite=args.overwrite,
@@ -355,7 +335,10 @@ def main() -> None:
             ok += 1
         created_total += created
 
-    print(f"\nDone: {ok}/{len(core_scene_dirs)} core scene(s) processed, {created_total} junction scene(s) written.")
+    print(
+        f"\nDone: {ok}/{len(core_scene_dirs)} core scene(s) produced scenes, "
+        f"{created_total} roundabout variant(s) written."
+    )
     if ok < len(core_scene_dirs):
         sys.exit(1)
 

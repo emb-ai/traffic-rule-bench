@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Grow a junction scene pool to a target size (default 100) with review cycles.
+"""Grow a roundabout scene pool to a target size (default 100) with review cycles.
 
 Workflow:
-  1. Import core maps:
+  1. Import core maps (roundabout filter required):
        python tools/filter_scenes/import_catalog_scenes.py --limit 40
 
-  2. Create initial candidate pool (crop junctions until >= target scenes exist):
+  2. Create initial candidate pool (crop roundabouts until >= target scenes exist):
        python tools/filter_scenes/build_scene_pool.py crop --target 100
 
   3. Review and mark keep/reject:
@@ -32,10 +32,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 FILTER_SCENES_DIR = Path(__file__).resolve().parent
-YIELD_SIGN_DIR = FILTER_SCENES_DIR.parent.parent
+ROUNDABOUT_SIGN_DIR = FILTER_SCENES_DIR.parent.parent
 DEFAULT_TARGET = 100
 
-sys.path.insert(0, str(YIELD_SIGN_DIR))
+sys.path.insert(0, str(ROUNDABOUT_SIGN_DIR))
 
 from lib.manifest_config import (  # noqa: E402
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
@@ -137,9 +137,8 @@ def crop_core_batch(
     scenes_root: Path,
     *,
     max_cores: int | None,
-    radius_m: float,
+    spoke_length_m: float,
     min_lane_length_m: float,
-    max_junctions: int,
     preview_name: str,
     dry_run: bool,
     overwrite: bool,
@@ -147,7 +146,7 @@ def crop_core_batch(
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 ) -> tuple[int, int]:
-    """Crop uncropped core maps. Returns (junction_scenes_written, cores_processed)."""
+    """Crop uncropped core maps. Returns (roundabout_scenes_written, cores_processed)."""
     cores = uncropped_core_dirs(core_root)
     if max_cores is not None:
         cores = cores[:max_cores]
@@ -158,9 +157,9 @@ def crop_core_batch(
         created = process_core_scene(
             core_dir,
             scenes_root,
-            radius_m=radius_m,
+            spoke_extension_m=spoke_length_m,
+            max_spoke_length_m=spoke_length_m,
             min_lane_length_m=min_lane_length_m,
-            max_junctions=max_junctions,
             preview_name=preview_name,
             dry_run=dry_run,
             overwrite=overwrite,
@@ -178,9 +177,8 @@ def crop_until_candidates(
     core_root: Path,
     *,
     target: int,
-    radius_m: float,
+    spoke_length_m: float,
     min_lane_length_m: float,
-    max_junctions: int,
     preview_name: str,
     dry_run: bool,
     overwrite: bool,
@@ -209,9 +207,8 @@ def crop_until_candidates(
             core_root,
             scenes_root,
             max_cores=1,
-            radius_m=radius_m,
+            spoke_length_m=spoke_length_m,
             min_lane_length_m=min_lane_length_m,
-            max_junctions=max_junctions,
             preview_name=preview_name,
             dry_run=dry_run,
             overwrite=overwrite,
@@ -223,7 +220,7 @@ def crop_until_candidates(
         total_cores += cores
         candidates = len(discover_review_scenes(scenes_root, preview_name=preview_name))
         if written == 0:
-            print("  [skip core] no manifest-viable junctions; trying next core map")
+            print("  [skip core] no manifest-viable roundabout; trying next core map")
 
     return total_written, total_cores
 
@@ -233,9 +230,8 @@ def fill_after_review(
     core_root: Path,
     *,
     target: int,
-    radius_m: float,
+    spoke_length_m: float,
     min_lane_length_m: float,
-    max_junctions: int,
     preview_name: str,
     dry_run: bool,
     overwrite: bool,
@@ -244,7 +240,7 @@ def fill_after_review(
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 ) -> int:
-    """Add junction crops from new core maps when kept count is below target."""
+    """Add roundabout crops from new core maps when kept count is below target."""
     status = collect_pool_status(
         scenes_root,
         core_root,
@@ -284,9 +280,8 @@ def fill_after_review(
             core_root,
             scenes_root,
             max_cores=1,
-            radius_m=radius_m,
+            spoke_length_m=spoke_length_m,
             min_lane_length_m=min_lane_length_m,
-            max_junctions=max_junctions,
             preview_name=preview_name,
             dry_run=dry_run,
             overwrite=overwrite,
@@ -296,7 +291,7 @@ def fill_after_review(
         )
         total_written += written
         if written == 0:
-            print("  [skip core] no manifest-viable junctions; trying next core map")
+            print("  [skip core] no manifest-viable roundabout; trying next core map")
 
     status = collect_pool_status(
         scenes_root,
@@ -306,7 +301,7 @@ def fill_after_review(
         min_ego_lane_m=min_ego_lane_m,
         aux_distance_from_intersection=aux_distance_from_intersection,
     )
-    print(f"\nAdded {total_written} junction scene(s) this run.")
+    print(f"\nAdded {total_written} roundabout scene(s) this run.")
     print_pool_status(status)
     if status.kept < status.target:
         print(
@@ -318,38 +313,36 @@ def fill_after_review(
 
 
 def add_crop_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--radius", type=float, default=80.0, help="Max arm length in meters (default: 80)")
+    parser.add_argument(
+        "--spoke-length",
+        type=float,
+        default=80.0,
+        help="Max upstream length on each spoke arm in meters (default: 80)",
+    )
     parser.add_argument(
         "--min-lane-length",
         type=float,
         default=10.0,
-        help="Each arm must have a lane longer than this (default: 10 m)",
-    )
-    parser.add_argument(
-        "--max-junctions",
-        type=int,
-        default=5,
-        help="Maximum junctions to crop per core scene (default: 5)",
+        help="Minimum approach lane length when picking spawn meta (default: 10 m)",
     )
     parser.add_argument(
         "--preview-name",
         default=PREVIEW_NAME_DEFAULT,
         help=f"Preview image filename (default: {PREVIEW_NAME_DEFAULT})",
     )
-    parser.add_argument("--overwrite", action="store_true", help="Replace existing junction scene folders")
+    parser.add_argument("--overwrite", action="store_true", help="Replace existing roundabout scene folders")
     parser.add_argument("--dry-run", action="store_true", help="Only report picks, do not write files")
     parser.add_argument(
         "--no-require-manifest-viable",
         action="store_true",
-        help="Write all cropped junctions even if they would be dropped by generate_manifest.py",
+        help="Write all cropped roundabouts even if they would be dropped by generate_manifest.py",
     )
 
 
 def _crop_kwargs(args: argparse.Namespace) -> dict:
     return {
-        "radius_m": args.radius,
+        "spoke_length_m": args.spoke_length,
         "min_lane_length_m": args.min_lane_length,
-        "max_junctions": args.max_junctions,
         "preview_name": args.preview_name,
         "dry_run": args.dry_run,
         "overwrite": args.overwrite,
@@ -377,7 +370,7 @@ def main() -> None:
         "--scenes-dir",
         type=Path,
         default=SCENES_DIR_DEFAULT,
-        help=f"Junction scenes root (default: {SCENES_DIR_DEFAULT})",
+        help=f"Roundabout scenes root (default: {SCENES_DIR_DEFAULT})",
     )
     common.add_argument(
         "--min-ego-lane",
@@ -396,7 +389,7 @@ def main() -> None:
     )
 
     parser = argparse.ArgumentParser(
-        description="Build a reviewed junction scene pool up to a target size",
+        description="Build a reviewed roundabout scene pool up to a target size",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -456,7 +449,7 @@ def main() -> None:
             target=args.target,
             **crop_kw,
         )
-        print(f"\nCrop done: {written} junction scene(s) from {cores} core map(s).")
+        print(f"\nCrop done: {written} roundabout scene(s) from {cores} core map(s).")
         status = collect_pool_status(
             scenes_root,
             core_root,
