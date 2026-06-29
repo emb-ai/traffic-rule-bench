@@ -215,12 +215,14 @@ def main() -> None:
         # Recipients reach N exactly; donors give only what's needed and keep the
         # rest (>= N), which the build caps to N. No drops, no 3.24->5.31 unless
         # 5.21 can't cover 5.31's deficit.
-        x_46 = N - d                                  # 3.24 -> 4.6
+        x_46 = min(max(N - d, 0), len(ms_eligible))   # 3.24 -> 4.6 (limited by fast donors)
+        if d + x_46 < N:
+            print(f"NOTE: only {len(ms_eligible)} 3.24 donors with road>= "
+                  f"{args.min_road_kmh:g} km/h; 4.6 reaches {d + x_46} < N={N} "
+                  f"(accepted — discriminative-min set).", file=sys.stderr)
         need_531 = N - c                              # 5.31 deficit
         y_531 = min(max(need_531, 0), max(b - N, 0))  # from 5.21, keeping 5.21 >= N
         x_531a = max(need_531 - y_531, 0)             # remainder from 3.24
-        if x_46 < 0:
-            problems.append(f"4.6 has {d} > N={N}; lower N.")
         if need_531 < 0:
             problems.append(f"5.31 has {c} > N={N}; lower N.")
         if a - x_46 - x_531a < N:
@@ -242,7 +244,7 @@ def main() -> None:
             problems.append(f"3.24 ends at {a - x_46 - x_531a}, not N={N} "
                             f"(only N=floor(total/4) is exactly feasible by pure move).")
 
-    if x_46 > len(ms_eligible):
+    if args.mode != "cap" and x_46 > len(ms_eligible):
         problems.append(f"need {x_46} 3.24->4.6 donors with road>= {args.min_road_kmh:g} km/h, "
                         f"only {len(ms_eligible)} eligible.")
 

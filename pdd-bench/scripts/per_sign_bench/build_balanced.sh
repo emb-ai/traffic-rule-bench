@@ -23,7 +23,9 @@ SRC=scenes_uniq            # pristine source (left untouched)
 SC=scenes_balanced         # working copy we redistribute in place
 OUT=benchmark_output_speed/balanced
 CODES=3.24,3.25,5.21,5.22,5.31,4.6
-MIN_ROAD_KMH=20            # 3.24->4.6 donors need road OSM speed >= this
+MIN_ROAD_KMH=45            # 3.24->4.6 donors need road OSM speed >= this, so the
+                           # enforced min (road-10, cap 40/60) lands >= 35 and sits
+                           # ABOVE base cruise (~30) -> base violates, compliant obeys
 
 log(){ echo "[$(date '+%F %T')] $*"; }
 

@@ -597,14 +597,22 @@ class SignComplianceMixin:
         return None
 
     def _handle_speed_limit(self, sign):
+        limit = float(sign.speed_limit)
+        # In-zone check via the SIGN's own is_vehicle_in_zone (multi-edge aware,
+        # exactly what the verifier uses). The previous lane-local check
+        # (zone_start<=veh_long<=zone_end on sign.lane + on_same_road) lost the
+        # limit when the ego crossed into another edge of a multi-edge zone
+        # (5.21/5.31), so the ego sped up mid-zone. Asking the sign keeps the cap
+        # applied across the WHOLE zone, matching where violations are measured.
+        if sign.is_vehicle_in_zone(self.control_object):
+            self._cap_speed(limit)
+            return
+        # Approach phase (before entering the zone): brake early within lookahead.
         if not on_same_road(self.control_object.lane, sign.lane):
             if not self._is_sign_on_route(sign):
                 return
-        limit = float(sign.speed_limit)
         veh_long = self._veh_long(sign.lane)
-        if sign.zone_start <= veh_long <= sign.zone_end:
-            self._cap_speed(limit)
-        elif veh_long < sign.zone_start:
+        if veh_long < sign.zone_start:
             approach = max(self._approach_dist(limit), SPEED_SIGN_LOOKAHEAD)
             if 0 < (sign.zone_start - veh_long) < approach:
                 self._cap_speed(limit)

@@ -76,6 +76,13 @@ ALL_POLICIES = IDM_FAMILY | NN_NEED_CHECKPOINT | NN_NO_CHECKPOINT
 EGO_VARIANTS = ["default", "s1", "s2", "s3", "s4"]
 BENCH_DIR = Path(__file__).resolve().parent
 
+# A single baseline can die on a flaky native crash (e.g. SIGSEGV in
+# MetaDrive/panda3d/SUMO). run_benchmark resumes from episodes_*.jsonl, so a
+# retry accumulates progress past flaky crashes; after this many attempts we
+# SKIP the baseline and continue rather than aborting the whole (multi-policy)
+# job and losing every other baseline + the metrics build.
+MAX_BASELINE_ATTEMPTS = 2
+
 
 def run(cmd: list[str], cwd: Path | None = None) -> None:
     print(f"\n$ {' '.join(cmd)}")
@@ -223,6 +230,7 @@ def main() -> None:
     # <bench_root>/policy_eval/<run_name>/episodes_<policy>.jsonl. Sidecars are
     # only written when --emit-replay-sidecar is passed (for deep per-step analysis).
     bench_root = OUT / "benchmark"
+    failed: list[str] = []
     for policy, variant in baselines:
         run_name = f"{policy}_{variant}"
         cmd = [
@@ -245,7 +253,23 @@ def main() -> None:
         if args.save_gifs:
             gif_base = Path(args.gif_dir) if args.gif_dir else (OUT / "gifs")
             cmd += ["--save-gifs", "--gif-dir", str(gif_base / run_name)]
-        run(cmd)
+        # Fault-tolerant: a crash here (flaky native SIGSEGV) must NOT abort the
+        # whole job. Retry (run_benchmark resumes from episodes_*.jsonl), then
+        # skip the baseline and continue so the remaining policies + the metrics
+        # build still run.
+        ok = False
+        for attempt in range(1, MAX_BASELINE_ATTEMPTS + 1):
+            try:
+                run(cmd)
+                ok = True
+                break
+            except subprocess.CalledProcessError as exc:
+                print(f"!! {run_name} crashed (attempt {attempt}/{MAX_BASELINE_ATTEMPTS}, "
+                      f"rc={exc.returncode})", file=sys.stderr)
+        if not ok:
+            failed.append(run_name)
+            print(f"!! SKIPPING {run_name} after {MAX_BASELINE_ATTEMPTS} attempts; "
+                  f"continuing with the remaining baselines", file=sys.stderr)
 
     # metrics pipeline (build --  aggregate -- MD report)
     no_manifests = OUT / "_no_manifests"  # placeholder for build_csv
@@ -274,7 +298,9 @@ def main() -> None:
     report = OUT / "reports" / "report_cumulative.md"
     print("\n" + "=" * 60)
     print("DONE.")
-    print(f"  Baselines: {len(baselines)}")
+    print(f"  Baselines: {len(baselines)} ({len(baselines) - len(failed)} ok, {len(failed)} failed)")
+    if failed:
+        print(f"  FAILED baselines (skipped): {', '.join(failed)}")
     print(f"  CSV:    {OUT}/metrics_per_episode.csv")
     print(f"  Report: {report}")
     print("=" * 60)

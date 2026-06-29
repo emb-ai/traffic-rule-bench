@@ -40,7 +40,8 @@ ACCEL_V0_FLOOR_KMH = 5.0        # but never slower than this
 # only need it established at v0 just before the sign — a small fixed approach,
 # leaving the post-sign edge as the zone where it must reach the minimum.
 ACCEL_APPROACH_M = 8.0
-MIN_SPEED_FLOOR_KMH = 20.0      # skip 4.6 scenes whose road is too slow for a meaningful min
+MIN_SPEED_FLOOR_KMH = 35.0      # drop 4.6 scenes whose realistic min (road-10, cap) is below
+                                # this — a min <= base cruise (~30) isn't discriminative
 
 
 def bucket_limit_kmh(raw_kmh: float, selector: Optional[int] = None):
@@ -191,20 +192,19 @@ def build_catalog(
         v_target_raw_kmh = 0.0
         if is_accel:
             # 4.6 minimum-speed: target = min(road_speed - 10, achievable cap),
-            # where the cap is split 20 / 40 across scenes so the minimum is
-            # actually reachable (idm cruises ~30: min=20 -> idm complies, min=40
-            # -> idm too slow -> violates; discriminative like 3.24's 20/30 split).
+            # cap split 40 / 60. The minimum must sit ABOVE the base policies'
+            # natural cruise (~30 km/h) so an unaware agent UNDER-shoots it
+            # (violates) while a compliant agent accelerates up to it (obeys) —
+            # the mirror of 3.24. Roads whose realistic min (<= road_speed-10)
+            # falls below MIN_SPEED_FLOOR_KMH are dropped (a 20 km/h min on a
+            # 30 km/h road isn't discriminative — base already complies).
             net_abs = str(scenes_root / scene.net_path)
             v_target_raw_kmh = round(edge_speed_mps(net_abs, scene.road_id) * 3.6)
-            cap = 20 if (stable_hash(scene.scene_id, "min2040") % 2 == 0) else 40
-            # Drop only roads slower than the 20 km/h floor (ego can't reach the
-            # minimum there). Otherwise CLAMP the target up to the floor instead
-            # of dropping: roads in 20..30 keep a min of 20; on faster roads the
-            # cap=40 bucket scales the min up toward 40 (discriminative).
-            if v_target_raw_kmh < MIN_SPEED_FLOOR_KMH:
+            cap = 40 if (stable_hash(scene.scene_id, "min2040") % 2 == 0) else 60
+            v_target_kmh = min(v_target_raw_kmh - 10, cap)
+            if v_target_kmh < MIN_SPEED_FLOOR_KMH:
                 dropped_slow_min += 1
                 continue
-            v_target_kmh = max(MIN_SPEED_FLOOR_KMH, min(v_target_raw_kmh - 10, cap))
         elif is_braking:
             if scene.sign_code == "5.21":
                 # Residential zone: fixed 20 km/h, independent of the road's speed.
