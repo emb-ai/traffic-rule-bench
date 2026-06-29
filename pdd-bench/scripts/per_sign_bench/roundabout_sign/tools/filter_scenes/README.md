@@ -40,8 +40,11 @@ python tools/filter_scenes/review_junction_scenes.py --apply
 
 and check how many scenes are generated in the result:
 ```
-ls -1d sign*_rb_s*/ 2>/dev/null | wc -l
+ls -1d sign*_rb/ sign*_rb_s*/ 2>/dev/null | wc -l
 ```
+
+By default each core map produces one cropped scene (`sign_<id>_rb/`). Use
+`--per-spoke` on crop/build_scene_pool for the legacy per-spoke layout (`_rb_s00`, …).
 
 
 4. Generate manifest (rejected scenes in scene_selection.json are skipped automatically)

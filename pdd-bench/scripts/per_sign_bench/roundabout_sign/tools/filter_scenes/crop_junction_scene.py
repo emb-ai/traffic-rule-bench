@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Crop core 4.3 catalog scenes into per-spoke roundabout benchmark folders.
+"""Crop core 4.3 catalog scenes into roundabout benchmark folders.
 
-Reads full maps from scenes/core/ and writes one cropped folder per attached road:
-  scenes/core/sign_77277/          # untouched core map
-  scenes/sign_77277_rb_s00/        # sign on spoke 0
-  scenes/sign_77277_rb_s01/        # sign on spoke 1
-  ...
+By default writes one cropped folder per core map (catalog sign spoke):
+  scenes/core/sign_77277/     # untouched core map
+  scenes/sign_77277_rb/       # ring + spokes, sign on catalog road
+
+Use --per-spoke for the legacy layout (one folder per attached road):
+  scenes/sign_77277_rb_s00/, sign_77277_rb_s01/, ...
 
 Each crop keeps only the traffic circle and attached spoke roads.
 
@@ -37,7 +38,9 @@ from lib.manifest_viability import check_manifest_viability  # noqa: E402
 from lib.junction_crop import (  # noqa: E402
     JunctionLayoutError,
     crop_scene_to_roundabout,
+    resolve_catalog_sign_spoke,
     resolve_full_source_net,
+    roundabout_scene_name,
     roundabout_spoke_scene_name,
 )
 from lib.roundabout_topology import detect_roundabout  # noqa: E402
@@ -67,16 +70,11 @@ def discover_core_scene_dirs(core_root: Path) -> list[Path]:
     return out
 
 
-def render_preview(scene_dir: Path, marker_xy: tuple[float, float], out_path: Path) -> None:
+def render_preview(scene_dir: Path, out_path: Path) -> None:
     meta = load_scene_meta(scene_dir)
     net_file = resolve_net_file(scene_dir, meta)
     edges, junctions = parse_sumo_net(scene_dir / net_file)
-    render_network(
-        edges,
-        junctions,
-        out_path,
-        marker_xy=marker_xy,
-    )
+    render_network(edges, junctions, out_path)
 
 
 def existing_roundabout_scenes(scenes_root: Path, core_scene_name: str) -> list[Path]:
@@ -108,8 +106,9 @@ def process_core_scene(
     require_manifest_viable: bool = True,
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+    one_per_core: bool = True,
 ) -> int:
-    """Crop one scene per spoke attached to the traffic circle. Returns scenes written."""
+    """Crop roundabout scene(s) from a core map. Returns scenes written."""
     core_scene_name = core_scene_dir.name
     print(f"\n=== {core_scene_name} (core) ===")
 
@@ -130,8 +129,24 @@ def process_core_scene(
         print("  [skip] no spokes on traffic circle")
         return 0
 
+    if one_per_core:
+        try:
+            sign_spoke = resolve_catalog_sign_spoke(
+                source_pick, meta.get("road_id"), spokes
+            )
+        except JunctionLayoutError as exc:
+            print(f"  [skip] {exc}")
+            return 0
+        crop_jobs = [(0, sign_spoke, roundabout_scene_name(core_scene_name))]
+        print(f"  one crop on catalog spoke {sign_spoke!r} -> {crop_jobs[0][2]}")
+    else:
+        crop_jobs = [
+            (rank, spoke_edge_id, roundabout_spoke_scene_name(core_scene_name, rank))
+            for rank, spoke_edge_id in enumerate(spokes)
+        ]
+
     if dry_run:
-        return len(spokes)
+        return len(crop_jobs)
 
     if overwrite:
         for old_dir in existing_roundabout_scenes(scenes_root, core_scene_name):
@@ -140,8 +155,7 @@ def process_core_scene(
     records: list[dict] = []
     written = 0
 
-    for rank, spoke_edge_id in enumerate(spokes):
-        scene_name = roundabout_spoke_scene_name(core_scene_name, rank)
+    for rank, spoke_edge_id, scene_name in crop_jobs:
         out_dir = scenes_root / scene_name
         if out_dir.exists() and not overwrite:
             print(f"  [skip existing] {scene_name}")
@@ -216,7 +230,7 @@ def process_core_scene(
             shutil.copytree(tmp_dir, out_dir)
 
         preview_path = out_dir / preview_name
-        render_preview(out_dir, pick.center_xy, preview_path)
+        render_preview(out_dir, preview_path)
         print(f"  wrote scenes/{scene_name}/ sign on {spoke_edge_id} ({preview_name})")
         record["written"] = True
         record["preview"] = f"{scene_name}/{preview_name}"
@@ -238,9 +252,14 @@ def uncropped_core_dirs(core_root: Path) -> list[Path]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Crop core scenes into per-spoke roundabout folders under scenes/",
+        description="Crop core scenes into roundabout folders under scenes/",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
+    )
+    parser.add_argument(
+        "--per-spoke",
+        action="store_true",
+        help="Emit one folder per spoke (sign_<id>_rb_s00, _s01, …) instead of one per core",
     )
     parser.add_argument(
         "scenes",
@@ -330,6 +349,7 @@ def main() -> None:
             require_manifest_viable=not args.no_require_manifest_viable,
             min_ego_lane_m=args.min_ego_lane,
             aux_distance_from_intersection=args.aux_distance,
+            one_per_core=not args.per_spoke,
         )
         if created > 0:
             ok += 1

@@ -9,7 +9,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from .junction_priority_layout import JunctionLayoutError, SumoEdge, _load_net
 
@@ -358,8 +358,45 @@ def resolve_full_source_net(scene_dir: Path, meta: dict) -> Path:
     return scene_dir / resolve_net_file(scene_dir, meta)
 
 
+def roundabout_scene_name(core_scene_name: str) -> str:
+    """Single cropped roundabout folder per core map (e.g. sign_144460_rb)."""
+    return f"{core_scene_name}_rb"
+
+
 def roundabout_spoke_scene_name(core_scene_name: str, spoke_rank: int) -> str:
     return f"{core_scene_name}_rb_s{spoke_rank:02d}"
+
+
+def resolve_catalog_sign_spoke(
+    pick: "RoundaboutPick",
+    catalog_road_id: Optional[str],
+    spokes: Iterable[str],
+) -> str:
+    """Pick the spoke edge that matches the catalog sign road."""
+    spoke_list = list(spokes)
+    if not spoke_list:
+        raise JunctionLayoutError("No spokes on traffic circle")
+
+    if pick.approach_edge_id in spoke_list:
+        return pick.approach_edge_id
+
+    if catalog_road_id:
+        if catalog_road_id in spoke_list:
+            return catalog_road_id
+        prefix = catalog_road_id.split("#", 1)[0]
+        chain = [
+            sid
+            for sid in spoke_list
+            if sid == catalog_road_id or sid.startswith(prefix + "#")
+        ]
+        if chain:
+            return chain[0]
+        stripped = catalog_road_id.lstrip("-")
+        for candidate in (f"-{stripped}", stripped):
+            if candidate in spoke_list:
+                return candidate
+
+    return spoke_list[0]
 
 
 def crop_scene_to_roundabout(
