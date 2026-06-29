@@ -31,7 +31,12 @@ DEFAULT_DEST = ROUNDABOUT_SIGN_DIR / "scenes" / "core"
 
 sys.path.insert(0, str(ROUNDABOUT_SIGN_DIR))
 
-from lib.roundabout_topology import try_detect_roundabout  # noqa: E402
+from lib.roundabout_topology import try_detect_roundabout, resolve_sumo_roundabout  # noqa: E402
+from lib.roundabout_fingerprint import (  # noqa: E402
+    RoundaboutFingerprintRegistry,
+    fingerprint_from_sumo_roundabout,
+    sumo_roundabout_record,
+)
 from lib.sumo_utils import load_scene_meta, resolve_net_file  # noqa: E402
 from tools.render_map import parse_sumo_net, render_network  # noqa: E402
 
@@ -44,6 +49,7 @@ class SceneAnalysis:
     ring_edge_count: Optional[int] = None
     spoke_edge_count: Optional[int] = None
     approach_edge_id: Optional[str] = None
+    sumo_roundabout_fingerprint: Optional[str] = None
     reason: Optional[str] = None
 
 
@@ -100,6 +106,12 @@ def analyze_scene_roundabout(scene_dir: Path) -> SceneAnalysis:
             reason="no SUMO <roundabout> reachable from catalog sign road",
         )
 
+    try:
+        rb = resolve_sumo_roundabout(net_path, sign_edge_id=sign_edge)
+        fingerprint = fingerprint_from_sumo_roundabout(rb)
+    except Exception:
+        fingerprint = None
+
     return SceneAnalysis(
         scene_name=scene_name,
         matched=True,
@@ -107,6 +119,7 @@ def analyze_scene_roundabout(scene_dir: Path) -> SceneAnalysis:
         ring_edge_count=pick.ring_edge_count,
         spoke_edge_count=len(pick.spoke_edge_ids),
         approach_edge_id=pick.approach_edge_id or sign_edge,
+        sumo_roundabout_fingerprint=fingerprint,
     )
 
 
@@ -122,6 +135,8 @@ def normalize_meta(meta: dict, scene_name: str, analysis: SceneAnalysis | None =
         out["catalog_roundabout_spokes"] = analysis.spoke_edge_count
         if analysis.approach_edge_id:
             out["catalog_roundabout_approach_edge"] = analysis.approach_edge_id
+        if analysis.sumo_roundabout_fingerprint:
+            out["sumo_roundabout_fingerprint"] = analysis.sumo_roundabout_fingerprint
     return out
 
 
@@ -145,6 +160,12 @@ def copy_scene(
     meta_path = dst / "meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta = normalize_meta(meta, scene_name, analysis)
+    if analysis is not None and analysis.matched and analysis.sumo_roundabout_fingerprint:
+        try:
+            rb = resolve_sumo_roundabout(dst / resolve_net_file(dst, meta), sign_edge_id=meta.get("road_id"))
+            meta.update(sumo_roundabout_record(rb))
+        except Exception:
+            pass
     meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     print(f"  copied -> {dst}")
     return dst
@@ -193,6 +214,11 @@ def main() -> None:
     parser.add_argument("--sign-ids", type=int, nargs="*", default=[])
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--allow-duplicate-roundabout",
+        action="store_true",
+        help="Import even when scenes/roundabout_fingerprints.json already has this ring",
+    )
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--run-simulation", action="store_true")
     parser.add_argument("--policy", default="idm")
@@ -234,11 +260,26 @@ def main() -> None:
         candidate_names = [n for n in candidate_names if n not in already]
 
     to_import: list[SceneAnalysis] = []
+    scenes_root = dest_root.parent
+    registry = RoundaboutFingerprintRegistry.for_scenes_root(scenes_root)
+    skip_duplicate = not args.allow_duplicate_roundabout
+
     for name in candidate_names:
         analysis = analyze_scene_roundabout(available[name])
         if not analysis.matched:
             print(f"  [skip]  {name}: {analysis.reason}")
             continue
+        if skip_duplicate and analysis.sumo_roundabout_fingerprint:
+            duplicate = registry.duplicate_owner(
+                analysis.sumo_roundabout_fingerprint,
+                scene_name=name,
+            )
+            if duplicate is not None:
+                print(
+                    f"  [skip duplicate roundabout] {name}: "
+                    f"same ring as {duplicate.get('scene_name')!r}"
+                )
+                continue
         to_import.append(analysis)
         if args.limit and not requested and len(to_import) >= args.limit:
             break
@@ -264,6 +305,25 @@ def main() -> None:
             overwrite=args.overwrite,
             analysis=analysis,
         )
+        if analysis.sumo_roundabout_fingerprint:
+            try:
+                scene_meta = load_scene_meta(scene_dir)
+                rb = resolve_sumo_roundabout(
+                    scene_dir / resolve_net_file(scene_dir, scene_meta),
+                    sign_edge_id=scene_meta.get("road_id"),
+                )
+                registry.upsert(
+                    analysis.sumo_roundabout_fingerprint,
+                    scene_name=scene_name,
+                    core_scene_name=scene_name,
+                    kind="core",
+                    sign_id=scene_meta.get("sign_id"),
+                    sumo_roundabout_nodes=rb.node_ids,
+                    sumo_roundabout_ring_edges=rb.ring_edge_ids,
+                )
+                registry.save()
+            except Exception as exc:
+                print(f"  [fingerprint registry] {exc}")
         imported += 1
         if not args.no_render:
             try:

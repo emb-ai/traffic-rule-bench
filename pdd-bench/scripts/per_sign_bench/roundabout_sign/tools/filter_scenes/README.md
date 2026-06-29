@@ -46,6 +46,14 @@ ls -1d sign*_rb/ sign*_rb_s*/ 2>/dev/null | wc -l
 By default each core map produces one cropped scene (`sign_<id>_rb/`). Use
 `--per-spoke` on crop/build_scene_pool for the legacy per-spoke layout (`_rb_s00`, …).
 
+Duplicate roundabouts (same SUMO `<roundabout>` OSM node set) are tracked in
+`scenes/roundabout_fingerprints.json` and skipped on import/crop. Rebuild after
+manual edits:
+
+```
+python tools/filter_scenes/rebuild_roundabout_fingerprints.py
+```
+
 
 4. Generate manifest (rejected scenes in scene_selection.json are skipped automatically)
 ```

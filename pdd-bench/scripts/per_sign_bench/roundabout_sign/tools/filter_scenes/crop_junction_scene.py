@@ -43,7 +43,11 @@ from lib.junction_crop import (  # noqa: E402
     roundabout_scene_name,
     roundabout_spoke_scene_name,
 )
-from lib.roundabout_topology import detect_roundabout  # noqa: E402
+from lib.roundabout_fingerprint import (  # noqa: E402
+    RoundaboutFingerprintRegistry,
+    fingerprint_from_sumo_roundabout,
+)
+from lib.roundabout_topology import detect_roundabout, resolve_sumo_roundabout  # noqa: E402
 from lib.sumo_utils import (  # noqa: E402
     is_core_scene_name,
     load_scene_meta,
@@ -93,6 +97,21 @@ def write_roundabout_index(core_scene_dir: Path, records: list[dict]) -> None:
     index_path.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
 
 
+def mark_core_crop_attempted(
+    core_scene_dir: Path,
+    records: list[dict],
+    *,
+    dry_run: bool,
+    skipped: str | None = None,
+) -> None:
+    """Record that this core was processed so build_scene_pool does not retry forever."""
+    if dry_run:
+        return
+    if not records:
+        records = [{"written": False, "skipped": skipped or "no_viable_crop"}]
+    write_roundabout_index(core_scene_dir, records)
+
+
 def process_core_scene(
     core_scene_dir: Path,
     scenes_root: Path,
@@ -107,6 +126,7 @@ def process_core_scene(
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     one_per_core: bool = True,
+    skip_duplicate_fingerprints: bool = True,
 ) -> int:
     """Crop roundabout scene(s) from a core map. Returns scenes written."""
     core_scene_name = core_scene_dir.name
@@ -118,6 +138,7 @@ def process_core_scene(
         source_pick = detect_roundabout(source_net, sign_edge_id=meta.get("road_id"))
     except (FileNotFoundError, JunctionLayoutError) as exc:
         print(f"  [skip] {exc}")
+        mark_core_crop_attempted(core_scene_dir, [], dry_run=dry_run, skipped=str(exc))
         return 0
 
     spokes = list(source_pick.spoke_edge_ids)
@@ -127,7 +148,18 @@ def process_core_scene(
     )
     if not spokes:
         print("  [skip] no spokes on traffic circle")
+        mark_core_crop_attempted(core_scene_dir, [], dry_run=dry_run, skipped="no_spokes")
         return 0
+
+    try:
+        sumo_rb = resolve_sumo_roundabout(source_net, sign_edge_id=meta.get("road_id"))
+        fingerprint = fingerprint_from_sumo_roundabout(sumo_rb)
+    except JunctionLayoutError as exc:
+        print(f"  [skip] {exc}")
+        mark_core_crop_attempted(core_scene_dir, [], dry_run=dry_run, skipped=str(exc))
+        return 0
+
+    registry = RoundaboutFingerprintRegistry.for_scenes_root(scenes_root)
 
     if one_per_core:
         try:
@@ -136,6 +168,7 @@ def process_core_scene(
             )
         except JunctionLayoutError as exc:
             print(f"  [skip] {exc}")
+            mark_core_crop_attempted(core_scene_dir, [], dry_run=dry_run, skipped=str(exc))
             return 0
         crop_jobs = [(0, sign_spoke, roundabout_scene_name(core_scene_name))]
         print(f"  one crop on catalog spoke {sign_spoke!r} -> {crop_jobs[0][2]}")
@@ -146,99 +179,155 @@ def process_core_scene(
         ]
 
     if dry_run:
+        if skip_duplicate_fingerprints and crop_jobs:
+            probe_name = crop_jobs[0][2]
+            duplicate = registry.duplicate_owner(
+                fingerprint,
+                scene_name=probe_name,
+                core_scene_name=core_scene_name,
+            )
+            if duplicate is not None:
+                print(
+                    f"  [dry-run duplicate] would skip; same ring as "
+                    f"{duplicate.get('scene_name')!r}"
+                )
+                return 0
         return len(crop_jobs)
-
-    if overwrite:
-        for old_dir in existing_roundabout_scenes(scenes_root, core_scene_name):
-            shutil.rmtree(old_dir)
 
     records: list[dict] = []
     written = 0
+    try:
+        if overwrite:
+            for old_dir in existing_roundabout_scenes(scenes_root, core_scene_name):
+                registry.remove_scene(old_dir.name)
+                shutil.rmtree(old_dir)
+            registry.save()
 
-    for rank, spoke_edge_id, scene_name in crop_jobs:
-        out_dir = scenes_root / scene_name
-        if out_dir.exists() and not overwrite:
-            print(f"  [skip existing] {scene_name}")
-            records.append(
-                {
-                    "scene_name": scene_name,
-                    "spoke_edge": spoke_edge_id,
-                    "spoke_rank": rank,
-                    "written": False,
-                    "skipped": "exists",
-                }
-            )
-            continue
-
-        record: dict = {
-            "scene_name": scene_name,
-            "spoke_edge": spoke_edge_id,
-            "spoke_rank": rank,
-            "written": False,
-        }
-
-        with tempfile.TemporaryDirectory(prefix="roundabout_crop_") as tmp:
-            tmp_dir = Path(tmp)
-            try:
-                pick = crop_scene_to_roundabout(
-                    core_scene_dir,
-                    ego_spoke_edge_id=spoke_edge_id,
-                    spoke_rank=rank,
-                    spoke_extension_m=spoke_extension_m,
-                    max_spoke_length_m=max_spoke_length_m,
-                    min_lane_length_m=min_lane_length_m,
-                    output_dir=tmp_dir,
-                    output_scene_name=scene_name,
-                    backup_original=False,
-                    source_pick=source_pick,
+        for rank, spoke_edge_id, scene_name in crop_jobs:
+            out_dir = scenes_root / scene_name
+            if skip_duplicate_fingerprints:
+                duplicate = registry.duplicate_owner(
+                    fingerprint,
+                    scene_name=scene_name,
+                    core_scene_name=core_scene_name,
                 )
-            except JunctionLayoutError as exc:
-                print(f"  [skip] {scene_name}: {exc}")
-                record["error"] = str(exc)
-                records.append(record)
+                if duplicate is not None:
+                    owner = duplicate.get("scene_name", "?")
+                    print(
+                        f"  [skip duplicate roundabout] {scene_name}: "
+                        f"same SUMO nodes as {owner!r}"
+                    )
+                    records.append(
+                        {
+                            "scene_name": scene_name,
+                            "spoke_edge": spoke_edge_id,
+                            "spoke_rank": rank,
+                            "written": False,
+                            "skipped": "duplicate_fingerprint",
+                            "duplicate_of": owner,
+                            "sumo_roundabout_fingerprint": fingerprint,
+                        }
+                    )
+                    continue
+
+            if out_dir.exists() and not overwrite:
+                print(f"  [skip existing] {scene_name}")
+                records.append(
+                    {
+                        "scene_name": scene_name,
+                        "spoke_edge": spoke_edge_id,
+                        "spoke_rank": rank,
+                        "written": False,
+                        "skipped": "exists",
+                    }
+                )
                 continue
 
-            record.update(
-                {
-                    "entry_junction": pick.entry_junction_id,
-                    "ring_edges": len(pick.ring_edge_ids),
-                    "spokes": len(pick.spoke_edge_ids),
-                    "center_xy": [pick.center_xy[0], pick.center_xy[1]],
-                }
-            )
+            record: dict = {
+                "scene_name": scene_name,
+                "spoke_edge": spoke_edge_id,
+                "spoke_rank": rank,
+                "written": False,
+            }
 
-            if require_manifest_viable:
-                scene_meta = json.loads((tmp_dir / "meta.json").read_text(encoding="utf-8"))
-                net_file = scene_meta.get("net_file", "map.net.xml")
-                viability = check_manifest_viability(
-                    tmp_dir / net_file,
-                    meta=scene_meta,
-                    min_ego_lane_m=min_ego_lane_m,
-                    aux_distance_from_intersection=aux_distance_from_intersection,
-                )
-                record["manifest_viable"] = viability.viable
-                if not viability.viable:
-                    print(
-                        f"  [skip manifest] {scene_name} ({spoke_edge_id}): "
-                        f"{viability.reason} — {viability.detail}"
+            with tempfile.TemporaryDirectory(prefix="roundabout_crop_") as tmp:
+                tmp_dir = Path(tmp)
+                try:
+                    pick = crop_scene_to_roundabout(
+                        core_scene_dir,
+                        ego_spoke_edge_id=spoke_edge_id,
+                        spoke_rank=rank,
+                        spoke_extension_m=spoke_extension_m,
+                        max_spoke_length_m=max_spoke_length_m,
+                        min_lane_length_m=min_lane_length_m,
+                        output_dir=tmp_dir,
+                        output_scene_name=scene_name,
+                        backup_original=False,
+                        source_pick=source_pick,
+                        sumo_roundabout=sumo_rb,
                     )
+                except JunctionLayoutError as exc:
+                    print(f"  [skip] {scene_name}: {exc}")
+                    record["error"] = str(exc)
                     records.append(record)
                     continue
 
-            if out_dir.exists():
-                shutil.rmtree(out_dir)
-            shutil.copytree(tmp_dir, out_dir)
+                record.update(
+                    {
+                        "entry_junction": pick.entry_junction_id,
+                        "ring_edges": len(pick.ring_edge_ids),
+                        "spokes": len(pick.spoke_edge_ids),
+                        "center_xy": [pick.center_xy[0], pick.center_xy[1]],
+                    }
+                )
 
-        preview_path = out_dir / preview_name
-        render_preview(out_dir, preview_path)
-        print(f"  wrote scenes/{scene_name}/ sign on {spoke_edge_id} ({preview_name})")
-        record["written"] = True
-        record["preview"] = f"{scene_name}/{preview_name}"
-        records.append(record)
-        written += 1
+                if require_manifest_viable:
+                    scene_meta = json.loads((tmp_dir / "meta.json").read_text(encoding="utf-8"))
+                    net_file = scene_meta.get("net_file", "map.net.xml")
+                    viability = check_manifest_viability(
+                        tmp_dir / net_file,
+                        meta=scene_meta,
+                        min_ego_lane_m=min_ego_lane_m,
+                        aux_distance_from_intersection=aux_distance_from_intersection,
+                    )
+                    record["manifest_viable"] = viability.viable
+                    if not viability.viable:
+                        print(
+                            f"  [skip manifest] {scene_name} ({spoke_edge_id}): "
+                            f"{viability.reason} — {viability.detail}"
+                        )
+                        records.append(record)
+                        continue
 
-    write_roundabout_index(core_scene_dir, records)
-    return written
+                if out_dir.exists():
+                    shutil.rmtree(out_dir)
+                shutil.copytree(tmp_dir, out_dir)
+
+            preview_path = out_dir / preview_name
+            render_preview(out_dir, preview_path)
+            registry.upsert(
+                fingerprint,
+                scene_name=scene_name,
+                core_scene_name=core_scene_name,
+                kind="cropped",
+                sign_id=meta.get("sign_id"),
+                sumo_roundabout_nodes=sumo_rb.node_ids,
+                sumo_roundabout_ring_edges=sumo_rb.ring_edge_ids,
+            )
+            registry.save()
+            print(f"  wrote scenes/{scene_name}/ sign on {spoke_edge_id} ({preview_name})")
+            record["written"] = True
+            record["preview"] = f"{scene_name}/{preview_name}"
+            records.append(record)
+            written += 1
+
+        return written
+    except Exception as exc:
+        print(f"  [error] {core_scene_name}: {exc}")
+        records.append({"written": False, "skipped": "error", "error": str(exc)})
+        return 0
+    finally:
+        mark_core_crop_attempted(core_scene_dir, records, dry_run=dry_run)
 
 
 def uncropped_core_dirs(core_root: Path) -> list[Path]:
@@ -260,6 +349,11 @@ def main() -> None:
         "--per-spoke",
         action="store_true",
         help="Emit one folder per spoke (sign_<id>_rb_s00, _s01, …) instead of one per core",
+    )
+    parser.add_argument(
+        "--allow-duplicate-roundabout",
+        action="store_true",
+        help="Allow cropping even when scenes/roundabout_fingerprints.json already has this ring",
     )
     parser.add_argument(
         "scenes",
@@ -350,6 +444,7 @@ def main() -> None:
             min_ego_lane_m=args.min_ego_lane,
             aux_distance_from_intersection=args.aux_distance,
             one_per_core=not args.per_spoke,
+            skip_duplicate_fingerprints=not args.allow_duplicate_roundabout,
         )
         if created > 0:
             ok += 1

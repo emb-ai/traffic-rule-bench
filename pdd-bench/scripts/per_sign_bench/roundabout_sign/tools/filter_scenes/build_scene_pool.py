@@ -146,6 +146,7 @@ def crop_core_batch(
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     one_per_core: bool = True,
+    skip_duplicate_fingerprints: bool = True,
 ) -> tuple[int, int]:
     """Crop uncropped core maps. Returns (roundabout_scenes_written, cores_processed)."""
     cores = uncropped_core_dirs(core_root)
@@ -168,6 +169,7 @@ def crop_core_batch(
             min_ego_lane_m=min_ego_lane_m,
             aux_distance_from_intersection=aux_distance_from_intersection,
             one_per_core=one_per_core,
+            skip_duplicate_fingerprints=skip_duplicate_fingerprints,
         )
         processed += 1
         written += created
@@ -188,6 +190,7 @@ def crop_until_candidates(
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     one_per_core: bool = True,
+    skip_duplicate_fingerprints: bool = True,
 ) -> tuple[int, int]:
     """Crop uncropped cores until at least ``target`` reviewable scenes exist."""
     candidates = len(discover_review_scenes(scenes_root, preview_name=preview_name))
@@ -206,6 +209,7 @@ def crop_until_candidates(
             )
             break
 
+        next_core = remaining[0].name
         written, cores = crop_core_batch(
             core_root,
             scenes_root,
@@ -219,11 +223,19 @@ def crop_until_candidates(
             min_ego_lane_m=min_ego_lane_m,
             aux_distance_from_intersection=aux_distance_from_intersection,
             one_per_core=one_per_core,
+            skip_duplicate_fingerprints=skip_duplicate_fingerprints,
         )
         total_written += written
         total_cores += cores
         candidates = len(discover_review_scenes(scenes_root, preview_name=preview_name))
         if written == 0:
+            still = uncropped_core_dirs(core_root)
+            if still and still[0].name == next_core:
+                print(
+                    f"  [stop] core {next_core!r} was not marked processed; "
+                    "aborting to avoid an infinite loop"
+                )
+                break
             print("  [skip core] no manifest-viable roundabout; trying next core map")
 
     return total_written, total_cores
@@ -244,6 +256,7 @@ def fill_after_review(
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     one_per_core: bool = True,
+    skip_duplicate_fingerprints: bool = True,
 ) -> int:
     """Add roundabout crops from new core maps when kept count is below target."""
     status = collect_pool_status(
@@ -281,6 +294,7 @@ def fill_after_review(
             )
             break
 
+        next_core = remaining[0].name
         written, _ = crop_core_batch(
             core_root,
             scenes_root,
@@ -294,9 +308,17 @@ def fill_after_review(
             min_ego_lane_m=min_ego_lane_m,
             aux_distance_from_intersection=aux_distance_from_intersection,
             one_per_core=one_per_core,
+            skip_duplicate_fingerprints=skip_duplicate_fingerprints,
         )
         total_written += written
         if written == 0:
+            still = uncropped_core_dirs(core_root)
+            if still and still[0].name == next_core:
+                print(
+                    f"  [stop] core {next_core!r} was not marked processed; "
+                    "aborting to avoid an infinite loop"
+                )
+                break
             print("  [skip core] no manifest-viable roundabout; trying next core map")
 
     status = collect_pool_status(
@@ -342,6 +364,11 @@ def add_crop_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Crop one folder per spoke (_rb_s00, _s01, …) instead of one per core (_rb)",
     )
+    parser.add_argument(
+        "--allow-duplicate-roundabout",
+        action="store_true",
+        help="Allow duplicate SUMO roundabouts already listed in roundabout_fingerprints.json",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Only report picks, do not write files")
     parser.add_argument(
         "--no-require-manifest-viable",
@@ -361,6 +388,7 @@ def _crop_kwargs(args: argparse.Namespace) -> dict:
         "min_ego_lane_m": args.min_ego_lane,
         "aux_distance_from_intersection": args.aux_distance,
         "one_per_core": not args.per_spoke,
+        "skip_duplicate_fingerprints": not args.allow_duplicate_roundabout,
     }
 
 

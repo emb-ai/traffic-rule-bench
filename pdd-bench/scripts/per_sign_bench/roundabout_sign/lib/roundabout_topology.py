@@ -321,15 +321,13 @@ def _roundabout_pick_from_sumo(
     )
 
 
-def detect_roundabout(
+def resolve_sumo_roundabout(
     net_path: Path | str,
     *,
     sign_edge_id: Optional[str] = None,
-    min_ring_junctions: int = 2,
     min_ring_edges: int = 3,
-    ego_spoke_edge_id: Optional[str] = None,
-) -> RoundaboutPick:
-    """Find the SUMO roundabout nearest the catalog sign road."""
+) -> SumoRoundabout:
+    """Return the SUMO ``<roundabout>`` block nearest the catalog sign road."""
     net_path = Path(net_path)
     if not net_path.is_file():
         raise JunctionLayoutError(f"net.xml not found: {net_path}")
@@ -344,7 +342,7 @@ def detect_roundabout(
     if sign_edge_id and sign_edge_id not in edges:
         raise JunctionLayoutError(f"Sign approach edge {sign_edge_id!r} not in net")
 
-    rb = _pick_sumo_roundabout(
+    return _pick_sumo_roundabout(
         roundabouts,
         sign_edge_id=sign_edge_id,
         junctions=junctions,
@@ -352,6 +350,27 @@ def detect_roundabout(
         adj=adj,
         min_ring_edges=min_ring_edges,
     )
+
+
+def detect_roundabout(
+    net_path: Path | str,
+    *,
+    sign_edge_id: Optional[str] = None,
+    min_ring_junctions: int = 2,
+    min_ring_edges: int = 3,
+    ego_spoke_edge_id: Optional[str] = None,
+) -> RoundaboutPick:
+    """Find the SUMO roundabout nearest the catalog sign road."""
+    net_path = Path(net_path)
+    rb = resolve_sumo_roundabout(
+        net_path,
+        sign_edge_id=sign_edge_id,
+        min_ring_edges=min_ring_edges,
+    )
+
+    junctions, edges, _, connections = _load_net(net_path)
+    adj = _adjacent_from_connections(edges, connections)
+
     pick = _roundabout_pick_from_sumo(
         rb,
         junctions,

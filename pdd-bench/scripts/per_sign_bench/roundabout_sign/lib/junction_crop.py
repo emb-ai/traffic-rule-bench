@@ -412,9 +412,11 @@ def crop_scene_to_roundabout(
     output_dir: Optional[Path] = None,
     output_scene_name: Optional[str] = None,
     source_pick: Optional["RoundaboutPick"] = None,
+    sumo_roundabout: Optional["SumoRoundabout"] = None,
 ) -> "RoundaboutPick":
     """Crop to ring+spokes only; place the 4.3 sign on ``ego_spoke_edge_id``."""
-    from .roundabout_topology import RoundaboutPick, detect_roundabout
+    from .roundabout_topology import RoundaboutPick, detect_roundabout, resolve_sumo_roundabout
+    from .roundabout_fingerprint import sumo_roundabout_record
     from .sumo_utils import load_scene_meta
 
     scene_dir = scene_dir.resolve()
@@ -521,6 +523,17 @@ def crop_scene_to_roundabout(
     meta.pop("junction_arm_count", None)
     meta.pop("junction_rank", None)
     meta["sign_spawn_distance"] = 30.0
+
+    if sumo_roundabout is None:
+        try:
+            sumo_roundabout = resolve_sumo_roundabout(
+                source_net,
+                sign_edge_id=catalog_sign_road,
+            )
+        except Exception:
+            sumo_roundabout = None
+    if sumo_roundabout is not None:
+        meta.update(sumo_roundabout_record(sumo_roundabout))
 
     meta_path = output_dir / "meta.json"
     meta_path.write_text(json_dumps(meta) + "\n", encoding="utf-8")
