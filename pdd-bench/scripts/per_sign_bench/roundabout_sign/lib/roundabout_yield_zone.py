@@ -39,6 +39,41 @@ def entry_conflict_ring_edges(
     return sorted(incoming_edges)
 
 
+def all_entry_conflict_ring_edges(layout: dict) -> List[str]:
+    """Ring edges immediately upstream of every roundabout entry spoke.
+
+    For each secondary road entering the traffic circle, find the main/ring
+    edge that ends at the same junction node. These are the left-side circle
+    approaches whose last 20 m should be tracked for circulating traffic.
+    """
+    ring_nodes = set()
+    for arm in layout.get("arms", []):
+        if arm.get("road_class") != "main":
+            continue
+        if arm.get("from_node"):
+            ring_nodes.add(str(arm.get("from_node")))
+        if arm.get("to_node"):
+            ring_nodes.add(str(arm.get("to_node")))
+
+    entry_nodes = set()
+    for arm in layout.get("arms", []):
+        if arm.get("road_class") != "secondary":
+            continue
+        to_node = str(arm.get("to_node", ""))
+        from_node = str(arm.get("from_node", ""))
+        if to_node in ring_nodes and from_node not in ring_nodes:
+            entry_nodes.add(to_node)
+
+    incoming_edges: List[str] = []
+    for arm in layout.get("arms", []):
+        if arm.get("road_class") != "main":
+            continue
+        eid = str(arm.get("edge_id", ""))
+        if eid and str(arm.get("to_node", "")) in entry_nodes:
+            incoming_edges.append(eid)
+    return sorted(set(incoming_edges))
+
+
 def lane_keys_for_edges(layout: dict, edge_ids: Iterable[str]) -> List[str]:
     wanted = set(edge_ids)
     keys: List[str] = []
@@ -68,3 +103,8 @@ def collect_entry_conflict_lanes(
         entry_junction_id=entry_junction_id,
     )
     return collect_lanes_for_edge_ids(env, layout, edge_ids)
+
+
+def collect_all_entry_conflict_lanes(env, layout: dict) -> List[Any]:
+    """MetaDrive lanes on all ring segments upstream of roundabout entries."""
+    return collect_lanes_for_edge_ids(env, layout, all_entry_conflict_ring_edges(layout))

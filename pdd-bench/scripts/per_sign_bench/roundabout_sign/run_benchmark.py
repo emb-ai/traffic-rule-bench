@@ -30,8 +30,11 @@ from lib.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
     DEFAULT_CONVOY_SIZE,
     DEFAULT_SPAWN_VELOCITY_MS,
+    MIN_SPAWN_LONGITUDE_M,
     add_auxiliary_agents,
+    resolve_aux_destination_lane_key,
     resolve_aux_spawn_plan,
+    select_occupied_main_lanes,
 )
 from lib.manifest_config import DEFAULT_AUX_LANES_OCCUPIED_MAX
 from lib.junction_sign_placement import (
@@ -44,8 +47,11 @@ from lib.junction_sign_placement import (
     sign_placement_long,
 )
 from lib.roundabout_yield_zone import (
+    all_entry_conflict_ring_edges,
+    collect_all_entry_conflict_lanes,
     collect_entry_conflict_lanes,
     entry_conflict_ring_edges,
+    lane_keys_for_edges,
 )
 from lib.junction_priority_layout import (
     JunctionLayoutError,
@@ -53,6 +59,7 @@ from lib.junction_priority_layout import (
 )
 from lib.manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+    DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     enrich_manifest_row,
     load_manifest_config,
 )
@@ -434,6 +441,49 @@ def _ego_in_exact_sign_zone(sign, vehicle) -> bool:
     except Exception:
         return False
     return float(zone_start) <= veh_long <= float(zone_end)
+
+
+def _ego_entry_blue_zone_lane_keys(row: dict) -> list[str]:
+    """Lane keys for the blue main-road zone nearest ego's roundabout entry."""
+    layout = row.get("junction_layout")
+    ego_edge = str(row.get("road_id") or "")
+    if not layout or not ego_edge:
+        return []
+    ego_arm = next(
+        (arm for arm in layout.get("arms", []) if arm.get("edge_id") == ego_edge),
+        None,
+    )
+    entry_junction = (ego_arm or {}).get("to_node") or row.get("roundabout_entry_junction")
+    edges = entry_conflict_ring_edges(
+        layout,
+        ego_edge,
+        entry_junction_id=entry_junction,
+    )
+    return lane_keys_for_edges(layout, edges)
+
+
+def _roundabout_aux_spawn_longitudes(
+    env,
+    lane_keys: list[str],
+    *,
+    distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+) -> dict[str, float]:
+    """Spawn aux on ego-entry conflict segment, ``distance_from_intersection`` before lane end."""
+    road_network = env.engine.current_map.road_network
+    spawn_longs: dict[str, float] = {}
+    zone_before_m = float(RoundaboutYieldSign.ENTRY_CONFLICT_BEFORE_M)
+    for lane_key in lane_keys:
+        try:
+            lane = road_network.get_lane(lane_key)
+            zone_start = max(0.0, float(lane.length) - zone_before_m)
+            zone_end = float(lane.length)
+            spawn_long = max(zone_start, zone_end - distance_from_intersection)
+            if spawn_long < MIN_SPAWN_LONGITUDE_M <= zone_end:
+                spawn_long = MIN_SPAWN_LONGITUDE_M
+            spawn_longs[lane_key] = float(min(spawn_long, max(zone_end - 0.1, 0.0)))
+        except Exception:
+            continue
+    return spawn_longs
 
 
 def _unwrap_base_env(env):
@@ -1011,7 +1061,8 @@ def _place_roundabout_signs(
         )
 
     ego_edge = str(row.get("road_id") or "")
-    entry_junction = layout.get("junction_id") or row.get("roundabout_entry_junction")
+    ego_arm = next((a for a in secondary_arms if a.get("edge_id") == ego_edge), None)
+    entry_junction = (ego_arm or {}).get("to_node") or row.get("roundabout_entry_junction")
     incoming_edges = entry_conflict_ring_edges(
         layout,
         ego_edge,
@@ -1023,13 +1074,15 @@ def _place_roundabout_signs(
         ego_edge,
         entry_junction_id=entry_junction,
     )
-    center = layout.get("center") or row.get("roundabout_center_xy")
-    entry_junction_xy = tuple(center[:2]) if center else None
+    all_incoming_edges = all_entry_conflict_ring_edges(layout)
+    all_entry_incoming_lanes = collect_all_entry_conflict_lanes(env, layout)
+    entry_junction_xy = None
     print(
         f"[RoundaboutSigns] Yield conflict zone: "
-        f"{len(incoming_edges)} incoming ring edge(s) "
+        f"ego_entry={len(incoming_edges)} edge(s) "
         f"({', '.join(incoming_edges) or 'none'}), "
-        f"{len(entry_incoming_lanes)} lane(s)"
+        f"all_entries={len(all_incoming_edges)} edge(s), "
+        f"{len(all_entry_incoming_lanes)} lane(s)"
     )
 
     junction_id = layout.get("junction_id", "")
@@ -1038,7 +1091,6 @@ def _place_roundabout_signs(
     # Visible 4.3 plate on every spoke approach (or ego spoke only if unknown)
     plate_arms = secondary_arms
     if ego_edge:
-        ego_arm = next((a for a in secondary_arms if a.get("edge_id") == ego_edge), None)
         if ego_arm is not None:
             plate_arms = [ego_arm]
         elif ego_edge not in layout.get("main_edge_ids", []):
@@ -1081,7 +1133,7 @@ def _place_roundabout_signs(
                 use_random_lane=False,
                 intersection_name=junction_id,
                 ring_road_lanes=ring_lanes,
-                entry_incoming_lanes=entry_incoming_lanes,
+                entry_incoming_lanes=all_entry_incoming_lanes or entry_incoming_lanes,
                 entry_junction_xy=entry_junction_xy,
             )
             if tracker is not None:
@@ -1165,7 +1217,9 @@ def run_one_episode(
 
         # Manifest spawn lane + distance before intersection
         _apply_manifest_ego_spawn_lane(base_env, row)
-        spawn_distance = float(row.get("spawn_distance_before_end", 0) or 0)
+        spawn_distance = float(
+            row.get("spawn_distance_before_end", DEFAULT_SPAWN_DISTANCE_BEFORE_END) or 0
+        )
         if spawn_distance > 0:
             _reposition_ego_before_lane_end(base_env, spawn_distance)
 
@@ -1263,6 +1317,52 @@ def run_one_episode(
             aux_destination_lanes = [
                 dest or None for dest in aux_destination_lanes
             ]
+            aux_spawn_longitudes: dict[str, float] = {}
+
+            blue_zone_lane_keys = _ego_entry_blue_zone_lane_keys(row)
+            if blue_zone_lane_keys:
+                preferred_aux_lane = str(row.get("aux_spawn_lane_index") or "")
+                if preferred_aux_lane not in blue_zone_lane_keys:
+                    preferred_aux_lane = None
+                candidate_aux_spawn_lanes = select_occupied_main_lanes(
+                    blue_zone_lane_keys,
+                    aux_lanes_occupied,
+                    prefer_lane_key=preferred_aux_lane,
+                )
+                candidate_aux_spawn_longitudes = _roundabout_aux_spawn_longitudes(
+                    base_env,
+                    candidate_aux_spawn_lanes,
+                    distance_from_intersection=aux_distance_from_intersection,
+                )
+                if (
+                    candidate_aux_spawn_lanes
+                    and len(candidate_aux_spawn_longitudes) == len(candidate_aux_spawn_lanes)
+                    and all(
+                        candidate_aux_spawn_longitudes.get(lane_key, 0.0) >= MIN_SPAWN_LONGITUDE_M
+                        for lane_key in candidate_aux_spawn_lanes
+                    )
+                ):
+                    aux_spawn_lanes = candidate_aux_spawn_lanes
+                    aux_destination_lanes = [
+                        resolve_aux_destination_lane_key(row.get("junction_layout"), lane_key)
+                        for lane_key in aux_spawn_lanes
+                    ]
+                    alternate_spawn_dest_map = {
+                        lane_key: dest
+                        for lane_key, dest in zip(aux_spawn_lanes, aux_destination_lanes)
+                        if dest
+                    }
+                    aux_spawn_longitudes = candidate_aux_spawn_longitudes
+                    print(
+                        f"[AuxAgent] Using ego-entry blue zone lanes: "
+                        f"{', '.join(aux_spawn_lanes)} "
+                        f"(spawn_long={aux_spawn_longitudes})"
+                    )
+                else:
+                    print(
+                        f"[AuxAgent] Blue-zone lanes are not viable for spawn; "
+                        f"keeping manifest aux lanes: {', '.join(aux_spawn_lanes)}"
+                    )
 
             if aux_spawn_lanes:
                 aux_agent_mgr = add_auxiliary_agents(
@@ -1279,6 +1379,7 @@ def run_one_episode(
                     convoy_size=aux_convoy_size,
                     convoy_gap_m=aux_convoy_gap_m,
                     alternate_spawn_dest_map=alternate_spawn_dest_map,
+                    spawn_longitudinal_by_lane=aux_spawn_longitudes,
                 )
                 if aux_agent_mgr is not None:
                     print(

@@ -10,6 +10,7 @@ from .manifest_config import (
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     DEFAULT_AUX_LANES_OCCUPIED_MAX,
+    DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     load_manifest_config,
     enrich_manifest_row,
 )

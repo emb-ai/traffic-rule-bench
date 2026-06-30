@@ -169,6 +169,7 @@ class AuxiliaryAgentsManager(BaseManager):
         convoy_size: int = DEFAULT_CONVOY_SIZE,
         convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
         alternate_spawn_dest_map: Optional[dict] = None,
+        spawn_longitudinal_by_lane: Optional[dict] = None,
     ):
         super().__init__()
         self._requested_spawn_lane_indices = list(spawn_lane_indices)
@@ -180,6 +181,7 @@ class AuxiliaryAgentsManager(BaseManager):
         )
         self._destination_lanes = list(destination_lanes or [])
         self._alternate_spawn_dest_map = dict(alternate_spawn_dest_map or {})
+        self._spawn_longitudinal_by_lane = dict(spawn_longitudinal_by_lane or {})
         self._ego_vehicle = ego_vehicle
         self._ego_spawn_lane_index = ego_spawn_lane_index
         self._ego_release_distance_before_end = float(ego_release_distance_before_end)
@@ -326,7 +328,10 @@ class AuxiliaryAgentsManager(BaseManager):
             used_destination = None
             for candidate_lane in candidate_lanes:
                 lane = road_network.get_lane(candidate_lane)
-                lead_spawn_long = lane.length - self._distance_from_intersection
+                if candidate_lane in self._spawn_longitudinal_by_lane:
+                    lead_spawn_long = float(self._spawn_longitudinal_by_lane[candidate_lane])
+                else:
+                    lead_spawn_long = lane.length - self._distance_from_intersection
                 if lead_spawn_long < MIN_SPAWN_LONGITUDE_M:
                     if candidate_lane == spawn_lane_index:
                         logging.warning(
@@ -713,6 +718,7 @@ def add_auxiliary_agents(
     convoy_size: int = DEFAULT_CONVOY_SIZE,
     convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
     alternate_spawn_dest_map: Optional[dict] = None,
+    spawn_longitudinal_by_lane: Optional[dict] = None,
 ) -> Optional[AuxiliaryAgentsManager]:
     """Add auxiliary agents on incoming lanes (optionally as a convoy per lane)."""
     if not spawn_lane_indices:
@@ -735,6 +741,7 @@ def add_auxiliary_agents(
         convoy_size=convoy_size,
         convoy_gap_m=convoy_gap_m,
         alternate_spawn_dest_map=alternate_spawn_dest_map,
+        spawn_longitudinal_by_lane=spawn_longitudinal_by_lane,
     )
     env.engine.register_manager("auxiliary_agent_manager", manager)
     manager.after_reset()

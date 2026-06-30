@@ -7,8 +7,10 @@ from pathlib import Path
 from typing import Any
 
 # Shared with generate_manifest.py / run_benchmark.py CLI defaults.
-DEFAULT_SPAWN_DISTANCE_BEFORE_END = 20.0
-DEFAULT_AUX_DISTANCE_FROM_INTERSECTION = 20.0
+# Ego spawn offset from lane end toward the junction (m).
+DEFAULT_SPAWN_DISTANCE_BEFORE_END = 1.0
+# Aux spawn offset from lane end on main-road approach lanes (m).
+DEFAULT_AUX_DISTANCE_FROM_INTERSECTION = 10.0
 DEFAULT_AUX_LANES_OCCUPIED_MAX = 4
 
 # Row fields that may be filled from manifest.json / real_manifest_summary.json.
