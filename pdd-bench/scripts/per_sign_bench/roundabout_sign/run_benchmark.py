@@ -63,6 +63,12 @@ from lib.manifest_config import (
     enrich_manifest_row,
     load_manifest_config,
 )
+from lib.top_down_renderer_patch import (
+    apply_roundabout_top_down_renderer_patch,
+    dedupe_roundabout_sign_mgr,
+)
+
+apply_roundabout_top_down_renderer_patch()
 
 BENCH_DIR = Path(__file__).resolve().parent
 PER_SIGN_BENCH_DIR = BENCH_DIR.parent
@@ -1140,6 +1146,10 @@ def _place_roundabout_signs(
                 tracker.is_priority_sign = True
         except Exception as exc:
             print(f"[RoundaboutSigns] Failed yield tracker on ego lane: {exc}")
+
+    removed_dupes = dedupe_roundabout_sign_mgr(sign_mgr)
+    if removed_dupes:
+        print(f"[RoundaboutSigns] Removed {removed_dupes} duplicate 4.3 icon(s)")
 
     print(
         f"[RoundaboutSigns] Placed {placed_plate} RoundaboutSign(s) + yield tracker "

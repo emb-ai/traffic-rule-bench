@@ -22,6 +22,7 @@ from metadrive.policy.expert_policy import ExpertPolicy
 from scripts.per_sign_bench.factorized_space.ego_defaults import (
     apply_ego_defaults,
     apply_ego_sampled,
+    numpy_legacy_seed,
     sample_ego_params,
 )
 from traffic_signs.priority_signs import MainRoadSign, YieldSign
@@ -1032,7 +1033,7 @@ def run_one_episode(
     aux_lanes_occupied: int = DEFAULT_AUX_LANES_OCCUPIED_MAX,
 ) -> dict:
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
-    np.random.seed(seed)
+    np.random.seed(numpy_legacy_seed(seed))
     random.seed(seed)
     try:
         import torch as _torch
@@ -1122,7 +1123,9 @@ def run_one_episode(
                     apply_ego_defaults(policy_obj)
                 elif ego_variant.startswith("s") and ego_variant[1:].isdigit():
                     k = int(ego_variant[1:])
-                    sample_seed = int(ego_sample_seed_base) + int(seed) + k * 1000003
+                    sample_seed = numpy_legacy_seed(
+                        int(ego_sample_seed_base) + int(seed) + k * 1000003
+                    )
                     sampled_ego_params = sample_ego_params(sample_seed)
                     apply_ego_sampled(policy_obj, sampled_ego_params)
                 else:

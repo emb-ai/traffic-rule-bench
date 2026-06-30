@@ -11,6 +11,10 @@ from metadrive.constants import DEFAULT_AGENT, TerminationState
 from metadrive.component.navigation_module.edge_network_navigation import EdgeNetworkNavigation
 from metadrive.obs.top_down_obs_multi_channel import TopDownMultiChannel
 from metadrive.utils import clip, Config
+from envs.sumo_lane_node_patch import apply_sumo_lane_node_patch
+
+apply_sumo_lane_node_patch()
+
 from traffic_signs.traffic_sign_manager import TrafficSignManager
 from traffic_signs.stop_sign import StopSign
 from traffic_signs.direction_sign import DirectionSign
