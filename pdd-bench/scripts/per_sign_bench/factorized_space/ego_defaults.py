@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 DEFAULT_EGO_PARAMS = {
     "NORMAL_SPEED": 10.0,        # m/s (~36 km/h)
     "MAX_SPEED": 15.0,           # m/s (~54 km/h)
@@ -24,6 +23,14 @@ DEFAULT_EGO_PARAMS = {
     "TIME_WANTED": 1.5,          # s
     "LANE_CHANGE_FREQ": 200,     # cooldown in sim steps
 }
+
+
+_NUMPY_LEGACY_SEED_MOD = 2**32
+
+
+def numpy_legacy_seed(seed: int) -> int:
+    """Map any integer seed into the range accepted by ``np.random.seed``."""
+    return int(seed) % _NUMPY_LEGACY_SEED_MOD
 
 
 def apply_ego_defaults(ego_policy: Any) -> None:
@@ -66,7 +73,7 @@ def sample_ego_params(seed: int) -> dict:
     # itself — must keep deriving randomness from that scene_seed).
     saved_state = np.random.get_state()
     try:
-        np.random.seed(seed)
+        np.random.seed(numpy_legacy_seed(seed))
         normal_speed = float(sampler.normal_speed())
         distance_wanted = float(sampler.distance_wanted())
         safe_normal = max(normal_speed, 0.5)

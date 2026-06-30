@@ -396,6 +396,9 @@ class TrafficSignSumoEnv(BaseEnv):
         # reads this class attribute at __init__.
         from metadrive.utils.sumo.map_utils import LaneNode
         LaneNode.MIN_LANE_WIDTH = float(self.config.get("min_lane_width", 0.0))
+        LaneNode.TREAT_LIGHT_VEHICLE_AS_DRIVING = bool(
+            self.config.get("treat_light_vehicle_lanes_as_driving", True)
+        )
         self.engine.register_manager("map_manager", SumoMapManager(map_path))
         self.engine.register_manager("traffic_manager", SimpleTrafficManager())
         self.engine.register_manager("traffic_sign_manager", TrafficSignManager())
@@ -415,7 +418,10 @@ class TrafficSignSumoEnv(BaseEnv):
             self.engine.register_manager("pedestrian_manager", CrosswalkPedestrianManager())
             if self.config.get("enforce_pedestrian_yield_for_traffic", True):
                 self.engine.register_manager("crosswalk_yield_enforcer", CrosswalkYieldEnforcerManager())
-        print(f"[sumo_env] LaneNode.MIN_LANE_WIDTH = {LaneNode.MIN_LANE_WIDTH}")
+        print(
+            f"[sumo_env] LaneNode.MIN_LANE_WIDTH = {LaneNode.MIN_LANE_WIDTH}, "
+            f"TREAT_LIGHT_VEHICLE_AS_DRIVING = {LaneNode.TREAT_LIGHT_VEHICLE_AS_DRIVING}"
+        )
 
     @staticmethod
     def _normalize_turn_direction(raw_dir: str) -> str:
