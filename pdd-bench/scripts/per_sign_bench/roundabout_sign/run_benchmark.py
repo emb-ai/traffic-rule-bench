@@ -43,6 +43,10 @@ from lib.junction_sign_placement import (
     sign_longitudinal_offset,
     sign_placement_long,
 )
+from lib.roundabout_yield_zone import (
+    collect_entry_conflict_lanes,
+    entry_conflict_ring_edges,
+)
 from lib.junction_priority_layout import (
     JunctionLayoutError,
     build_junction_priority_layout,
@@ -413,6 +417,23 @@ def _ego_in_sign_zone(sign, vehicle) -> bool:
         return False
 
     return False
+
+
+def _ego_in_exact_sign_zone(sign, vehicle) -> bool:
+    """Display-only check matching the rendered sign zone polygon exactly."""
+    lane = getattr(sign, "lane", None)
+    zone_start = getattr(sign, "zone_start", None)
+    zone_end = getattr(sign, "zone_end", None)
+    veh_lane = getattr(vehicle, "lane", None)
+    if lane is None or veh_lane is None or zone_start is None or zone_end is None:
+        return False
+    if not _on_same_road(veh_lane, lane):
+        return False
+    try:
+        veh_long = float(lane.local_coordinates(vehicle.position)[0])
+    except Exception:
+        return False
+    return float(zone_start) <= veh_long <= float(zone_end)
 
 
 def _unwrap_base_env(env):
@@ -989,8 +1010,29 @@ def _place_roundabout_signs(
             env, distance_before_end=distance_before_end, show_model=show_model
         )
 
-    junction_id = layout.get("junction_id", "")
     ego_edge = str(row.get("road_id") or "")
+    entry_junction = layout.get("junction_id") or row.get("roundabout_entry_junction")
+    incoming_edges = entry_conflict_ring_edges(
+        layout,
+        ego_edge,
+        entry_junction_id=entry_junction,
+    )
+    entry_incoming_lanes = collect_entry_conflict_lanes(
+        env,
+        layout,
+        ego_edge,
+        entry_junction_id=entry_junction,
+    )
+    center = layout.get("center") or row.get("roundabout_center_xy")
+    entry_junction_xy = tuple(center[:2]) if center else None
+    print(
+        f"[RoundaboutSigns] Yield conflict zone: "
+        f"{len(incoming_edges)} incoming ring edge(s) "
+        f"({', '.join(incoming_edges) or 'none'}), "
+        f"{len(entry_incoming_lanes)} lane(s)"
+    )
+
+    junction_id = layout.get("junction_id", "")
     placed_plate = 0
 
     # Visible 4.3 plate on every spoke approach (or ego spoke only if unknown)
@@ -1039,6 +1081,8 @@ def _place_roundabout_signs(
                 use_random_lane=False,
                 intersection_name=junction_id,
                 ring_road_lanes=ring_lanes,
+                entry_incoming_lanes=entry_incoming_lanes,
+                entry_junction_xy=entry_junction_xy,
             )
             if tracker is not None:
                 tracker.is_priority_sign = True
@@ -1459,7 +1503,7 @@ def run_one_episode(
                     for sign in yield_signs:
                         has_traffic, _ = sign.has_main_road_traffic(exclude_vehicle=vehicle)
                         main_road_has_traffic = main_road_has_traffic or has_traffic
-                        if sign._is_vehicle_in_zone(vehicle):
+                        if _ego_in_exact_sign_zone(sign, vehicle):
                             ego_in_yield_zone = True
                         if sign._is_violating(vehicle):
                             ego_violating_yield = True

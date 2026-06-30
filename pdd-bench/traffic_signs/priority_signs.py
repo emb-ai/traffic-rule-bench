@@ -1,4 +1,4 @@
-from traffic_signs.base_traffic_sign import BaseTrafficSign, ICONS_DIR
+from traffic_signs.base_traffic_sign import BaseTrafficSign, ICONS_DIR, same_road_check
 import numpy as np
 import os
 import re
@@ -446,14 +446,14 @@ class YieldSign(BaseTrafficSign):
 
     def _is_vehicle_in_zone(self, vehicle) -> bool:
         """Check if the vehicle is within the yield zone."""
-        vehicle_idx = vehicle.lane.index
-        sign_idx = self.lane.index
-
-        same_road = (vehicle_idx[0] == sign_idx[0] and vehicle_idx[1] == sign_idx[1])
-        if not same_road:
+        vehicle_lane = getattr(vehicle, "lane", None)
+        if vehicle_lane is None or not same_road_check(
+            getattr(vehicle_lane, "index", None),
+            getattr(self.lane, "index", None),
+        ):
             return False
-        
-        veh_long = vehicle.lane.local_coordinates(vehicle.position)[0]
+
+        veh_long = self.lane.local_coordinates(vehicle.position)[0]
         return self.zone_start <= veh_long <= self._obligation_zone_end(vehicle)
 
     def _is_violating(self, vehicle) -> bool:
@@ -715,28 +715,132 @@ class RoundaboutSign(BaseTrafficSign):
 class RoundaboutYieldSign(YieldSign):
     """Invisible yield tracker for 4.3 — ego on spoke yields to ring traffic."""
 
+    ENTRY_CONFLICT_BEFORE_M = 20.0
+    ENTRY_CONFLICT_AFTER_M = 0.0
+
     def __init__(
         self,
         lane,
         intersection_name: str = None,
         ring_road_lanes: list = None,
+        entry_incoming_lanes: list = None,
+        entry_junction_xy: tuple[float, float] | list[float] | None = None,
         **kwargs,
     ):
         kwargs.setdefault("show_model", False)
         kwargs.setdefault("icon_path", "4.3.png")
+        incoming = list(entry_incoming_lanes or [])
+        conflict_lanes = incoming
+        if not conflict_lanes:
+            conflict_lanes = list(ring_road_lanes or [])
         super().__init__(
             lane,
             intersection_name=intersection_name,
-            main_road_lanes=ring_road_lanes,
+            main_road_lanes=conflict_lanes,
             auto_detect_main_roads=False,
             **kwargs,
         )
         self.priority_type = "roundabout_yield"
+        if entry_junction_xy is not None:
+            self._entry_junction_xy = np.array(
+                [float(entry_junction_xy[0]), float(entry_junction_xy[1])],
+                dtype=np.float64,
+            )
+        else:
+            self._entry_junction_xy = None
+
+    def _junction_at_lane_end(self, lane) -> bool:
+        """True when the entry junction is at ``lane.length`` (SUMO to-node end)."""
+        if self._entry_junction_xy is None:
+            return True
+        try:
+            p0 = np.array(lane.position(0.0, 0.0), dtype=np.float64)
+            p1 = np.array(lane.position(float(lane.length), 0.0), dtype=np.float64)
+        except Exception:
+            return True
+        return float(np.linalg.norm(p1 - self._entry_junction_xy)) <= float(
+            np.linalg.norm(p0 - self._entry_junction_xy)
+        )
+
+    def _conflict_longitudinal_range(self, lane) -> tuple[float, float]:
+        """20 m on the ring upstream of ego's entry junction (yield-from-left)."""
+        before_m = self.ENTRY_CONFLICT_BEFORE_M
+        if self._junction_at_lane_end(lane):
+            return (
+                max(0.0, lane.length - before_m),
+                lane.length + self.ENTRY_CONFLICT_AFTER_M,
+            )
+        return (0.0, min(float(lane.length), before_m))
+
+    def _is_vehicle_in_main_road_conflict_zone(self, vehicle) -> bool:
+        """True only when vehicle is in the 20 m ring segment at ego's entry."""
+        if not self.main_road_lanes:
+            return False
+
+        try:
+            vehicle_pos = vehicle.position
+            vehicle_heading = vehicle.heading_theta
+            vehicle_lane_idx = getattr(vehicle.lane, "index", None)
+            if vehicle_lane_idx is None:
+                return False
+            v_segment = (vehicle_lane_idx[0], vehicle_lane_idx[1])
+        except Exception:
+            return False
+
+        main_segments = set()
+        for ln in self.main_road_lanes:
+            ln_idx = getattr(ln, "index", None)
+            if ln_idx and len(ln_idx) >= 2:
+                main_segments.add((ln_idx[0], ln_idx[1]))
+
+        for lane in self.main_road_lanes:
+            try:
+                lane_idx = getattr(lane, "index", None)
+                if lane_idx is None or len(lane_idx) < 2:
+                    continue
+                lane_segment = (lane_idx[0], lane_idx[1])
+                long_pos, lat_pos = lane.local_coordinates(vehicle_pos)
+                zone_start, zone_end = self._conflict_longitudinal_range(lane)
+
+                if zone_start <= long_pos <= zone_end:
+                    if abs(lat_pos) <= lane.width * 1.5:
+                        if v_segment == lane_segment:
+                            return True
+                        if v_segment not in main_segments:
+                            lane_heading = lane.heading_theta_at(
+                                min(max(long_pos, 0.0), lane.length)
+                            )
+                            heading_diff = abs(vehicle_heading - lane_heading)
+                            heading_diff = min(heading_diff, 2 * np.pi - heading_diff)
+                            if heading_diff < np.pi / 2:
+                                return True
+            except Exception:
+                continue
+        return False
+
+    def get_top_down_aux_conflict_zones(self) -> list[dict]:
+        """Lane segments where auxiliary ring traffic triggers a 4.3 violation."""
+        zones: list[dict] = []
+        for lane in self.main_road_lanes:
+            try:
+                long_start, long_end = self._conflict_longitudinal_range(lane)
+                zones.append(
+                    {
+                        "lane": lane,
+                        "long_start": float(long_start),
+                        "long_end": float(long_end),
+                        "kind": "incoming",
+                    }
+                )
+            except Exception:
+                continue
+        return zones
 
     def get_rule_description(self) -> str:
         return (
             "Roundabout (4.3) — must not leave the approach zone "
-            "while traffic is present on the traffic circle"
+            "while traffic is present on the ring within 20 m upstream "
+            "of the ego entry junction"
         )
 
 
