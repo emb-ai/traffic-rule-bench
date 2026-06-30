@@ -59,6 +59,7 @@ class ScenarioConfig:
     n_variants: int = 1
     augment: bool = True
     max_scenarios_per_scene: Optional[int] = None
+    max_exit_destinations_per_spawn: Optional[int] = None
 
 
 @dataclass
@@ -605,6 +606,7 @@ def generate_manifest(
                 net_full_path,
                 spawn_lanes,
                 aux_distance_from_intersection=aux_cfg.distance_from_intersection,
+                max_exit_destinations_per_spawn=scenario_cfg.max_exit_destinations_per_spawn,
             )
             if not scenarios:
                 print(f"  [augment] No valid scenarios for {scene_name}; skipping scene")
@@ -666,6 +668,7 @@ def generate_manifest(
         "variants_per_scene": scenario_cfg.n_variants,
         "augment": scenario_cfg.augment,
         "max_scenarios_per_scene": scenario_cfg.max_scenarios_per_scene,
+        "max_exit_destinations_per_spawn": scenario_cfg.max_exit_destinations_per_spawn,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
         "traffic_density": sim_cfg.traffic_density,
         "horizon": sim_cfg.horizon,
@@ -811,6 +814,7 @@ def main(cfg: DictConfig) -> None:
         n_variants=cfg.scenario.n_variants,
         augment=cfg.scenario.augment,
         max_scenarios_per_scene=cfg.scenario.max_scenarios_per_scene,
+        max_exit_destinations_per_spawn=cfg.scenario.max_exit_destinations_per_spawn,
     )
     sim_cfg = SimulationConfig(
         spawn_velocity_ms=cfg.simulation.spawn_velocity_ms,

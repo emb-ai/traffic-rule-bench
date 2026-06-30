@@ -55,6 +55,7 @@ class ApproachArm:
     outgoing_to: List[str] = field(default_factory=list)
     left_to: List[str] = field(default_factory=list)
     from_node: str = ""
+    to_node: str = ""
     min_lane_length: float = 0.0
 
     def to_dict(self) -> dict:
@@ -69,6 +70,7 @@ class ApproachArm:
             "outgoing_to": list(self.outgoing_to),
             "left_to": list(self.left_to),
             "from_node": self.from_node,
+            "to_node": self.to_node,
             "min_lane_length": float(self.min_lane_length),
         }
 
@@ -319,6 +321,7 @@ def load_junction_priority_layout(path: Path | str) -> JunctionPriorityLayout:
             outgoing_to=list(arm.get("outgoing_to", arm.get("straight_to", []))),
             left_to=list(arm.get("left_to", [])),
             from_node=arm.get("from_node", ""),
+            to_node=arm.get("to_node", ""),
         )
         for arm in data["arms"]
     ]

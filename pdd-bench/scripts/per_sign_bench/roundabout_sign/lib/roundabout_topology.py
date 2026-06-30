@@ -469,6 +469,7 @@ def _spoke_arms_for_component(
                 outgoing_to=sorted(outgoing_map.get(edge_id, set())),
                 left_to=sorted(left_map.get(edge_id, set())),
                 from_node=edge.from_node,
+                to_node=edge.to_node,
                 min_lane_length=min((lane.length for lane in edge.lanes), default=0.0),
             )
         )
@@ -507,6 +508,7 @@ def _ring_arms_for_component(
                 outgoing_to=sorted(outgoing_map.get(edge_id, set())),
                 left_to=sorted(left_map.get(edge_id, set())),
                 from_node=edge.from_node,
+                to_node=edge.to_node,
                 min_lane_length=min((lane.length for lane in edge.lanes), default=0.0),
             )
         )

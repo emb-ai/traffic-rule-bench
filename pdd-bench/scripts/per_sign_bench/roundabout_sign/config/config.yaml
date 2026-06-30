@@ -26,7 +26,8 @@ paths:
 scenario:
   n_variants: 1                   # Variants per scene (non-augmented mode)
   augment: true                   # Enable ego/aux spawn point enumeration
-  max_scenarios_per_scene: 1     # Limit augmented scenarios (null = all)
+  max_exit_destinations_per_spawn: 1  # Limit outbound roundabout exits per ego spawn (null = all)
+  max_scenarios_per_scene: 1  # Final global cap after exit-destination expansion (null = all)
   respect_scene_selection: true  # Skip scenes marked reject in scene_selection.json
 
 # =============================================================================

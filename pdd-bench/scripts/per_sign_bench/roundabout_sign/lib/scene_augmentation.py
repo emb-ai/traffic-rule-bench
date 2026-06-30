@@ -141,18 +141,31 @@ def parse_intersection_approach_lanes(
     return lanes
 
 
+def _roundabout_exit_edges(layout: JunctionPriorityLayout, ego_edge_id: str) -> List[str]:
+    """Outbound spoke edges whose lane end can be used as ego destination."""
+    ring_nodes: set[str] = set()
+    for arm in layout.arms:
+        if arm.edge_id not in layout.main_edge_ids:
+            continue
+        if arm.from_node:
+            ring_nodes.add(arm.from_node)
+        if arm.to_node:
+            ring_nodes.add(arm.to_node)
+
+    exits: List[str] = []
+    for arm in layout.arms:
+        if arm.road_class != "secondary":
+            continue
+        if arm.edge_id == ego_edge_id:
+            continue
+        if arm.from_node in ring_nodes and arm.to_node not in ring_nodes:
+            exits.append(arm.edge_id)
+    return sorted(set(exits))
+
+
 def _ego_destination_edges(layout: JunctionPriorityLayout, ego_edge_id: str) -> List[str]:
-    """Ego destination for roundabout: enter the traffic circle (ring edges)."""
-    arm = layout.arm_for_edge(ego_edge_id)
-    main_ids = layout.main_edge_ids
-    if arm is not None:
-        candidates = _filter_real_destination_edges(
-            list(arm.outgoing_to) + list(arm.left_to) + list(arm.straight_to)
-        )
-        ring_dests = [e for e in candidates if e in main_ids and e != ego_edge_id]
-        if ring_dests:
-            return ring_dests
-    return sorted(e for e in main_ids if e != ego_edge_id)
+    """Ego destination for roundabout: the end of one outbound exit spoke."""
+    return _roundabout_exit_edges(layout, ego_edge_id)
 
 
 def _aux_straight_destination(layout: JunctionPriorityLayout, aux_edge_id: str) -> Optional[str]:
@@ -430,6 +443,7 @@ def enumerate_spawn_scenarios(
     lane_lengths: Optional[Dict[Tuple[str, int], float]] = None,
     route_index: Optional[VehicleRouteIndex] = None,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+    max_exit_destinations_per_spawn: Optional[int] = None,
 ) -> List[SpawnScenario]:
     """Enumerate ego/aux spawn combinations from junction layout arms."""
     from .auxiliary_agent import min_aux_spawn_lane_length
@@ -478,6 +492,7 @@ def enumerate_spawn_scenarios(
                 if lane_lengths.get((ego_edge, ego_lane), min_lane_length) < min_lane_length:
                     continue
 
+                reachable_destinations: List[tuple[str, str]] = []
                 for ego_dest_edge in ego_dest_edges:
                     # Skip if destination is same as spawn edge (no junction crossing)
                     if ego_dest_edge == ego_edge:
@@ -489,21 +504,29 @@ def enumerate_spawn_scenarios(
                         lane_keys_by_edge,
                     )
 
+                    if not _is_valid_departure(
+                        ego_edge,
+                        ego_lane,
+                        ego_dest_edge,
+                        ego_dest_lane_key,
+                    ):
+                        continue
+
+                    if route_index is not None and not route_index.can_reach_edge(
+                        ego_edge, ego_lane, ego_dest_edge
+                    ):
+                        continue
+
+                    reachable_destinations.append((ego_dest_edge, ego_dest_lane_key))
+
+                if max_exit_destinations_per_spawn is not None:
+                    reachable_destinations = reachable_destinations[
+                        :max(0, int(max_exit_destinations_per_spawn))
+                    ]
+
+                for ego_dest_edge, ego_dest_lane_key in reachable_destinations:
                     for aux_lane in aux_lane_nums:
                         if lane_lengths.get((aux_edge, aux_lane), min_lane_length) < min_lane_length:
-                            continue
-
-                        if not _is_valid_departure(
-                            ego_edge,
-                            ego_lane,
-                            ego_dest_edge,
-                            ego_dest_lane_key,
-                        ):
-                            continue
-
-                        if route_index is not None and not route_index.can_reach_edge(
-                            ego_edge, ego_lane, ego_dest_edge
-                        ):
                             continue
 
                         aux_dest_lane_key = _pick_outgoing_lane_key(
@@ -555,6 +578,7 @@ def augment_layout_for_scene(
     scene_meta: Optional[dict] = None,
     min_lane_length: float = 20.0,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+    max_exit_destinations_per_spawn: Optional[int] = None,
 ) -> Tuple[JunctionPriorityLayout, List[SpawnScenario]]:
     """Build roundabout layout and enumerate augmented scenarios for one scene."""
     meta = scene_meta or {}
@@ -581,5 +605,6 @@ def augment_layout_for_scene(
         lane_lengths=lengths,
         route_index=route_index,
         aux_distance_from_intersection=aux_distance_from_intersection,
+        max_exit_destinations_per_spawn=max_exit_destinations_per_spawn,
     )
     return layout, scenarios
