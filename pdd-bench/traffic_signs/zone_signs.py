@@ -11,13 +11,19 @@ class ZoneSpeedLimitSign(BaseTrafficSign):
     """
 
     def __init__(
-        self, 
-        lane, 
+        self,
+        lane,
         speed_limit: float = 20,
         longitudinal_offset: float = 0.0,
+        speed_limit_override: float = None,
         **kwargs
     ):
-        if hasattr(lane, 'speed') and lane.speed is not None:
+        # `speed_limit_override` forces the enforced limit (e.g. the catalog's
+        # bucketed {20,30,40} v_target) instead of the raw road speed, so the
+        # verifier checks the canonical zone limit the braking scene was built for.
+        if speed_limit_override is not None:
+            self.speed_limit = int(round(float(speed_limit_override)))
+        elif hasattr(lane, 'speed') and lane.speed is not None:
             self.speed_limit = round(lane.speed * 3.6)
         else:
             self.speed_limit = speed_limit

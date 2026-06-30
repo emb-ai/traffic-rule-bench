@@ -46,26 +46,23 @@ MIN_SPEED_FLOOR_KMH = 35.0      # drop 4.6 scenes whose realistic min (road-10, 
                                 # this — a min <= base cruise (~30) isn't discriminative
 
 
+# Enforced limits a braking scene (3.24 / 5.31) may use. Bounded at 40: the ego
+# cruises ~36 km/h and tops out ~54 km/h, so a 40 limit is reliably violatable
+# (base enters above it, compliant brakes to it). 50 sits at the ego's ceiling —
+# too marginal to discriminate — so roads ≥45 km/h snap DOWN to 40.
+ALLOWED_LIMITS_KMH = (20, 30, 40)
+
+
 def bucket_limit_kmh(raw_kmh: float, selector: Optional[int] = None):
-    """Snap a raw OSM speed limit to {20, 30, 50} for 3.24.
+    """Snap a raw OSM speed limit to the NEAREST of {20, 30, 40} km/h.
 
-    <20 → 20 ; 20–40 → 30 ; 40–80 → 30 or 50 (even split) ; >80 → None (dropped).
-
-    Final targets are {20, 30}: low enough that an unaware ego can VIOLATE them at a
-    MODERATE, lane-holdable speed (≤40 km/h) — high speeds (needed to violate a 40
-    limit) made the ego fly off curvy OSM roads (OOR → low success). 50 is a MARKER:
-    the caller redistributes every former-50 scene EVENLY into 20/30 (round-robin).
+    >80 km/h → None (dropped). Each road keeps a limit close to its real speed
+    (20→20, 35→30/40, ≥45→40) instead of the old collapse-to-{20,30}. `selector`
+    is now unused (kept for call-site backward compat).
     """
     if raw_kmh > 80:
         return None
-    if raw_kmh < 21:
-        return 20
-    if raw_kmh <= 40:
-        return 30
-    # was 60 → even 30/50 split keyed off the per-scene selector (50 = redistributed)
-    if selector is None:
-        return 50
-    return 30 if (selector % 2 == 0) else 50
+    return min(ALLOWED_LIMITS_KMH, key=lambda b: abs(b - raw_kmh))
 
 BRAKE_DECEL_MPS2_DEFAULT = 3.5     # assumed braking decel (firm but achievable;
                                    # idm brakes harder than its 2.5 comfort decel).
@@ -80,12 +77,13 @@ V0_MAX_EXCESS_KMH = 30.0
 # doesn't brake enters the zone at v0 > v_target and VIOLATES. This is the whole
 # point of the scene — discriminate aware vs unaware, not test braking strength.
 BRAKE_DIST_FACTOR = 1.0
-# Ego's IDM desired speed (= profile MAX_SPEED ~14.3 m/s ≈ 51 km/h). v0 above this
-# is shed instantly at spawn, so cap v0 here to keep the approach short & the entry
-# speed realistic. The zone limit (v_target, 20/40) sits BELOW this cruising speed,
-# so an unaware agent cruising at ~51 violates it.
-EGO_DESIRED_SPEED_MPS = 11.0   # ~40 km/h: spawn/approach speed matches ego cruise
-                               # (no spawn spike) and holds the lane (less OOR)
+# Spawn-velocity ceiling: the agent's INITIAL speed at spawn may reach up to
+# 60 km/h. v0 is set directly via set_velocity (not clamped), then the IDM decays
+# toward its desired speed — so the agent ENTERS the approach above the limit and an
+# unaware policy carries that over-speed into the zone (violates). 60 km/h is the
+# fastest realistic entry and bounds the braking distance / off-road risk.
+EGO_MAX_SPAWN_MPS = 60.0 / 3.6   # = 16.667 m/s ≈ 60 km/h
+EGO_DESIRED_SPEED_MPS = 11.0     # legacy ref (~40 km/h); no longer caps v0
 SPAWN_VELOCITY_MAX_MPS = 22.0      # nuPlan clip upper bound
 
 
@@ -176,7 +174,6 @@ def build_catalog(
     insufficient_v0 = 0
     dropped_high_limit = 0
     dropped_slow_min = 0   # 4.6 scenes whose road is too slow for a meaningful min
-    fifty_rr = 0   # round-robin counter: former-50 (3.24) scenes -> even 20/40
     for scene in sampled:
         n_lanes = count_lanes_on_road(scene.net_path, scene.road_id)
         if n_lanes <= 0:
@@ -214,23 +211,14 @@ def build_catalog(
             else:
                 net_abs = str(scenes_root / scene.net_path)
                 v_target_raw_kmh = round(edge_speed_mps(net_abs, scene.road_id) * 3.6)
-                if scene.sign_code == "3.24":
-                    bucketed = bucket_limit_kmh(
-                        v_target_raw_kmh,
-                        selector=stable_hash(scene.scene_id, "limit40_50"))
-                    if bucketed is None:    # raw limit > 80 km/h → drop the scene
-                        dropped_high_limit += 1
-                        continue
-                    # 50 ≈ ego cruise → unaware agent wouldn't violate. Redistribute
-                    # every former-50 scene EVENLY into 20/40 (round-robin → exact
-                    # even split, deterministic in sampled-iteration order).
-                    if bucketed == 50:
-                        bucketed = 20 if (fifty_rr % 2 == 0) else 30
-                        fifty_rr += 1
-                    v_target_kmh = bucketed
-                else:
-                    # Zone-limit signs (5.31): brake to the real zone limit.
-                    v_target_kmh = v_target_raw_kmh
+                # 3.24 AND 5.31: snap the road's limit to the nearest of
+                # {20,30,40,50} km/h (5.21 is fixed 20, handled above). Bounded at
+                # 50 so the ego can still spawn above the limit and violate it.
+                bucketed = bucket_limit_kmh(v_target_raw_kmh)
+                if bucketed is None:    # raw limit > 80 km/h → drop the scene
+                    dropped_high_limit += 1
+                    continue
+                v_target_kmh = bucketed
 
         for spawn_lane_num in lane_range:
             for var_idx in range(n_variations):
@@ -296,9 +284,12 @@ def build_catalog(
                     # Cap v0 at the ego's DESIRED speed (else it's shed instantly
                     # at spawn) AND near the limit (short approach). The ego holds
                     # this speed in, then must brake for the zone.
+                    # Ceiling: limit + up-to-30 km/h over-speed, capped at the 60 km/h
+                    # spawn ceiling. So 30/40 limits can spawn up to 60; 20 tops at 50
+                    # (a 40 km/h over-speed in a 20 zone is undrivable).
                     v0_cap_mps = min(float(v0_max_kmh) / 3.6,
                                      (v_target_kmh + V0_MAX_EXCESS_KMH) / 3.6,
-                                     EGO_DESIRED_SPEED_MPS)
+                                     EGO_MAX_SPAWN_MPS)
                     v0 = _v0_sampler(vseed, v_target_mps,
                                      min_excess=v0_min_excess_mps,
                                      max_v=v0_cap_mps)

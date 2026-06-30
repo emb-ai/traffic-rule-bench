@@ -1748,9 +1748,11 @@ class TrafficSignSumoEnv(BaseEnv):
                 spawn_dist = max(0.1, float(self.sign_spawn_distance))
             sign_longitudinal_offset = min(spawn_dist, max(0.1, sign_lane.length - 1.0))
             speed_kwargs = dict(sign_kwargs)
-            # 3.24: force the enforced limit to the bucketed value (20/40/60) so
-            # the verifier checks the canonical limit and the icon resolves.
-            if self.sign_type == "3.24" and float(self.config.get("ego_v_target_kmh", 0) or 0) > 0:
+            # 3.24 / 5.31: force the enforced limit to the bucketed value
+            # ({20,30,40}) so the verifier checks the canonical limit (not the raw
+            # road speed) and the icon resolves. 5.31's catalog v_target is now
+            # bucketed too, so its runtime sign must use the same value.
+            if self.sign_type in ("3.24", "5.31") and float(self.config.get("ego_v_target_kmh", 0) or 0) > 0:
                 speed_kwargs["speed_limit_override"] = float(self.config.get("ego_v_target_kmh"))
             sign_obj = sign_mgr.add_sign(
                 sign_class,

@@ -3,7 +3,7 @@
 Produces a PNG with:
   - nuPlan observed speeds (sampler.speeds) in km/h
   - nuPlan initial/spawn speed draws (sample_spawn_velocity) in km/h
-Marks the canonical 3.24 limits {20,40,60} for reference.
+Marks the canonical 3.24 limits {20,40,50} for reference.
 
 Run:
   ~/miniconda3/envs/metadrive_sdc/bin/python scripts/vis_env/plot_nuplan_speeds.py \
@@ -50,14 +50,14 @@ def main():
         (axes[1], spawn_kmh, "nuPlan initial/spawn speed (sampled)", "#4f9d69"),
     ):
         ax.hist(data, bins=40, color=color, edgecolor="white")
-        for lim in (20, 40, 60):
+        for lim in (20, 40, 50):
             ax.axvline(lim, color="#c0504d", ls="--", lw=1, alpha=0.7)
         ax.set_title(f"{title}\nmed={np.median(data):.1f} mean={data.mean():.1f} "
                      f"p95={np.percentile(data,95):.1f} km/h")
         ax.set_xlabel("speed, km/h")
         ax.set_ylabel("count")
         ax.grid(axis="y", alpha=0.3)
-    fig.suptitle("nuPlan speed distributions (dashed = 3.24 limits 20/40/60)")
+    fig.suptitle("nuPlan speed distributions (dashed = 3.24 limits 20/40/50)")
     fig.tight_layout()
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
