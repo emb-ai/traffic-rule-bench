@@ -138,3 +138,49 @@ def collect_entry_conflict_lanes(
 def collect_all_entry_conflict_lanes(env, layout: dict) -> List[Any]:
     """MetaDrive lanes on all ring segments upstream of roundabout entries."""
     return collect_lanes_for_edge_ids(env, layout, all_entry_conflict_ring_edges(layout))
+
+
+def ego_entry_junction_id(
+    layout: dict,
+    ego_spoke_edge_id: str,
+) -> Optional[str]:
+    """Junction node where ego spoke meets the traffic circle."""
+    for arm in layout.get("arms", []):
+        if arm.get("edge_id") == ego_spoke_edge_id:
+            return str(arm.get("to_node", "")) or None
+    return layout.get("junction_id")
+
+
+def compact_aux_ring_edges_for_ego(
+    layout: dict,
+    ego_spoke_edge_id: str,
+    *,
+    entry_junction_id: Optional[str] = None,
+) -> List[str]:
+    """Ring edges at ego's entry viable for compact-ring aux (blue zone + outgoing)."""
+    entry_j = entry_junction_id or ego_entry_junction_id(layout, ego_spoke_edge_id) or ""
+    if not entry_j:
+        return []
+
+    ordered: List[str] = []
+    seen: set[str] = set()
+    for edge_id in entry_conflict_ring_edges(
+        layout, ego_spoke_edge_id, entry_junction_id=entry_j
+    ):
+        if edge_id not in seen:
+            ordered.append(edge_id)
+            seen.add(edge_id)
+    for edge_id in entry_outgoing_ring_edges(
+        layout, ego_spoke_edge_id, entry_junction_id=entry_j
+    ):
+        if edge_id not in seen:
+            ordered.append(edge_id)
+            seen.add(edge_id)
+    return ordered
+
+
+def _arm_min_lane_length(layout: dict, edge_id: str) -> float:
+    for arm in layout.get("arms", []):
+        if arm.get("edge_id") == edge_id:
+            return float(arm.get("min_lane_length", 0.0) or 0.0)
+    return 0.0

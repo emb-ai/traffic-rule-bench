@@ -140,7 +140,7 @@ def collect_roundabout_keep_edge_ids(
     spoke_extension_m: float,
     extend_spoke_edge_id: Optional[str] = None,
 ) -> List[str]:
-    """Ring edges, all spoke approaches, and upstream chain on the sign spoke only."""
+    """Ring edges, all spoke approaches, and upstream chain on every spoke."""
     _, edges, _, _ = _load_net(net_path)
     ring_juncs = set(pick.ring_junction_ids)
     ring_edges = set(pick.ring_edge_ids)
@@ -174,14 +174,8 @@ def collect_roundabout_keep_edge_ids(
                 if next_budget > 0:
                     stack.append((pred.from_node, next_budget))
 
-    if extend_spoke_edge_id:
-        if extend_spoke_edge_id in pick.spoke_edge_ids:
-            walk_upstream(extend_spoke_edge_id)
-        else:
-            prefix = extend_spoke_edge_id.split("#", 1)[0]
-            for spoke_id in pick.spoke_edge_ids:
-                if spoke_id == extend_spoke_edge_id or spoke_id.startswith(prefix + "#"):
-                    walk_upstream(spoke_id)
+    for spoke_id in pick.spoke_edge_ids:
+        walk_upstream(spoke_id)
 
     pruned = {
         eid
@@ -457,7 +451,7 @@ def crop_scene_to_roundabout(
 
     cropped_pick = detect_roundabout(
         out_net,
-        sign_edge_id=catalog_sign_road or ego_spoke_edge_id,
+        sign_edge_id=ego_spoke_edge_id,
         ego_spoke_edge_id=ego_spoke_edge_id,
     )
 

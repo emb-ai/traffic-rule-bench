@@ -81,6 +81,45 @@ def render_preview(scene_dir: Path, out_path: Path) -> None:
     render_network(edges, junctions, out_path)
 
 
+def cropped_spoke_edges_for_core(scenes_root: Path, core_scene_name: str) -> set[str]:
+    """Spoke edge ids already covered by cropped folders for this core map."""
+    covered: set[str] = set()
+    for scene_dir in existing_roundabout_scenes(scenes_root, core_scene_name):
+        meta_path = scene_dir / "meta.json"
+        if not meta_path.is_file():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        spoke = (
+            meta.get("roundabout_sign_spoke_edge")
+            or meta.get("roundabout_approach_edge")
+            or meta.get("road_id")
+        )
+        if spoke:
+            covered.add(str(spoke))
+    return covered
+
+
+def per_spoke_expand_jobs(
+    core_scene_dir: Path,
+    scenes_root: Path,
+) -> list[tuple[int, str, str]]:
+    """Crop jobs for spokes not yet covered by any folder from this core."""
+    core_scene_name = core_scene_dir.name
+    meta = load_scene_meta(core_scene_dir)
+    source_net = resolve_full_source_net(core_scene_dir, meta)
+    pick = detect_roundabout(source_net, sign_edge_id=meta.get("road_id"))
+    covered = cropped_spoke_edges_for_core(scenes_root, core_scene_name)
+    jobs: list[tuple[int, str, str]] = []
+    for rank, spoke_edge_id in enumerate(pick.spoke_edge_ids):
+        if spoke_edge_id in covered:
+            continue
+        jobs.append((rank, spoke_edge_id, roundabout_spoke_scene_name(core_scene_name, rank)))
+    return jobs
+
+
 def existing_roundabout_scenes(scenes_root: Path, core_scene_name: str) -> list[Path]:
     patterns = [
         f"{core_scene_name}_rb_s*",
@@ -127,6 +166,8 @@ def process_core_scene(
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     one_per_core: bool = True,
     skip_duplicate_fingerprints: bool = True,
+    crop_jobs: list[tuple[int, str, str]] | None = None,
+    write_junction_index: bool = True,
 ) -> int:
     """Crop roundabout scene(s) from a core map. Returns scenes written."""
     core_scene_name = core_scene_dir.name
@@ -161,22 +202,26 @@ def process_core_scene(
 
     registry = RoundaboutFingerprintRegistry.for_scenes_root(scenes_root)
 
-    if one_per_core:
-        try:
-            sign_spoke = resolve_catalog_sign_spoke(
-                source_pick, meta.get("road_id"), spokes
-            )
-        except JunctionLayoutError as exc:
-            print(f"  [skip] {exc}")
-            mark_core_crop_attempted(core_scene_dir, [], dry_run=dry_run, skipped=str(exc))
-            return 0
-        crop_jobs = [(0, sign_spoke, roundabout_scene_name(core_scene_name))]
-        print(f"  one crop on catalog spoke {sign_spoke!r} -> {crop_jobs[0][2]}")
+    if crop_jobs is None:
+        if one_per_core:
+            try:
+                sign_spoke = resolve_catalog_sign_spoke(
+                    source_pick, meta.get("road_id"), spokes
+                )
+            except JunctionLayoutError as exc:
+                print(f"  [skip] {exc}")
+                mark_core_crop_attempted(core_scene_dir, [], dry_run=dry_run, skipped=str(exc))
+                return 0
+            crop_jobs = [(0, sign_spoke, roundabout_scene_name(core_scene_name))]
+            print(f"  one crop on catalog spoke {sign_spoke!r} -> {crop_jobs[0][2]}")
+        else:
+            crop_jobs = [
+                (rank, spoke_edge_id, roundabout_spoke_scene_name(core_scene_name, rank))
+                for rank, spoke_edge_id in enumerate(spokes)
+            ]
     else:
-        crop_jobs = [
-            (rank, spoke_edge_id, roundabout_spoke_scene_name(core_scene_name, rank))
-            for rank, spoke_edge_id in enumerate(spokes)
-        ]
+        one_per_core = False
+        print(f"  spoke expansion: {len(crop_jobs)} additional crop(s)")
 
     if dry_run:
         if skip_duplicate_fingerprints and crop_jobs:
@@ -185,6 +230,7 @@ def process_core_scene(
                 fingerprint,
                 scene_name=probe_name,
                 core_scene_name=core_scene_name,
+                one_per_core=one_per_core,
             )
             if duplicate is not None:
                 print(
@@ -210,6 +256,7 @@ def process_core_scene(
                     fingerprint,
                     scene_name=scene_name,
                     core_scene_name=core_scene_name,
+                    one_per_core=one_per_core,
                 )
                 if duplicate is not None:
                     owner = duplicate.get("scene_name", "?")
@@ -327,7 +374,74 @@ def process_core_scene(
         records.append({"written": False, "skipped": "error", "error": str(exc)})
         return 0
     finally:
-        mark_core_crop_attempted(core_scene_dir, records, dry_run=dry_run)
+        if write_junction_index:
+            mark_core_crop_attempted(core_scene_dir, records, dry_run=dry_run)
+
+
+def cores_with_cropped_scenes(scenes_root: Path, core_root: Path) -> list[Path]:
+    """Core maps that already have at least one cropped roundabout folder."""
+    cores: list[Path] = []
+    for core_dir in discover_core_scene_dirs(core_root):
+        if existing_roundabout_scenes(scenes_root, core_dir.name):
+            cores.append(core_dir)
+    return cores
+
+
+def expand_spokes_until(
+    scenes_root: Path,
+    core_root: Path,
+    *,
+    target: int,
+    preview_name: str,
+    dry_run: bool,
+    overwrite: bool,
+    require_manifest_viable: bool = True,
+    min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+    spoke_length_m: float = 80.0,
+    min_lane_length_m: float = 10.0,
+    skip_duplicate_fingerprints: bool = True,
+) -> int:
+    """Add per-spoke crops for cores that already have a base ``_rb`` scene."""
+    from tools.filter_scenes.review_junction_scenes import discover_review_scenes
+
+    candidates = len(discover_review_scenes(scenes_root, preview_name=preview_name))
+    if candidates >= target:
+        print(f"Already have {candidates} candidate scene(s) (target {target}).")
+        return 0
+
+    total_written = 0
+    cores = cores_with_cropped_scenes(scenes_root, core_root)
+    for core_dir in cores:
+        if candidates >= target:
+            break
+        try:
+            jobs = per_spoke_expand_jobs(core_dir, scenes_root)
+        except (FileNotFoundError, JunctionLayoutError) as exc:
+            print(f"  [skip expand] {core_dir.name}: {exc}")
+            continue
+        if not jobs:
+            continue
+        written = process_core_scene(
+            core_dir,
+            scenes_root,
+            spoke_extension_m=spoke_length_m,
+            max_spoke_length_m=spoke_length_m,
+            min_lane_length_m=min_lane_length_m,
+            preview_name=preview_name,
+            dry_run=dry_run,
+            overwrite=overwrite,
+            require_manifest_viable=require_manifest_viable,
+            min_ego_lane_m=min_ego_lane_m,
+            aux_distance_from_intersection=aux_distance_from_intersection,
+            one_per_core=False,
+            skip_duplicate_fingerprints=skip_duplicate_fingerprints,
+            crop_jobs=jobs,
+            write_junction_index=False,
+        )
+        total_written += written
+        candidates = len(discover_review_scenes(scenes_root, preview_name=preview_name))
+    return total_written
 
 
 def uncropped_core_dirs(core_root: Path) -> list[Path]:
@@ -337,6 +451,32 @@ def uncropped_core_dirs(core_root: Path) -> list[Path]:
         for core_dir in discover_core_scene_dirs(core_root)
         if not (core_dir / "junctions.json").is_file()
     ]
+
+
+def retryable_core_dirs(core_root: Path) -> list[Path]:
+    """Cores whose last crop attempt wrote no roundabout scene (safe to retry)."""
+    retryable: list[Path] = []
+    for core_dir in discover_core_scene_dirs(core_root):
+        index_path = core_dir / "junctions.json"
+        if not index_path.is_file():
+            continue
+        try:
+            records = json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not records:
+            retryable.append(core_dir)
+            continue
+        if any(record.get("written") for record in records):
+            continue
+        retryable.append(core_dir)
+    return retryable
+
+
+def clear_crop_attempt(core_dir: Path) -> None:
+    index_path = core_dir / "junctions.json"
+    if index_path.is_file():
+        index_path.unlink()
 
 
 def main() -> None:

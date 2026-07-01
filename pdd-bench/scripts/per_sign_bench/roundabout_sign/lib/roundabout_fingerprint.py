@@ -92,12 +92,27 @@ class RoundaboutFingerprintRegistry:
         *,
         scene_name: str,
         core_scene_name: Optional[str] = None,
+        one_per_core: bool = True,
     ) -> Optional[dict[str, Any]]:
         """Return registry entry if another scene already owns this fingerprint.
 
         Cropping ``sign_foo_rb`` from core ``sign_foo`` is allowed when the registry
-        only contains the matching ``kind=core`` entry from import.
+        only contains the matching ``kind=core`` entry from import. Multiple catalog
+        signs on the same SUMO roundabout are also allowed until a cropped scene
+        exists for that fingerprint.
+
+        When ``one_per_core=False`` (per-spoke crops), only block if ``scene_name``
+        is already registered — the same physical ring may have many spoke folders.
         """
+        if scene_name in self.by_scene:
+            owner = self.owner_of(self.by_scene[scene_name])
+            if owner is not None and owner.get("scene_name") != scene_name:
+                return owner
+            return None
+
+        if not one_per_core:
+            return None
+
         owner = self.owner_of(fingerprint)
         if owner is None:
             return None
@@ -108,6 +123,8 @@ class RoundaboutFingerprintRegistry:
                 return None
             if owner.get("kind") == "core" and owner.get("scene_name") == core_scene_name:
                 return None
+        if owner.get("kind") == "core":
+            return None
         return owner
 
     def upsert(
@@ -125,10 +142,6 @@ class RoundaboutFingerprintRegistry:
         if previous_scene and previous_scene != fingerprint:
             if self.fingerprints.get(previous_scene, {}).get("scene_name") == scene_name:
                 self.fingerprints.pop(previous_scene, None)
-
-        previous_owner = self.fingerprints.get(fingerprint)
-        if previous_owner and previous_owner.get("scene_name") not in (scene_name, None):
-            self.by_scene.pop(str(previous_owner["scene_name"]), None)
 
         entry = {
             "scene_name": scene_name,

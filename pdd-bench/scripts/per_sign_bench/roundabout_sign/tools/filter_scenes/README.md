@@ -9,12 +9,19 @@ python tools/filter_scenes/import_catalog_scenes.py --limit 30
 2. Build roundabout scene pool up to 100 candidates, then review
 
 Cropping runs the same manifest-viability checks as `generate_manifest.py` (O layout,
-aux lane length, routable ego/aux spawn scenarios). Invalid roundabouts are skipped before
-review so you do not label scenes that would be dropped later.
+aux spawn on long ring arms or compact entry zones near ego, routable ego/aux scenarios).
+Invalid roundabouts are skipped before review so you do not label scenes that would be
+dropped later.
 
 ```
 # Crop until >= 100 manifest-viable roundabout scenes exist
 python tools/filter_scenes/build_scene_pool.py crop --target 100
+
+# Re-try cores that failed earlier (duplicate/crop bugs) after fixes:
+python tools/filter_scenes/build_scene_pool.py retry --target 150
+
+# Add scenes on other spokes for roundabouts that already have sign_*_rb (reach 100+):
+python tools/filter_scenes/build_scene_pool.py expand-spokes --target 100
 
 # Review keep/reject in browser (roundabout crops only)
 python tools/filter_scenes/review_junction_scenes.py
@@ -40,7 +47,7 @@ python tools/filter_scenes/review_junction_scenes.py --apply
 
 and check how many scenes are generated in the result:
 ```
-ls -1d sign*_rb/ sign*_rb_s*/ 2>/dev/null | wc -l
+ls -1d sign*/ 2>/dev/null | wc -l
 ```
 
 By default each core map produces one cropped scene (`sign_<id>_rb/`). Use

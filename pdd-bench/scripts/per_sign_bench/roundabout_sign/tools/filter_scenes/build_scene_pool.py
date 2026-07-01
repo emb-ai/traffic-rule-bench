@@ -46,8 +46,11 @@ from lib.scene_selection import VERDICT_PENDING  # noqa: E402
 from tools.filter_scenes.crop_junction_scene import (  # noqa: E402
     CORE_DIR_DEFAULT,
     SCENES_DIR_DEFAULT,
+    clear_crop_attempt,
     discover_core_scene_dirs,
+    expand_spokes_until,
     process_core_scene,
+    retryable_core_dirs,
     uncropped_core_dirs,
 )
 from tools.filter_scenes.review_junction_scenes import (  # noqa: E402
@@ -238,7 +241,35 @@ def crop_until_candidates(
                 break
             print("  [skip core] no manifest-viable roundabout; trying next core map")
 
-    return total_written, total_cores
+    return total_written
+
+
+def retry_failed_crops(
+    scenes_root: Path,
+    core_root: Path,
+    *,
+    target: int,
+    **crop_kw,
+) -> tuple[int, int]:
+    """Clear junctions.json for failed cores and crop again until target or exhaustion."""
+    candidates = len(discover_review_scenes(scenes_root, preview_name=crop_kw.get("preview_name", PREVIEW_NAME_DEFAULT)))
+    if candidates >= target:
+        print(f"Already have {candidates} candidate scene(s) (target {target}).")
+        return 0, 0
+
+    cleared = 0
+    for core_dir in retryable_core_dirs(core_root):
+        clear_crop_attempt(core_dir)
+        cleared += 1
+    if cleared:
+        print(f"Cleared crop index for {cleared} failed core map(s); retrying...")
+
+    return crop_until_candidates(
+        scenes_root,
+        core_root,
+        target=target,
+        **crop_kw,
+    )
 
 
 def fill_after_review(
@@ -444,6 +475,20 @@ def main() -> None:
     )
     add_crop_args(crop_parser)
 
+    retry_parser = sub.add_parser(
+        "retry",
+        parents=[common],
+        help="Re-crop cores whose previous attempt wrote no scene, then grow pool to target",
+    )
+    add_crop_args(retry_parser)
+
+    expand_parser = sub.add_parser(
+        "expand-spokes",
+        parents=[common],
+        help="Crop additional spokes (_rb_s01, …) for cores that already have sign_*_rb",
+    )
+    add_crop_args(expand_parser)
+
     fill_parser = sub.add_parser(
         "fill",
         parents=[common],
@@ -503,6 +548,54 @@ def main() -> None:
             "\nNext: python tools/filter_scenes/review_junction_scenes.py\n"
             f"Then: python tools/filter_scenes/build_scene_pool.py fill --target {args.target}"
         )
+        return
+
+    if args.command == "retry":
+        crop_kw = _crop_kwargs(args)
+        written, cores = retry_failed_crops(
+            scenes_root,
+            core_root,
+            target=args.target,
+            **crop_kw,
+        )
+        print(f"\nRetry done: {written} roundabout scene(s) from {cores} core map(s).")
+        status = collect_pool_status(
+            scenes_root,
+            core_root,
+            target=args.target,
+            preview_name=args.preview_name,
+            min_ego_lane_m=args.min_ego_lane,
+            aux_distance_from_intersection=args.aux_distance,
+        )
+        print_pool_status(status)
+        return
+
+    if args.command == "expand-spokes":
+        crop_kw = _crop_kwargs(args)
+        written = expand_spokes_until(
+            scenes_root,
+            core_root,
+            target=args.target,
+            preview_name=args.preview_name,
+            spoke_length_m=crop_kw["spoke_length_m"],
+            min_lane_length_m=crop_kw["min_lane_length_m"],
+            dry_run=crop_kw["dry_run"],
+            overwrite=crop_kw["overwrite"],
+            require_manifest_viable=crop_kw["require_manifest_viable"],
+            min_ego_lane_m=crop_kw["min_ego_lane_m"],
+            aux_distance_from_intersection=crop_kw["aux_distance_from_intersection"],
+            skip_duplicate_fingerprints=crop_kw["skip_duplicate_fingerprints"],
+        )
+        print(f"\nExpand-spokes done: {written} additional scene(s).")
+        status = collect_pool_status(
+            scenes_root,
+            core_root,
+            target=args.target,
+            preview_name=args.preview_name,
+            min_ego_lane_m=args.min_ego_lane,
+            aux_distance_from_intersection=args.aux_distance,
+        )
+        print_pool_status(status)
         return
 
     if args.command == "fill":

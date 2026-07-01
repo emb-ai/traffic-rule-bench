@@ -435,6 +435,87 @@ def _is_valid_departure(
     return True
 
 
+def _lane_nums_for_edge(
+    layout: JunctionPriorityLayout,
+    edge_id: str,
+    spawn_lanes_by_edge: Dict[str, List[int]],
+) -> List[int]:
+    lane_nums = list(spawn_lanes_by_edge.get(edge_id, []))
+    if lane_nums:
+        return lane_nums
+    arm = layout.arm_for_edge(edge_id)
+    if arm is None:
+        return []
+    return [lane_num_from_key(key) for key in arm.lane_keys]
+
+
+def _lane_length_for_edge_lane(
+    edge_id: str,
+    lane_num: int,
+    layout: JunctionPriorityLayout,
+    lane_lengths: Dict[Tuple[str, int], float],
+    default: float,
+) -> float:
+    length = lane_lengths.get((edge_id, lane_num))
+    if length is not None:
+        return float(length)
+    arm = layout.arm_for_edge(edge_id)
+    if arm is not None:
+        return float(arm.min_lane_length)
+    return float(default)
+
+
+def roundabout_aux_spawn_options_for_ego(
+    layout: JunctionPriorityLayout,
+    ego_edge: str,
+    spawn_lanes_by_edge: Dict[str, List[int]],
+    lane_lengths: Dict[Tuple[str, int], float],
+    *,
+    aux_distance_from_intersection: float,
+    min_lane_length: float,
+) -> List[Tuple[str, List[int]]]:
+    """Aux spawn edges/lanes for one ego entry (long ring arms or compact entry zones)."""
+    from .auxiliary_agent import MIN_SPAWN_LONGITUDE_M, min_aux_spawn_lane_length
+    from .roundabout_yield_zone import compact_aux_ring_edges_for_ego
+
+    min_long_ring = min_aux_spawn_lane_length(aux_distance_from_intersection)
+    min_compact = MIN_SPAWN_LONGITUDE_M
+    options: List[Tuple[str, List[int]]] = []
+
+    for aux_edge in sorted(layout.main_edge_ids):
+        if aux_edge == ego_edge:
+            continue
+        lane_nums = _lane_nums_for_edge(layout, aux_edge, spawn_lanes_by_edge)
+        viable = [
+            lane_num
+            for lane_num in lane_nums
+            if _lane_length_for_edge_lane(
+                aux_edge, lane_num, layout, lane_lengths, min_lane_length
+            )
+            >= min_long_ring
+        ]
+        if viable:
+            options.append((aux_edge, viable))
+
+    if options:
+        return options
+
+    junction_layout = layout.to_dict()
+    for aux_edge in compact_aux_ring_edges_for_ego(junction_layout, ego_edge):
+        lane_nums = _lane_nums_for_edge(layout, aux_edge, spawn_lanes_by_edge)
+        viable = [
+            lane_num
+            for lane_num in lane_nums
+            if _lane_length_for_edge_lane(
+                aux_edge, lane_num, layout, lane_lengths, min_lane_length
+            )
+            >= min_compact
+        ]
+        if viable:
+            options.append((aux_edge, viable))
+    return options
+
+
 def enumerate_spawn_scenarios(
     layout: JunctionPriorityLayout,
     spawn_lanes_by_edge: Dict[str, List[int]],
@@ -457,7 +538,6 @@ def enumerate_spawn_scenarios(
     secondary_edges = _roundabout_ego_spawn_edges(
         layout, spawn_lanes_by_edge, prefer_ego_edge_id=None
     )
-    main_edges = sorted(layout.main_edge_ids)
     scenarios: List[SpawnScenario] = []
 
     for ego_edge in secondary_edges:
@@ -469,23 +549,20 @@ def enumerate_spawn_scenarios(
         if not ego_dest_edges:
             continue
 
-        for aux_edge in main_edges:
-            if aux_edge == ego_edge:
-                continue
+        aux_spawn_options = roundabout_aux_spawn_options_for_ego(
+            layout,
+            ego_edge,
+            spawn_lanes_by_edge,
+            lane_lengths,
+            aux_distance_from_intersection=aux_distance_from_intersection,
+            min_lane_length=min_lane_length,
+        )
+        if not aux_spawn_options:
+            continue
 
+        for aux_edge, aux_lane_nums in aux_spawn_options:
             aux_dest_edge = _aux_straight_destination(layout, aux_edge)
             if aux_dest_edge is None:
-                continue
-
-            aux_lane_nums = spawn_lanes_by_edge.get(aux_edge, [])
-            if not aux_lane_nums:
-                continue
-            aux_lane_nums = [
-                lane_num
-                for lane_num in aux_lane_nums
-                if lane_lengths.get((aux_edge, lane_num), min_lane_length) >= min_aux_lane_length
-            ]
-            if not aux_lane_nums:
                 continue
 
             for ego_lane in ego_lane_nums:

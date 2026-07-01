@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
-from lib.auxiliary_agent import has_viable_aux_lanes, min_aux_spawn_lane_length
+from lib.auxiliary_agent import (
+    MIN_SPAWN_LONGITUDE_M,
+    has_roundabout_aux_spawn_capability,
+    has_viable_aux_lanes,
+    min_aux_spawn_lane_length,
+)
 from lib.junction_priority_layout import JunctionLayoutError, build_junction_priority_layout
 from lib.manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
@@ -22,6 +27,7 @@ from lib.scene_augmentation import (
     augment_layout_for_scene,
     build_spawn_lanes_by_edge,
     lane_lengths_from_spawn_lanes,
+    roundabout_aux_spawn_options_for_ego,
 )
 from lib.sumo_utils import load_vehicle_route_index, load_scene_meta, resolve_net_file
 
@@ -121,25 +127,16 @@ def _explain_no_scenarios(
                     continue
                 any_ego_route = True
 
-                for aux_edge in main_edges:
-                    if aux_edge == ego_edge:
-                        continue
-                    aux_dest_edge = _aux_straight_destination(layout, aux_edge)
-                    if aux_dest_edge is None:
-                        aux_no_straight_dest += 1
-                        continue
-                    aux_lane_nums = spawn_by_edge.get(aux_edge, [])
-                    if not aux_lane_nums:
-                        aux_no_approach_lane += 1
-                        continue
-                    viable_aux = [
-                        ln
-                        for ln in aux_lane_nums
-                        if lengths.get((aux_edge, ln), 0) >= min_aux_lane
-                    ]
-                    if not viable_aux:
-                        aux_no_viable_lane += 1
-                        continue
+                aux_options = roundabout_aux_spawn_options_for_ego(
+                    layout,
+                    ego_edge,
+                    spawn_by_edge,
+                    lengths,
+                    aux_distance_from_intersection=aux_distance_from_intersection,
+                    min_lane_length=min_ego_lane_m,
+                )
+                if not aux_options:
+                    aux_no_viable_lane += 1
 
         if not any_ego_route and ego_dest_edges:
             pass
@@ -239,14 +236,17 @@ def check_manifest_viability(
     result.spawn_lane_count = len(spawn_lanes)
 
     junction_layout = layout.to_dict()
-    if auxiliary_enabled and not has_viable_aux_lanes(
+    if auxiliary_enabled and not has_roundabout_aux_spawn_capability(
         junction_layout, aux_distance_from_intersection
     ):
         min_aux_lane = min_aux_spawn_lane_length(aux_distance_from_intersection)
         return ManifestViabilityResult(
             viable=False,
             reason="no_viable_aux_arm",
-            detail=f"no main arm with lane length >= {min_aux_lane:.0f}m",
+            detail=(
+                f"no long main arm (>={min_aux_lane:.0f}m) or compact entry zone "
+                f"(>={MIN_SPAWN_LONGITUDE_M:.0f}m) for aux spawn"
+            ),
             spawn_lane_count=result.spawn_lane_count,
         )
 

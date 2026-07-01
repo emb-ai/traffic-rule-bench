@@ -22,6 +22,7 @@ from lib.lane_keys import lane_edge_id, lane_num_from_key, make_lane_key
 from lib.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
     DEFAULT_CONVOY_SIZE,
+    has_roundabout_aux_spawn_capability,
     has_viable_aux_lanes,
     main_lane_keys_for_aux,
     resolve_aux_destination_lane_key,
@@ -724,12 +725,12 @@ def generate_manifest(
         )
         print(f"  Main-road lane slots for aux: {available_main_lane_count}")
 
-        if aux_cfg.enabled and not has_viable_aux_lanes(
+        if aux_cfg.enabled and not has_roundabout_aux_spawn_capability(
             junction_layout, aux_cfg.distance_from_intersection
         ):
             print(
-                f"  [aux] No main-road lanes long enough for aux spawning "
-                f"(need >{aux_cfg.distance_from_intersection}m); skipping {scene_name}"
+                f"  [aux] No viable aux spawn (long ring or compact entry zone) "
+                f"for {scene_name}; skipping"
             )
             continue
 

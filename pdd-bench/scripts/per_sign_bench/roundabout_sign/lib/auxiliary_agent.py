@@ -584,6 +584,34 @@ def has_viable_aux_lanes(
     return False
 
 
+def has_roundabout_aux_spawn_capability(
+    junction_layout: Optional[dict],
+    aux_distance_from_intersection: float,
+) -> bool:
+    """Whether aux can spawn on this roundabout (long ring arms or compact entry zones)."""
+    from .roundabout_yield_zone import (
+        _arm_min_lane_length,
+        compact_aux_ring_edges_for_ego,
+    )
+
+    if not junction_layout:
+        return False
+    if has_viable_aux_lanes(junction_layout, aux_distance_from_intersection):
+        return True
+
+    min_compact = MIN_SPAWN_LONGITUDE_M
+    for arm in junction_layout.get("arms", []):
+        if arm.get("road_class") != "secondary":
+            continue
+        ego_edge = arm.get("edge_id")
+        if not ego_edge:
+            continue
+        for edge_id in compact_aux_ring_edges_for_ego(junction_layout, str(ego_edge)):
+            if _arm_min_lane_length(junction_layout, edge_id) >= min_compact:
+                return True
+    return False
+
+
 def resolve_aux_spawn_lanes(
     row: dict,
     ego_lane_index: str,
