@@ -76,27 +76,48 @@ awk -v n="$NSHARDS" -v dir="$SHARD_DIR" 'NF{ f=sprintf("%s/shard_%02d.jsonl",dir
 echo "shards: $(ls "$SHARD_DIR"/shard_*.jsonl | wc -l) x ~$(( $(wc -l < "$SRC_MANIFEST") / NSHARDS )) rows"
 
 # ---- 2. job lists: one per (policy, ego-variant, shard) ---------------------
-# spec = "policy|variant|model|shardfile|tag|runname"
+# GPU spec = "gpu|policy|variant|model|shardfile|tag|runname"  (GPU pinned in front)
+# CPU spec =     "policy|variant|model|shardfile|tag|runname"
 gpu_jobs=(); cpu_jobs=()
-add_shards () {  # where(gpu|cpu) policy variant model
-  local where="$1" policy="$2" variant="$3" model="$4" s sf tag rn
+
+# Each NN policy pinned to its OWN GPU group (no model co-location; uses all 8 GPUs).
+# Its shards round-robin across the group. Edit the case to taste (portable: no bash-4 assoc arrays).
+policy_gpus () {  # -> GPU list for a policy
+  case "$1" in
+    carl)        echo "0 1" ;;
+    carl_rule)   echo "2 3" ;;
+    plant2)      echo "4 5" ;;
+    plant2_rule) echo "6 7" ;;
+    *)           echo "$GPUS" ;;
+  esac
+}
+
+# GPU jobs interleaved by shard (outer) so all NN policies start TOGETHER, each on
+# its own GPUs — instead of finishing carl, then carl_rule, then plant2, ...
+for s in $(seq 0 $((NSHARDS-1))); do
+  sf=$(printf "%s/shard_%02d.jsonl" "$SHARD_DIR" "$s")
+  for p in $NN_POLICIES; do
+    case "$p" in carl|carl_rule) ck="$CARL_CKPT";; plant2|plant2_rule) ck="$PLANT_CKPT";; *) ck="";; esac
+    pg=($(policy_gpus "$p")); g=${pg[$(( s % ${#pg[@]} ))]}
+    rn="${p}_default"; tag=$(printf "%s_s%02d" "$rn" "$s")
+    gpu_jobs+=("$g|$p|default|$ck|$sf|$tag|$rn")
+  done
+done
+
+add_cpu () {  # policy variant model
+  local policy="$1" variant="$2" model="$3" s sf tag rn
   rn="${policy}_${variant}"
   for s in $(seq 0 $((NSHARDS-1))); do
     sf=$(printf "%s/shard_%02d.jsonl" "$SHARD_DIR" "$s")
     tag=$(printf "%s_s%02d" "$rn" "$s")
-    if [ "$where" = cpu ]; then cpu_jobs+=("$policy|$variant|$model|$sf|$tag|$rn")
-    else                        gpu_jobs+=("$policy|$variant|$model|$sf|$tag|$rn"); fi
+    cpu_jobs+=("$policy|$variant|$model|$sf|$tag|$rn")
   done
 }
-for p in $NN_POLICIES; do
-  case "$p" in carl|carl_rule) ck="$CARL_CKPT";; plant2|plant2_rule) ck="$PLANT_CKPT";; *) ck="";; esac
-  add_shards gpu "$p" default "$ck"
-done
 for p in $IDM_FAMILY_POLICIES; do
-  for v in ${EGO_VARIANTS//,/ }; do add_shards cpu "$p" "$v" ""; done
+  for v in ${EGO_VARIANTS//,/ }; do add_cpu "$p" "$v" ""; done
 done
-for p in $CPU_SINGLE_POLICIES; do add_shards cpu "$p" default ""; done
-echo "gpu jobs: ${#gpu_jobs[@]} (NN x $NSHARDS) on $NGPU GPUs; cpu jobs: ${#cpu_jobs[@]}"
+for p in $CPU_SINGLE_POLICIES; do add_cpu "$p" default ""; done
+echo "gpu jobs: ${#gpu_jobs[@]} (NN x $NSHARDS, pinned per-policy); cpu jobs: ${#cpu_jobs[@]}"
 
 # ---- 3. run one baseline-shard (run_benchmark.py directly, no metrics) -------
 run_job () {  # gpu spec   (gpu="cpu" -> hide CUDA)
@@ -139,9 +160,12 @@ progress_watcher () {  # expected_episodes interval done_dir total_jobs
 }
 
 # ---- 4. two pools running CONCURRENTLY: GPU (NN) + CPU (rule-based) ----------
-gpu_lane () { local li="$1" gpu="${GPU_ARR[$(( li % NGPU ))]}" i
+gpu_lane () { local li="$1" i spec gpu rest
   for i in "${!gpu_jobs[@]}"; do
-    [ $(( i % CONCURRENCY )) -eq "$li" ] && run_job "$gpu" "${gpu_jobs[$i]}"
+    if [ $(( i % CONCURRENCY )) -eq "$li" ]; then
+      spec="${gpu_jobs[$i]}"; gpu="${spec%%|*}"; rest="${spec#*|}"   # unpin GPU baked in front
+      run_job "$gpu" "$rest"
+    fi
   done; }
 cpu_lane () { local li="$1" i
   for i in "${!cpu_jobs[@]}"; do
