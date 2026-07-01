@@ -33,7 +33,14 @@ from lib.manifest_config import (
     DEFAULT_AUX_LANES_OCCUPIED_MAX,
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
 )
-from lib.scene_augmentation import SpawnScenario, augment_layout_for_scene, pick_default_yield_spawn_meta_for_net
+from lib.scene_augmentation import (
+    SpawnScenario,
+    _roundabout_ego_spawn_edges,
+    augment_layout_for_scene,
+    build_spawn_lanes_by_edge,
+    parse_roundabout_spawn_lanes,
+    pick_default_yield_spawn_meta_for_net,
+)
 from lib.sumo_utils import is_vehicle_drivable_lane
 
 
@@ -60,6 +67,8 @@ class ScenarioConfig:
     augment: bool = True
     max_scenarios_per_scene: Optional[int] = None
     max_exit_destinations_per_spawn: Optional[int] = None
+    validate_metadrive_routes: bool = True
+    min_ego_lane_m: float = 10.0
 
 
 @dataclass
@@ -182,6 +191,63 @@ def parse_sumo_net_for_spawn_lanes(net_path: Path, min_length: float = 20.0) -> 
     return spawn_lanes
 
 
+def parse_spawn_lanes_for_scene(
+    net_path: Path,
+    meta: Dict,
+    *,
+    min_length: float = 10.0,
+) -> List[SumoLaneInfo]:
+    """Spawn lanes on roundabout spokes and the catalog sign approach."""
+    if meta.get("roundabout_ring_edges"):
+        approach_lanes = parse_roundabout_spawn_lanes(
+            net_path,
+            spoke_edge_ids=meta.get("roundabout_spoke_edges"),
+            sign_road_id=meta.get("catalog_sign_road_id") or meta.get("road_id"),
+            min_length=min_length,
+        )
+        return [
+            SumoLaneInfo(
+                edge_id=lane.edge_id,
+                lane_num=lane.lane_num,
+                lane_id=f"lane_{lane.edge_id}_{lane.lane_num}",
+                length=lane.length,
+                to_junction="",
+                junction_type="roundabout",
+            )
+            for lane in approach_lanes
+        ]
+    return parse_sumo_net_for_spawn_lanes(net_path, min_length=min_length)
+
+
+def select_scenarios_per_incoming_road(
+    scenarios: List[SpawnScenario],
+    required_incoming_edges: List[str],
+    *,
+    max_per_road: Optional[int] = None,
+) -> Tuple[List[SpawnScenario], List[str], List[str]]:
+    """Keep up to N scenarios per required incoming road; report uncovered arms."""
+    from collections import defaultdict
+
+    by_ego_edge: Dict[str, List[SpawnScenario]] = defaultdict(list)
+    for scenario in scenarios:
+        by_ego_edge[scenario.ego_edge_id].append(scenario)
+
+    selected: List[SpawnScenario] = []
+    covered: List[str] = []
+    missing: List[str] = []
+    for ego_edge_id in required_incoming_edges:
+        group = by_ego_edge.get(ego_edge_id, [])
+        if not group:
+            missing.append(ego_edge_id)
+            continue
+        covered.append(ego_edge_id)
+        if max_per_road is not None:
+            random.shuffle(group)
+            group = group[: max(0, int(max_per_road))]
+        selected.extend(group)
+    return selected, covered, missing
+
+
 # -----------------------------------------------------------------------------
 # Junction layout utilities
 # -----------------------------------------------------------------------------
@@ -291,6 +357,69 @@ def sizes_up_to(
     if available is not None:
         cap = min(cap, int(available))
     return list(range(1, cap + 1))
+
+
+def filter_scenarios_to_metadrive_routes(
+    scenarios: List[SpawnScenario],
+    scene_dir: Path,
+    scenes_root: Path,
+    meta: Dict,
+) -> List[SpawnScenario]:
+    """Keep only scenarios routable by MetaDrive's EdgeRoadNetwork."""
+    if not scenarios:
+        return []
+
+    try:
+        from run_benchmark import _build_sumo_env
+    except Exception as exc:
+        print(f"  [augment] Could not import MetaDrive route validator: {exc}")
+        return scenarios
+
+    net_file = meta.get("net_file", "map.net.xml")
+    rel_net_path = scene_dir.relative_to(scenes_root) / net_file
+    probe = scenarios[0]
+    probe_row = {
+        "net_path": str(rel_net_path),
+        "sign_code": PDD_CODE,
+        "sign_type": SIGN_TYPE,
+        "pdd_code": PDD_CODE,
+        "traffic_density": 0.0,
+        "horizon": 5,
+        "road_id": probe.ego_edge_id,
+        "spawn_lane_num": probe.ego_lane_num,
+        "destination_lane_id": probe.ego_destination_lane_key,
+    }
+
+    env = None
+    try:
+        env = _build_sumo_env(probe_row, scenes_root, max_steps=5)
+        env.reset(seed=0)
+        road_network = env.engine.current_map.road_network
+
+        filtered: List[SpawnScenario] = []
+        for scenario in scenarios:
+            start_lane = make_lane_key(scenario.ego_edge_id, scenario.ego_lane_num)
+            destination_lane = scenario.ego_destination_lane_key
+            if start_lane not in road_network.graph or destination_lane not in road_network.graph:
+                continue
+            path = road_network.find_path(start_lane, destination_lane, max_len=10)
+            route_valid = (
+                path
+                and path[-1] == destination_lane
+                and path[0] != path[-1]
+            )
+            if route_valid:
+                filtered.append(scenario)
+        return filtered
+    except Exception as exc:
+        print(f"  [augment] MetaDrive route validation failed: {exc}")
+        return scenarios
+    finally:
+        if env is not None:
+            try:
+                env.close()
+            except Exception:
+                pass
 
 
 # -----------------------------------------------------------------------------
@@ -561,8 +690,12 @@ def generate_manifest(
         net_file = meta.get("net_file", "map.net.xml")
         net_full_path = scene_dir / net_file
         
-        spawn_lanes = parse_sumo_net_for_spawn_lanes(net_full_path)
-        print(f"  Found {len(spawn_lanes)} intersection-approaching lane(s)")
+        spawn_lanes = parse_spawn_lanes_for_scene(
+            net_full_path,
+            meta,
+            min_length=scenario_cfg.min_ego_lane_m,
+        )
+        print(f"  Found {len(spawn_lanes)} roundabout approach lane(s)")
 
         junction_layout = build_junction_layout_for_scene(
             net_full_path,
@@ -602,20 +735,62 @@ def generate_manifest(
 
         scenarios: List[SpawnScenario] = []
         if scenario_cfg.augment:
-            _, scenarios = augment_layout_for_scene(
+            layout, scenarios = augment_layout_for_scene(
                 net_full_path,
                 spawn_lanes,
+                scene_meta=meta,
+                min_lane_length=scenario_cfg.min_ego_lane_m,
                 aux_distance_from_intersection=aux_cfg.distance_from_intersection,
                 max_exit_destinations_per_spawn=scenario_cfg.max_exit_destinations_per_spawn,
             )
+            spawn_by_edge = build_spawn_lanes_by_edge(spawn_lanes)
+            prefer_ego = meta.get("catalog_sign_road_id") or meta.get("road_id")
+            required_incoming = _roundabout_ego_spawn_edges(
+                layout,
+                spawn_by_edge,
+                prefer_ego_edge_id=prefer_ego,
+            )
+            print(f"  Incoming roads (spawn-capable): {required_incoming}")
             if not scenarios:
                 print(f"  [augment] No valid scenarios for {scene_name}; skipping scene")
                 continue
-            if scenario_cfg.max_scenarios_per_scene is not None:
-                print(f"Retained only {scenario_cfg.max_scenarios_per_scene} from {len(scenarios)} possible scenarios")
-                random.shuffle(scenarios)
-                scenarios = scenarios[:scenario_cfg.max_scenarios_per_scene]
-            print(f"  Augmented scenarios: {len(scenarios)}")
+
+            total_before_route_filter = len(scenarios)
+            if scenario_cfg.validate_metadrive_routes:
+                scenarios = filter_scenarios_to_metadrive_routes(
+                    scenarios,
+                    scene_dir,
+                    scenes_dir,
+                    meta,
+                )
+                dropped = total_before_route_filter - len(scenarios)
+                print(
+                    f"  [augment] MetaDrive-routable scenarios: {len(scenarios)} "
+                    f"(dropped {dropped})"
+                )
+                if not scenarios:
+                    print(f"  [augment] No MetaDrive-routable scenarios for {scene_name}; skipping scene")
+                    continue
+
+            total_before = len(scenarios)
+            scenarios, covered_incoming, missing_incoming = select_scenarios_per_incoming_road(
+                scenarios,
+                required_incoming,
+                max_per_road=scenario_cfg.max_scenarios_per_scene,
+            )
+            if missing_incoming:
+                print(
+                    f"  [augment] No routable scenario for incoming road(s): "
+                    f"{missing_incoming}"
+                )
+            print(
+                f"  Augmented scenarios: {len(scenarios)} "
+                f"({len(covered_incoming)}/{len(required_incoming)} incoming roads, "
+                f"from {total_before} routable)"
+            )
+            if not scenarios:
+                print(f"  [augment] No scenarios after per-road selection for {scene_name}; skipping scene")
+                continue
         
         convoy_sizes = sizes_up_to(aux_cfg.convoy_size, auxiliary_enabled=aux_cfg.enabled)
         lanes_counts = sizes_up_to(
@@ -669,6 +844,8 @@ def generate_manifest(
         "augment": scenario_cfg.augment,
         "max_scenarios_per_scene": scenario_cfg.max_scenarios_per_scene,
         "max_exit_destinations_per_spawn": scenario_cfg.max_exit_destinations_per_spawn,
+        "validate_metadrive_routes": scenario_cfg.validate_metadrive_routes,
+        "min_ego_lane_m": scenario_cfg.min_ego_lane_m,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
         "traffic_density": sim_cfg.traffic_density,
         "horizon": sim_cfg.horizon,
@@ -705,6 +882,15 @@ def _iter_jsonl_rows(path: Path):
             if not line:
                 continue
             yield json.loads(line)
+
+
+def _expected_gif_path(row: dict, gif_dir: Path, policy: str) -> Path:
+    """Mirror run_benchmark.py GIF naming so saved GIFs can be verified."""
+    scene_id = row.get("scene_id") or "scene"
+    seed_val = int(row.get("seed") or row.get("deterministic_seed") or 0)
+    var_idx = int(row.get("var_idx", 0) or 0)
+    uid = f"{scene_id}_v{var_idx}_s{seed_val}"
+    return gif_dir / f"{uid}_{policy}_default.gif"
 
 
 def render_gifs_from_manifest(
@@ -758,8 +944,10 @@ def render_gifs_from_manifest(
     
     rendered = 0
     failed = 0
+    missing = 0
     for i, row in enumerate(rows, start=1):
         scene_uid = f"{row['scene_id']}:{row['pdd_code']}:{row['seed']}"
+        expected_gif_path = _expected_gif_path(row, gif_dir, gif_cfg.policy)
         cmd = [
             sys.executable,
             str(RUN_BENCH_SCRIPT),
@@ -787,13 +975,18 @@ def render_gifs_from_manifest(
             continue
         
         res = subprocess.run(cmd, cwd=str(RUN_BENCH_SCRIPT.parent))
-        if res.returncode == 0:
-            rendered += 1
-        else:
+        if res.returncode != 0:
             failed += 1
             print(f"[GIF] Command failed with code {res.returncode}")
+        elif expected_gif_path.is_file() and expected_gif_path.stat().st_size > 0:
+            rendered += 1
+        else:
+            missing += 1
+            print(f"[GIF] No GIF file produced: {expected_gif_path.name}")
+    if missing:
+        print(f"[GIF] Missing GIF files after successful runs: {missing}")
     
-    return rendered, failed
+    return rendered, failed + missing
 
 
 # -----------------------------------------------------------------------------
@@ -802,7 +995,7 @@ def render_gifs_from_manifest(
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(cfg: DictConfig) -> None:
     """Main entry point with Hydra configuration."""
-    scenes_dir = Path(cfg.paths.scenes_dir)
+    scenes_dir = Path(cfg.paths.scenes_dir).resolve()
 
     experiment_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     experiment_dir.mkdir(parents=True, exist_ok=True)
@@ -815,6 +1008,8 @@ def main(cfg: DictConfig) -> None:
         augment=cfg.scenario.augment,
         max_scenarios_per_scene=cfg.scenario.max_scenarios_per_scene,
         max_exit_destinations_per_spawn=cfg.scenario.max_exit_destinations_per_spawn,
+        validate_metadrive_routes=cfg.scenario.validate_metadrive_routes,
+        min_ego_lane_m=cfg.scenario.min_ego_lane_m,
     )
     sim_cfg = SimulationConfig(
         spawn_velocity_ms=cfg.simulation.spawn_velocity_ms,

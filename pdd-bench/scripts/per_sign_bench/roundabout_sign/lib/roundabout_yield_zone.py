@@ -39,6 +39,36 @@ def entry_conflict_ring_edges(
     return sorted(incoming_edges)
 
 
+def entry_outgoing_ring_edges(
+    layout: dict,
+    ego_spoke_edge_id: str,
+    *,
+    entry_junction_id: Optional[str] = None,
+) -> List[str]:
+    """Ring edges leaving ego's entry junction onto the traffic circle."""
+    entry_j = entry_junction_id or layout.get("junction_id") or ""
+    if not entry_j:
+        return []
+
+    ego_arm = next(
+        (arm for arm in layout.get("arms", []) if arm.get("edge_id") == ego_spoke_edge_id),
+        None,
+    )
+    if entry_junction_id is None and ego_arm is not None:
+        entry_j = str(ego_arm.get("to_node", "")) or entry_j
+
+    outgoing_edges: List[str] = []
+    for arm in layout.get("arms", []):
+        if arm.get("road_class") != "main":
+            continue
+        eid = str(arm.get("edge_id", ""))
+        if not eid:
+            continue
+        if str(arm.get("from_node", "")) == entry_j:
+            outgoing_edges.append(eid)
+    return sorted(outgoing_edges)
+
+
 def all_entry_conflict_ring_edges(layout: dict) -> List[str]:
     """Ring edges immediately upstream of every roundabout entry spoke.
 

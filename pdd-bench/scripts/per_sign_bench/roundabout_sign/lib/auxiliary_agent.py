@@ -477,6 +477,41 @@ def main_lane_keys_for_aux(
     return sorted(keys)
 
 
+def filter_lane_keys_in_road_network(road_network, lane_keys: List[str]) -> List[str]:
+    """Keep lane keys that exist in the MetaDrive road network."""
+    return [key for key in lane_keys if key in road_network.graph]
+
+
+def select_spawnable_lanes(
+    road_network,
+    lane_keys: List[str],
+    n_lanes_occupied: int = 1,
+    *,
+    prefer_lane_key: Optional[str] = None,
+    min_length: float = MIN_SPAWN_LONGITUDE_M,
+) -> List[str]:
+    """Pick longest sim lanes that are long enough to place at least one aux vehicle."""
+    viable: List[tuple[float, str]] = []
+    for lane_key in lane_keys:
+        if lane_key not in road_network.graph:
+            continue
+        try:
+            length = float(road_network.get_lane(lane_key).length)
+        except Exception:
+            continue
+        if length >= float(min_length):
+            viable.append((length, lane_key))
+    viable.sort(key=lambda item: (-item[0], item[1]))
+    ordered = [lane_key for _, lane_key in viable]
+    if prefer_lane_key and prefer_lane_key in ordered:
+        ordered.remove(prefer_lane_key)
+        ordered.insert(0, prefer_lane_key)
+    if not ordered:
+        return []
+    n = max(1, min(int(n_lanes_occupied), len(ordered)))
+    return ordered[:n]
+
+
 def select_occupied_main_lanes(
     all_main_lane_keys: List[str],
     n_lanes_occupied: int,
