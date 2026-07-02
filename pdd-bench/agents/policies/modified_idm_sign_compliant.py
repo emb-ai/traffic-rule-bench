@@ -1,8 +1,8 @@
 """Modified IDM + sign compliance (same overlay pattern as CarlSignCompliantPolicy).
 
 ModifiedIDMPolicy handles defensive driving (intersection crossing brake,
-curvature limits, stop-sign wait). SignComplianceMixin adds yield / priority
-and other traffic-sign rules as post-processing on top of each act() step.
+curvature limits) without traffic-sign rules. SignComplianceMixin adds stop,
+yield, priority, and other traffic-sign rules as post-processing on each act().
 """
 
 from __future__ import annotations
