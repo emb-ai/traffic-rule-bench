@@ -346,10 +346,20 @@ def build_catalog(
 
 
 def save_catalog(catalog: List[dict], path: str | Path) -> None:
+    """Write the catalog: JSONL (строка = сцена) для .jsonl, иначе JSON-массив.
+
+    JSONL — формат, который читает eval (bench/manifest_io._load_jsonl_rows
+    парсит построчно): каталог в этом виде подставляется в --manifest напрямую,
+    без материализации.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
-        json.dump(catalog, f, indent=None, separators=(",", ":"))
+        if path.suffix == ".jsonl":
+            for row in catalog:
+                f.write(json.dumps(row, separators=(",", ":")) + "\n")
+        else:
+            json.dump(catalog, f, indent=None, separators=(",", ":"))
 
 
 def load_catalog(path: str | Path) -> List[dict]:
