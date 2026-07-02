@@ -18,7 +18,6 @@ from lib.scene_augmentation import (
     _ego_destination_edges,
     _is_valid_departure,
     _pick_outgoing_lane_key,
-    _roundabout_ego_spawn_edges,
     augment_layout_for_scene,
     build_spawn_lanes_by_edge,
     lane_lengths_from_spawn_lanes,
@@ -35,23 +34,10 @@ class ManifestViabilityResult:
     scenario_count: int = 0
 
 
-def parse_spawn_lanes_for_viability(
-    net_path: Path,
-    min_length: float,
-    *,
-    meta: Optional[dict[str, Any]] = None,
-) -> list:
-    """Match generate_manifest.parse_sumo_net_for_spawn_lanes (roundabout spokes)."""
+def parse_spawn_lanes_for_viability(net_path: Path, min_length: float) -> list:
+    """Match generate_manifest.parse_sumo_net_for_spawn_lanes."""
     from generate_manifest import parse_sumo_net_for_spawn_lanes
-    from lib.scene_augmentation import parse_roundabout_spawn_lanes
 
-    if meta and meta.get("roundabout_ring_edges"):
-        return parse_roundabout_spawn_lanes(
-            net_path,
-            spoke_edge_ids=meta.get("roundabout_spoke_edges"),
-            sign_road_id=meta.get("catalog_sign_road_id") or meta.get("road_id"),
-            min_length=min_length,
-        )
     return parse_sumo_net_for_spawn_lanes(net_path, min_length=min_length)
 
 
@@ -69,15 +55,15 @@ def _explain_no_scenarios(
     lane_keys_by_edge = {arm.edge_id: list(arm.lane_keys) for arm in layout.arms}
     min_aux_lane = min_aux_spawn_lane_length(aux_distance_from_intersection)
 
-    secondary = _roundabout_ego_spawn_edges(layout, spawn_by_edge)
+    secondary = sorted(layout.secondary_edge_ids)
     main_edges = sorted(layout.main_edge_ids)
 
     ego_edges_with_spawn = [e for e in secondary if spawn_by_edge.get(e)]
     if not ego_edges_with_spawn:
         return (
             "no_ego_spawn_lanes",
-            f"no spoke approach with vehicle lane >= {min_ego_lane_m:.0f}m "
-            f"(secondary/spokes={secondary})",
+            f"no secondary arm with vehicle approach lane >= {min_ego_lane_m:.0f}m "
+            f"(secondary={secondary})",
         )
 
     ego_no_dest = []
@@ -147,7 +133,7 @@ def _explain_no_scenarios(
     if ego_no_dest and len(ego_no_dest) == len(ego_edges_with_spawn):
         return (
             "no_ego_destination",
-            f"no roundabout ring destination for ego arms: {ego_no_dest}",
+            f"T-junction left-turn / X straight destination missing for ego arms: {ego_no_dest}",
         )
 
     if ego_no_route > 0 and aux_no_viable_lane == 0 and aux_no_approach_lane == 0:
@@ -210,17 +196,7 @@ def check_manifest_viability(
     result = ManifestViabilityResult(viable=True, reason="", detail="")
 
     try:
-        ring_ids = (meta or {}).get("roundabout_ring_edges")
-        spoke_ids = (meta or {}).get("roundabout_spoke_edges")
-        entry_junction = (meta or {}).get("roundabout_entry_junction")
-        layout = build_junction_priority_layout(
-            net_path,
-            mode="roundabout",
-            ego_edge_id=(meta or {}).get("road_id"),
-            ring_edge_ids=ring_ids,
-            spoke_edge_ids=spoke_ids,
-            entry_junction_id=entry_junction,
-        )
+        layout = build_junction_priority_layout(net_path)
     except JunctionLayoutError as exc:
         return ManifestViabilityResult(
             viable=False,
@@ -228,14 +204,7 @@ def check_manifest_viability(
             detail=str(exc),
         )
 
-    if layout.shape != "O" or layout.mode != "roundabout":
-        return ManifestViabilityResult(
-            viable=False,
-            reason="not_roundabout",
-            detail=f"expected shape=O mode=roundabout, got shape={layout.shape} mode={layout.mode}",
-        )
-
-    spawn_lanes = parse_spawn_lanes_for_viability(net_path, min_ego_lane_m, meta=meta)
+    spawn_lanes = parse_spawn_lanes_for_viability(net_path, min_ego_lane_m)
     result.spawn_lane_count = len(spawn_lanes)
 
     junction_layout = layout.to_dict()
@@ -253,7 +222,6 @@ def check_manifest_viability(
     _, scenarios = augment_layout_for_scene(
         net_path,
         spawn_lanes,
-        scene_meta=meta,
         min_lane_length=min_ego_lane_m,
         aux_distance_from_intersection=aux_distance_from_intersection,
     )
