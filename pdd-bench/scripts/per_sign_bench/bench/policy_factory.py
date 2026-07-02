@@ -113,7 +113,9 @@ def make_ego_policy(policy_type, models, base_env, seed,
         if ego_variant.startswith("s") and ego_variant[1:].isdigit():
             k = int(ego_variant[1:])
             sample_seed = int(ego_sample_seed_base) + int(seed) + k * 1000003
-            sampled_ego_params = sample_ego_params(sample_seed)
+            # variant_k задаёт квантильную полосу стиля в EGO_SAMPLER=styles
+            # (s1 медленный … s4 быстрый); в legacy-режиме игнорируется.
+            sampled_ego_params = sample_ego_params(sample_seed, variant_k=k)
             apply_ego_sampled(policy_obj, sampled_ego_params)
         else:
             apply_ego_defaults(policy_obj)
