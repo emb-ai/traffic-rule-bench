@@ -86,15 +86,25 @@ def make_ego_policy(policy_type, models, base_env, seed,
     Returns (policy_obj, sampled_ego_params); sampled_ego_params is None unless an
     `s*` variant was applied.
     """
+    import os
+
     from metadrive.policy.idm_policy import IDMPolicy
     from metadrive.policy.expert_policy import ExpertPolicy
     from agents.policies.comprehensive_rule_expert import ComprehensiveRuleExpertPolicy
+    from agents.policies.curve_aware_idm import CurveAwareIDMPolicy
     from agents.policies.rule_compliant_expert import RuleCompliantExpertPolicy
     from factorized_space.ego_defaults import (apply_ego_defaults, apply_ego_sampled,
                                                sample_ego_params)
 
+    # Base idm получает тот же оборонительный слой, что rule-эксперт/NPC
+    # (кривизна-кап, lookahead руления, торможение перед пересекающим
+    # трафиком) — пара idm/idm_rule различается только знанием знаков.
+    # EGO_CURVE_AWARE=0 возвращает сырой MetaDrive IDMPolicy.
+    ego_idm_cls = (IDMPolicy if os.environ.get("EGO_CURVE_AWARE", "1") == "0"
+                   else CurveAwareIDMPolicy)
+
     builtin = {
-        "idm": IDMPolicy,
+        "idm": ego_idm_cls,
         "comprehensive_rule_expert": ComprehensiveRuleExpertPolicy,
         "rule_compliant": RuleCompliantExpertPolicy,
         "ppo_lidar": ExpertPolicy,
