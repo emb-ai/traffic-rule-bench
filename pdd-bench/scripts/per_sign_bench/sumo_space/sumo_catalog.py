@@ -210,14 +210,23 @@ def build_catalog(
             # 30 km/h road isn't discriminative — base already complies).
             net_abs = str(scenes_root / scene.net_path)
             v_target_raw_kmh = round(edge_speed_mps(net_abs, scene.road_id) * 3.6)
-            # Round-robin желаемого минимума по {40,50,60}; достижимость
-            # сохраняем (v_target ≤ road−10), floor 35 отбрасывает слишком
-            # медленные дороги. Счётчик тикает на каждой сцене — сплит
-            # приблизительно равный (быстрые дороги забирают 50/60).
-            idx = limit_rr.get(scene.sign_code, 0)
-            limit_rr[scene.sign_code] = idx + 1
-            desired_min = MIN_SPEED_TARGETS_KMH[idx % len(MIN_SPEED_TARGETS_KMH)]
-            v_target_kmh = min(v_target_raw_kmh - 10, desired_min)
+            # Балансировка минимума по {40,50,60}: сцене назначается НАИМЕНЕЕ
+            # заполненный из ДОСТИЖИМЫХ бакетов (v_target ≤ road−10). Слепой
+            # round-robin давал перекос (50/60 достижимы лишь на дорогах
+            # ≥60/≥70, а быстрым дорогам выпадало «40»); greedy тратит быстрые
+            # дороги на дефицитные бакеты → равномерность ограничена только
+            # парком дорог. Детерминировано порядком stratified_sample.
+            achievable = [t for t in MIN_SPEED_TARGETS_KMH
+                          if t <= v_target_raw_kmh - 10]
+            if achievable:
+                counts = limit_rr.setdefault(
+                    ("min_counts", scene.sign_code),
+                    {t: 0 for t in MIN_SPEED_TARGETS_KMH})
+                v_target_kmh = min(achievable, key=lambda t: (counts[t], t))
+                counts[v_target_kmh] += 1
+            else:
+                # дорога 45–49 км/ч: единственный осмысленный минимум road−10
+                v_target_kmh = v_target_raw_kmh - 10
             if v_target_kmh < MIN_SPEED_FLOOR_KMH:
                 dropped_slow_min += 1
                 continue
