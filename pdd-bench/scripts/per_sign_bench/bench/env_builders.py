@@ -243,8 +243,27 @@ def _apply_manifest_npc_speed_cap(row: dict) -> None:
 RELOCATE_EGO_TO_SIGN_LANE = True
 
 
+def _sample_profile_for_catalog_row(row: dict, max_steps: int) -> None:
+    """Каталог-прямой режим (без материализации): у строки нет profile_*.
+
+    Материализация сэмплировала NPC-профиль из сида строки и писала его в
+    манифест; при прогоне прямо по catalog.jsonl делаем то же самое на лету —
+    та же функция sample_one_profile и тот же сид → тот же профиль, что был бы
+    в манифесте. horizon_steps поднимаем до max_steps (в каталоге его нет,
+    дефолт сэмплера 600 обрезал бы эпизод).
+    """
+    if _manifest_profile(row):
+        return  # манифест-строка — профиль уже зашит
+    from factorized_space.agent_profile_bank import sample_one_profile
+
+    prof = sample_one_profile(_row_seed(row), horizon_steps=max_steps)
+    for key, value in prof.items():
+        row[f"profile_{key}"] = value
+
+
 def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSignSumoEnv:
     SumoTrafficManager.EGO_SAFE_RADIUS = 15
+    _sample_profile_for_catalog_row(row, max_steps)
     _apply_manifest_profile_to_npcs(row)
     _apply_manifest_npc_speed_cap(row)
     traffic_density = _manifest_traffic_density(row, default=0.1)
