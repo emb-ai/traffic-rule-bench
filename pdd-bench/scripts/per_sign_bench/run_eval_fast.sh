@@ -14,15 +14,19 @@
 #
 # ---- config (EDIT for the server) -------------------------------------------
 REPO=/home/jovyan/shares/SR006.nfs2/smirnova/traffic-rule-bench/pdd-bench
-MANIFEST=$REPO/benchmark_output_speed/balanced/check_100x5/mani/sumo_manifest.jsonl
+# v61: каталог-прямой прогон (без материализации) — каталог и есть манифест
+MANIFEST=$REPO/benchmark_output_speed/balanced/run_v61_a6/catalog.jsonl
 SCENES=$REPO/scenes_balanced
-OUT=$REPO/benchmark_output_speed/balanced/check_100x5/eval_fast
+OUT=$REPO/benchmark_output_speed/balanced/run_v61_a6/eval_fast
 
-NGPU=8
-GPUS="0 1 2 3 4 5 6 7"
-NSHARDS=8                   # scene shards per baseline (more = finer balance, more ckpt loads)
-CONCURRENCY=16             # GPU-baseline workers (NN: carl/plant2 families); ~2 per GPU
-CONCURRENCY_CPU=24         # CPU-baseline workers (idm-family / rule_compliant / ppo_lidar)
+# 2-GPU схема: симуляция CPU-bound (на 8 GPU утилизация ~5%), поэтому все NN
+# консолидированы на GPU 0/1 с ~10 процессами на карту (см. policy_gpus ниже).
+GPUS="0 1 2 3 4 5 6 7"      # fallback для policy_gpus(*); NN живут на "0 1"
+NSHARDS=16                  # scene shards per baseline (more = finer balance, more ckpt loads)
+CONCURRENCY=20              # NN-процессов суммарно на GPU 0+1 (~10/карту, CaRL-1B ~4-5 ГБ GPU
+                            # каждый). 32 на 2 картах = OOM (rc=137); поднимать шагами по free -g
+CONCURRENCY_CPU=24          # CPU-baseline workers; помнить: NN-джобы тоже жрут CPU (сим),
+                            # суммарно CONCURRENCY+CONCURRENCY_CPU процессов симуляции
 MAX_STEPS=1500
 PROGRESS_INTERVAL=30        # seconds between progress lines in the eval log
 
@@ -46,6 +50,12 @@ PLANT_CKPT=/home/jovyan/shares/SR006.nfs2/smirnova/sdc/pdd-bench/checkpoints/epo
 # -----------------------------------------------------------------------------
 
 export PER_SIGN_COMPLIANT_NPC=1
+# Правки v61 (переопределяемы из окружения): styles-сэмплер ego s1-s4,
+# curve-aware база idm, «ego держит v0» для default-пары, carl-трекинг.
+export EGO_SAMPLER="${EGO_SAMPLER:-styles}"
+export EGO_CURVE_AWARE="${EGO_CURVE_AWARE:-1}"
+export EGO_HOLD_V0="${EGO_HOLD_V0:-1}"
+export CARL_LONGITUDINAL="${CARL_LONGITUDINAL:-tracking}"
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 BLIS_NUM_THREADS=1 TORCH_NUM_THREADS=1
 export SDL_AUDIODRIVER=dummy
@@ -80,16 +90,11 @@ echo "shards: $(ls "$SHARD_DIR"/shard_*.jsonl | wc -l) x ~$(( $(wc -l < "$SRC_MA
 # CPU spec =     "policy|variant|model|shardfile|tag|runname"
 gpu_jobs=(); cpu_jobs=()
 
-# Each NN policy pinned to its OWN GPU group (no model co-location; uses all 8 GPUs).
-# Its shards round-robin across the group. Edit the case to taste (portable: no bash-4 assoc arrays).
+# 2-GPU схема: ВСЕ NN-политики на GPU 0 и 1 (шарды round-robin между ними).
+# Симуляция CPU-bound — карты легко тянут по ~10 процессов; больше карт не
+# ускоряет, а размазывает. Старая схема (по паре карт на политику) — в git.
 policy_gpus () {  # -> GPU list for a policy
-  case "$1" in
-    carl)        echo "0 1" ;;
-    carl_rule)   echo "2 3" ;;
-    plant2)      echo "4 5" ;;
-    plant2_rule) echo "6 7" ;;
-    *)           echo "$GPUS" ;;
-  esac
+  echo "0 1"
 }
 
 # GPU jobs interleaved by shard (outer) so all NN policies start TOGETHER, each on
@@ -123,6 +128,12 @@ echo "gpu jobs: ${#gpu_jobs[@]} (NN x $NSHARDS, pinned per-policy); cpu jobs: ${
 run_job () {  # gpu spec   (gpu="cpu" -> hide CUDA)
   local gpu="$1" spec="$2" policy variant model sf tag rn cvd rc
   IFS='|' read -r policy variant model sf tag rn <<< "$spec"
+  # RESUME: skip a job that already finished cleanly (.ok marker); otherwise drop
+  # any partial output from a killed/failed attempt so episodes don't double-count.
+  if [ -f "$DONE_DIR/$tag.ok" ]; then
+    echo "[$(date +%H:%M:%S)] SKIP $tag (already done)"; return
+  fi
+  rm -rf "$OUT/parts/$tag" "$DONE_DIR/$tag.fail"
   cvd="$gpu"; [ "$gpu" = cpu ] && cvd=""
   local args=( --policy "$policy" --run-name "$rn" --ego-variant "$variant"
     --manifest "$sf" --scenes-root "$SCENES" --backends sumo
@@ -172,14 +183,17 @@ cpu_lane () { local li="$1" i
     [ $(( i % CONCURRENCY_CPU )) -eq "$li" ] && run_job cpu "${cpu_jobs[$i]}"
   done; }
 # expected episodes ≈ manifest rows × number of baselines (for the progress bar)
-DONE_DIR="$OUT/_done"; rm -rf "$DONE_DIR"; mkdir -p "$DONE_DIR"
+# RESUME: keep .ok markers across runs so a relaunch skips finished jobs. Wipe with
+# `rm -rf "$OUT/eval_fast"` (or just "$OUT/_done") only when you want a fresh start.
+DONE_DIR="$OUT/_done"; mkdir -p "$DONE_DIR"
 TOTAL_JOBS=$(( ${#gpu_jobs[@]} + ${#cpu_jobs[@]} ))
 N_BASELINES=$(( $(echo $NN_POLICIES | wc -w) \
               + $(echo $IDM_FAMILY_POLICIES | wc -w) * $(echo "${EGO_VARIANTS//,/ }" | wc -w) \
               + $(echo $CPU_SINGLE_POLICIES | wc -w) ))
 EXPECTED=$(( $(wc -l < "$SRC_MANIFEST") * N_BASELINES ))
 
-echo "=== launching $CONCURRENCY GPU workers + $CONCURRENCY_CPU CPU workers ($TOTAL_JOBS jobs, ~$EXPECTED episodes) ==="
+NDONE=$(find "$DONE_DIR" -name '*.ok' 2>/dev/null | wc -l)
+echo "=== launching $CONCURRENCY GPU + $CONCURRENCY_CPU CPU workers ($TOTAL_JOBS jobs, $NDONE already done -> resuming, ~$EXPECTED episodes) ==="
 progress_watcher "$EXPECTED" "$PROGRESS_INTERVAL" "$DONE_DIR" "$TOTAL_JOBS" &
 WATCHER=$!
 trap 'kill "$WATCHER" 2>/dev/null' EXIT

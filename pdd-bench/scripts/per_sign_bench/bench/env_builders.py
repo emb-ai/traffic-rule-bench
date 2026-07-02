@@ -254,11 +254,22 @@ def _sample_profile_for_catalog_row(row: dict, max_steps: int) -> None:
     """
     if _manifest_profile(row):
         return  # манифест-строка — профиль уже зашит
+    import os
+
     from factorized_space.agent_profile_bank import sample_one_profile
 
     prof = sample_one_profile(_row_seed(row), horizon_steps=max_steps)
     for key, value in prof.items():
         row[f"profile_{key}"] = value
+    # NPC-кап под лимит знака: для манифеста источником истины была
+    # материализация (PER_SIGN_COMPLIANT_NPC=1 → npc_compliant в строке);
+    # для каталог-строки воспроизводим то же правило от env-переменной.
+    if (os.environ.get("PER_SIGN_COMPLIANT_NPC") == "1"
+            and "npc_compliant" not in row):
+        cap = float(row.get("v_target_kmh") or 0.0)
+        if cap > 0:
+            row["npc_compliant"] = True
+            row["npc_speed_cap_kmh"] = cap
 
 
 def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSignSumoEnv:
