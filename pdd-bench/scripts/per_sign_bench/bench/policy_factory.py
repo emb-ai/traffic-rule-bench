@@ -73,7 +73,8 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
 
 
 def make_ego_policy(policy_type, models, base_env, seed,
-                    ego_variant="default", ego_sample_seed_base=42):
+                    ego_variant="default", ego_sample_seed_base=42,
+                    ego_hold_speed_ms=None):
     """Resolve + instantiate the ego BasePolicy and apply its IDM ego variant.
 
     All policies implement the uniform BasePolicy.act(name) interface — built-in
@@ -129,5 +130,16 @@ def make_ego_policy(policy_type, models, base_env, seed,
             apply_ego_sampled(policy_obj, sampled_ego_params)
         else:
             apply_ego_defaults(policy_obj)
+            # «Ego держит v0» (braking-спавн, только default-вариант): желаемая
+            # скорость поднимается до скорости спавна, чтобы незнающий IDM въехал
+            # в зону выше лимита (иначе затухает к 36 км/ч ровно к знаку — вакуум
+            # на v40). Rule-эксперт получает то же — его капит знак (mixin), так
+            # что зазор пары = чистое знание знака. s1–s4 не трогаем (стили).
+            # Кап по кривизне (CurveAwareIDMPolicy/эксперт) остаётся поверх.
+            # Откат: EGO_HOLD_V0=0.
+            if ego_hold_speed_ms and os.environ.get("EGO_HOLD_V0", "1") != "0":
+                v_kmh = float(ego_hold_speed_ms) * 3.6
+                policy_obj.NORMAL_SPEED = max(float(policy_obj.NORMAL_SPEED), v_kmh)
+                policy_obj.MAX_SPEED = max(float(policy_obj.MAX_SPEED), 1.15 * v_kmh)
 
     return policy_obj, sampled_ego_params

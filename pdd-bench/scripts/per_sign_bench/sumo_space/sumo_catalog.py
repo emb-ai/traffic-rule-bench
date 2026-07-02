@@ -46,19 +46,27 @@ MIN_SPEED_FLOOR_KMH = 35.0      # drop 4.6 scenes whose realistic min (road-10, 
                                 # this — a min <= base cruise (~30) isn't discriminative
 
 
-# Enforced limits a braking scene (3.24 / 5.31) may use. Bounded at 40: the ego
-# cruises ~36 km/h and tops out ~54 km/h, so a 40 limit is reliably violatable
-# (base enters above it, compliant brakes to it). 50 sits at the ego's ceiling —
-# too marginal to discriminate — so roads ≥45 km/h snap DOWN to 40.
+# Enforced limits a braking scene (3.24 / 5.31) may use.
 ALLOWED_LIMITS_KMH = (20, 30, 40)
+
+# Равномерное распределение целевых лимитов (стратегия A6 по анализу
+# run_v60_x10, см. reports/filtration_scenarios.md того прогона):
+# 3.24/5.31 — nearest-снап давал 85% сцен на v40 ≈ крейсер base-политик →
+# вакуумное соблюдение (idm_default 0.99); round-robin даёт точный сплит 1/3.
+SPEED_LIMIT_TARGETS_KMH = (20, 30, 40)
+# 4.6 — cap {40,60} давал 61% сцен на min=40 ≈ крейсер plant2 (~41 км/ч,
+# вакуум, gap пары 0.09); round-robin {40,50,60} чинит пару plant2
+# (min gap 0.159→0.234 пост-хок; при {50,60} было бы 0.311, но 40 оставляем
+# ради объёма доноров).
+MIN_SPEED_TARGETS_KMH = (40, 50, 60)
 
 
 def bucket_limit_kmh(raw_kmh: float, selector: Optional[int] = None):
     """Snap a raw OSM speed limit to the NEAREST of {20, 30, 40} km/h.
 
-    >80 km/h → None (dropped). Each road keeps a limit close to its real speed
-    (20→20, 35→30/40, ≥45→40) instead of the old collapse-to-{20,30}. `selector`
-    is now unused (kept for call-site backward compat).
+    DEPRECATED в энумерации 3.24/5.31 (там round-robin по
+    SPEED_LIMIT_TARGETS_KMH в build_catalog); оставлена для тестов и внешних
+    вызовов. >80 km/h → None (dropped).
     """
     if raw_kmh > 80:
         return None
@@ -174,6 +182,9 @@ def build_catalog(
     insufficient_v0 = 0
     dropped_high_limit = 0
     dropped_slow_min = 0   # 4.6 scenes whose road is too slow for a meaningful min
+    # Round-robin счётчики целевых лимитов, отдельный на каждый sign_code —
+    # детерминированы порядком stratified_sample → точный сплит внутри кода.
+    limit_rr: dict = {}
     for scene in sampled:
         n_lanes = count_lanes_on_road(scene.net_path, scene.road_id)
         if n_lanes <= 0:
@@ -199,8 +210,14 @@ def build_catalog(
             # 30 km/h road isn't discriminative — base already complies).
             net_abs = str(scenes_root / scene.net_path)
             v_target_raw_kmh = round(edge_speed_mps(net_abs, scene.road_id) * 3.6)
-            cap = 40 if (stable_hash(scene.scene_id, "min2040") % 2 == 0) else 60
-            v_target_kmh = min(v_target_raw_kmh - 10, cap)
+            # Round-robin желаемого минимума по {40,50,60}; достижимость
+            # сохраняем (v_target ≤ road−10), floor 35 отбрасывает слишком
+            # медленные дороги. Счётчик тикает на каждой сцене — сплит
+            # приблизительно равный (быстрые дороги забирают 50/60).
+            idx = limit_rr.get(scene.sign_code, 0)
+            limit_rr[scene.sign_code] = idx + 1
+            desired_min = MIN_SPEED_TARGETS_KMH[idx % len(MIN_SPEED_TARGETS_KMH)]
+            v_target_kmh = min(v_target_raw_kmh - 10, desired_min)
             if v_target_kmh < MIN_SPEED_FLOOR_KMH:
                 dropped_slow_min += 1
                 continue
@@ -211,14 +228,15 @@ def build_catalog(
             else:
                 net_abs = str(scenes_root / scene.net_path)
                 v_target_raw_kmh = round(edge_speed_mps(net_abs, scene.road_id) * 3.6)
-                # 3.24 AND 5.31: snap the road's limit to the nearest of
-                # {20,30,40,50} km/h (5.21 is fixed 20, handled above). Bounded at
-                # 50 so the ego can still spawn above the limit and violate it.
-                bucketed = bucket_limit_kmh(v_target_raw_kmh)
-                if bucketed is None:    # raw limit > 80 km/h → drop the scene
+                if v_target_raw_kmh > 80:   # автомагистрали — геометрия не для 20/30
                     dropped_high_limit += 1
                     continue
-                v_target_kmh = bucketed
+                # 3.24 И 5.31: равномерный round-robin лимита по {20,30,40}
+                # (точный сплит 1/3 внутри кода) вместо nearest-снапа, который
+                # давал 85% сцен на недискриминативном v40.
+                idx = limit_rr.get(scene.sign_code, 0)
+                limit_rr[scene.sign_code] = idx + 1
+                v_target_kmh = SPEED_LIMIT_TARGETS_KMH[idx % len(SPEED_LIMIT_TARGETS_KMH)]
 
         for spawn_lane_num in lane_range:
             for var_idx in range(n_variations):

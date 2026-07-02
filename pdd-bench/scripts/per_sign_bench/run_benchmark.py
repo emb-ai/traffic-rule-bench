@@ -398,9 +398,19 @@ def run_one_episode(
             return _error_result(row, setup_error, backend=backend)
 
         # Resolve + instantiate the ego BasePolicy and apply the IDM ego variant.
+        # Braking-спавн: default ego-IDM «держит v0» (желаемая скорость ≥ спавна),
+        # чтобы незнающий агент въезжал в зону выше лимита, а не затухал к 36 км/ч
+        # ровно к знаку (вакуумное соблюдение v40). Rule-эксперт капится знаком.
+        ego_hold_speed_ms = None
+        if row.get("braking_spawn"):
+            try:
+                ego_hold_speed_ms = float(row.get("spawn_velocity_ms") or 0.0) or None
+            except (TypeError, ValueError):
+                ego_hold_speed_ms = None
         policy_obj, sampled_ego_params = make_ego_policy(
             policy_type, models, base_env, seed,
-            ego_variant=ego_variant, ego_sample_seed_base=ego_sample_seed_base)
+            ego_variant=ego_variant, ego_sample_seed_base=ego_sample_seed_base,
+            ego_hold_speed_ms=ego_hold_speed_ms)
 
         r = _run_rollout(env, base_env, policy_obj,
                          max_steps=max_steps, save_gif=save_gif)
