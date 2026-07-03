@@ -29,7 +29,7 @@ scenario:
   max_exit_destinations_per_spawn: null  # Limit outbound roundabout exits per ego spawn (null = all)
   max_scenarios_per_scene: 1  # Limit per incoming road (each entry road always represented; null = all)
   validate_metadrive_routes: true # Drop candidate routes that MetaDrive navigation cannot follow
-  min_ego_lane_m: 5.0           # Min spoke/sign-approach lane length for ego spawn enumeration
+  min_ego_lane_m: 10.0           # Min spoke/sign-approach lane length for ego spawn enumeration
   respect_scene_selection: true  # Skip scenes marked reject in scene_selection.json
 
 # =============================================================================

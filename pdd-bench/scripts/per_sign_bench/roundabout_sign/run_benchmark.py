@@ -1371,7 +1371,7 @@ def run_one_episode(
                 else str(getattr(base_env.vehicle.lane, "index", ""))
             )
 
-            aux_spawn_lanes, aux_destination_lanes, alternate_spawn_dest_map = (
+            aux_spawn_lanes, aux_destination_lanes, alternate_spawn_dest_map, manifest_spawn_longs = (
                 resolve_aux_spawn_plan(
                     row,
                     ego_lane_index=str(ego_lane_index),
@@ -1383,7 +1383,7 @@ def run_one_episode(
             aux_destination_lanes = [
                 dest or None for dest in aux_destination_lanes
             ]
-            aux_spawn_longitudes: dict[str, float] = {}
+            aux_spawn_longitudes: dict[str, float] = dict(manifest_spawn_longs)
 
             road_network = base_env.engine.current_map.road_network
             blue_zone_lane_keys = filter_lane_keys_in_road_network(

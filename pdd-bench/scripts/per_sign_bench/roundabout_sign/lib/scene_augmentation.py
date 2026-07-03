@@ -38,9 +38,10 @@ class SpawnScenario:
     aux_destination_edge_id: str
     aux_destination_lane_key: str
     scenario_id: str
+    aux_spawn_longitudinal: Optional[float] = None
 
     def to_manifest_fields(self) -> dict:
-        return {
+        fields = {
             "road_id": self.ego_edge_id,
             "spawn_lane_num": self.ego_lane_num,
             "destination_lane_id": self.ego_destination_lane_key,
@@ -52,6 +53,9 @@ class SpawnScenario:
             "aux_destination_edge_id": self.aux_destination_edge_id,
             "augmentation_id": self.scenario_id,
         }
+        if self.aux_spawn_longitudinal is not None:
+            fields["aux_spawn_longitudinal"] = self.aux_spawn_longitudinal
+        return fields
 
 
 def _lane_key(edge_id: str, lane_num: int) -> str:
@@ -446,13 +450,25 @@ def enumerate_spawn_scenarios(
     max_exit_destinations_per_spawn: Optional[int] = None,
 ) -> List[SpawnScenario]:
     """Enumerate ego/aux spawn combinations from junction layout arms."""
-    from .auxiliary_agent import min_aux_spawn_lane_length
+    from .auxiliary_agent import (
+        merge_lane_lengths_from_layout,
+        resolve_aux_spawn_placement,
+    )
 
-    lane_lengths = lane_lengths or {}
-    min_aux_lane_length = min_aux_spawn_lane_length(aux_distance_from_intersection)
+    layout_dict = layout.to_dict() if hasattr(layout, "to_dict") else layout
+    lane_lengths = merge_lane_lengths_from_layout(layout_dict, lane_lengths or {})
     lane_keys_by_edge: Dict[str, List[str]] = {
         arm.edge_id: list(arm.lane_keys) for arm in layout.arms
     }
+
+    def _aux_lane_nums(aux_edge: str) -> List[int]:
+        nums = spawn_lanes_by_edge.get(aux_edge, [])
+        if nums:
+            return nums
+        arm = layout.arm_for_edge(aux_edge)
+        if arm is None:
+            return []
+        return sorted({lane_num_from_key(key) for key in arm.lane_keys})
 
     secondary_edges = _roundabout_ego_spawn_edges(
         layout, spawn_lanes_by_edge, prefer_ego_edge_id=None
@@ -477,15 +493,18 @@ def enumerate_spawn_scenarios(
             if aux_dest_edge is None:
                 continue
 
-            aux_lane_nums = spawn_lanes_by_edge.get(aux_edge, [])
-            if not aux_lane_nums:
-                continue
-            aux_lane_nums = [
-                lane_num
-                for lane_num in aux_lane_nums
-                if lane_lengths.get((aux_edge, lane_num), min_lane_length) >= min_aux_lane_length
-            ]
-            if not aux_lane_nums:
+            aux_lane_placements: List[tuple[int, object]] = []
+            for lane_num in _aux_lane_nums(aux_edge):
+                placement = resolve_aux_spawn_placement(
+                    layout_dict,
+                    aux_edge,
+                    lane_num,
+                    lane_lengths,
+                    aux_distance_from_intersection,
+                )
+                if placement is not None:
+                    aux_lane_placements.append((lane_num, placement))
+            if not aux_lane_placements:
                 continue
 
             for ego_lane in ego_lane_nums:
@@ -525,10 +544,7 @@ def enumerate_spawn_scenarios(
                     ]
 
                 for ego_dest_edge, ego_dest_lane_key in reachable_destinations:
-                    for aux_lane in aux_lane_nums:
-                        if lane_lengths.get((aux_edge, aux_lane), min_lane_length) < min_lane_length:
-                            continue
-
+                    for aux_lane, placement in aux_lane_placements:
                         aux_dest_lane_key = _pick_outgoing_lane_key(
                             aux_dest_edge,
                             aux_lane,
@@ -546,11 +562,12 @@ def enumerate_spawn_scenarios(
                                 ego_lane_num=ego_lane,
                                 ego_destination_edge_id=ego_dest_edge,
                                 ego_destination_lane_key=ego_dest_lane_key,
-                                aux_edge_id=aux_edge,
-                                aux_lane_num=aux_lane,
+                                aux_edge_id=placement.spawn_edge_id,
+                                aux_lane_num=placement.spawn_lane_num,
                                 aux_destination_edge_id=aux_dest_edge,
                                 aux_destination_lane_key=aux_dest_lane_key,
                                 scenario_id=scenario_id,
+                                aux_spawn_longitudinal=placement.spawn_longitudinal,
                             )
                         )
 

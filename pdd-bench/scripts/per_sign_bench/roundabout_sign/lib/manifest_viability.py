@@ -7,8 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
-from lib.auxiliary_agent import has_viable_aux_lanes, min_aux_spawn_lane_length
+from lib.auxiliary_agent import (
+    has_viable_aux_lanes,
+    is_aux_lane_viable_with_ring_extension,
+    merge_lane_lengths_from_layout,
+    min_aux_spawn_lane_length,
+)
 from lib.junction_priority_layout import JunctionLayoutError, build_junction_priority_layout
+from lib.lane_keys import lane_num_from_key
 from lib.manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
@@ -64,7 +70,10 @@ def _explain_no_scenarios(
     aux_distance_from_intersection: float,
 ) -> Tuple[str, str]:
     spawn_by_edge = build_spawn_lanes_by_edge(spawn_lanes)
-    lengths = lane_lengths_from_spawn_lanes(spawn_lanes)
+    lengths = merge_lane_lengths_from_layout(
+        layout.to_dict() if hasattr(layout, "to_dict") else layout,
+        lane_lengths_from_spawn_lanes(spawn_lanes),
+    )
     route_index = load_vehicle_route_index(net_path)
     lane_keys_by_edge = {arm.edge_id: list(arm.lane_keys) for arm in layout.arms}
     min_aux_lane = min_aux_spawn_lane_length(aux_distance_from_intersection)
@@ -130,12 +139,24 @@ def _explain_no_scenarios(
                         continue
                     aux_lane_nums = spawn_by_edge.get(aux_edge, [])
                     if not aux_lane_nums:
+                        arm = layout.arm_for_edge(aux_edge)
+                        if arm:
+                            aux_lane_nums = sorted(
+                                {lane_num_from_key(k) for k in arm.lane_keys}
+                            )
+                    if not aux_lane_nums:
                         aux_no_approach_lane += 1
                         continue
                     viable_aux = [
                         ln
                         for ln in aux_lane_nums
-                        if lengths.get((aux_edge, ln), 0) >= min_aux_lane
+                        if is_aux_lane_viable_with_ring_extension(
+                            layout.to_dict(),
+                            aux_edge,
+                            ln,
+                            lengths,
+                            aux_distance_from_intersection,
+                        )
                     ]
                     if not viable_aux:
                         aux_no_viable_lane += 1
@@ -239,8 +260,14 @@ def check_manifest_viability(
     result.spawn_lane_count = len(spawn_lanes)
 
     junction_layout = layout.to_dict()
+    aux_lane_lengths = merge_lane_lengths_from_layout(
+        junction_layout,
+        lane_lengths_from_spawn_lanes(spawn_lanes),
+    )
     if auxiliary_enabled and not has_viable_aux_lanes(
-        junction_layout, aux_distance_from_intersection
+        junction_layout,
+        aux_distance_from_intersection,
+        lane_lengths=aux_lane_lengths,
     ):
         min_aux_lane = min_aux_spawn_lane_length(aux_distance_from_intersection)
         return ManifestViabilityResult(

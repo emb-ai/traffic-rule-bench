@@ -22,9 +22,9 @@ from lib.lane_keys import lane_edge_id, lane_num_from_key, make_lane_key
 from lib.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
     DEFAULT_CONVOY_SIZE,
-    has_roundabout_aux_spawn_capability,
     has_viable_aux_lanes,
     main_lane_keys_for_aux,
+    merge_lane_lengths_from_layout,
     resolve_aux_destination_lane_key,
     select_occupied_main_lanes,
     viable_aux_lane_keys,
@@ -39,6 +39,7 @@ from lib.scene_augmentation import (
     _roundabout_ego_spawn_edges,
     augment_layout_for_scene,
     build_spawn_lanes_by_edge,
+    lane_lengths_from_spawn_lanes,
     parse_roundabout_spawn_lanes,
     pick_default_yield_spawn_meta_for_net,
 )
@@ -725,12 +726,17 @@ def generate_manifest(
         )
         print(f"  Main-road lane slots for aux: {available_main_lane_count}")
 
-        if aux_cfg.enabled and not has_roundabout_aux_spawn_capability(
-            junction_layout, aux_cfg.distance_from_intersection
+        if aux_cfg.enabled and not has_viable_aux_lanes(
+            junction_layout,
+            aux_cfg.distance_from_intersection,
+            lane_lengths=merge_lane_lengths_from_layout(
+                junction_layout,
+                lane_lengths_from_spawn_lanes(spawn_lanes),
+            ),
         ):
             print(
-                f"  [aux] No viable aux spawn (long ring or compact entry zone) "
-                f"for {scene_name}; skipping"
+                f"  [aux] No main-road lanes long enough for aux spawning "
+                f"(need >{aux_cfg.distance_from_intersection}m); skipping {scene_name}"
             )
             continue
 

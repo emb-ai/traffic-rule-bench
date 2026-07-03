@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Literal, Optional
+from dataclasses import dataclass
+from typing import Dict, List, Literal, Optional, Tuple
 
 from metadrive.manager.base_manager import BaseManager
 from metadrive.component.vehicle.base_vehicle import BaseVehicle
 from metadrive.policy.base_policy import BasePolicy
 from metadrive.policy.idm_policy import IDMPolicy
 from metadrive.component.navigation_module.edge_network_navigation import EdgeNetworkNavigation
+
+from .lane_keys import lane_edge_id, lane_num_from_key, make_lane_key, parse_lane_key
 
 
 DEFAULT_DISTANCE_FROM_INTERSECTION = 20.0
@@ -22,7 +25,7 @@ AuxPolicyType = Literal["idm", "stationary"]
 
 
 def min_aux_spawn_lane_length(aux_distance_from_intersection: float) -> float:
-    """Minimum incoming lane length required to place an aux convoy."""
+    """Minimum incoming lane length required to place an aux convoy on one segment."""
     return float(aux_distance_from_intersection) + MIN_SPAWN_LONGITUDE_M
 
 
@@ -31,6 +34,157 @@ def is_viable_aux_lane_length(
     aux_distance_from_intersection: float,
 ) -> bool:
     return float(lane_length) >= min_aux_spawn_lane_length(aux_distance_from_intersection)
+
+
+def _layout_arms(junction_layout: Optional[dict]) -> List[dict]:
+    if not junction_layout:
+        return []
+    return list(junction_layout.get("arms", []))
+
+
+def _arm_for_edge(junction_layout: Optional[dict], edge_id: str) -> Optional[dict]:
+    for arm in _layout_arms(junction_layout):
+        if arm.get("edge_id") == edge_id:
+            return arm
+    return None
+
+
+def upstream_ring_arm(
+    junction_layout: Optional[dict],
+    edge_id: str,
+) -> Optional[dict]:
+    """Ring segment immediately upstream of ``edge_id`` (feeds into its ``from_node``)."""
+    arm = _arm_for_edge(junction_layout, edge_id)
+    if arm is None or arm.get("road_class") != "main":
+        return None
+    from_node = str(arm.get("from_node", ""))
+    if not from_node:
+        return None
+    upstream: List[dict] = []
+    for candidate in _layout_arms(junction_layout):
+        if candidate.get("road_class") != "main":
+            continue
+        if str(candidate.get("to_node", "")) == from_node:
+            upstream.append(candidate)
+    if not upstream:
+        return None
+    return max(upstream, key=lambda item: float(item.get("min_lane_length", 0.0) or 0.0))
+
+
+def lane_length_for_spawn(
+    edge_id: str,
+    lane_num: int,
+    lane_lengths: Dict[Tuple[str, int], float],
+    junction_layout: Optional[dict],
+) -> float:
+    length = float(lane_lengths.get((edge_id, lane_num), 0.0) or 0.0)
+    if length > 0.0:
+        return length
+    arm = _arm_for_edge(junction_layout, edge_id)
+    if arm is not None:
+        return float(arm.get("min_lane_length", 0.0) or 0.0)
+    return 0.0
+
+
+@dataclass(frozen=True)
+class AuxSpawnPlacement:
+    """Resolved aux spawn lane and longitudinal offset along it."""
+
+    spawn_edge_id: str
+    spawn_lane_num: int
+    spawn_longitudinal: float
+    conflict_edge_id: str
+    conflict_lane_num: int
+
+    @property
+    def spawn_lane_key(self) -> str:
+        return make_lane_key(self.spawn_edge_id, self.spawn_lane_num)
+
+
+def resolve_aux_spawn_placement(
+    junction_layout: Optional[dict],
+    edge_id: str,
+    lane_num: int,
+    lane_lengths: Dict[Tuple[str, int], float],
+    aux_distance_from_intersection: float = DEFAULT_DISTANCE_FROM_INTERSECTION,
+) -> Optional[AuxSpawnPlacement]:
+    """Place aux ``aux_distance`` before the junction, extending onto upstream ring if needed."""
+    aux_distance = float(aux_distance_from_intersection)
+    lane_length = lane_length_for_spawn(edge_id, lane_num, lane_lengths, junction_layout)
+    if lane_length <= 0.0:
+        return None
+
+    if lane_length >= aux_distance + MIN_SPAWN_LONGITUDE_M:
+        spawn_long = lane_length - aux_distance
+        if spawn_long < MIN_SPAWN_LONGITUDE_M:
+            spawn_long = MIN_SPAWN_LONGITUDE_M
+        if spawn_long > max(lane_length - 0.1, MIN_SPAWN_LONGITUDE_M):
+            return None
+        return AuxSpawnPlacement(
+            spawn_edge_id=edge_id,
+            spawn_lane_num=lane_num,
+            spawn_longitudinal=float(spawn_long),
+            conflict_edge_id=edge_id,
+            conflict_lane_num=lane_num,
+        )
+
+    remainder = aux_distance - lane_length
+    upstream = upstream_ring_arm(junction_layout, edge_id)
+    if upstream is None:
+        return None
+    up_edge = str(upstream.get("edge_id", ""))
+    if not up_edge:
+        return None
+    up_length = lane_length_for_spawn(up_edge, lane_num, lane_lengths, junction_layout)
+    if up_length < remainder + MIN_SPAWN_LONGITUDE_M:
+        return None
+
+    spawn_long = up_length - remainder
+    if spawn_long < MIN_SPAWN_LONGITUDE_M:
+        return None
+    return AuxSpawnPlacement(
+        spawn_edge_id=up_edge,
+        spawn_lane_num=lane_num,
+        spawn_longitudinal=float(spawn_long),
+        conflict_edge_id=edge_id,
+        conflict_lane_num=lane_num,
+    )
+
+
+def is_aux_lane_viable_with_ring_extension(
+    junction_layout: Optional[dict],
+    edge_id: str,
+    lane_num: int,
+    lane_lengths: Dict[Tuple[str, int], float],
+    aux_distance_from_intersection: float = DEFAULT_DISTANCE_FROM_INTERSECTION,
+) -> bool:
+    return (
+        resolve_aux_spawn_placement(
+            junction_layout,
+            edge_id,
+            lane_num,
+            lane_lengths,
+            aux_distance_from_intersection,
+        )
+        is not None
+    )
+
+
+def merge_lane_lengths_from_layout(
+    junction_layout: Optional[dict],
+    lane_lengths: Dict[Tuple[str, int], float],
+) -> Dict[Tuple[str, int], float]:
+    """Fill missing (edge, lane) lengths from junction arm minima."""
+    merged = dict(lane_lengths)
+    for arm in _layout_arms(junction_layout):
+        edge_id = str(arm.get("edge_id", ""))
+        min_len = float(arm.get("min_lane_length", 0.0) or 0.0)
+        if not edge_id or min_len <= 0.0:
+            continue
+        for lane_key in arm.get("lane_keys", []):
+            lane_num = lane_num_from_key(str(lane_key))
+            merged.setdefault((edge_id, lane_num), min_len)
+    return merged
 
 
 def apply_aux_cruise_speed(aux_policy, speed_ms: float) -> None:
@@ -108,9 +262,6 @@ class GatedAuxiliaryIDMPolicy(AuxiliaryIDMPolicy):
             else:
                 return [0.0, -0.5]
         return super().act(*args, **kwargs)
-
-
-from .lane_keys import lane_edge_id, lane_num_from_key, make_lane_key, parse_lane_key
 
 
 def pick_destination_outgoing_lane(
@@ -531,22 +682,32 @@ def viable_aux_arms(
     junction_layout: Optional[dict],
     aux_distance_from_intersection: float,
     ego_edge_id: Optional[str] = None,
+    lane_lengths: Optional[Dict[Tuple[str, int], float]] = None,
 ) -> List[dict]:
-    """Return main-road arms with lanes long enough for aux spawning.
-    
-    A lane is viable if ``min_lane_length >= aux_distance + MIN_SPAWN_LONGITUDE_M``.
-    """
+    """Return main-road arms where at least one lane can host aux (with ring extension)."""
     if not junction_layout:
         return []
-    min_required = min_aux_spawn_lane_length(aux_distance_from_intersection)
+    lengths = merge_lane_lengths_from_layout(junction_layout, lane_lengths or {})
     viable: List[dict] = []
-    for arm in junction_layout.get("arms", []):
+    for arm in _layout_arms(junction_layout):
         if arm.get("road_class") != "main":
             continue
         if ego_edge_id and arm.get("edge_id") == ego_edge_id:
             continue
-        min_len = arm.get("min_lane_length", 0.0)
-        if min_len >= min_required:
+        edge_id = str(arm.get("edge_id", ""))
+        lane_nums = sorted(
+            {lane_num_from_key(str(key)) for key in arm.get("lane_keys", [])}
+        ) or [0]
+        if any(
+            is_aux_lane_viable_with_ring_extension(
+                junction_layout,
+                edge_id,
+                lane_num,
+                lengths,
+                aux_distance_from_intersection,
+            )
+            for lane_num in lane_nums
+        ):
             viable.append(arm)
     return viable
 
@@ -566,50 +727,16 @@ def viable_aux_lane_keys(
 def has_viable_aux_lanes(
     junction_layout: Optional[dict],
     aux_distance_from_intersection: float,
+    lane_lengths: Optional[Dict[Tuple[str, int], float]] = None,
 ) -> bool:
-    """Check if a junction layout has any main-road arm with sufficient lane length.
-    
-    Returns True if at least one main-road arm (across all possible ego edges)
-    has lanes long enough for aux spawning.
-    """
-    if not junction_layout:
-        return False
-    min_required = min_aux_spawn_lane_length(aux_distance_from_intersection)
-    for arm in junction_layout.get("arms", []):
-        if arm.get("road_class") != "main":
-            continue
-        min_len = arm.get("min_lane_length", 0.0)
-        if min_len >= min_required:
-            return True
-    return False
-
-
-def has_roundabout_aux_spawn_capability(
-    junction_layout: Optional[dict],
-    aux_distance_from_intersection: float,
-) -> bool:
-    """Whether aux can spawn on this roundabout (long ring arms or compact entry zones)."""
-    from .roundabout_yield_zone import (
-        _arm_min_lane_length,
-        compact_aux_ring_edges_for_ego,
+    """True if any main-road arm can host aux (possibly via upstream ring extension)."""
+    return bool(
+        viable_aux_arms(
+            junction_layout,
+            aux_distance_from_intersection,
+            lane_lengths=lane_lengths,
+        )
     )
-
-    if not junction_layout:
-        return False
-    if has_viable_aux_lanes(junction_layout, aux_distance_from_intersection):
-        return True
-
-    min_compact = MIN_SPAWN_LONGITUDE_M
-    for arm in junction_layout.get("arms", []):
-        if arm.get("road_class") != "secondary":
-            continue
-        ego_edge = arm.get("edge_id")
-        if not ego_edge:
-            continue
-        for edge_id in compact_aux_ring_edges_for_ego(junction_layout, str(ego_edge)):
-            if _arm_min_lane_length(junction_layout, edge_id) >= min_compact:
-                return True
-    return False
 
 
 def resolve_aux_spawn_lanes(
@@ -730,8 +857,8 @@ def resolve_aux_spawn_plan(
     incoming_lanes: Optional[List[dict]] = None,
     aux_lanes_occupied: int = 1,
     aux_distance_from_intersection: float = DEFAULT_DISTANCE_FROM_INTERSECTION,
-) -> tuple[List[str], List[str], dict]:
-    """Resolve aux spawn lanes, destinations, and alternate spawn->dest fallbacks."""
+) -> tuple[List[str], List[str], dict, dict]:
+    """Resolve aux spawn lanes, destinations, alternate fallbacks, and spawn longitudes."""
     spawn_lanes = resolve_aux_spawn_lanes(
         row,
         ego_lane_index=ego_lane_index,
@@ -756,6 +883,7 @@ def resolve_aux_spawn_plan(
             alternate_spawn_dest_map[lane_key] = dest
 
     destination_lanes: List[str] = []
+    spawn_longitudinal_by_lane: dict = {}
     for idx, spawn_lane in enumerate(spawn_lanes):
         dest = alternate_spawn_dest_map.get(spawn_lane)
         if not dest and idx == 0 and row.get("aux_destination_lane_id"):
@@ -763,8 +891,11 @@ def resolve_aux_spawn_plan(
             if manifest_spawn and spawn_lane == str(manifest_spawn):
                 dest = str(row["aux_destination_lane_id"])
         destination_lanes.append(dest or "")
+        manifest_long = row.get("aux_spawn_longitudinal")
+        if manifest_long is not None and spawn_lane == str(row.get("aux_spawn_lane_index") or ""):
+            spawn_longitudinal_by_lane[str(spawn_lane)] = float(manifest_long)
 
-    return spawn_lanes, destination_lanes, alternate_spawn_dest_map
+    return spawn_lanes, destination_lanes, alternate_spawn_dest_map, spawn_longitudinal_by_lane
 
 
 def add_auxiliary_agents(
