@@ -21,6 +21,52 @@ DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END = 5.0
 DEFAULT_CONVOY_SIZE = 3
 DEFAULT_CONVOY_GAP_M = 10.0
 MIN_SPAWN_LONGITUDE_M = 3.0
+
+
+def achievable_convoy_sizes(
+    lead_spawn_long: float,
+    *,
+    convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
+    max_convoy: int = DEFAULT_CONVOY_SIZE,
+    min_spawn_long: float = MIN_SPAWN_LONGITUDE_M,
+) -> List[int]:
+    """Return convoy sizes supported on one lane (spatial or sequential at lead point)."""
+    _ = (lead_spawn_long, convoy_gap_m, min_spawn_long)
+    cap = max(1, int(max_convoy))
+    return list(range(1, cap + 1))
+
+
+def manifest_entry_spawn_fingerprint(entry: dict) -> tuple:
+    """Hashable key for the simulation-relevant spawn layout (dedup identical variants)."""
+    aux_keys = tuple(sorted(str(k) for k in (entry.get("aux_occupied_lane_keys") or [])))
+    if not aux_keys and entry.get("aux_spawn_lane_index"):
+        aux_keys = (str(entry["aux_spawn_lane_index"]),)
+    spawn_long = entry.get("aux_spawn_longitudinal")
+    return (
+        str(entry.get("scene_id") or ""),
+        str(entry.get("road_id") or ""),
+        int(entry.get("spawn_lane_num") or 0),
+        str(entry.get("destination_edge_id") or ""),
+        str(entry.get("destination_lane_id") or ""),
+        aux_keys,
+        int(entry.get("aux_convoy_size") or 1),
+        len(aux_keys) if aux_keys else int(entry.get("aux_lanes_occupied") or 1),
+        round(float(spawn_long), 2) if spawn_long is not None else None,
+    )
+
+
+@dataclass
+class _PendingConvoySpawn:
+    """Convoy slot waiting for the predecessor to vacate the lead spawn point."""
+
+    spawn_lane_index: str
+    lead_spawn_long: float
+    destination_lane: Optional[str]
+    convoy_position: int
+    wait_slot: int
+    lane_convoy: List[Optional[BaseVehicle]]
+
+
 AuxPolicyType = Literal["idm", "stationary"]
 
 
@@ -363,6 +409,7 @@ class AuxiliaryAgentsManager(BaseManager):
         self._spawn_destinations: List[Optional[str]] = []
         self._convoy_positions: List[int] = []
         self._aux_policies: List[BasePolicy] = []
+        self._pending_convoy_spawns: List[_PendingConvoySpawn] = []
 
     def reset(self):
         self._aux_vehicles = []
@@ -370,9 +417,66 @@ class AuxiliaryAgentsManager(BaseManager):
         self._spawn_destinations = []
         self._convoy_positions = []
         self._aux_policies = []
+        self._pending_convoy_spawns = []
 
     def after_reset(self):
         self._spawn_auxiliary_vehicles()
+
+    def _vehicle_longitudinal_on_lane(self, vehicle: BaseVehicle, lane_index: str) -> Optional[float]:
+        try:
+            lane = self.engine.current_map.road_network.get_lane(lane_index)
+            longitudinal, _ = lane.local_coordinates(vehicle.position)
+            return float(longitudinal)
+        except Exception:
+            return None
+
+    def _predecessor_cleared_spawn_point(
+        self,
+        predecessor: BaseVehicle,
+        lane_index: str,
+        lead_spawn_long: float,
+    ) -> bool:
+        """True when the predecessor has moved far enough to reuse the lead spawn point."""
+        long_pos = self._vehicle_longitudinal_on_lane(predecessor, lane_index)
+        if long_pos is None:
+            return False
+        return long_pos >= float(lead_spawn_long) + self._convoy_gap_m
+
+    def _try_spawn_pending_convoys(self) -> None:
+        if not self._pending_convoy_spawns:
+            return
+
+        still_pending: List[_PendingConvoySpawn] = []
+        for pending in self._pending_convoy_spawns:
+            if pending.wait_slot >= 0:
+                predecessor = pending.lane_convoy[pending.wait_slot]
+                if predecessor is None:
+                    still_pending.append(pending)
+                    continue
+                if not self._predecessor_cleared_spawn_point(
+                    predecessor,
+                    pending.spawn_lane_index,
+                    pending.lead_spawn_long,
+                ):
+                    still_pending.append(pending)
+                    continue
+
+            if self._spawn_vehicle_on_lane(
+                pending.spawn_lane_index,
+                pending.lead_spawn_long,
+                pending.destination_lane,
+                pending.convoy_position,
+            ):
+                pending.lane_convoy[pending.convoy_position] = self._aux_vehicles[-1]
+                print(
+                    f"[AuxAgent] Sequential convoy slot {pending.convoy_position + 1}/"
+                    f"{self._convoy_size} on {pending.spawn_lane_index} "
+                    f"at {pending.lead_spawn_long:.1f}m "
+                    f"(after slot {pending.wait_slot + 1} cleared)"
+                )
+            else:
+                still_pending.append(pending)
+        self._pending_convoy_spawns = still_pending
 
     def _spawn_vehicle_on_lane(
         self,
@@ -487,6 +591,7 @@ class AuxiliaryAgentsManager(BaseManager):
         self._spawn_destinations = []
         self._convoy_positions = []
         self._aux_policies = []
+        self._pending_convoy_spawns = []
 
         for idx, spawn_lane_index in enumerate(self._requested_spawn_lane_indices):
             candidate_lanes = [spawn_lane_index]
@@ -521,30 +626,67 @@ class AuxiliaryAgentsManager(BaseManager):
                     )
 
                 spawned_on_lane = 0
+                lane_convoy: List[Optional[BaseVehicle]] = [None] * self._convoy_size
+                lane_pending: List[_PendingConvoySpawn] = []
                 for convoy_idx in range(self._convoy_size):
                     spawn_long = lead_spawn_long - convoy_idx * self._convoy_gap_m
-                    if spawn_long < MIN_SPAWN_LONGITUDE_M:
-                        break
-                    if self._spawn_vehicle_on_lane(
-                        candidate_lane,
-                        spawn_long,
-                        destination_lane,
-                        convoy_idx,
-                    ):
-                        spawned_on_lane += 1
+                    if spawn_long >= MIN_SPAWN_LONGITUDE_M:
+                        if self._spawn_vehicle_on_lane(
+                            candidate_lane,
+                            spawn_long,
+                            destination_lane,
+                            convoy_idx,
+                        ):
+                            spawned_on_lane += 1
+                            lane_convoy[convoy_idx] = self._aux_vehicles[-1]
+                        elif convoy_idx == 0:
+                            break
+                        else:
+                            lane_pending.append(
+                                _PendingConvoySpawn(
+                                    spawn_lane_index=candidate_lane,
+                                    lead_spawn_long=lead_spawn_long,
+                                    destination_lane=destination_lane,
+                                    convoy_position=convoy_idx,
+                                    wait_slot=convoy_idx - 1,
+                                    lane_convoy=lane_convoy,
+                                )
+                            )
+                    else:
+                        if convoy_idx == 0:
+                            break
+                        lane_pending.append(
+                            _PendingConvoySpawn(
+                                spawn_lane_index=candidate_lane,
+                                lead_spawn_long=lead_spawn_long,
+                                destination_lane=destination_lane,
+                                convoy_position=convoy_idx,
+                                wait_slot=convoy_idx - 1,
+                                lane_convoy=lane_convoy,
+                            )
+                        )
 
-                if spawned_on_lane:
+                if spawned_on_lane > 0 or lane_pending:
+                    if lane_pending:
+                        self._pending_convoy_spawns.extend(lane_pending)
                     used_lane = candidate_lane
                     used_destination = destination_lane
                     break
 
-            if spawned_on_lane and used_lane:
+            if used_lane is not None:
+                pending_n = sum(
+                    1
+                    for pending in self._pending_convoy_spawns
+                    if pending.spawn_lane_index == used_lane
+                )
                 print(
                     f"[AuxAgent] Convoy x{spawned_on_lane} on {used_lane} "
                     f"-> {used_destination} ({self._policy}, gap={self._convoy_gap_m:.1f}m)"
+                    + (f", +{pending_n} sequential pending" if pending_n else "")
                 )
 
     def before_step(self):
+        self._try_spawn_pending_convoys()
         if not self._aux_vehicles:
             return {}
         for aux_vehicle in self._aux_vehicles:
@@ -618,6 +760,7 @@ class AuxiliaryAgentsManager(BaseManager):
             "count": len(self._aux_vehicles),
             "convoy_size": self._convoy_size,
             "convoy_gap_m": self._convoy_gap_m,
+            "pending_convoy_spawns": len(self._pending_convoy_spawns),
             "lanes_occupied": len(set(self._spawn_lane_indices)),
             "policy": self._policy,
             "agents": agents,

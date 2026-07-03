@@ -113,6 +113,21 @@ def lane_keys_for_edges(layout: dict, edge_ids: Iterable[str]) -> List[str]:
     return sorted(keys)
 
 
+def entry_conflict_aux_lane_keys(
+    layout: dict,
+    ego_spoke_edge_id: str,
+    *,
+    entry_junction_id: Optional[str] = None,
+) -> List[str]:
+    """Parallel main-road lane keys at ego entry conflict (excludes upstream hops)."""
+    edge_ids = entry_conflict_ring_edges(
+        layout,
+        ego_spoke_edge_id,
+        entry_junction_id=entry_junction_id,
+    )
+    return lane_keys_for_edges(layout, edge_ids)
+
+
 def collect_lanes_for_edge_ids(env, layout: dict, edge_ids: Sequence[str]) -> List[Any]:
     from .junction_sign_placement import collect_lanes_for_keys
 

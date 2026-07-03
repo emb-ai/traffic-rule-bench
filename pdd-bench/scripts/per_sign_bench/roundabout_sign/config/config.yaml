@@ -28,7 +28,7 @@ scenario:
   augment: true                   # Enable ego/aux spawn point enumeration
   max_exit_destinations_per_spawn: null  # Limit outbound roundabout exits per ego spawn (null = all)
   max_core_scenarios: 105         # Cap entry-level cores (scene + incoming road); round-robin across scenes
-  max_scenarios_per_scene: 10     # Cap lane/convoy/lanes_occupied variants per core scenario (null = all)
+  max_scenarios_per_scene: 25     # Cap lane/convoy/lanes_occupied variants per core scenario (null = all)
   validate_metadrive_routes: true # Drop candidate routes that MetaDrive navigation cannot follow
   min_ego_lane_m: 10.0           # Min spoke/sign-approach lane length for ego spawn enumeration
   respect_scene_selection: true  # Skip scenes marked reject in scene_selection.json
@@ -49,7 +49,7 @@ simulation:
 auxiliary:
   enabled: true                   # Spawn agents on main road
   distance_from_intersection: 20.0  # Aux spawn offset from lane end (m)
-  convoy_size: 3                  # Vehicles per lane
+  convoy_size: 5                  # Vehicles per lane
   lanes_occupied: 4               # Main road lanes to occupy
   convoy_gap_m: 10.0              # Gap between convoy vehicles (m)
 

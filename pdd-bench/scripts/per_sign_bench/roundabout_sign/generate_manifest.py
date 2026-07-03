@@ -22,8 +22,10 @@ from lib.lane_keys import lane_edge_id, lane_num_from_key, make_lane_key
 from lib.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
     DEFAULT_CONVOY_SIZE,
+    achievable_convoy_sizes,
     has_viable_aux_lanes,
     main_lane_keys_for_aux,
+    manifest_entry_spawn_fingerprint,
     merge_lane_lengths_from_layout,
     resolve_aux_destination_lane_key,
     select_occupied_main_lanes,
@@ -42,7 +44,9 @@ from lib.scene_augmentation import (
     lane_lengths_from_spawn_lanes,
     parse_roundabout_spawn_lanes,
     pick_default_yield_spawn_meta_for_net,
+    select_canonical_entry_scenarios,
 )
+from lib.roundabout_yield_zone import entry_conflict_aux_lane_keys
 from lib.sumo_utils import is_vehicle_drivable_lane
 
 
@@ -351,6 +355,36 @@ def limit_core_scenarios(
     return selected
 
 
+def _scenario_aux_lead_spawn_long(
+    layout: dict,
+    scenario: "SpawnScenario",
+    ego_entry_edge: str,
+    lane_lengths: Dict[Tuple[str, int], float],
+    aux_distance: float,
+) -> float:
+    """Longitudinal position of the lead convoy vehicle on the aux lane."""
+    if scenario.aux_spawn_longitudinal is not None:
+        return float(scenario.aux_spawn_longitudinal)
+
+    from lib.auxiliary_agent import MIN_SPAWN_LONGITUDE_M, resolve_aux_spawn_placement
+    from lib.roundabout_yield_zone import conflict_aux_ring_edge_ids
+
+    allowed = set(conflict_aux_ring_edge_ids(layout, ego_entry_edge))
+    placement = resolve_aux_spawn_placement(
+        layout,
+        scenario.aux_edge_id,
+        scenario.aux_lane_num,
+        lane_lengths,
+        aux_distance,
+        allowed_ring_edges=allowed,
+    )
+    if placement is not None:
+        return float(placement.spawn_longitudinal)
+
+    length = float(lane_lengths.get((scenario.aux_edge_id, scenario.aux_lane_num), 0.0) or 0.0)
+    return max(MIN_SPAWN_LONGITUDE_M, length - float(aux_distance))
+
+
 def expand_core_variants(
     core: CoreScenarioBundle,
     scenes_root: Path,
@@ -360,28 +394,63 @@ def expand_core_variants(
     *,
     max_variants: Optional[int],
 ) -> tuple[List[Dict], int]:
-    """Expand one core with lane/convoy/lanes_occupied variants; shuffle and cap."""
+    """Expand one core with convoy/lanes variants from a single canonical base spawn."""
     scene_name = str(core.meta.get("scene_name") or core.scene_dir.name)
     junction_layout = core.junction_layout
-    variants: List[Dict] = []
+    lane_lengths = merge_lane_lengths_from_layout(
+        junction_layout,
+        lane_lengths_from_spawn_lanes(core.spawn_lanes),
+    )
+    max_convoy = max(convoy_sizes) if convoy_sizes else 1
+    candidates: List[Dict] = []
 
-    for variant_idx, scenario in enumerate(core.entry_scenarios):
-        scene_main_lanes = (
-            viable_aux_lane_keys(
-                junction_layout,
-                aux_cfg.distance_from_intersection,
-                core.ego_entry_edge,
-            )
-            if aux_cfg.enabled
-            else main_lane_keys_for_aux(junction_layout, core.ego_entry_edge)
-        )
+    base_scenarios = select_canonical_entry_scenarios(
+        core.entry_scenarios,
+        junction_layout,
+        core.ego_entry_edge,
+    )
+    parallel_aux_keys = entry_conflict_aux_lane_keys(
+        junction_layout,
+        core.ego_entry_edge,
+    )
+    if aux_cfg.enabled and not parallel_aux_keys:
+        parallel_aux_keys = viable_aux_lane_keys(
+            junction_layout,
+            aux_cfg.distance_from_intersection,
+            core.ego_entry_edge,
+        )[:1]
+
+    for variant_idx, scenario in enumerate(base_scenarios):
+        if aux_cfg.enabled and not parallel_aux_keys:
+            continue
+
         scene_lane_counts = sizes_up_to(
             aux_cfg.lanes_occupied,
             auxiliary_enabled=aux_cfg.enabled,
-            available=len(scene_main_lanes),
+            available=len(parallel_aux_keys),
         )
+        scenario_convoy_sizes = convoy_sizes
+        if aux_cfg.enabled:
+            lead_long = _scenario_aux_lead_spawn_long(
+                junction_layout,
+                scenario,
+                core.ego_entry_edge,
+                lane_lengths,
+                aux_cfg.distance_from_intersection,
+            )
+            allowed_convoys = set(
+                achievable_convoy_sizes(
+                    lead_long,
+                    convoy_gap_m=aux_cfg.convoy_gap_m,
+                    max_convoy=max_convoy,
+                )
+            )
+            scenario_convoy_sizes = [n for n in convoy_sizes if n in allowed_convoys]
+            if not scenario_convoy_sizes:
+                continue
+
         for lanes_n in scene_lane_counts:
-            for convoy_n in convoy_sizes:
+            for convoy_n in scenario_convoy_sizes:
                 entry = build_manifest_entry(
                     scene_dir=core.scene_dir,
                     scenes_root=scenes_root,
@@ -395,10 +464,19 @@ def expand_core_variants(
                     junction_layout_cache=junction_layout,
                     spawn_scenario=scenario,
                 )
+                if not entry.get("valid", True):
+                    continue
+                if aux_cfg.enabled and not entry.get("aux_occupied_lane_keys"):
+                    continue
                 entry["core_scenario_id"] = f"{scene_name}__entry_{core.ego_entry_edge}"
-                variants.append(entry)
+                candidates.append(entry)
 
-    raw_count = len(variants)
+    raw_count = len(candidates)
+    deduped: Dict[tuple, Dict] = {}
+    for entry in candidates:
+        deduped[manifest_entry_spawn_fingerprint(entry)] = entry
+    variants = list(deduped.values())
+
     rng = random.Random(_stable_seed(scene_name, scenario_id=f"core_{core.ego_entry_edge}"))
     rng.shuffle(variants)
     if max_variants is not None:
@@ -710,10 +788,10 @@ def build_manifest_entry(
         entry.update(spawn_scenario.to_manifest_fields())
         if aux_cfg.enabled:
             suffix_parts = []
-            if aux_lanes_occupied > 1:
-                suffix_parts.append(f"lanes{aux_lanes_occupied}")
-            if aux_convoy_size > 1:
-                suffix_parts.append(f"convoy{aux_convoy_size}")
+            if int(entry.get("aux_lanes_occupied") or 1) > 1:
+                suffix_parts.append(f"lanes{entry['aux_lanes_occupied']}")
+            if int(entry.get("aux_convoy_size") or 1) > 1:
+                suffix_parts.append(f"convoy{entry['aux_convoy_size']}")
             if suffix_parts:
                 base_aug = entry.get("augmentation_id") or scenario_id
                 entry["augmentation_id"] = f"{base_aug}_{'_'.join(suffix_parts)}"
@@ -795,11 +873,16 @@ def build_manifest_entry(
             ego_edge = entry.get("road_id") or (
                 spawn_scenario.ego_edge_id if spawn_scenario is not None else None
             )
-            available_main = viable_aux_lane_keys(
+            available_main = entry_conflict_aux_lane_keys(
                 junction_layout_cache,
-                aux_cfg.distance_from_intersection,
                 ego_edge,
             )
+            if not available_main:
+                available_main = viable_aux_lane_keys(
+                    junction_layout_cache,
+                    aux_cfg.distance_from_intersection,
+                    ego_edge,
+                )
             if not available_main:
                 entry["valid"] = False
             prefer_aux = None
@@ -812,6 +895,8 @@ def build_manifest_entry(
                 available_main, aux_lanes_occupied, prefer_lane_key=prefer_aux
             )
             if entry["aux_occupied_lane_keys"]:
+                actual_lanes = len(entry["aux_occupied_lane_keys"])
+                entry["aux_lanes_occupied"] = actual_lanes
                 primary_aux = entry["aux_occupied_lane_keys"][0]
                 entry["aux_spawn_lane_index"] = primary_aux
                 entry["aux_road_id"] = lane_edge_id(primary_aux)

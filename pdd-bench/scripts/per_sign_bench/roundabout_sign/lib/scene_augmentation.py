@@ -580,6 +580,49 @@ def enumerate_spawn_scenarios(
     return scenarios
 
 
+def select_canonical_entry_scenarios(
+    scenarios: List[SpawnScenario],
+    layout: dict,
+    ego_entry_edge: str,
+) -> List[SpawnScenario]:
+    """Pick one base spawn scenario per ego lane for convoy/lanes expansion.
+
+    Upstream ring hops are valid for aux placement during exit augmentation, but
+    convoy/lanes_occupied variants should not multiply over upstream vs conflict
+    segments on the same single-lane approach.
+    """
+    from collections import defaultdict
+
+    from .roundabout_yield_zone import entry_conflict_ring_edges
+
+    if not scenarios:
+        return []
+
+    layout_dict = layout.to_dict() if hasattr(layout, "to_dict") else layout
+    conflict_edges = set(
+        entry_conflict_ring_edges(layout_dict, ego_entry_edge)
+    )
+    by_ego_lane: Dict[int, List[SpawnScenario]] = defaultdict(list)
+    for scenario in scenarios:
+        by_ego_lane[scenario.ego_lane_num].append(scenario)
+
+    canonical: List[SpawnScenario] = []
+    for ego_lane in sorted(by_ego_lane):
+        group = by_ego_lane[ego_lane]
+        on_conflict = [s for s in group if s.aux_edge_id in conflict_edges]
+        pool = on_conflict if on_conflict else group
+        pool.sort(
+            key=lambda s: (
+                s.ego_destination_edge_id,
+                0 if s.aux_edge_id in conflict_edges else 1,
+                s.aux_edge_id,
+                s.scenario_id,
+            )
+        )
+        canonical.append(pool[0])
+    return canonical
+
+
 def build_spawn_lanes_by_edge(
     spawn_lanes: Iterable,
 ) -> Dict[str, List[int]]:
