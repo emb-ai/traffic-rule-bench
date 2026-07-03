@@ -64,11 +64,24 @@ class PathsConfig:
 
 
 @dataclass
+class CoreScenarioBundle:
+    """One ego entry arm on a physical scene — base unit before lane/convoy expansion."""
+
+    scene_dir: Path
+    meta: Dict
+    junction_layout: dict
+    spawn_lanes: List
+    ego_entry_edge: str
+    entry_scenarios: List["SpawnScenario"]
+
+
+@dataclass
 class ScenarioConfig:
     n_variants: int = 1
     augment: bool = True
-    max_scenarios_per_scene: Optional[int] = None
+    max_scenarios_per_scene: Optional[int] = 10
     max_exit_destinations_per_spawn: Optional[int] = None
+    max_core_scenarios: Optional[int] = 105
     validate_metadrive_routes: bool = True
     min_ego_lane_m: float = 10.0
 
@@ -248,6 +261,149 @@ def select_scenarios_per_incoming_road(
             group = group[: max(0, int(max_per_road))]
         selected.extend(group)
     return selected, covered, missing
+
+
+def _manifest_entry_sort_key(entry: Dict) -> tuple:
+    return (
+        str(entry.get("scene_id") or ""),
+        str(entry.get("road_id") or entry.get("ego_edge_id") or ""),
+        str(entry.get("augmentation_id") or entry.get("scenario_id") or ""),
+        int(entry.get("var_idx") or 0),
+        int(entry.get("aux_convoy_size") or 0),
+        int(entry.get("aux_lanes_occupied") or 0),
+    )
+
+
+def _core_bundle_sort_key(core: CoreScenarioBundle) -> tuple:
+    scene_name = str(core.meta.get("scene_name") or core.scene_dir.name)
+    return (scene_name, str(core.ego_entry_edge))
+
+
+def build_core_bundles_for_scene(
+    scene_dir: Path,
+    meta: Dict,
+    junction_layout: dict,
+    spawn_lanes: List,
+    scenarios: List["SpawnScenario"],
+    required_incoming_edges: List[str],
+) -> tuple[List[CoreScenarioBundle], List[str], List[str]]:
+    """Group routable scenarios by ego entry arm (one core per incoming road)."""
+    from collections import defaultdict
+
+    by_entry: Dict[str, List[SpawnScenario]] = defaultdict(list)
+    for scenario in scenarios:
+        by_entry[scenario.ego_edge_id].append(scenario)
+
+    cores: List[CoreScenarioBundle] = []
+    covered: List[str] = []
+    missing: List[str] = []
+    for ego_edge in required_incoming_edges:
+        group = by_entry.get(ego_edge, [])
+        if not group:
+            missing.append(ego_edge)
+            continue
+        covered.append(ego_edge)
+        group.sort(key=lambda item: item.scenario_id)
+        cores.append(
+            CoreScenarioBundle(
+                scene_dir=scene_dir,
+                meta=meta,
+                junction_layout=junction_layout,
+                spawn_lanes=spawn_lanes,
+                ego_entry_edge=ego_edge,
+                entry_scenarios=list(group),
+            )
+        )
+    return cores, covered, missing
+
+
+def limit_core_scenarios(
+    cores: List[CoreScenarioBundle],
+    max_core: Optional[int],
+) -> List[CoreScenarioBundle]:
+    """Cap entry-level core scenarios (round-robin across physical scenes)."""
+    if max_core is None or len(cores) <= max_core:
+        return cores
+
+    from collections import defaultdict
+
+    by_scene: Dict[str, List[CoreScenarioBundle]] = defaultdict(list)
+    for core in cores:
+        scene_key = str(core.meta.get("scene_name") or core.scene_dir.name)
+        by_scene[scene_key].append(core)
+
+    scene_keys = sorted(by_scene.keys())
+    for scene_key in scene_keys:
+        by_scene[scene_key].sort(key=_core_bundle_sort_key)
+
+    selected: List[CoreScenarioBundle] = []
+    while len(selected) < max_core:
+        progressed = False
+        for scene_key in scene_keys:
+            if not by_scene[scene_key]:
+                continue
+            selected.append(by_scene[scene_key].pop(0))
+            progressed = True
+            if len(selected) >= max_core:
+                break
+        if not progressed:
+            break
+    return selected
+
+
+def expand_core_variants(
+    core: CoreScenarioBundle,
+    scenes_root: Path,
+    sim_cfg: SimulationConfig,
+    aux_cfg: AuxiliaryConfig,
+    convoy_sizes: List[int],
+    *,
+    max_variants: Optional[int],
+) -> tuple[List[Dict], int]:
+    """Expand one core with lane/convoy/lanes_occupied variants; shuffle and cap."""
+    scene_name = str(core.meta.get("scene_name") or core.scene_dir.name)
+    junction_layout = core.junction_layout
+    variants: List[Dict] = []
+
+    for variant_idx, scenario in enumerate(core.entry_scenarios):
+        scene_main_lanes = (
+            viable_aux_lane_keys(
+                junction_layout,
+                aux_cfg.distance_from_intersection,
+                core.ego_entry_edge,
+            )
+            if aux_cfg.enabled
+            else main_lane_keys_for_aux(junction_layout, core.ego_entry_edge)
+        )
+        scene_lane_counts = sizes_up_to(
+            aux_cfg.lanes_occupied,
+            auxiliary_enabled=aux_cfg.enabled,
+            available=len(scene_main_lanes),
+        )
+        for lanes_n in scene_lane_counts:
+            for convoy_n in convoy_sizes:
+                entry = build_manifest_entry(
+                    scene_dir=core.scene_dir,
+                    scenes_root=scenes_root,
+                    meta=core.meta,
+                    variant=variant_idx,
+                    sim_cfg=sim_cfg,
+                    aux_cfg=aux_cfg,
+                    aux_convoy_size=convoy_n,
+                    aux_lanes_occupied=lanes_n,
+                    spawn_lanes_cache=core.spawn_lanes,
+                    junction_layout_cache=junction_layout,
+                    spawn_scenario=scenario,
+                )
+                entry["core_scenario_id"] = f"{scene_name}__entry_{core.ego_entry_edge}"
+                variants.append(entry)
+
+    raw_count = len(variants)
+    rng = random.Random(_stable_seed(scene_name, scenario_id=f"core_{core.ego_entry_edge}"))
+    rng.shuffle(variants)
+    if max_variants is not None:
+        variants = variants[: max(0, int(max_variants))]
+    return variants, raw_count
 
 
 # -----------------------------------------------------------------------------
@@ -684,14 +840,14 @@ def generate_manifest(
 ) -> List[Dict]:
     """Generate real_manifest.jsonl from discovered scenes."""
     scenes = discover_scenes(scenes_dir)
-    entries = []
-    
+    core_bundles: List[CoreScenarioBundle] = []
+
     for scene_dir in scenes:
         meta = load_scene_metadata(scene_dir)
         scene_name = meta.get("scene_name", scene_dir.name)
         net_file = meta.get("net_file", "map.net.xml")
         net_full_path = scene_dir / net_file
-        
+
         spawn_lanes = parse_spawn_lanes_for_scene(
             net_full_path,
             meta,
@@ -718,7 +874,7 @@ def generate_manifest(
             f"(main={len(junction_layout.get('main_edge_ids', []))}, "
             f"secondary={len(junction_layout.get('secondary_edge_ids', []))})"
         )
-        
+
         available_main_lane_count = len(
             viable_aux_lane_keys(junction_layout, aux_cfg.distance_from_intersection)
             if aux_cfg.enabled
@@ -780,10 +936,13 @@ def generate_manifest(
                     continue
 
             total_before = len(scenarios)
-            scenarios, covered_incoming, missing_incoming = select_scenarios_per_incoming_road(
+            scene_cores, covered_incoming, missing_incoming = build_core_bundles_for_scene(
+                scene_dir,
+                meta,
+                junction_layout,
+                spawn_lanes,
                 scenarios,
                 required_incoming,
-                max_per_road=scenario_cfg.max_scenarios_per_scene,
             )
             if missing_incoming:
                 print(
@@ -791,49 +950,58 @@ def generate_manifest(
                     f"{missing_incoming}"
                 )
             print(
-                f"  Augmented scenarios: {len(scenarios)} "
+                f"  Entry cores: {len(scene_cores)} "
                 f"({len(covered_incoming)}/{len(required_incoming)} incoming roads, "
-                f"from {total_before} routable)"
+                f"from {total_before} routable lane/dest/aux combos)"
             )
-            if not scenarios:
-                print(f"  [augment] No scenarios after per-road selection for {scene_name}; skipping scene")
+            if not scene_cores:
+                print(f"  [augment] No entry cores for {scene_name}; skipping scene")
                 continue
-        
-        convoy_sizes = sizes_up_to(aux_cfg.convoy_size, auxiliary_enabled=aux_cfg.enabled)
-        lanes_counts = sizes_up_to(
-            aux_cfg.lanes_occupied,
-            auxiliary_enabled=aux_cfg.enabled,
-            available=available_main_lane_count,
+            core_bundles.extend(scene_cores)
+
+    total_cores_before_cap = len(core_bundles)
+    core_bundles = limit_core_scenarios(core_bundles, scenario_cfg.max_core_scenarios)
+    if (
+        scenario_cfg.max_core_scenarios is not None
+        and total_cores_before_cap > len(core_bundles)
+    ):
+        print(
+            f"[manifest] Capped core scenarios: {len(core_bundles)} "
+            f"(from {total_cores_before_cap}, "
+            f"max_core_scenarios={scenario_cfg.max_core_scenarios})"
         )
-        for variant, scenario in enumerate(scenarios):
-            ego_edge = scenario.ego_edge_id
-            scene_main_lanes = viable_aux_lane_keys(
-                junction_layout,
-                aux_cfg.distance_from_intersection,
-                ego_edge,
-            ) if aux_cfg.enabled else main_lane_keys_for_aux(junction_layout, ego_edge)
-            scene_lane_counts = sizes_up_to(
-                aux_cfg.lanes_occupied,
-                auxiliary_enabled=aux_cfg.enabled,
-                available=len(scene_main_lanes),
-            )
-            for lanes_n in scene_lane_counts:
-                for convoy_n in convoy_sizes:
-                    entry = build_manifest_entry(
-                        scene_dir=scene_dir,
-                        scenes_root=scenes_dir,
-                        meta=meta,
-                        variant=variant,
-                        sim_cfg=sim_cfg,
-                        aux_cfg=aux_cfg,
-                        aux_convoy_size=convoy_n,
-                        aux_lanes_occupied=lanes_n,
-                        spawn_lanes_cache=spawn_lanes,
-                        junction_layout_cache=junction_layout,
-                        spawn_scenario=scenario,
-                    )
-                    entries.append(entry)
-    
+
+    convoy_sizes = sizes_up_to(aux_cfg.convoy_size, auxiliary_enabled=aux_cfg.enabled)
+    entries: List[Dict] = []
+    total_variants_before_cap = 0
+    for core in core_bundles:
+        core_entries, raw_count = expand_core_variants(
+            core,
+            scenes_root=scenes_dir,
+            sim_cfg=sim_cfg,
+            aux_cfg=aux_cfg,
+            convoy_sizes=convoy_sizes,
+            max_variants=scenario_cfg.max_scenarios_per_scene,
+        )
+        total_variants_before_cap += raw_count
+        entries.extend(core_entries)
+
+    if (
+        scenario_cfg.max_scenarios_per_scene is not None
+        and total_variants_before_cap > len(entries)
+    ):
+        print(
+            f"[manifest] Per-core variant cap: {len(entries)} manifest rows "
+            f"(from {total_variants_before_cap} expanded variants, "
+            f"max_scenarios_per_scene={scenario_cfg.max_scenarios_per_scene}, "
+            f"{len(core_bundles)} core scenarios)"
+        )
+    else:
+        print(
+            f"[manifest] Expanded {len(entries)} manifest rows "
+            f"from {len(core_bundles)} core scenarios"
+        )
+
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "real_manifest.jsonl"
     
@@ -851,6 +1019,11 @@ def generate_manifest(
         "augment": scenario_cfg.augment,
         "max_scenarios_per_scene": scenario_cfg.max_scenarios_per_scene,
         "max_exit_destinations_per_spawn": scenario_cfg.max_exit_destinations_per_spawn,
+        "max_core_scenarios": scenario_cfg.max_core_scenarios,
+        "core_scenarios_before_cap": total_cores_before_cap,
+        "core_scenarios_after_cap": len(core_bundles),
+        "variants_before_per_core_cap": total_variants_before_cap,
+        "total_manifest_rows": len(entries),
         "validate_metadrive_routes": scenario_cfg.validate_metadrive_routes,
         "min_ego_lane_m": scenario_cfg.min_ego_lane_m,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
@@ -1015,6 +1188,7 @@ def main(cfg: DictConfig) -> None:
         augment=cfg.scenario.augment,
         max_scenarios_per_scene=cfg.scenario.max_scenarios_per_scene,
         max_exit_destinations_per_spawn=cfg.scenario.max_exit_destinations_per_spawn,
+        max_core_scenarios=cfg.scenario.max_core_scenarios,
         validate_metadrive_routes=cfg.scenario.validate_metadrive_routes,
         min_ego_lane_m=cfg.scenario.min_ego_lane_m,
     )

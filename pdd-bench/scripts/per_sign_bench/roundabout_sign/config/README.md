@@ -29,7 +29,10 @@ python generate_manifest.py paths.experiment_name=my_experiment
 |-----------|---------|-------------|
 | `n_variants` | `1` | Number of variants per scene |
 | `augment` | `true` | Enable scenario augmentation |
-| `max_scenarios_per_scene` | `null` | Limit total manifest rows per scene (after convoy/lanes expansion) |
+| `max_exit_destinations_per_spawn` | `null` | Limit outbound roundabout exits per ego spawn |
+| `max_core_scenarios` | `105` | Cap entry-level cores (physical scene + incoming road to ring); round-robin across scenes |
+| `max_scenarios_per_scene` | `10` | Cap lane / convoy / lanes_occupied variants **per core** (after shuffling) |
+| `validate_metadrive_routes` | `true` | Drop routes MetaDrive navigation cannot follow |
 
 ### `simulation`
 | Parameter | Default | Description |
