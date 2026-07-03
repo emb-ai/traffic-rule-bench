@@ -151,6 +151,78 @@ def ego_entry_junction_id(
     return layout.get("junction_id")
 
 
+def _upstream_ring_arm(layout: dict, edge_id: str) -> Optional[dict]:
+    arm = next((a for a in layout.get("arms", []) if a.get("edge_id") == edge_id), None)
+    if arm is None or arm.get("road_class") != "main":
+        return None
+    from_node = str(arm.get("from_node", ""))
+    if not from_node:
+        return None
+    upstream = [
+        candidate
+        for candidate in layout.get("arms", [])
+        if candidate.get("road_class") == "main"
+        and str(candidate.get("to_node", "")) == from_node
+    ]
+    if not upstream:
+        return None
+    return max(upstream, key=lambda item: float(item.get("min_lane_length", 0.0) or 0.0))
+
+
+def conflict_aux_ring_edge_ids(
+    layout: dict,
+    ego_spoke_edge_id: str,
+    *,
+    entry_junction_id: Optional[str] = None,
+    max_upstream_hops: int = 1,
+) -> List[str]:
+    """Ring edge IDs where aux may spawn for ego yield (conflict arc, not exit arc).
+
+    Includes the ring segment(s) ending at ego's entry junction and at most
+    ``max_upstream_hops`` upstream segments on the circle, excluding outgoing
+    ring edges at the same entry.
+    """
+    entry_j = entry_junction_id or ego_entry_junction_id(layout, ego_spoke_edge_id) or ""
+    if not entry_j:
+        return []
+
+    outgoing = set(
+        entry_outgoing_ring_edges(
+            layout,
+            ego_spoke_edge_id,
+            entry_junction_id=entry_j,
+        )
+    )
+    conflict = entry_conflict_ring_edges(
+        layout,
+        ego_spoke_edge_id,
+        entry_junction_id=entry_j,
+    )
+    allowed: List[str] = []
+    seen: set[str] = set()
+    for edge_id in conflict:
+        if edge_id and edge_id not in seen:
+            allowed.append(edge_id)
+            seen.add(edge_id)
+
+    frontier = list(conflict)
+    for _ in range(max(0, int(max_upstream_hops))):
+        next_frontier: List[str] = []
+        for edge_id in frontier:
+            upstream = _upstream_ring_arm(layout, edge_id)
+            if upstream is None:
+                continue
+            up_id = str(upstream.get("edge_id", ""))
+            if not up_id or up_id in seen or up_id in outgoing:
+                continue
+            allowed.append(up_id)
+            seen.add(up_id)
+            next_frontier.append(up_id)
+        frontier = next_frontier
+
+    return allowed
+
+
 def compact_aux_ring_edges_for_ego(
     layout: dict,
     ego_spoke_edge_id: str,

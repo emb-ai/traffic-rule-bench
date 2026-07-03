@@ -78,8 +78,10 @@ def _explain_no_scenarios(
     lane_keys_by_edge = {arm.edge_id: list(arm.lane_keys) for arm in layout.arms}
     min_aux_lane = min_aux_spawn_lane_length(aux_distance_from_intersection)
 
+    from .roundabout_yield_zone import all_entry_conflict_ring_edges, conflict_aux_ring_edge_ids
+
     secondary = _roundabout_ego_spawn_edges(layout, spawn_by_edge)
-    main_edges = sorted(layout.main_edge_ids)
+    main_edges = sorted(all_entry_conflict_ring_edges(layout.to_dict()))
 
     ego_edges_with_spawn = [e for e in secondary if spawn_by_edge.get(e)]
     if not ego_edges_with_spawn:
@@ -133,6 +135,9 @@ def _explain_no_scenarios(
                 for aux_edge in main_edges:
                     if aux_edge == ego_edge:
                         continue
+                    allowed = set(conflict_aux_ring_edge_ids(layout.to_dict(), ego_edge))
+                    if aux_edge not in allowed:
+                        continue
                     aux_dest_edge = _aux_straight_destination(layout, aux_edge)
                     if aux_dest_edge is None:
                         aux_no_straight_dest += 1
@@ -156,6 +161,7 @@ def _explain_no_scenarios(
                             ln,
                             lengths,
                             aux_distance_from_intersection,
+                            allowed_ring_edges=allowed,
                         )
                     ]
                     if not viable_aux:

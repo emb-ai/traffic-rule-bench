@@ -69,9 +69,7 @@ class EndMainRoadSign(BaseTrafficSign):
 class YieldSign(BaseTrafficSign):
 
     EGO_ZONE_BEFORE = 30.0
-    # Treat yield obligation as cleared when the vehicle center passes this far before
-    # the lane end (~half car length), so a junction entry/crash is not missed while
-    # the rear is still geometrically on the approach lane.
+    # Fallback full vehicle length when MetaDrive LENGTH is unavailable.
     EGO_ZONE_END_CENTER_INSET = 4.0
     MAIN_ROAD_ZONE_BEFORE = 20.0
     MAIN_ROAD_ZONE_AFTER = 15.0     
@@ -439,13 +437,18 @@ class YieldSign(BaseTrafficSign):
         
         return len(conflicting) > 0, conflicting
 
+    def _vehicle_half_length(self, vehicle) -> float:
+        return 0.5 * float(
+            getattr(vehicle, "LENGTH", self.EGO_ZONE_END_CENTER_INSET * 2)
+        )
+
     def _obligation_zone_end(self, vehicle) -> float:
-        """Last longitudinal position (vehicle center) still under yield obligation."""
-        inset = 0.5 * float(getattr(vehicle, "LENGTH", self.EGO_ZONE_END_CENTER_INSET))
-        return max(self.zone_start, float(self.zone_end) - inset)
+        """Max vehicle-center longitudinal still fully inside the yield zone."""
+        half_len = self._vehicle_half_length(vehicle)
+        return max(self.zone_start + half_len, float(self.zone_end) - half_len)
 
     def _is_vehicle_in_zone(self, vehicle) -> bool:
-        """Check if the vehicle is within the yield zone."""
+        """True when the whole vehicle footprint is inside the yield zone."""
         vehicle_lane = getattr(vehicle, "lane", None)
         if vehicle_lane is None or not same_road_check(
             getattr(vehicle_lane, "index", None),
@@ -454,7 +457,10 @@ class YieldSign(BaseTrafficSign):
             return False
 
         veh_long = self.lane.local_coordinates(vehicle.position)[0]
-        return self.zone_start <= veh_long <= self._obligation_zone_end(vehicle)
+        half_len = self._vehicle_half_length(vehicle)
+        front = float(veh_long) + half_len
+        rear = float(veh_long) - half_len
+        return rear >= self.zone_start and front <= self.zone_end
 
     def _is_violating(self, vehicle) -> bool:
         """Check if the vehicle is violating the yield sign."""
@@ -716,7 +722,7 @@ class RoundaboutYieldSign(YieldSign):
     """Invisible yield tracker for 4.3 — ego on spoke yields to ring traffic."""
 
     ENTRY_CONFLICT_BEFORE_M = 20.0
-    ENTRY_CONFLICT_AFTER_M = 0.0
+    ENTRY_CONFLICT_AFTER_M = 5.0
 
     def __init__(
         self,
@@ -763,24 +769,24 @@ class RoundaboutYieldSign(YieldSign):
         )
 
     def _conflict_longitudinal_range(self, lane) -> tuple[float, float]:
-        """20 m on the ring upstream of ego's entry junction (yield-from-left)."""
+        """Ring tail upstream of ego entry, plus a short downstream tail past lane end."""
         before_m = self.ENTRY_CONFLICT_BEFORE_M
-        if self._junction_at_lane_end(lane):
-            return (
-                max(0.0, lane.length - before_m),
-                lane.length + self.ENTRY_CONFLICT_AFTER_M,
-            )
-        return (0.0, min(float(lane.length), before_m))
+        after_m = self.ENTRY_CONFLICT_AFTER_M
+        return (
+            max(0.0, float(lane.length) - before_m),
+            float(lane.length) + after_m,
+        )
 
     def _is_vehicle_in_main_road_conflict_zone(self, vehicle) -> bool:
-        """True only when vehicle is in the 20 m ring segment at ego's entry."""
+        """True when ring traffic is in the monitored conflict arc at ego's entry."""
         if not self.main_road_lanes:
             return False
 
         try:
             vehicle_pos = vehicle.position
             vehicle_heading = vehicle.heading_theta
-            vehicle_lane_idx = getattr(vehicle.lane, "index", None)
+            vehicle_lane = getattr(vehicle, "lane", None)
+            vehicle_lane_idx = getattr(vehicle_lane, "index", None)
             if vehicle_lane_idx is None:
                 return False
             v_segment = (vehicle_lane_idx[0], vehicle_lane_idx[1])
@@ -792,6 +798,15 @@ class RoundaboutYieldSign(YieldSign):
             ln_idx = getattr(ln, "index", None)
             if ln_idx and len(ln_idx) >= 2:
                 main_segments.add((ln_idx[0], ln_idx[1]))
+
+        if v_segment in main_segments and vehicle_lane is not None:
+            try:
+                long_pos, lat_pos = vehicle_lane.local_coordinates(vehicle_pos)
+                zone_start, zone_end = self._conflict_longitudinal_range(vehicle_lane)
+                if zone_start <= long_pos <= zone_end and abs(lat_pos) <= vehicle_lane.width * 1.5:
+                    return True
+            except Exception:
+                pass
 
         for lane in self.main_road_lanes:
             try:
@@ -839,8 +854,9 @@ class RoundaboutYieldSign(YieldSign):
     def get_rule_description(self) -> str:
         return (
             "Roundabout (4.3) — must not leave the approach zone "
-            "while traffic is present on the ring within 20 m upstream "
-            "of the ego entry junction"
+            "while traffic is present on the ring within "
+            f"{self.ENTRY_CONFLICT_BEFORE_M:.0f} m upstream of the ego entry junction "
+            f"(plus {self.ENTRY_CONFLICT_AFTER_M:.0f} m past the lane end)"
         )
 
 

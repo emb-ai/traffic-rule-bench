@@ -52,6 +52,8 @@ from lib.roundabout_yield_zone import (
     all_entry_conflict_ring_edges,
     collect_all_entry_conflict_lanes,
     collect_entry_conflict_lanes,
+    collect_lanes_for_edge_ids,
+    conflict_aux_ring_edge_ids,
     entry_conflict_ring_edges,
     entry_outgoing_ring_edges,
     lane_keys_for_edges,
@@ -449,7 +451,13 @@ def _ego_in_exact_sign_zone(sign, vehicle) -> bool:
         veh_long = float(lane.local_coordinates(vehicle.position)[0])
     except Exception:
         return False
-    return float(zone_start) <= veh_long <= float(zone_end)
+    if hasattr(sign, "_is_vehicle_in_zone"):
+        return bool(sign._is_vehicle_in_zone(vehicle))
+    half_len = 0.5 * float(getattr(vehicle, "LENGTH", 8.0))
+    return (
+        float(zone_start) <= veh_long - half_len
+        and veh_long + half_len <= float(zone_end)
+    )
 
 
 def _ego_entry_blue_zone_lane_keys(row: dict) -> list[str]:
@@ -1136,6 +1144,16 @@ def _place_roundabout_signs(
         ego_edge,
         entry_junction_id=entry_junction,
     )
+    ego_main_traffic_edges = conflict_aux_ring_edge_ids(
+        layout,
+        ego_edge,
+        entry_junction_id=entry_junction,
+    )
+    ego_main_traffic_lanes = collect_lanes_for_edge_ids(
+        env,
+        layout,
+        ego_main_traffic_edges,
+    )
     all_incoming_edges = all_entry_conflict_ring_edges(layout)
     all_entry_incoming_lanes = collect_all_entry_conflict_lanes(env, layout)
     entry_junction_xy = None
@@ -1143,6 +1161,9 @@ def _place_roundabout_signs(
         f"[RoundaboutSigns] Yield conflict zone: "
         f"ego_entry={len(incoming_edges)} edge(s) "
         f"({', '.join(incoming_edges) or 'none'}), "
+        f"ego_main_traffic={len(ego_main_traffic_edges)} edge(s) "
+        f"({', '.join(ego_main_traffic_edges) or 'none'}), "
+        f"{len(ego_main_traffic_lanes)} lane(s), "
         f"all_entries={len(all_incoming_edges)} edge(s), "
         f"{len(all_entry_incoming_lanes)} lane(s)"
     )
@@ -1195,7 +1216,7 @@ def _place_roundabout_signs(
                 use_random_lane=False,
                 intersection_name=junction_id,
                 ring_road_lanes=ring_lanes,
-                entry_incoming_lanes=all_entry_incoming_lanes or entry_incoming_lanes,
+                entry_incoming_lanes=ego_main_traffic_lanes or entry_incoming_lanes,
                 entry_junction_xy=entry_junction_xy,
             )
             if tracker is not None:
@@ -1425,47 +1446,16 @@ def run_one_episode(
                         f"{', '.join(aux_spawn_lanes)} "
                         f"(spawn_long={aux_spawn_longitudes})"
                     )
+                elif manifest_spawn_longs:
+                    print(
+                        f"[AuxAgent] Blue-zone lanes not viable; "
+                        f"keeping manifest conflict-zone aux lanes: {', '.join(aux_spawn_lanes)}"
+                    )
                 else:
-                    outgoing_lane_keys = filter_lane_keys_in_road_network(
-                        road_network,
-                        _ego_entry_outgoing_ring_lane_keys(row),
+                    print(
+                        f"[AuxAgent] Blue-zone lanes not viable and no manifest spawn longitudes; "
+                        f"aux may be skipped"
                     )
-                    candidate_aux_spawn_lanes = select_spawnable_lanes(
-                        road_network,
-                        outgoing_lane_keys,
-                        aux_lanes_occupied,
-                    )
-                    candidate_aux_spawn_longitudes = _roundabout_aux_spawn_longitudes_near_entry(
-                        base_env,
-                        candidate_aux_spawn_lanes,
-                    )
-                    if _aux_spawn_longitudes_are_viable(
-                        candidate_aux_spawn_lanes,
-                        candidate_aux_spawn_longitudes,
-                    ):
-                        aux_spawn_lanes = candidate_aux_spawn_lanes
-                        aux_destination_lanes = [
-                            resolve_aux_destination_lane_key(
-                                row.get("junction_layout"), lane_key
-                            )
-                            for lane_key in aux_spawn_lanes
-                        ]
-                        alternate_spawn_dest_map = {
-                            lane_key: dest
-                            for lane_key, dest in zip(aux_spawn_lanes, aux_destination_lanes)
-                            if dest
-                        }
-                        aux_spawn_longitudes = candidate_aux_spawn_longitudes
-                        print(
-                            f"[AuxAgent] Using outgoing ring lanes near ego entry: "
-                            f"{', '.join(aux_spawn_lanes)} "
-                            f"(spawn_long={aux_spawn_longitudes})"
-                        )
-                    else:
-                        print(
-                            f"[AuxAgent] Blue-zone lanes are not viable for spawn; "
-                            f"keeping manifest aux lanes: {', '.join(aux_spawn_lanes)}"
-                        )
 
             if aux_spawn_lanes:
                 aux_agent_mgr = add_auxiliary_agents(

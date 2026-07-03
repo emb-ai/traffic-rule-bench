@@ -455,6 +455,8 @@ def enumerate_spawn_scenarios(
         resolve_aux_spawn_placement,
     )
 
+    from .roundabout_yield_zone import conflict_aux_ring_edge_ids
+
     layout_dict = layout.to_dict() if hasattr(layout, "to_dict") else layout
     lane_lengths = merge_lane_lengths_from_layout(layout_dict, lane_lengths or {})
     lane_keys_by_edge: Dict[str, List[str]] = {
@@ -473,7 +475,6 @@ def enumerate_spawn_scenarios(
     secondary_edges = _roundabout_ego_spawn_edges(
         layout, spawn_lanes_by_edge, prefer_ego_edge_id=None
     )
-    main_edges = sorted(layout.main_edge_ids)
     scenarios: List[SpawnScenario] = []
 
     for ego_edge in secondary_edges:
@@ -485,9 +486,13 @@ def enumerate_spawn_scenarios(
         if not ego_dest_edges:
             continue
 
-        for aux_edge in main_edges:
-            if aux_edge == ego_edge:
-                continue
+        allowed_aux_edges = set(
+            conflict_aux_ring_edge_ids(layout_dict, ego_edge)
+        )
+        if not allowed_aux_edges:
+            continue
+
+        for aux_edge in sorted(allowed_aux_edges):
 
             aux_dest_edge = _aux_straight_destination(layout, aux_edge)
             if aux_dest_edge is None:
@@ -501,6 +506,7 @@ def enumerate_spawn_scenarios(
                     lane_num,
                     lane_lengths,
                     aux_distance_from_intersection,
+                    allowed_ring_edges=allowed_aux_edges,
                 )
                 if placement is not None:
                     aux_lane_placements.append((lane_num, placement))

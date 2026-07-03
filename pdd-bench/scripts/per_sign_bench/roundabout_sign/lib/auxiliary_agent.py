@@ -107,11 +107,16 @@ def resolve_aux_spawn_placement(
     lane_num: int,
     lane_lengths: Dict[Tuple[str, int], float],
     aux_distance_from_intersection: float = DEFAULT_DISTANCE_FROM_INTERSECTION,
+    *,
+    allowed_ring_edges: Optional[set[str]] = None,
 ) -> Optional[AuxSpawnPlacement]:
     """Place aux ``aux_distance`` before the junction, extending onto upstream ring if needed."""
     aux_distance = float(aux_distance_from_intersection)
     lane_length = lane_length_for_spawn(edge_id, lane_num, lane_lengths, junction_layout)
     if lane_length <= 0.0:
+        return None
+
+    if allowed_ring_edges is not None and edge_id not in allowed_ring_edges:
         return None
 
     if lane_length >= aux_distance + MIN_SPAWN_LONGITUDE_M:
@@ -130,20 +135,32 @@ def resolve_aux_spawn_placement(
 
     remainder = aux_distance - lane_length
     upstream = upstream_ring_arm(junction_layout, edge_id)
-    if upstream is None:
-        return None
-    up_edge = str(upstream.get("edge_id", ""))
-    if not up_edge:
-        return None
-    up_length = lane_length_for_spawn(up_edge, lane_num, lane_lengths, junction_layout)
-    if up_length < remainder + MIN_SPAWN_LONGITUDE_M:
-        return None
+    if upstream is not None:
+        up_edge = str(upstream.get("edge_id", ""))
+        if up_edge and (
+            allowed_ring_edges is None or up_edge in allowed_ring_edges
+        ):
+            up_length = lane_length_for_spawn(
+                up_edge, lane_num, lane_lengths, junction_layout
+            )
+            if up_length >= remainder + MIN_SPAWN_LONGITUDE_M:
+                spawn_long = up_length - remainder
+                if spawn_long >= MIN_SPAWN_LONGITUDE_M:
+                    return AuxSpawnPlacement(
+                        spawn_edge_id=up_edge,
+                        spawn_lane_num=lane_num,
+                        spawn_longitudinal=float(spawn_long),
+                        conflict_edge_id=edge_id,
+                        conflict_lane_num=lane_num,
+                    )
 
-    spawn_long = up_length - remainder
-    if spawn_long < MIN_SPAWN_LONGITUDE_M:
+    if allowed_ring_edges is not None and edge_id not in allowed_ring_edges:
+        return None
+    spawn_long = max(MIN_SPAWN_LONGITUDE_M, lane_length - MIN_SPAWN_LONGITUDE_M)
+    if spawn_long > max(lane_length - 0.1, MIN_SPAWN_LONGITUDE_M):
         return None
     return AuxSpawnPlacement(
-        spawn_edge_id=up_edge,
+        spawn_edge_id=edge_id,
         spawn_lane_num=lane_num,
         spawn_longitudinal=float(spawn_long),
         conflict_edge_id=edge_id,
@@ -157,6 +174,8 @@ def is_aux_lane_viable_with_ring_extension(
     lane_num: int,
     lane_lengths: Dict[Tuple[str, int], float],
     aux_distance_from_intersection: float = DEFAULT_DISTANCE_FROM_INTERSECTION,
+    *,
+    allowed_ring_edges: Optional[set[str]] = None,
 ) -> bool:
     return (
         resolve_aux_spawn_placement(
@@ -165,6 +184,7 @@ def is_aux_lane_viable_with_ring_extension(
             lane_num,
             lane_lengths,
             aux_distance_from_intersection,
+            allowed_ring_edges=allowed_ring_edges,
         )
         is not None
     )
@@ -687,7 +707,14 @@ def viable_aux_arms(
     """Return main-road arms where at least one lane can host aux (with ring extension)."""
     if not junction_layout:
         return []
+    from .roundabout_yield_zone import all_entry_conflict_ring_edges, conflict_aux_ring_edge_ids
+
     lengths = merge_lane_lengths_from_layout(junction_layout, lane_lengths or {})
+    if ego_edge_id:
+        allowed_edges = set(conflict_aux_ring_edge_ids(junction_layout, ego_edge_id))
+    else:
+        allowed_edges = set(all_entry_conflict_ring_edges(junction_layout))
+
     viable: List[dict] = []
     for arm in _layout_arms(junction_layout):
         if arm.get("road_class") != "main":
@@ -695,6 +722,8 @@ def viable_aux_arms(
         if ego_edge_id and arm.get("edge_id") == ego_edge_id:
             continue
         edge_id = str(arm.get("edge_id", ""))
+        if edge_id not in allowed_edges:
+            continue
         lane_nums = sorted(
             {lane_num_from_key(str(key)) for key in arm.get("lane_keys", [])}
         ) or [0]
@@ -705,6 +734,7 @@ def viable_aux_arms(
                 lane_num,
                 lengths,
                 aux_distance_from_intersection,
+                allowed_ring_edges=allowed_edges,
             )
             for lane_num in lane_nums
         ):
