@@ -338,7 +338,15 @@ def md_table(t: pd.DataFrame) -> str:
         else:
             t[c] = t[c].astype(str).replace({"nan": "—", "None": "—"})
     header = [str(t.index.name or "")] + [str(c) for c in t.columns]
-    rows = [[str(i)] + list(r) for i, r in zip(t.index, t.values)]
+
+    def _cell(v) -> str:
+        # пер-ячеечная защита: NaN/None → «—», прочее → str (не зависит от
+        # версии pandas и dtype-сюрпризов на частичных данных)
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return "—"
+        return str(v)
+
+    rows = [[str(i)] + [_cell(v) for v in r] for i, r in zip(t.index, t.values)]
     out = ["| " + " | ".join(header) + " |",
            "|" + "|".join("---" for _ in header) + "|"]
     out += ["| " + " | ".join(r) + " |" for r in rows]
