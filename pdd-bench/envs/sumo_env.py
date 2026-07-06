@@ -235,6 +235,10 @@ class TrafficSignSumoEnv(BaseEnv):
         config["relocate_ego_to_sign_lane"] = True
         # Spawn the physical cone cluster for detour signs (4.2.x).
         config["spawn_detour_cones"] = True
+        # NPCs are cleared from the obstacle lane starting this many metres
+        # before the detour sign (up to the far end of the cones). Traffic
+        # elsewhere around the sign is kept.
+        config["detour_clear_before_sign_m"] = 5.0
         # Braking-spawn (3.24): ego starts above the limit, placed d_required
         # before the sign (resolved up the road graph). Disabled by default.
         config["ego_braking_spawn"] = False
@@ -1811,15 +1815,25 @@ class TrafficSignSumoEnv(BaseEnv):
             if sign_obj is not None and self.config.get("spawn_detour_cones", True):
                 from traffic_signs.detour_obstacle import spawn_detour_obstacle
                 spawn_detour_obstacle(self.engine, sign_lane, sign_obj)
-                # Clear SUMO NPC traffic near the cone cluster so it doesn't
-                # pile into the obstacle before ego arrives.
-                obstacle_pos = sign_lane.position(sign_obj.obstacle_long, 0)
+                # Clear NPCs ONLY from the obstacle-lane corridor between
+                # `detour_clear_before_sign_m` before the sign and the far end
+                # of the cone cluster — otherwise cones spawn on top of an NPC.
+                # Traffic on the adjacent lanes and elsewhere near the sign is
+                # deliberately kept (ego must merge into real traffic).
+                clear_before = float(self.config.get("detour_clear_before_sign_m", 5.0))
+                win_start = float(sign_obj.placement_long) - clear_before
+                win_end = float(sign_obj.obstacle_long) + 5.0
+                half_w = sign_lane.width_at(0) / 2 + 0.3
                 traffic_mgr = self.engine.traffic_manager
                 if hasattr(traffic_mgr, 'traffic_vehicles'):
-                    to_remove = [
-                        v for v in list(traffic_mgr.traffic_vehicles)
-                        if np.linalg.norm(np.array(v.position) - np.array(obstacle_pos)) < 25.0
-                    ]
+                    to_remove = []
+                    for v in list(traffic_mgr.traffic_vehicles):
+                        try:
+                            v_long, v_lat = sign_lane.local_coordinates(v.position)
+                        except Exception:
+                            continue
+                        if win_start <= v_long <= win_end and abs(v_lat) <= half_w:
+                            to_remove.append(v)
                     for v in to_remove:
                         traffic_mgr.clear_objects([v.id])
                         traffic_mgr._traffic_vehicles.remove(v)
@@ -1946,10 +1960,13 @@ class TrafficSignSumoEnv(BaseEnv):
         # still points to lane_0's checkpoints and the IDM/policy steers ego back
         # toward the original lane (often into oncoming traffic).
         lane_num = self.config.get("spawn_lane_num", None)
-        # Detour (4.2.x): ego is pinned to the obstacle lane above — the
-        # parallel-lane teleport must not move it off that lane.
+        # Detour (4.2.x): when ego was relocated to the obstacle lane above,
+        # the parallel-lane teleport must not move it off that lane. With
+        # relocation disabled (NN policies) the teleport IS the pinning
+        # mechanism (catalog sets spawn_lane_num = sign_lane_index) — keep it.
         if (lane_num is not None and int(lane_num) > 0
-                and self.sign_type not in DETOUR_SIGN_CODES
+                and not (self.sign_type in DETOUR_SIGN_CODES
+                         and self.config.get("relocate_ego_to_sign_lane", True))
                 and self.meta and "road_id" in self.meta):
             road_id = str(self.meta["road_id"])
             target_key = f"lane_{road_id}_{int(lane_num)}"

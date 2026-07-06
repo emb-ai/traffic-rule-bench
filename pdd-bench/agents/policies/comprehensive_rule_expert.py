@@ -255,6 +255,17 @@ class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
                 obj_speed_kmh = float(getattr(obj, "speed_km_h", 0.0))
             except Exception:
                 obj_speed_kmh = 0.0
+            # Mid lane-change the relevant corridor is the TARGET lane: the
+            # queue crawling on the lane being vacated (detour 4.2.x) must not
+            # stall the merge. Applies to moving objects too.
+            lc_target = getattr(self, "_lc_target_lane", None)
+            if lc_target is not None and obj_speed_kmh >= 1.0:
+                try:
+                    s_obj, lat_obj = lc_target.local_coordinates(obj.position)
+                    if abs(lat_obj) > lc_target.width_at(s_obj) / 2 + 0.5:
+                        continue
+                except Exception:
+                    pass
             if obj_speed_kmh < 1.0:
                 if dist > 6.0:
                     continue
@@ -262,8 +273,11 @@ class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
                 # ego's own lane corridor. A detour sign / cone cluster (4.2.x)
                 # stands mid-roadway on the ADJACENT blocked lane — without
                 # this check the ego passing alongside freezes forever.
+                # During an active lane change the corridor is the TARGET lane:
+                # ego is vacating the current one, so the detour sign/cones on
+                # it must not brake the ego into a crawl mid-manoeuvre.
                 try:
-                    lane = ego.lane
+                    lane = self._lc_target_lane or ego.lane
                     s_obj, lat_obj = lane.local_coordinates(obj.position)
                     if abs(lat_obj) > lane.width_at(s_obj) / 2 + 0.3:
                         continue

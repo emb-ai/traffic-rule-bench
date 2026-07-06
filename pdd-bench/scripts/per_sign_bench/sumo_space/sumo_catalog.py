@@ -270,6 +270,13 @@ def build_catalog(
                     "spawn_lane_num": spawn_lane_num,
                     "var_idx": var_idx,
                 }
+                if scene.sign_code in ("4.2.1", "4.2.2", "4.2.3"):
+                    base["sign_lane_index"] = int(scene.sign_lane_index or 0)
+                    # Half the scenes get the physical cone cluster, half only
+                    # the sign — tests reaction to the SIGN itself vs the
+                    # obstacle. Deterministic per scene (stable across runs).
+                    base["detour_cones"] = (
+                        stable_hash(scene.scene_id, "detour_cones") % 2 == 0)
                 if not is_spawn:
                     base["seed"] = stable_hash(scene.scene_id, spawn_lane_num, var_idx)
                     base["spawn_velocity_ms"] = 0.0

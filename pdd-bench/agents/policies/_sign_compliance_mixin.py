@@ -772,7 +772,7 @@ class SignComplianceMixin:
     # Distance (m) before the detour zone at which the preemptive lane change
     # starts. The zone itself starts violating immediately, so the manoeuvre
     # must begin before zone_start for a zero-violation run.
-    PREEMPT_DETOUR_M = 40.0
+    PREEMPT_DETOUR_M = 10.0
     # Longitudinal clearance past the cone cluster centre before merging back
     # into the original lane (cone half-span 2.25 m + ego half-length + margin).
     DETOUR_RETURN_CLEARANCE_M = 8.0
@@ -794,7 +794,8 @@ class SignComplianceMixin:
                 getattr(self.control_object.lane, "index", None)
                 in (getattr(sign, "_allowed_lane_indices", None) or set()))
             cleared = veh_long > sign.obstacle_long + self.DETOUR_RETURN_CLEARANCE_M
-            if on_detour_lane and cleared and self._lc_target_lane is None:
+            if on_detour_lane and cleared and self._lc_target_lane is None \
+                    and self._detour_gap_ok(sign.lane):
                 self._lc_target_lane = sign.lane
                 self._get_heading_pid().reset()
                 self._get_lateral_pid().reset()
@@ -803,7 +804,12 @@ class SignComplianceMixin:
         approaching = (veh_long < sign.zone_start
                        and sign.zone_start - veh_long < self.PREEMPT_DETOUR_M)
         if not (in_zone or approaching):
-            return
+            # Queue at the cones: NPCs on the obstacle lane pile up behind the
+            # cluster. Merge BEFORE reaching the queue tail instead of joining
+            # it and crawling behind a stopped leader.
+            if not (veh_long < sign.zone_start
+                    and self._detour_queue_ahead(sign, veh_long)):
+                return
         violation_long = getattr(
             sign, "violation_long",
             sign.obstacle_long + getattr(sign, "OBSTACLE_OFFSET", 2.0),
@@ -820,9 +826,64 @@ class SignComplianceMixin:
                 self._lc_target_lane = target
                 self._get_heading_pid().reset()
                 self._get_lateral_pid().reset()
+            # Keep momentum while merging: base IDM brakes for the queued
+            # leader on the lane being vacated. With a clear gap in the target
+            # lane, floor the speed so the merge completes instead of stalling.
+            if self._lc_target_lane is not None \
+                    and self._detour_gap_ok(self._lc_target_lane):
+                self._raise_floor(15.0)
         else:
             self._cap_speed(max(FALLBACK_MIN_KMH,
                                 self.control_object.speed_km_h * FALLBACK_FACTOR))
+
+    # How far ahead (m) to look for a stopped queue on the obstacle lane.
+    DETOUR_QUEUE_LOOKAHEAD_M = 35.0
+
+    def _detour_gap_ok(self, target_lane, ahead=15.0, behind=8.0):
+        """True if no vehicle occupies the target-lane corridor within
+        `ahead` m in front / `behind` m behind the ego's projection."""
+        try:
+            ego_long, _ = target_lane.local_coordinates(self.control_object.position)
+            tm = getattr(self.engine, "traffic_manager", None)
+            vehicles = list(getattr(tm, "traffic_vehicles", None) or [])
+        except Exception:
+            return False
+        half_w = target_lane.width_at(0) / 2 + 0.3
+        for v in vehicles:
+            try:
+                v_long, v_lat = target_lane.local_coordinates(v.position)
+            except Exception:
+                continue
+            if abs(v_lat) > half_w:
+                continue
+            if -behind < v_long - ego_long < ahead:
+                return False
+        return True
+
+    def _detour_queue_ahead(self, sign, veh_long):
+        """True if a slow/stopped vehicle occupies the obstacle lane between
+        ego and the cones — the tail of a queue formed behind the obstacle."""
+        try:
+            tm = getattr(self.engine, "traffic_manager", None)
+            vehicles = list(getattr(tm, "traffic_vehicles", None) or [])
+        except Exception:
+            return False
+        lane = sign.lane
+        half_w = lane.width_at(0) / 2 + 0.3
+        for v in vehicles:
+            try:
+                v_long, v_lat = lane.local_coordinates(v.position)
+            except Exception:
+                continue
+            if abs(v_lat) > half_w:
+                continue
+            if not (veh_long < v_long <= sign.obstacle_long + 3.0):
+                continue
+            if v_long - veh_long > self.DETOUR_QUEUE_LOOKAHEAD_M:
+                continue
+            if float(getattr(v, "speed_km_h", 99.0)) < 10.0:
+                return True
+        return False
 
     def _detour_target_lane(self, sign):
         """DETOUR-ONLY: pick the physically-correct adjacent lane from the
