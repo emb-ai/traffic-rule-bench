@@ -193,6 +193,11 @@ def build_catalog(
         else:
             lane_range = list(range(n_lanes))
             n_lanes_field = n_lanes
+        # Detour (4.2.x): ego is pinned to the obstacle lane by sumo_env (the
+        # spawn_lane_num teleport is skipped there) — enumerating other lanes
+        # would only produce duplicate rows.
+        if scene.sign_code in ("4.2.1", "4.2.2", "4.2.3"):
+            lane_range = [int(scene.sign_lane_index or 0)]
 
         is_braking = scene.sign_code in BRAKING_SPAWN_CODES
         is_accel = scene.sign_code in ACCEL_SPAWN_CODES

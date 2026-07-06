@@ -769,34 +769,101 @@ class SignComplianceMixin:
         if dist < approach:
             self._cap_speed(0.001)
 
+    # Distance (m) before the detour zone at which the preemptive lane change
+    # starts. The zone itself starts violating immediately, so the manoeuvre
+    # must begin before zone_start for a zero-violation run.
+    PREEMPT_DETOUR_M = 40.0
+    # Longitudinal clearance past the cone cluster centre before merging back
+    # into the original lane (cone half-span 2.25 m + ego half-length + margin).
+    DETOUR_RETURN_CLEARANCE_M = 8.0
+
     def _handle_detour(self, sign):
         self._blocked_lanes.add(getattr(sign.lane, "index", None))
         if not on_same_road(self.control_object.lane, sign.lane):
             return
         sign_ln = lane_index_num(sign.lane)
         cur = self._cur_lane_num()
-        if cur is None or sign_ln is None or cur != sign_ln:
+        if cur is None or sign_ln is None:
             return
         veh_long = self._veh_long(sign.lane)
-        if not (sign.zone_start <= veh_long <= sign.zone_end):
+        if cur != sign_ln:
+            # Ego is on the detour lane. Once the cone cluster is fully
+            # cleared, merge back into the original (route) lane — completes
+            # the manoeuvre and restores route-lane arrival checks.
+            on_detour_lane = (
+                getattr(self.control_object.lane, "index", None)
+                in (getattr(sign, "_allowed_lane_indices", None) or set()))
+            cleared = veh_long > sign.obstacle_long + self.DETOUR_RETURN_CLEARANCE_M
+            if on_detour_lane and cleared and self._lc_target_lane is None:
+                self._lc_target_lane = sign.lane
+                self._get_heading_pid().reset()
+                self._get_lateral_pid().reset()
+            return
+        in_zone = sign.zone_start <= veh_long <= sign.zone_end
+        approaching = (veh_long < sign.zone_start
+                       and sign.zone_start - veh_long < self.PREEMPT_DETOUR_M)
+        if not (in_zone or approaching):
             return
         violation_long = getattr(
             sign, "violation_long",
             sign.obstacle_long + getattr(sign, "OBSTACLE_OFFSET", 2.0),
         )
-        if violation_long - veh_long <= 0:
+        if in_zone and violation_long - veh_long <= 0:
             return
         self._cap_speed(max(SLOW_APPROACH_MIN_KMH,
                             self.control_object.speed_km_h * SLOW_APPROACH_FACTOR))
-        ref = self._get_ref_lanes()
-        allowed = sign.allowed_directions
-        if "right" in allowed and cur + 1 < len(ref):
-            self._begin_lane_change(cur + 1)
-        elif "left" in allowed and cur - 1 >= 0:
-            self._begin_lane_change(cur - 1)
+        target = self._detour_target_lane(sign)
+        if target is not None:
+            if self._lc_target_lane is None and not same_lane(
+                self.control_object.lane, target
+            ):
+                self._lc_target_lane = target
+                self._get_heading_pid().reset()
+                self._get_lateral_pid().reset()
         else:
             self._cap_speed(max(FALLBACK_MIN_KMH,
                                 self.control_object.speed_km_h * FALLBACK_FACTOR))
+
+    def _detour_target_lane(self, sign):
+        """DETOUR-ONLY: pick the physically-correct adjacent lane from the
+        sign's own resolved allowed set (``_allowed_lane_indices`` is correct
+        on both SUMO and PG networks, unlike raw ``cur±1`` arithmetic — SUMO
+        lane 0 is the rightmost, PG lane 0 is the leftmost). Prefers the
+        right-hand option for 4.2.3."""
+        allowed = list(getattr(sign, "_allowed_lane_indices", None) or [])
+        if not allowed:
+            return None
+        rn = getattr(getattr(getattr(self, "engine", None), "current_map", None),
+                     "road_network", None)
+        if rn is None:
+            return None
+        sign_num = lane_index_num(sign.lane)
+
+        def _num_kind(idx):
+            if isinstance(idx, tuple) and len(idx) >= 3 and isinstance(idx[2], int):
+                return idx[2], "pg"
+            try:
+                return int(str(idx).rsplit("_", 1)[1]), "sumo"
+            except (ValueError, IndexError):
+                return None, None
+
+        def _right_first(idx):
+            # SUMO: right = lower lane num; PG: right = higher lane num.
+            n, kind = _num_kind(idx)
+            if n is None or sign_num is None:
+                return 1
+            is_right = (kind == "sumo" and n < sign_num) or \
+                       (kind == "pg" and n > sign_num)
+            return 0 if is_right else 1
+
+        for idx in sorted(allowed, key=_right_first):
+            try:
+                lane = rn.get_lane(idx)
+            except Exception:
+                lane = None
+            if lane is not None and getattr(lane, "index", None) not in self._restricted_lanes:
+                return lane
+        return None
 
     # Distance (m) before the restricted zone at which we start a preemptive
     # lane change. Works for both SUMO and PG-map lanes (uses generic

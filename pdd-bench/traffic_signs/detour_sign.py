@@ -156,6 +156,10 @@ class DetourSign(BaseTrafficSign):
         return violating_now
 
     def _is_violating(self, vehicle) -> bool:
+        # An infeasible detour (no adjacent lane in the prescribed direction)
+        # can never be satisfied, so it must not count as a violation.
+        if not self._allowed_lane_indices:
+            return False
         if not self.is_in_drivable_area(vehicle):
             return False
 
@@ -203,7 +207,7 @@ class DetourSign(BaseTrafficSign):
         return state["entered_zone"] and not state["changed_correctly"]
     
     def get_rule_description(self) -> str:
-        raise "DetourSign"
+        return "Знак 4.2.x «Объезд препятствия» — объезд в предписанном направлении"
 
     @property
     def violation_events(self) -> int:
@@ -227,6 +231,12 @@ class DetourRightSign(DetourSign):
         kwargs.setdefault("icon_path", "4.2.1.png")
         super().__init__(lane, **kwargs)
 
+    def get_rule_description(self) -> str:
+        return (
+            "Знак 4.2.1 «Объезд препятствия справа» — "
+            "объезд разрешается только справа"
+        )
+
 
 
 class DetourLeftSign(DetourSign):
@@ -238,6 +248,12 @@ class DetourLeftSign(DetourSign):
         kwargs.setdefault("icon_path", "4.2.2.png")
         super().__init__(lane, **kwargs)
 
+    def get_rule_description(self) -> str:
+        return (
+            "Знак 4.2.2 «Объезд препятствия слева» — "
+            "объезд разрешается только слева"
+        )
+
 
 class DetourEitherSign(DetourSign):
     """4.2.3 — Detour obstacle on the right or left."""
@@ -247,6 +263,12 @@ class DetourEitherSign(DetourSign):
     def __init__(self, lane, **kwargs):
         kwargs.setdefault("icon_path", "4.2.3.png")
         super().__init__(lane, **kwargs)
+
+    def get_rule_description(self) -> str:
+        return (
+            "Знак 4.2.3 «Объезд препятствия справа или слева» — "
+            "объезд разрешается с любой стороны"
+        )
 
 
 

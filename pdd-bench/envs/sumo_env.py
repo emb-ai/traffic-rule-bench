@@ -114,6 +114,11 @@ SIGN_TYPE_TO_CLASS = {
 # Parameterized so 5.31 (zone speed limit, same entry semantics) can be added.
 ZONE_ENTRY_SIGN_CODES = {"5.21"}
 
+# Detour signs (обязательный объезд препятствия): the sign lane is the
+# OBSTACLE lane (meta sign_lane_index), cones are spawned on it, and ego is
+# pinned to that lane so the prescribed lane change is actually exercised.
+DETOUR_SIGN_CODES = ("4.2.1", "4.2.2", "4.2.3")
+
 
 def _edge_base(edge_id: str) -> str:
     """Way base of a directed SUMO edge id: '-794#0' -> '794'."""
@@ -228,6 +233,8 @@ class TrafficSignSumoEnv(BaseEnv):
         # sign-topology lane. Neural policies (plant2/carl) need False — keep ego
         # on vehicle_config spawn_lane_index / meta road_id instead.
         config["relocate_ego_to_sign_lane"] = True
+        # Spawn the physical cone cluster for detour signs (4.2.x).
+        config["spawn_detour_cones"] = True
         # Braking-spawn (3.24): ego starts above the limit, placed d_required
         # before the sign (resolved up the road graph). Disabled by default.
         config["ego_braking_spawn"] = False
@@ -1604,7 +1611,55 @@ class TrafficSignSumoEnv(BaseEnv):
         except Exception:
             pass
         
+    def _resolve_detour_lane_and_s(self, road_network, road_id):
+        """Resolve the OBSTACLE lane + sign longitudinal position for 4.2.x.
+
+        Uses meta ``sign_lane_index`` (written by detour_scene_editor.py) when
+        present; legacy scenes fall back to a feasibility-aware auto-pick: the
+        obstacle lane must have an adjacent same-direction lane on the side
+        prescribed by the sign (MetaDrive lane_info semantics: ``right_lanes``
+        is the physically-right neighbour, i.e. lower SUMO lane index).
+        """
+        meta = self.meta or {}
+        nums = self.list_parallel_lane_nums(road_id)
+        lane = None
+        idx = meta.get("sign_lane_index")
+        if idx is not None and int(idx) in nums:
+            try:
+                lane = road_network.get_lane(f"lane_{road_id}_{int(idx)}")
+            except Exception:
+                lane = None
+        if lane is None:
+            graph = getattr(road_network, "graph", {}) or {}
+            need_r = self.sign_type in ("4.2.1", "4.2.3")
+            need_l = self.sign_type in ("4.2.2", "4.2.3")
+
+            def feasible(n):
+                info = graph.get(f"lane_{road_id}_{n}")
+                if info is None:
+                    return False
+                return bool((need_r and getattr(info, "right_lanes", None)) or
+                            (need_l and getattr(info, "left_lanes", None)))
+
+            cand = [n for n in nums if feasible(n)]
+            if not cand:
+                raise RuntimeError(
+                    "detour_infeasible: no adjacent same-direction lane "
+                    f"on road_id={road_id} for sign {self.sign_type}"
+                )
+            above = [c for c in cand if c > 0]
+            pick = min(above) if self.sign_type != "4.2.2" and above else cand[0]
+            lane = road_network.get_lane(f"lane_{road_id}_{pick}")
+        sign_s = float(meta.get("sign_s", meta.get("distance_from_start", 0.0)) or 0.0)
+        # Keep the obstacle cluster (sign_s + 3.5 + half-span) on the lane.
+        sign_s = min(max(0.5, sign_s), max(0.5, lane.length - 4.5))
+        return lane, sign_s
+
     def reset(self, *, seed=None):
+        if self.meta and self.meta.get("excluded"):
+            raise RuntimeError(
+                f"scene_excluded: {self.meta.get('excluded_reason', 'unspecified')}"
+            )
         obs, info = super().reset(seed=seed)
 
         sign_mgr = self.engine.traffic_sign_manager
@@ -1736,7 +1791,38 @@ class TrafficSignSumoEnv(BaseEnv):
         elif issubclass(sign_class, (_IRLS, _EORLS)):
             sign_mgr.add_sign(sign_class, lane=sign_lane)
         elif issubclass(sign_class, _DS):
-            sign_mgr.add_sign(sign_class, lane=sign_lane)
+            detour_s = None
+            if preferred_road_id:
+                try:
+                    sign_lane, detour_s = self._resolve_detour_lane_and_s(
+                        road_network, preferred_road_id
+                    )
+                    lane_source = f"meta_detour_lane({preferred_road_id})"
+                except Exception as e:
+                    logging.warning(f"detour lane resolution failed: {e}")
+            detour_kwargs = {}
+            if detour_s is not None:
+                detour_kwargs = {
+                    "longitudinal_offset": detour_s,
+                    "longitudinal_from_start": True,
+                }
+            sign_obj = sign_mgr.add_sign(sign_class, lane=sign_lane, **detour_kwargs)
+            self._detour_sign_obj = sign_obj
+            if sign_obj is not None and self.config.get("spawn_detour_cones", True):
+                from traffic_signs.detour_obstacle import spawn_detour_obstacle
+                spawn_detour_obstacle(self.engine, sign_lane, sign_obj)
+                # Clear SUMO NPC traffic near the cone cluster so it doesn't
+                # pile into the obstacle before ego arrives.
+                obstacle_pos = sign_lane.position(sign_obj.obstacle_long, 0)
+                traffic_mgr = self.engine.traffic_manager
+                if hasattr(traffic_mgr, 'traffic_vehicles'):
+                    to_remove = [
+                        v for v in list(traffic_mgr.traffic_vehicles)
+                        if np.linalg.norm(np.array(v.position) - np.array(obstacle_pos)) < 25.0
+                    ]
+                    for v in to_remove:
+                        traffic_mgr.clear_objects([v.id])
+                        traffic_mgr._traffic_vehicles.remove(v)
         elif issubclass(sign_class, (SpeedLimitSign, ZoneSpeedLimitSign, BaseEndOfZoneSign)):
             # Speed/zone/end-of-zone signs use the unified `longitudinal_from_start`
             # convention (offset = meters from the edge START). For a combined
@@ -1830,6 +1916,15 @@ class TrafficSignSumoEnv(BaseEnv):
             # =====================================================
             self._spawn_ego_on_lane(spawn_lane)
             self._refresh_navigation_after_spawn(spawn_lane)
+            # Detour (4.2.x): ego spawns ON the obstacle lane, so the BFS route
+            # from _refresh_navigation_after_spawn already passes the sign edge.
+            # Only repair a degenerate [spawn, spawn] route (dead-end BFS pick):
+            # route explicitly through the sign edge and onward if possible.
+            if self.sign_type in DETOUR_SIGN_CODES and sign_lane is not None:
+                nav = getattr(self.vehicle, "navigation", None)
+                ckpts = [str(c) for c in (getattr(nav, "checkpoints", None) or [])]
+                if len(set(ckpts)) < 2:
+                    self._route_through_sign(spawn_lane, sign_lane.index)
 
         graph = self.engine.map_manager.graph
         for lane_name, lane_node in graph.lanes.items():
@@ -1851,7 +1946,11 @@ class TrafficSignSumoEnv(BaseEnv):
         # still points to lane_0's checkpoints and the IDM/policy steers ego back
         # toward the original lane (often into oncoming traffic).
         lane_num = self.config.get("spawn_lane_num", None)
-        if lane_num is not None and int(lane_num) > 0 and self.meta and "road_id" in self.meta:
+        # Detour (4.2.x): ego is pinned to the obstacle lane above — the
+        # parallel-lane teleport must not move it off that lane.
+        if (lane_num is not None and int(lane_num) > 0
+                and self.sign_type not in DETOUR_SIGN_CODES
+                and self.meta and "road_id" in self.meta):
             road_id = str(self.meta["road_id"])
             target_key = f"lane_{road_id}_{int(lane_num)}"
             try:
