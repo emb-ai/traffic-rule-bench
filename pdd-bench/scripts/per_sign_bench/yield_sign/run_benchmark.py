@@ -5,55 +5,58 @@ import json
 import logging
 import math
 import random
-import sys
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 import torch
-
-
-def _find_pdd_bench_root(start: Path) -> Path:
-    current = start if start.is_dir() else start.parent
-    for parent in (current, *current.parents):
-        if (parent / "envs").is_dir() and (parent / "traffic_signs").is_dir():
-            return parent
-    raise RuntimeError("Could not locate pdd-bench root")
-
-
-SCRIPT_PATH = Path(__file__).resolve()
-BENCH_DIR = SCRIPT_PATH.parent
-PER_SIGN_BENCH_DIR = BENCH_DIR.parent
-PDD_BENCH_DIR = _find_pdd_bench_root(SCRIPT_PATH)
-SDC_ROOT = PDD_BENCH_DIR.parent
-METADRIVE_DIR = SDC_ROOT / "metadrive"
-
-for p in (PDD_BENCH_DIR, METADRIVE_DIR, PER_SIGN_BENCH_DIR, BENCH_DIR):
-    ps = str(p)
-    if ps not in sys.path:
-        sys.path.insert(0, ps)
-
-CARL_NUPLAN_DIR = SDC_ROOT / "CaRL" / "nuPlan"
-if CARL_NUPLAN_DIR.exists():
-    carl_path = str(CARL_NUPLAN_DIR)
-    if carl_path not in sys.path:
-        sys.path.insert(0, carl_path)
+from stable_baselines3 import PPO
 
 from envs.sumo_env import TrafficSignSumoEnv
 from envs.sumo_traffic_manager import SumoTrafficManager
-from envs.traffic_sign_env import TrafficSignEnv
+from agents.policies.comprehensive_rule_expert import ComprehensiveRuleExpertPolicy
+from agents.policies.modified_idm_sign_compliant import ModifiedIDMSignCompliantPolicy
+from agents.policies.rule_compliant_expert import RuleCompliantExpertPolicy
 from metadrive.policy.idm_policy import IDMPolicy, ModifiedIDMPolicy
 from metadrive.policy.expert_policy import ExpertPolicy
-from stable_baselines3 import PPO
-from agents.policies.comprehensive_rule_expert import ComprehensiveRuleExpertPolicy
-from agents.policies.rule_compliant_expert import RuleCompliantExpertPolicy
+from scripts.per_sign_bench.factorized_space.ego_defaults import (
+    apply_ego_defaults,
+    apply_ego_sampled,
+    sample_ego_params,
+)
+from traffic_signs.priority_signs import MainRoadSign, YieldSign
+from lib.lane_keys import make_lane_key
+from lib.auxiliary_agent import (
+    DEFAULT_CONVOY_GAP_M,
+    DEFAULT_CONVOY_SIZE,
+    DEFAULT_SPAWN_VELOCITY_MS,
+    add_auxiliary_agents,
+    resolve_aux_spawn_plan,
+)
+from lib.manifest_config import DEFAULT_AUX_LANES_OCCUPIED_MAX
+from lib.junction_sign_placement import (
+    SIGN_SHOULDER_OFFSET_M,
+    arms_for_road_class,
+    collect_lanes_for_keys,
+    lateral_offset_beside_lane,
+    resolve_sign_lane_for_edge,
+    sign_longitudinal_offset,
+    sign_placement_long,
+)
+from lib.junction_priority_layout import (
+    JunctionLayoutError,
+    build_junction_priority_layout,
+)
+from lib.manifest_config import (
+    DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+    enrich_manifest_row,
+    load_manifest_config,
+)
 
-from factorized_space.ego_defaults import apply_ego_defaults, apply_ego_sampled, sample_ego_params
-
-# Import main road traffic manager for yield sign scenarios
-from yield_main_road_traffic import add_main_road_traffic
-_MAIN_ROAD_TRAFFIC_AVAILABLE = True
-
+BENCH_DIR = Path(__file__).resolve().parent
+PER_SIGN_BENCH_DIR = BENCH_DIR.parent
+PDD_BENCH_DIR = PER_SIGN_BENCH_DIR.parent.parent
+SDC_ROOT = PDD_BENCH_DIR.parent
 
 _SUMO_SIGN_DISTANCE_CACHE: dict[Path, float] = {}
 _PROFILE_KEYS = (
@@ -100,7 +103,7 @@ def _apply_manifest_profile_to_npcs(row: dict) -> None:
     profile = _manifest_profile(row)
     if not profile:
         return
-    from factorized_space.agent_profile_bank import apply_profile_to_idm_class
+    from scripts.per_sign_bench.factorized_space.agent_profile_bank import apply_profile_to_idm_class
 
     apply_profile_to_idm_class(profile)
 
@@ -119,43 +122,32 @@ def _load_jsonl_rows(path: Path) -> list[dict]:
     return rows
 
 
-def _choose_manifest(code_dir: Path, backend: str) -> Path | None:
-    if backend == "pgmap":
-        p = code_dir / "pgmap_materialized.jsonl"
-        return p if p.exists() and p.stat().st_size > 0 else None
-    if backend == "paired":
-        p = code_dir / "paired_materialized.jsonl"
-        return p if p.exists() and p.stat().st_size > 0 else None
-    if backend == "citymap":
-        p = code_dir / "citymap_materialized.jsonl"
-        return p if p.exists() and p.stat().st_size > 0 else None
-    if backend == "sumo":
-        p1 = code_dir / "sumo" / "sumo_manifest.jsonl"
-        p2 = code_dir / "real_manifest.jsonl"
-        if p1.exists() and p1.stat().st_size > 0:
-            return p1
-        if p2.exists() and p2.stat().st_size > 0:
-            return p2
-        return None
+def _load_enriched_manifest_rows(path: Path) -> list[dict]:
+    config = load_manifest_config(path)
+    return [enrich_manifest_row(row, config) for row in _load_jsonl_rows(path)]
+
+
+def _choose_manifest(code_dir: Path) -> Path | None:
+    """Find real_manifest.jsonl for SUMO scenes."""
+    p1 = code_dir / "sumo" / "sumo_manifest.jsonl"
+    p2 = code_dir / "real_manifest.jsonl"
+    if p1.exists() and p1.stat().st_size > 0:
+        return p1
+    if p2.exists() and p2.stat().st_size > 0:
+        return p2
     return None
 
 
 def collect_rows(
     benchmark_output_dir: Path,
-    backends: list[str],
     only_codes: set[str],
     max_scenes_per_sign: int | None,
     unique_scene_id: bool = False,
 ) -> list[dict]:
-    """Iterate manifests and collect rows for evaluation.
-
-    If `unique_scene_id=True`, deduplicate to ONE row per (backend, scene_id) —
-    keeps the first encountered row (typically var_idx=0). Used when caller wants
-    to cover unique (map × sign) pairs once, not all seed/var_idx variants.
-    """
+    """Iterate manifests and collect rows for evaluation (SUMO/real maps only)."""
     rows: list[dict] = []
-    counts: dict[tuple[str, str], int] = defaultdict(int)
-    seen_scene_ids: set[tuple[str, str]] = set()
+    counts: dict[str, int] = defaultdict(int)
+    seen_scene_ids: set[str] = set()
 
     sign_dirs = sorted([d for d in benchmark_output_dir.iterdir() if d.is_dir() and d.name[:1].isdigit()])
     for sign_dir in sign_dirs:
@@ -163,237 +155,76 @@ def collect_rows(
         if only_codes and sign_code not in only_codes:
             continue
 
-        for backend in backends:
-            manifest = _choose_manifest(sign_dir, backend)
-            if manifest is None:
-                continue
+        manifest = _choose_manifest(sign_dir)
+        if manifest is None:
+            continue
 
-            for row in _load_jsonl_rows(manifest):
-                if "valid" in row and not row["valid"]:
+        config = load_manifest_config(manifest)
+        for row in _load_jsonl_rows(manifest):
+            row = enrich_manifest_row(row, config)
+            if "valid" in row and not row["valid"]:
+                continue
+            if unique_scene_id:
+                sid_key = str(row.get("scene_id") or "")
+                if sid_key in seen_scene_ids:
                     continue
-                if unique_scene_id:
-                    sid_key = (backend, str(row.get("scene_id") or ""))
-                    if sid_key in seen_scene_ids:
-                        continue
-                    seen_scene_ids.add(sid_key)
-                key = (backend, sign_code)
-                if max_scenes_per_sign is not None and counts[key] >= max_scenes_per_sign:
-                    continue
-                row["_backend"] = backend
-                row["_sign_code"] = sign_code
-                rows.append(row)
-                counts[key] += 1
+                seen_scene_ids.add(sid_key)
+            if max_scenes_per_sign is not None and counts[sign_code] >= max_scenes_per_sign:
+                continue
+            row["_backend"] = "sumo"
+            row["_sign_code"] = sign_code
+            rows.append(row)
+            counts[sign_code] += 1
 
     return rows
 
 
-def _build_pgmap_env(row: dict, max_steps: int) -> TrafficSignEnv:
-    from metadrive.component.pgblock.first_block import FirstPGBlock
+def _ensure_secondary_ego_spawn(row: dict, scenes_root: Path) -> None:
+    """Ensure manifest spawn edge is on a secondary junction arm (mutates row in place)."""
+    layout = _get_junction_layout(row, scenes_root)
+    if not layout:
+        return
+
+    secondary_ids = set(layout.get("secondary_edge_ids") or [])
+    road_id = row.get("road_id")
+    if road_id and road_id in secondary_ids:
+        return
 
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
-    _apply_manifest_profile_to_npcs(row)
-    traffic_density = _manifest_traffic_density(row, default=0.1)
-    horizon = _manifest_horizon(row, fallback=max_steps)
-    spawn_lane = int(row["spawn_lane_index"])
-    is_ramp_merge = row.get("block_id") == "r" and row.get("route_intent") == "merge"
-    is_ramp_exit = row.get("block_id") == "R" and row.get("route_intent") == "exit"
-    if is_ramp_merge:
-        spawn_lane_tuple = ("2r1_0_", "2r1_1_", 0)
-    elif is_ramp_exit:
-        spawn_lane_tuple = (FirstPGBlock.NODE_1, FirstPGBlock.NODE_2, int(row["lane_num"]) - 1)
-    else:
-        spawn_lane_tuple = (FirstPGBlock.NODE_1, FirstPGBlock.NODE_2, spawn_lane)
+    pool: list[tuple[str, int]] = []
+    for arm in layout.get("arms", []):
+        if arm.get("road_class") != "secondary":
+            continue
+        edge_id = arm["edge_id"]
+        lane_keys = arm.get("lane_keys") or []
+        if not lane_keys:
+            pool.append((edge_id, int(row.get("spawn_lane_num", 0) or 0)))
+            continue
+        for lane_key in lane_keys:
+            try:
+                lane_num = int(str(lane_key).rsplit("_", 1)[1])
+            except (ValueError, IndexError):
+                lane_num = 0
+            pool.append((edge_id, lane_num))
 
-    vehicle_config = {"show_lidar": False}
-    spawn_vel = float(row.get("spawn_velocity_ms", 0.0) or 0.0)
-    if spawn_vel > 0:
-        vehicle_config["spawn_velocity"] = [spawn_vel, 0.0]
-        vehicle_config["spawn_velocity_car_frame"] = True
+    if not pool:
+        print("[EgoSpawn] No secondary arms in layout; keeping original spawn")
+        return
 
-    config = dict(
-        start_seed=seed,
-        use_render=False,
-        manual_control=False,
-        use_mesh_terrain=False,
-        log_level=logging.CRITICAL,
-        traffic_density=traffic_density,
-        horizon=horizon,
-        vehicle_config=vehicle_config,
-        map_config={
-            "type": "block_sequence",
-            "config": row["block_sequence"],
-            "lane_num": row["lane_num"],
-            "lane_width": row["lane_width"],
-        },
-        random_spawn_lane_index=False,
-        agent_configs={
-            "default_agent": dict(
-                use_special_color=True,
-                spawn_lane_index=spawn_lane_tuple,
-            )
-        },
-    )
-    return TrafficSignEnv(config)
-
-
-def _place_pgmap_sign(env: TrafficSignEnv, row: dict, seed: int) -> bool:
-    from factorized_space.benchmark_runner import (
-        BEGIN_TO_END,
-        DETOUR_KEYS,
-        LANE_CHANGE_KEYS,
-        PRIORITY_KEYS,
-        RESTRICTED_BEGIN_KEYS,
-        SIGN_CLASS_MAP,
-        _get_route_lanes,
-        _override_route_intent,
-        _pick_detour_lane,
-        _pick_lane_for_lane_change,
-        _pick_rightmost_lane,
-        # _pick_priority_lane,
-        _pick_route_lane,
-        _spawn_cyclists_on_lane,
-    )
-    from yield_generate_fixed_scenes import _pick_route_lane as _pick_priority_lane
-    from factorized_space.space_definition import BIKE_RELATED_SIGNS
-    from traffic_signs.detour_obstacle import spawn_detour_obstacle
-
-    if row.get("sign_type") is None and row.get("sign_type_start") and row.get("sign_type_end"):
-        # Paired scene: place start + end signs on one lane segment.
-        if not _override_route_intent(env, row):
-            return False
-        route_lanes = _get_route_lanes(env)
-        if not route_lanes:
-            return False
-
-        zone_length = float(row.get("zone_length_m", 20.0))
-        min_lane = 8.0 + zone_length + 4.0
-        lane = _pick_route_lane(route_lanes, min_length=min_lane, road_network=env.current_map.road_network)
-        if lane is None:
-            return False
-
-        sign_start_cls = SIGN_CLASS_MAP.get(row["sign_type_start"])
-        sign_end_cls = SIGN_CLASS_MAP.get(row["sign_type_end"])
-        if sign_start_cls is None or sign_end_cls is None:
-            return False
-
-        sign_mgr = env.engine.traffic_sign_manager
-        half_w = lane.width_at(0) / 2 + 0.8
-        start_long = 5.0
-        end_long = start_long + zone_length
-        # MetaDrive expects longitudinal offset from lane end.
-        md_start = start_long - lane.length
-        md_end = end_long - lane.length
-
-        try:
-            sign_mgr.add_sign(
-                sign_start_cls,
-                lane=lane,
-                longitudinal_offset=md_start,
-                lateral_offset=half_w,
-                use_random_lane=False,
-            )
-            sign_mgr.add_sign(
-                sign_end_cls,
-                lane=lane,
-                longitudinal_offset=md_end,
-                lateral_offset=half_w,
-                use_random_lane=False,
-            )
-            return True
-        except Exception:
-            return False
-
-    sign_key = row["sign_type"]
-    if sign_key not in SIGN_CLASS_MAP:
-        return False
-    sign_cls = SIGN_CLASS_MAP[sign_key]
-
-    # ── pg_direction: apply turn rules to the whole road network first ────────
-    if sign_key == "pg_direction":
-        from traffic_signs.pg_direction_sign import PGDirectionSign as _PGDir
-        rn = env.current_map.road_network
-        layout_index    = int(row.get("layout_index", 0))
-        allow_uturn     = bool(row.get("allow_uturn", False))
-        regex_mode      = str(row.get("regex_layout_mode", "all"))
-        regex_seed      = int(row.get("seed") or row.get("deterministic_seed") or 0)
-        try:
-            _PGDir.generate_and_apply_turns(
-                road_network=rn,
-                allow_uturn=allow_uturn,
-                strict=False,
-                overwrite_existing=True,
-                regex_layout_mode=regex_mode,
-                regex_max_layouts=32,
-                regex_seed=regex_seed,
-                layout_index=layout_index,
-                allow_s_block_multi_exit=False,
-            )
-        except Exception as exc:
-            logging.warning("pg_direction generate_and_apply_turns failed: %s", exc)
-            return False
-        # Place the sign object on a route lane before the intersection
-        if not _override_route_intent(env, row):
-            return False
-        route_lanes = _get_route_lanes(env)
-        if not route_lanes:
-            return False
-        lane = _pick_route_lane(route_lanes, min_length=15.0,
-                                road_network=env.current_map.road_network)
-        if lane is None:
-            lane = route_lanes[0]
-        try:
-            env.engine.traffic_sign_manager.add_sign(
-                _PGDir, lane=lane, use_random_lane=False)
-        except Exception:
-            pass  # sign object is cosmetic; turn rules already applied
-        return True
-    # ── end pg_direction ──────────────────────────────────────────────────────
-
-    if not _override_route_intent(env, row):
-        return False
-
-    route_lanes = _get_route_lanes(env)
-    if not route_lanes:
-        return False
-
-    veh = env.vehicle
-    rn = env.current_map.road_network
-    sign_mgr = env.engine.traffic_sign_manager
-
-    if sign_key in DETOUR_KEYS:
-        lane = _pick_detour_lane(route_lanes, sign_cls, min_length=30.0)
-    elif sign_key in LANE_CHANGE_KEYS:
-        vidx = getattr(veh.lane, "index", None)
-        vnum = vidx[2] if (vidx and len(vidx) >= 3) else 0
-        lane = _pick_lane_for_lane_change(route_lanes, vnum, road_network=rn)
-    elif sign_key in RESTRICTED_BEGIN_KEYS:
-        lane = _pick_rightmost_lane(route_lanes, min_length=30.0)
-    elif sign_key in PRIORITY_KEYS:
-        lane = _pick_priority_lane(route_lanes, min_length=15.0)
-    else:
-        lane = _pick_route_lane(route_lanes, min_length=15.0, road_network=rn)
-
-    if lane is None:
-        return False
-
-    if sign_key in RESTRICTED_BEGIN_KEYS:
-        sign = sign_mgr.add_sign(sign_cls, lane=lane, use_random_lane=False)
-        if sign_key in BEGIN_TO_END:
-            sign_mgr.add_sign(BEGIN_TO_END[sign_key], lane=sign.lane, use_random_lane=False)
-    else:
-        sign = sign_mgr.add_sign(sign_cls, lane=lane, use_random_lane=False)
-
-    if sign_key in DETOUR_KEYS and sign is not None:
-        spawn_detour_obstacle(env.engine, sign.lane, sign)
-    if sign_key in BIKE_RELATED_SIGNS and sign is not None:
-        _spawn_cyclists_on_lane(env, sign.lane, seed, n=3)
-    return True
+    edge_id, lane_num = pool[seed % len(pool)]
+    if road_id and road_id != edge_id:
+        print(
+            f"[EgoSpawn] Repicked spawn from main/non-secondary {road_id!r} "
+            f"-> secondary {edge_id!r} lane {lane_num}"
+        )
+    row["road_id"] = edge_id
+    row["spawn_lane_num"] = lane_num
 
 
 def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSignSumoEnv:
     SumoTrafficManager.EGO_SAFE_RADIUS = 15
     _apply_manifest_profile_to_npcs(row)
-    traffic_density = _manifest_traffic_density(row, default=0.1)
+    traffic_density = _manifest_traffic_density(row, default=0.0)
     horizon = _manifest_horizon(row, fallback=max_steps)
     net_path = str(scenes_root / row["net_path"]) if not str(row["net_path"]).startswith("/") else str(row["net_path"])
     sign_spawn_distance = _resolve_sign_spawn_distance(row, scenes_root)
@@ -420,29 +251,49 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         num_scenarios=100000,
         vehicle_config=vehicle_config,
         debug_one_way_sign_selection=bool(row.get("debug_one_way_sign_selection", False)),
+        show_lane_arrows=row.get("show_lane_arrows", False),
+        show_traffic_lights=row.get("show_traffic_lights", False),
+        show_npc_vehicles=row.get("show_npc_vehicles", False),
+        skip_auto_signs=True,
+        use_pedestrian_manager=False,
+        use_pedestrian_yield_rule=False,
     )
     if row.get("road_id"):
         config["vehicle_config"]["spawn_lane_index"] = row["road_id"]
     if "spawn_lane_num" in row:
         config["spawn_lane_num"] = int(row["spawn_lane_num"])
-    # Pin the destination lane if the manifest specifies one — keeps ego from
-    # taking BFS-picked routes that wander away from the sign zone. Mirrors
-    # expert_replay.py:389-391 (their env-var gate, here unconditional).
     if row.get("destination_lane_id"):
         config["vehicle_config"]["destination"] = row["destination_lane_id"]
 
-    class _EnvWithTraffic(TrafficSignSumoEnv):
+    class _RealMapEnv(TrafficSignSumoEnv):
         @classmethod
         def default_config(cls):
             cfg = super().default_config()
             cfg["traffic_density"] = 0.0
+            cfg["show_lane_arrows"] = True
+            cfg["show_traffic_lights"] = True
+            cfg["show_npc_vehicles"] = True
+            cfg["skip_auto_signs"] = False
             return cfg
 
         def setup_engine(self):
             super().setup_engine()
-            self.engine.update_manager("traffic_manager", SumoTrafficManager())
+            # Only add SumoTrafficManager if traffic_density > 0
+            # Otherwise keep the default SimpleTrafficManager (no NPC spawning)
+            if self.config.get("traffic_density", 0.0) > 0:
+                self.engine.update_manager("traffic_manager", SumoTrafficManager())
 
-    return _EnvWithTraffic(config)
+        def reset(self, *, seed=None):
+            # Skip TrafficSignSumoEnv.reset() sign creation by calling grandparent directly
+            if self.config.get("skip_auto_signs", False):
+                # Call BaseEnv.reset() directly, skipping TrafficSignSumoEnv.reset()
+                from metadrive.envs import BaseEnv
+                obs, info = BaseEnv.reset(self, seed=seed)
+                return obs, info
+            else:
+                return super().reset(seed=seed)
+
+    return _RealMapEnv(config)
 
 
 def _resolve_sign_spawn_distance(row: dict, scenes_root: Path) -> float:
@@ -481,6 +332,7 @@ def _resolve_sign_spawn_distance(row: dict, scenes_root: Path) -> float:
 def _wrap_for_policy(env, policy_type: str):
     return env
 
+
 def _format_violation(sign, vehicle):
     sign_name = type(sign).__name__
     lane = getattr(sign, "lane", None)
@@ -511,7 +363,6 @@ def _violation_bucket(sign_obj) -> str:
 
 
 def _on_same_road(lane_a, lane_b) -> bool:
-    """Cheap lane-equality check (PG tuple or SUMO `lane_<edge>_<num>`)."""
     idx_a = getattr(lane_a, "index", None)
     idx_b = getattr(lane_b, "index", None)
     if idx_a is None or idx_b is None:
@@ -524,21 +375,10 @@ def _on_same_road(lane_a, lane_b) -> bool:
         return False
 
 
-# Lookahead for proximity-style zones (StopSign, TrafficLightSign etc.) — same
-# value as the rule mixin's SPEED_SIGN_LOOKAHEAD so "in zone" agrees with
-# "policy starts reacting".
 _IN_ZONE_LOOKAHEAD_M = 50.0
 
 
 def _ego_in_sign_zone(sign, vehicle) -> bool:
-    """Heuristic: is ego inside (or approaching) this sign's zone of effect?
-
-    Returns True if ego is on the same road segment as the sign AND within the
-    sign's longitudinal zone (zone_start..zone_end) — or for proximity-style
-    signs (Stop/TrafficLight) within `_IN_ZONE_LOOKAHEAD_M` metres before the
-    stop line. False for cross-edge cases (cheap heuristic; matches the
-    same-road branch of SignComplianceMixin handlers).
-    """
     lane = getattr(sign, "lane", None)
     if lane is None:
         return False
@@ -561,8 +401,6 @@ def _ego_in_sign_zone(sign, vehicle) -> bool:
             return True
         return False
 
-    # Proximity-style sign (Stop, TrafficLight): use stop_line_position or
-    # placement_long; "in zone" if approaching within lookahead, or just past it.
     anchor = (getattr(sign, "stop_line_position", None)
               or getattr(sign, "placement_long", None))
     if anchor is not None:
@@ -570,7 +408,7 @@ def _ego_in_sign_zone(sign, vehicle) -> bool:
         dist = anchor - veh_long
         if 0 <= dist < _IN_ZONE_LOOKAHEAD_M:
             return True
-        if -5.0 < dist < 0:   # just past sign — still in effect
+        if -5.0 < dist < 0:
             return True
         return False
 
@@ -585,11 +423,6 @@ def _unwrap_base_env(env):
 
 
 def _extract_sign_info(env) -> list[dict]:
-    """Snapshot signs currently placed in the env (after reset + sign placement).
-
-    Mirrors expert_replay._extract_sign_info so replay.json sidecar carries the
-    same `signs` field in both pipelines.
-    """
     signs = []
     sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
     if sign_mgr is None:
@@ -613,11 +446,6 @@ def _extract_sign_info(env) -> list[dict]:
 
 
 def _ego_at_fault_for_crash(ego, engine, contact_dist: float = 4.0) -> bool:
-    """Heuristic ego-vs-NPC crash attribution (port of expert_replay.py:483).
-
-    Returns True iff a colliding NPC is in ego's forward half AND ego speed > 0.5
-    km/h — meaning ego drove into it. Otherwise NPC fault.
-    """
     import math as _m
     try:
         ego_pos = ego.position
@@ -691,7 +519,6 @@ def _route_length_m(info: dict) -> float | None:
 
 
 def _infraction_penalty(crashed: bool, out_of_road: bool, violations: int) -> float:
-    # Bench2Drive/CARLA-like multiplicative penalty, with project-specific proxies.
     p = 1.0
     if crashed:
         p *= 0.5
@@ -728,7 +555,6 @@ def _nearby_speed_percentage(vehicle) -> float | None:
 
     ego = _safe_float(getattr(vehicle, "speed_km_h", 0.0), 0.0)
     pct = 100.0 * ego / avg
-    # Bench2Drive filters extreme spikes.
     if pct > 1000.0:
         return None
     return float(pct)
@@ -823,21 +649,11 @@ def _compute_smoothness(step_vars: list[dict], segment_len: int = 20) -> dict:
 
 
 def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode: str = "pid"):
-    """Load model checkpoints and resolve the BasePolicy class to instantiate.
-
-    Returns dict with:
-      "policy_cls":   BasePolicy subclass; set as agent_policy in env config
-                      OR instantiated manually for IDM-family.
-    """
     policy_cls = None
 
     if policy == "carl":
         if not model_path:
             raise ValueError("--model-path is required for --policy carl")
-        CARL_ADAPTER_PATH = SDC_ROOT / "carl_in_metadrive"
-        aps = str(CARL_ADAPTER_PATH)
-        if aps not in sys.path:
-            sys.path.insert(0, aps)
         from agents.policies.plain_carl_policy import PlainCarlPolicy
         device = "cuda" if torch.cuda.is_available() else "cpu"
         PlainCarlPolicy.set_checkpoint(model_path, device=device)
@@ -846,8 +662,6 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
         if not model_path:
             raise ValueError("--model-path is required for --policy plant2")
         PLANT2_PATH = SDC_ROOT / "plant2"
-        if str(PLANT2_PATH) not in sys.path:
-            sys.path.insert(0, str(PLANT2_PATH))
         from agents.policies.plain_plant2_policy import PlainPlanT2Policy
         device = "cuda" if torch.cuda.is_available() else "cpu"
         PlainPlanT2Policy.set_checkpoint(
@@ -857,10 +671,6 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
     elif policy == "carl_rule":
         if not model_path:
             raise ValueError("--model-path is required for --policy carl_rule")
-        CARL_ADAPTER_PATH = SDC_ROOT / "carl_in_metadrive"
-        aps = str(CARL_ADAPTER_PATH)
-        if aps not in sys.path:
-            sys.path.insert(0, aps)
         from agents.policies.carl_sign_compliant import CarlSignCompliantPolicy
         device = "cuda" if torch.cuda.is_available() else "cpu"
         CarlSignCompliantPolicy.set_checkpoint(model_path, device=device)
@@ -869,8 +679,6 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
         if not model_path:
             raise ValueError("--model-path is required for --policy plant2_rule")
         PLANT2_PATH = SDC_ROOT / "plant2"
-        if str(PLANT2_PATH) not in sys.path:
-            sys.path.insert(0, str(PLANT2_PATH))
         from agents.policies.plant2_sign_compliant import PlanT2SignCompliantPolicy
         device = "cuda" if torch.cuda.is_available() else "cpu"
         PlanT2SignCompliantPolicy.set_checkpoint(
@@ -883,9 +691,328 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
     }
 
 
+def _format_lane_pos(pos) -> str:
+    """Format lane position for logging (handles numpy arrays)."""
+    if pos is None:
+        return "N/A"
+    return f"({float(pos[0]):.1f}, {float(pos[1]):.1f})"
+
+
+def _analyze_junction_lanes(env) -> dict:
+    """Analyze and print incoming/outgoing lanes of the junction.
+    
+    Incoming lanes: lanes that feed INTO the junction (have exit_lanes)
+    Outgoing lanes: lanes that exit FROM the junction (have entry_lanes but no exit_lanes)
+    
+    Args:
+        env: The environment instance.
+        
+    Returns:
+        Dict with 'incoming' and 'outgoing' lane lists.
+    """
+    result = {"incoming": [], "outgoing": [], "junction_id": None}
+    
+    road_network = env.engine.current_map.road_network
+    graph = road_network.graph
+    
+    incoming_lanes = []
+    outgoing_lanes = []
+    junction_id = None
+    
+    for lane_name, lane_info in graph.items():
+        # Find the junction polygon
+        if lane_name.startswith("junction"):
+            junction_id = lane_name
+            continue
+        
+        # Skip non-lane entries
+        if not lane_name.startswith("lane_"):
+            continue
+        
+        exit_lanes = getattr(lane_info, "exit_lanes", None) or []
+        entry_lanes = getattr(lane_info, "entry_lanes", None) or []
+        
+        # Extract edge ID from lane name (e.g., "lane_46710990#1_0" -> "46710990#1")
+        raw_name = lane_name[5:] if lane_name.startswith("lane_") else lane_name
+        edge_id = raw_name.rsplit("_", 1)[0] if "_" in raw_name else raw_name
+        
+        lane_obj = None
+        lane_length = 0.0
+        start_pos = None
+        end_pos = None
+        
+        try:
+            lane_obj = road_network.get_lane(lane_name)
+            lane_length = lane_obj.length
+            # Get start and end positions of the lane
+            start_pos = lane_obj.position(0.0, 0.0)  # Beginning of lane
+            end_pos = lane_obj.position(lane_length, 0.0)  # End of lane
+        except Exception:
+            pass
+        
+        lane_data = {
+            "lane_name": lane_name,
+            "edge_id": edge_id,
+            "length": lane_length,
+            "exit_lanes": exit_lanes,
+            "entry_lanes": entry_lanes,
+            "start_pos": start_pos,
+            "end_pos": end_pos,
+        }
+        
+        # Incoming: has exit_lanes (feeds INTO junction)
+        # Outgoing: has entry_lanes but no exit_lanes (exits FROM junction)
+        if exit_lanes:
+            incoming_lanes.append(lane_data)
+        elif entry_lanes and not exit_lanes:
+            outgoing_lanes.append(lane_data)
+    
+    result["incoming"] = incoming_lanes
+    result["outgoing"] = outgoing_lanes
+    result["junction_id"] = junction_id
+
+    return result.get("incoming", []), result.get("outgoing", [])
+
+
+def _apply_manifest_ego_spawn_lane(env, row: dict) -> bool:
+    """Teleport ego onto the manifest parallel lane (needed when skip_auto_signs=True)."""
+    road_id = row.get("road_id")
+    if not road_id:
+        return False
+    lane_num = int(row.get("spawn_lane_num", 0) or 0)
+    target_key = make_lane_key(str(road_id), lane_num)
+    try:
+        vehicle = env.agent
+        if vehicle is None:
+            return False
+        road_network = env.engine.current_map.road_network
+        target_lane = road_network.get_lane(target_key)
+        start_long = min(1.0, target_lane.length - 0.1)
+        pos = target_lane.position(start_long, 0.0)
+        heading = target_lane.heading_theta_at(start_long)
+        vehicle.set_position(pos)
+        vehicle.set_heading_theta(heading)
+        try:
+            vehicle.spawn_place = pos.copy()
+        except Exception:
+            pass
+        if hasattr(env, "_refresh_navigation_after_spawn"):
+            env._refresh_navigation_after_spawn(target_lane)
+        else:
+            vehicle.reset_navigation(target_lane)
+        return True
+    except Exception as exc:
+        print(f"[EgoSpawn] Could not teleport to {target_key}: {exc}")
+        return False
+
+
+def _reposition_ego_before_lane_end(env, distance_before_end: float) -> bool:
+    """Reposition the ego vehicle to a specific distance before the lane end.
+    
+    Args:
+        env: The environment instance.
+        distance_before_end: Distance in meters before lane end to place the vehicle.
+        
+    Returns True if repositioning succeeded, False otherwise.
+    """
+    try:
+        vehicle = env.agent
+        if vehicle is None:
+            return False
+        
+        lane = vehicle.lane
+        if lane is None:
+            return False
+        
+        lane_length = lane.length
+        # spawn_longitude is from lane START, so: lane_length - distance_before_end
+        spawn_long = max(1.0, min(lane_length - distance_before_end, lane_length - 0.1))
+        
+        pos = lane.position(spawn_long, 0.0)
+        heading = lane.heading_theta_at(spawn_long)
+        
+        vehicle.set_position(pos)
+        vehicle.set_heading_theta(heading)
+        
+        # Update spawn_place so navigation uses the new position
+        try:
+            vehicle.spawn_place = pos.copy()
+        except Exception:
+            pass
+        
+        # Rebuild navigation from new position
+        if hasattr(env, "_refresh_navigation_after_spawn"):
+            env._refresh_navigation_after_spawn(lane)
+        else:
+            try:
+                vehicle.reset_navigation(lane)
+            except Exception:
+                pass
+        
+        return True
+    except Exception as e:
+        print(f"[EgoReposition] Failed to reposition ego: {e}")
+        return False
+
+
+def _get_junction_layout(row: dict, scenes_root: Path) -> dict | None:
+    """Load junction layout from manifest row or build from scene net.xml."""
+    if row.get("junction_layout"):
+        return row["junction_layout"]
+
+    net_path = row.get("net_path")
+    if not net_path:
+        return None
+
+    net_file = Path(str(net_path))
+    full_path = net_file if net_file.is_absolute() else scenes_root / net_file
+    try:
+        layout = build_junction_priority_layout(full_path)
+    except JunctionLayoutError as exc:
+        print(f"[JunctionLayout] Failed to build layout: {exc}")
+        return None
+    return layout.to_dict()
+
+
+def _clear_sign_manager(sign_mgr) -> None:
+    sign_mgr.signs.clear()
+    sign_mgr.rules.clear()
+
+
+def _place_yield_sign_on_spawn_lane(
+    env, distance_before_end: float = 20.0, show_model: bool = True
+) -> bool:
+    """Fallback: place a single YieldSign beside the ego approach road."""
+    try:
+        vehicle = env.agent
+        if vehicle is None or vehicle.lane is None:
+            return False
+
+        sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
+        if sign_mgr is None:
+            return False
+
+        _clear_sign_manager(sign_mgr)
+        lane = vehicle.lane
+        placement_long = sign_placement_long(lane, distance_before_end)
+        sign = sign_mgr.add_sign(
+            YieldSign,
+            lane=lane,
+            longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
+            lateral_offset=lateral_offset_beside_lane(lane, placement_long),
+            show_model=show_model,
+            use_random_lane=False,
+            auto_detect_main_roads=False,
+        )
+        if sign is not None:
+            sign.is_priority_sign = False
+        return sign is not None
+    except Exception as e:
+        print(f"[YieldSign] Failed to place sign: {e}")
+        return False
+
+
+def _place_junction_priority_signs(
+    env,
+    row: dict,
+    scenes_root: Path,
+    distance_before_end: float = 20.0,
+    show_model: bool = True,
+) -> bool:
+    """Place one MainRoadSign / YieldSign per incoming road edge (not per lane line)."""
+    layout = _get_junction_layout(row, scenes_root)
+    if layout is None:
+        print("[JunctionSigns] No layout available, falling back to ego-only yield sign")
+        return _place_yield_sign_on_spawn_lane(
+            env, distance_before_end=distance_before_end, show_model=show_model
+        )
+
+    sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
+    if sign_mgr is None:
+        return False
+
+    _clear_sign_manager(sign_mgr)
+
+    main_arms = arms_for_road_class(layout, "main")
+    secondary_arms = arms_for_road_class(layout, "secondary")
+    if not main_arms or not secondary_arms:
+        print("[JunctionSigns] Missing main/secondary arms, falling back to ego-only yield sign")
+        return _place_yield_sign_on_spawn_lane(
+            env, distance_before_end=distance_before_end, show_model=show_model
+        )
+
+    main_lanes = []
+    for arm in main_arms:
+        main_lanes.extend(collect_lanes_for_keys(env, arm.get("lane_keys", [])))
+
+    if not main_lanes:
+        print("[JunctionSigns] Could not resolve main lanes, falling back to ego-only yield sign")
+        return _place_yield_sign_on_spawn_lane(
+            env, distance_before_end=distance_before_end, show_model=show_model
+        )
+
+    junction_id = layout.get("junction_id", "")
+    placed_main = 0
+    placed_yield = 0
+
+    for arm in main_arms:
+        edge_id = arm.get("edge_id", "")
+        lane = resolve_sign_lane_for_edge(env, edge_id, arm.get("lane_keys", []))
+        if lane is None:
+            print(f"[JunctionSigns] Skipping main sign, lane not found for edge: {edge_id}")
+            continue
+        placement_long = sign_placement_long(lane, distance_before_end)
+        try:
+            sign = sign_mgr.add_sign(
+                MainRoadSign,
+                lane=lane,
+                longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
+                lateral_offset=lateral_offset_beside_lane(lane, placement_long),
+                show_model=show_model,
+                use_random_lane=False,
+                intersection_name=junction_id,
+            )
+            if sign is not None:
+                sign.is_priority_sign = False
+            placed_main += 1
+        except Exception as exc:
+            print(f"[JunctionSigns] Failed MainRoadSign on edge {edge_id}: {exc}")
+
+    for arm in secondary_arms:
+        edge_id = arm.get("edge_id", "")
+        lane = resolve_sign_lane_for_edge(env, edge_id, arm.get("lane_keys", []))
+        if lane is None:
+            print(f"[JunctionSigns] Skipping yield sign, lane not found for edge: {edge_id}")
+            continue
+        placement_long = sign_placement_long(lane, distance_before_end)
+        try:
+            sign = sign_mgr.add_sign(
+                YieldSign,
+                lane=lane,
+                longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
+                lateral_offset=lateral_offset_beside_lane(lane, placement_long),
+                show_model=show_model,
+                use_random_lane=False,
+                intersection_name=junction_id,
+                main_road_lanes=main_lanes,
+                auto_detect_main_roads=False,
+            )
+            if sign is not None:
+                sign.is_priority_sign = False
+            placed_yield += 1
+        except Exception as exc:
+            print(f"[JunctionSigns] Failed YieldSign on edge {edge_id}: {exc}")
+
+    print(
+        f"[JunctionSigns] Placed {placed_main} MainRoadSign(s) and {placed_yield} YieldSign(s) "
+        f"at junction {junction_id} ({layout.get('shape')}), "
+        f"shoulder offset={SIGN_SHOULDER_OFFSET_M}m"
+    )
+    return placed_main > 0 or placed_yield > 0
+
+
 def run_one_episode(
     row: dict,
-    backend: str,
     policy_type: str,
     models: dict,
     scenes_root: Path,
@@ -894,10 +1021,15 @@ def run_one_episode(
     ego_sample_seed_base: int,
     replay_root: Path | None = None,
     save_gif: Path | None = None,
-    main_road_traffic: bool = False,
-    main_road_num_vehicles: int = 1,
-    main_road_velocity: float = 10.0,
-    main_road_trigger_distance: float = 15.0,
+    hide_signs: bool = False,
+    auxiliary_agent: bool = False,
+    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+    aux_policy: str = "idm",
+    aux_spawn_velocity_ms: float = DEFAULT_SPAWN_VELOCITY_MS,
+    aux_release_when_ego_within_m: float = 5.0,
+    aux_convoy_size: int = DEFAULT_CONVOY_SIZE,
+    aux_convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
+    aux_lanes_occupied: int = DEFAULT_AUX_LANES_OCCUPIED_MAX,
 ) -> dict:
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
     np.random.seed(seed)
@@ -912,25 +1044,17 @@ def run_one_episode(
     except ImportError:
         pass
 
-    if backend in ("pgmap", "paired", "citymap"):
-        env = _build_pgmap_env(row, max_steps=max_steps)
-    elif backend == "sumo":
-        env = _build_sumo_env(row, scenes_root=scenes_root, max_steps=max_steps)
-    else:
-        raise ValueError(f"Unsupported backend: {backend}")
+    _ensure_secondary_ego_spawn(row, scenes_root)
+    env = _build_sumo_env(row, scenes_root=scenes_root, max_steps=max_steps)
 
     raw_env = env
     env = _wrap_for_policy(env, policy_type)
 
-    # Resolve the BasePolicy class to instantiate on the ego vehicle. All policies
-    # implement the uniform BasePolicy.act(name) interface — including
-    # PlainCarl/PlainPlanT2 (raw NN) and CarlSignCompliantPolicy/PlanT2SignCompliantPolicy
-    # (NN + rule overlay).
     policy_cls = None
     if policy_type == "idm":
-        policy_cls = IDMPolicy
+        policy_cls = ModifiedIDMPolicy  # Good driving, no sign compliance
     elif policy_type == "modified_idm":
-        policy_cls = ModifiedIDMPolicy
+        policy_cls = ModifiedIDMSignCompliantPolicy
     elif policy_type == "comprehensive_rule_expert":
         policy_cls = ComprehensiveRuleExpertPolicy
     elif policy_type == "rule_compliant":
@@ -944,67 +1068,55 @@ def run_one_episode(
                                "check _load_policy_models")
 
     try:
-        if backend == "sumo":
-            env_seed = (int(row.get("sign_id", 0)) + int(row.get("var_idx", 0))) % 100000
-        elif backend == "citymap":
-            env_seed = int(row.get("map_seed") or row.get("seed") or 0)
-        else:
-            env_seed = seed
+        env_seed = (int(row.get("sign_id", 0)) + int(row.get("var_idx", 0))) % 100000
         obs, info = env.reset(seed=env_seed)
         base_env = _unwrap_base_env(env)
-        # Override engine.np_random with row.seed (NOT env_seed). MetaDrive's
-        # env.reset(seed=env_seed) only accepts seed < num_scenarios (100000 for
-        # SUMO), so env_seed is a truncated hash of (sign_id + var_idx). After
-        # reset we replace engine.np_random with a RandomState(row.seed) so NPC
-        # traffic / spawn / scenario randomness shares the same seed as the rest
-        # of the per-episode RNGs (np.random/random/torch — all seeded with seed
-        # at line 811). This guarantees the "surrounding traffic" the user
-        # specified via row.seed is reproducible across processes.
         try:
             if hasattr(base_env, "engine") and hasattr(base_env.engine, "np_random"):
                 base_env.engine.np_random = np.random.RandomState(seed)
         except Exception:
             pass
 
-        if backend in ("pgmap", "paired", "citymap"):
-            ok = _place_pgmap_sign(base_env, row, seed)
-            if not ok:
-                return {
-                    "ok": False,
-                    "error": "failed_to_place_pgmap_sign",
-                    "backend": backend,
-                    "scene_id": row.get("scene_id"),
-                    "sign_type": row.get("_sign_code") or row.get("sign_code") or row.get("pdd_code") or row.get("sign_type"),
-                    "seed": int(row.get("seed") or row.get("deterministic_seed") or -1),
-                }
-        # Spawn main road traffic for yield sign scenarios
-        yield_traffic_mgr = None
-        if main_road_traffic:
-            print(f"[YieldTraffic] main_road_traffic={main_road_traffic}, _MAIN_ROAD_TRAFFIC_AVAILABLE={_MAIN_ROAD_TRAFFIC_AVAILABLE}")
-            if _MAIN_ROAD_TRAFFIC_AVAILABLE:
-                try:
-                    print(f"[YieldTraffic] Calling add_main_road_traffic (trigger at {main_road_trigger_distance}m from sign)...")
-                    yield_traffic_mgr = add_main_road_traffic(
-                        base_env,
-                        num_vehicles=main_road_num_vehicles,
-                        spawn_velocity=main_road_velocity,
-                        spawn_trigger_distance=main_road_trigger_distance,
-                    )
-                    print(f"[YieldTraffic] Manager ready, will spawn when ego is {main_road_trigger_distance}m from yield sign")
-                except Exception as e:
-                    import traceback
-                    print(f"[YieldTraffic] Failed to initialize main road traffic: {e}")
-                    traceback.print_exc()
-            else:
-                print("[YieldTraffic] Main road traffic requested but yield_main_road_traffic module not available")
+        # Manifest spawn lane + distance before intersection
+        _apply_manifest_ego_spawn_lane(base_env, row)
+        spawn_distance = float(row.get("spawn_distance_before_end", 0) or 0)
+        if spawn_distance > 0:
+            _reposition_ego_before_lane_end(base_env, spawn_distance)
+
+        # Validate route: check that destination is different from spawn
+        nav = getattr(base_env.vehicle, "navigation", None)
+        if nav is not None:
+            checkpoints = getattr(nav, "checkpoints", [])
+            spawn_lane_idx = getattr(base_env.vehicle.lane, "index", None)
+            if checkpoints and spawn_lane_idx:
+                if len(checkpoints) <= 1 or checkpoints[-1] == spawn_lane_idx or checkpoints[0] == checkpoints[-1]:
+                    scene_id = row.get("scene_id", "unknown")
+                    dest = row.get("destination_lane_id", "unknown")
+                    print(f"[RouteValidation] INVALID: {scene_id} - route loops back to spawn. "
+                          f"spawn={spawn_lane_idx}, dest={dest}, checkpoints={checkpoints[:3]}...")
+                    return {
+                        "ok": False,
+                        "error": f"Invalid route: spawn and destination are the same or unreachable",
+                        "scene_id": scene_id,
+                    }
+
+        # Place main/yield signs on all junction arms from layout
+        sign_distance = float(row.get("sign_distance_before_end", 20.0))
+        _place_junction_priority_signs(
+            base_env,
+            row,
+            scenes_root=scenes_root,
+            distance_before_end=sign_distance,
+            show_model=not hide_signs,
+        )
+
+        # Analyze and print junction lanes (for debugging/info only)
+        incoming_lanes, outgoing_lanes = _analyze_junction_lanes(base_env)
 
         policy_obj = None
         sampled_ego_params = None
         if policy_cls is not None:
             policy_obj = policy_cls(base_env.vehicle, seed)
-            # NPC profile is applied via IDMPolicy class attrs globally.
-            # Keep ego IDM-family policies deterministic by overriding defaults
-            # on the policy instance.
             if policy_type in ("idm", "modified_idm", "comprehensive_rule_expert"):
                 if ego_variant == "default":
                     apply_ego_defaults(policy_obj)
@@ -1016,23 +1128,87 @@ def run_one_episode(
                 else:
                     apply_ego_defaults(policy_obj)
 
+        # Add auxiliary agents on every incoming lane (except ego's road)
+        # aux_agent_mgr = None
+        # if auxiliary_agent:
+        #     ego_lane_index = getattr(base_env.vehicle.lane, "index", "")
+        #     aux_spawn_lanes = [
+        #         lane["lane_name"]
+        #         for lane in incoming_lanes
+        #         # if lane["edge_id"] not in ego_lane_index
+        #     ]
+        #     if aux_spawn_lanes:
+        #         aux_agent_mgr = add_auxiliary_agents(
+        #             base_env,
+        #             spawn_lane_indices=aux_spawn_lanes,
+        #             distance_from_intersection=aux_distance_from_intersection,
+        #         )
+        #         print(f"[AuxAgent] Spawned on {len(aux_spawn_lanes)} incoming lane(s)")
+        #     else:
+        #         print("[AuxAgent] No incoming lanes available for auxiliary agents")
+
+        aux_agent_mgr = None
+        aux_spawn_lanes: list[str] = []
+        if auxiliary_agent:
+            aux_distance_from_intersection = float(
+                row.get("aux_distance_from_intersection", aux_distance_from_intersection)
+            )
+            aux_spawn_velocity_ms = float(
+                row.get("aux_spawn_velocity_ms", aux_spawn_velocity_ms)
+            )
+            aux_convoy_size = int(row.get("aux_convoy_size", aux_convoy_size))
+            aux_convoy_gap_m = float(row.get("aux_convoy_gap_m", aux_convoy_gap_m))
+            aux_lanes_occupied = int(row.get("aux_lanes_occupied", aux_lanes_occupied))
+            ego_lane_index = (
+                make_lane_key(str(row.get("road_id")), int(row.get("spawn_lane_num", 0) or 0))
+                if row.get("road_id")
+                else str(getattr(base_env.vehicle.lane, "index", ""))
+            )
+
+            aux_spawn_lanes, aux_destination_lanes, alternate_spawn_dest_map = (
+                resolve_aux_spawn_plan(
+                    row,
+                    ego_lane_index=str(ego_lane_index),
+                    incoming_lanes=incoming_lanes,
+                    aux_lanes_occupied=aux_lanes_occupied,
+                    aux_distance_from_intersection=aux_distance_from_intersection,
+                )
+            )
+            aux_destination_lanes = [
+                dest or None for dest in aux_destination_lanes
+            ]
+
+            if aux_spawn_lanes:
+                aux_agent_mgr = add_auxiliary_agents(
+                    base_env,
+                    spawn_lane_indices=aux_spawn_lanes,
+                    outgoing_lanes=outgoing_lanes,
+                    distance_from_intersection=aux_distance_from_intersection,
+                    policy=aux_policy,
+                    spawn_velocity_ms=aux_spawn_velocity_ms,
+                    destination_lanes=aux_destination_lanes,
+                    ego_vehicle=base_env.vehicle,
+                    ego_spawn_lane_index=ego_lane_index,
+                    ego_release_distance_before_end=aux_release_when_ego_within_m,
+                    convoy_size=aux_convoy_size,
+                    convoy_gap_m=aux_convoy_gap_m,
+                    alternate_spawn_dest_map=alternate_spawn_dest_map,
+                )
+                if aux_agent_mgr is not None:
+                    print(
+                        f"[AuxAgent] lanes={len(aux_spawn_lanes)}, "
+                        f"convoy_size={aux_convoy_size}, gap={aux_convoy_gap_m}m, "
+                        f"spawned={aux_agent_mgr.get_status().get('count', 0)}"
+                    )
+
         total_reward = 0.0
         violations = 0
         sign_violations = 0
         traffic_light_violations = 0
         crosswalk_violations = 0
-        # Per-step per-class counter (NEW): {StopSign: 50, TrafficLightSign: 5}
-        # — counts every step a sign of that class is violating. Combines
-        # run_benchmark_mini-style step granularity with expert_replay-style
-        # per-class breakdown.
         violations_by_class_step: dict[str, int] = {}
-        # Per-step in-zone tracking: how many steps ego was inside (or approaching
-        # within _IN_ZONE_LOOKAHEAD_M of) each sign's zone of effect.
-        # Pair with violations_by_class_step → per-zone violation rate.
         in_zone_total_steps = 0
         in_zone_by_class_step: dict[str, int] = {}
-        # Edge-counted: +1 only on "not violating → started violating" transition
-        # per sign class (matches expert_replay's violations_by_class).
         violations_event_count = 0
         violations_by_class_event: dict[str, int] = {}
         violations_timeline: list[dict] = []
@@ -1060,21 +1236,11 @@ def run_one_episode(
         prev_yaw_rate: float | None = None
         prev_action_steer: float | None = None
         smoothness_step_vars: list[dict] = []
-        # Per-step expert actions (mirror expert_replay.py:543) — written to
-        # replay.json sidecar so reverse-engineering of the rollout is possible.
         expert_actions: list[list[float]] = []
-        # One-shot snapshot of placed signs after sign-placement (post-reset).
         sign_info_snapshot = _extract_sign_info(base_env)
         last_info: dict = {}
 
         for step in range(max_steps):
-            # Update main road traffic (before ego action)
-            if yield_traffic_mgr is not None:
-                try:
-                    yield_traffic_mgr.before_step()
-                except Exception:
-                    pass
-
             if policy_obj is not None:
                 action = policy_obj.act(base_env.vehicle.name)
             else:
@@ -1086,12 +1252,6 @@ def run_one_episode(
 
             obs, reward, terminated, truncated, info = env.step(action)
 
-            # Update main road traffic (after step, handles respawning)
-            if yield_traffic_mgr is not None:
-                try:
-                    yield_traffic_mgr.after_step()
-                except Exception:
-                    pass
             last_info = info
             total_reward += float(reward)
             steps += 1
@@ -1100,10 +1260,8 @@ def run_one_episode(
             sign_mgr = getattr(base_env.engine, "traffic_sign_manager", None)
             current_violation_texts = []
             current_violated_class_names: set = set()
-            current_violations = []  # Initialize here so it's accessible in text_dict
+            current_violations = []
             if sign_mgr is not None and vehicle is not None:
-                # In-zone tracking (per-step, per-class). Done once per step
-                # over all signs — independent from violation check below.
                 step_in_any_zone = False
                 for _s in sign_mgr.signs:
                     if _ego_in_sign_zone(_s, vehicle):
@@ -1130,13 +1288,10 @@ def run_one_episode(
                         else:
                             sign_violations += 1
                         current_violation_texts.append(_format_violation(_sign, vehicle))
-                        # Per-step per-class: +1 every step this sign-class is violating.
                         cls_name = type(_sign).__name__
                         violations_by_class_step[cls_name] = (
                             violations_by_class_step.get(cls_name, 0) + 1)
                         current_violated_class_names.add(cls_name)
-                        # Edge-counting (expert_replay style): +1 only on the
-                        # "not-violating → started-violating" transition per class.
                         if cls_name not in prev_violated_class_names:
                             violations_event_count += 1
                             violations_by_class_event[cls_name] = (
@@ -1159,13 +1314,11 @@ def run_one_episode(
                 else:
                     last_violation_texts = []
 
-            # Bench2Drive-like efficiency proxy.
             if vehicle is not None:
                 sp = _nearby_speed_percentage(vehicle)
                 if sp is not None:
                     speed_pct_samples.append(float(sp))
 
-            # Additional quality/safety metrics.
             if vehicle is not None:
                 speed_mps = _safe_float(getattr(vehicle, "speed", 0.0), 0.0)
                 distance_travelled_m += max(0.0, speed_mps) * dt
@@ -1236,34 +1389,57 @@ def run_one_episode(
                 crashed = bool(info.get("crash", False) or out_of_road)
                 break
 
-            # text_dict is only assembled when GIF recording is on (it's only
-            # used as the render() text overlay). Skip the work otherwise.
             text_dict: dict = {}
             if save_gif:
                 text_dict = {
                     "Step": step,
                     "Speed": f"{vehicle.speed_km_h:.2f} km/h",
-                    "Current lane: ": vehicle.lane.index,
+                    "Vehicle lane: ": vehicle.lane.index,
+                    "Aux lanes": len(aux_spawn_lanes),
                     "Current lane width: ": vehicle.lane.width,
                     "Violations: ": sign_violations,
                 }
                 
-                # Add yield sign status indicators
                 ego_in_yield_zone = False
                 ego_violating_yield = False
                 main_road_has_traffic = False
                 
                 if sign_mgr is not None and vehicle is not None:
-                    for sign in sign_mgr.signs:
-                        sign_class_name = type(sign).__name__.lower()
-                        if "yield" in sign_class_name:
-                            main_road_has_traffic, _ = sign.has_main_road_traffic(exclude_vehicle=vehicle)
-                            ego_in_yield_zone = sign._is_vehicle_in_zone(vehicle)
-                            ego_violating_yield = sign._is_violating(vehicle)
+                    yield_signs = [
+                        sign for sign in sign_mgr.signs
+                        if "yield" in type(sign).__name__.lower()
+                    ]
+                    text_dict["Yield signs"] = len(yield_signs)
+                    text_dict["Main road signs"] = sum(
+                        1 for sign in sign_mgr.signs
+                        if "mainroad" in type(sign).__name__.lower()
+                    )
+                    for sign in yield_signs:
+                        has_traffic, _ = sign.has_main_road_traffic(exclude_vehicle=vehicle)
+                        main_road_has_traffic = main_road_has_traffic or has_traffic
+                        if sign._is_vehicle_in_zone(vehicle):
+                            ego_in_yield_zone = True
+                        if sign._is_violating(vehicle):
+                            ego_violating_yield = True
                 
                 text_dict["Main road traffic"] = main_road_has_traffic
                 text_dict["Ego in yield zone"] = ego_in_yield_zone
                 text_dict["Yield violation"] = ego_violating_yield
+                
+                # Add auxiliary agent status
+                if aux_agent_mgr is not None:
+                    aux_status = aux_agent_mgr.get_status()
+                    text_dict["Aux agents"] = aux_status.get("count", 0)
+                    text_dict["Aux lanes"] = aux_status.get("lanes_occupied", aux_lanes_occupied)
+                    text_dict["Aux convoy size"] = aux_status.get("convoy_size", aux_convoy_size)
+                    text_dict["Aux policy"] = aux_status.get("policy", aux_policy)
+                    agents = aux_status.get("agents") or []
+                    if agents:
+                        text_dict["Aux dest"] = agents[0].get("destination_lane", "")
+                        text_dict["Aux released"] = agents[0].get("released", False)
+                        ego_dist = agents[0].get("ego_dist_to_spawn_lane_end_m")
+                        if ego_dist is not None:
+                            text_dict["Ego to lane end"] = f"{ego_dist:.1f}m"
 
             if current_violation_texts:
                 text_dict["Violation"] = current_violation_texts[0]
@@ -1305,8 +1481,6 @@ def run_one_episode(
             else:
                 route_length_source = "none"
 
-        # Sidecar uses raw info["crash"] (without OOR) per expert_replay schema;
-        # episodes JSONL uses (crash OR OOR) per legacy run_benchmark convention.
         crashed_flag_raw = bool(last_info.get("crash", False)) if last_info else False
         crash_attribution = None
         if crashed_flag_raw or bool(getattr(base_env.agent, "crash_vehicle", False)):
@@ -1339,23 +1513,15 @@ def run_one_episode(
                     "crashed_npc_fault": bool(crashed_flag_raw and crash_attribution == "npc"),
                     "out_of_road": bool(out_of_road),
                     "final_step": int(steps),
-                    # Per-step counts (frames where any sign was violating)
                     "total_violations": int(violations),
-                    # 3-bucket per-step (run_benchmark_mini-style):
                     "violations_by_class": {
                         "sign": int(sign_violations),
                         "traffic_light": int(traffic_light_violations),
                         "crosswalk": int(crosswalk_violations),
                     },
-                    # Per-class per-step (NEW — combines both styles):
-                    # {StopSign: 50, TrafficLightSign: 5, ...}
                     "violations_by_class_step": dict(violations_by_class_step),
-                    # Steps ego was inside (or approaching) any sign's zone.
-                    # Pair with violations_by_class_step → per-zone violation rate.
                     "in_zone_total_steps": int(in_zone_total_steps),
                     "in_zone_by_class_step": dict(in_zone_by_class_step),
-                    # Edge-counts (expert_replay style — one event per class
-                    # transition not-violating → started-violating):
                     "violations_event_count": int(violations_event_count),
                     "violations_by_class_event": dict(violations_by_class_event),
                     "violations_timeline": list(violations_timeline),
@@ -1384,7 +1550,7 @@ def run_one_episode(
                 sidecar = {
                     "scene_id": scene_id_for_uid,
                     "scene_uid": scene_uid,
-                    "backend": backend,
+                    "backend": "sumo",
                     "pdd_code": (row.get("pdd_code") or row.get("sign_code")
                                  or row.get("sign_type")),
                     "sign_key": row.get("sign_type"),
@@ -1396,8 +1562,6 @@ def run_one_episode(
                         "map_name": row.get("net_path"),
                         "road_id": row.get("road_id"),
                         "spawn_lane_num": row.get("spawn_lane_num"),
-                        "lane_num": row.get("lane_num"),
-                        "lane_width": row.get("lane_width"),
                         "horizon": max_steps,
                         "seed": seed,
                     },
@@ -1414,12 +1578,11 @@ def run_one_episode(
                 with open(sidecar_path, "w", encoding="utf-8") as _sf:
                     json.dump(sidecar, _sf, default=str)
             except Exception:
-                # Fail soft — episodes JSONL still gets written below.
                 pass
 
         return {
             "ok": True,
-            "backend": backend,
+            "backend": "sumo",
             "scene_id": row.get("scene_id"),
             "sign_type": row.get("_sign_code") or row.get("sign_code") or row.get("pdd_code") or row.get("sign_type"),
             "seed": seed,
@@ -1451,13 +1614,10 @@ def run_one_episode(
             "distance_travelled_m": float(distance_travelled_m),
             "variant": ego_variant,
             "ego_params": sampled_ego_params,
-            # Per-class per-step counts (granular run_benchmark_mini-style)
             "violations_by_class_step": dict(violations_by_class_step),
-            # Edge-counted violations (expert_replay style)
             "violations_event_count": int(violations_event_count),
             "violations_by_class_event": dict(violations_by_class_event),
             "violations_timeline": list(violations_timeline),
-            # Per-class in-zone exposure (for per-zone violation rate)
             "in_zone_total_steps": int(in_zone_total_steps),
             "in_zone_by_class_step": dict(in_zone_by_class_step),
         }
@@ -1482,35 +1642,32 @@ def run_one_episode(
 
 
 def aggregate_results(results: list[dict]) -> dict:
-    grouped: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    grouped: dict[str, list[dict]] = defaultdict(list)
     for r in results:
         if not r.get("ok"):
             continue
-        key = (str(r.get("backend")), str(r.get("sign_type")))
+        key = str(r.get("sign_type"))
         grouped[key].append(r)
 
     summary: dict[str, dict] = {}
-    for (backend, sign), runs in sorted(grouped.items()):
+    for sign, runs in sorted(grouped.items()):
         success_rate = float(np.mean([x["success"] for x in runs])) if runs else 0.0
         crash_rate = float(np.mean([x["crashed"] for x in runs])) if runs else 0.0
         avg_violations = float(np.mean([x["violations"] for x in runs])) if runs else 0.0
         avg_sign_viol = float(np.mean([x.get("sign_violations", 0) for x in runs])) if runs else 0.0
         avg_tl_viol = float(np.mean([x.get("traffic_light_violations", 0) for x in runs])) if runs else 0.0
         avg_cw_viol = float(np.mean([x.get("crosswalk_violations", 0) for x in runs])) if runs else 0.0
-        # Edge-counted violations (expert_replay-style: 1 event per "enter zone").
         avg_violations_event = float(np.mean([x.get("violations_event_count", 0) for x in runs])) if runs else 0.0
         violations_by_class_event_total: dict[str, int] = {}
         for x in runs:
             for cls, cnt in (x.get("violations_by_class_event") or {}).items():
                 violations_by_class_event_total[cls] = (
                     violations_by_class_event_total.get(cls, 0) + int(cnt))
-        # Per-class per-step (run_benchmark_mini-style, granular).
         violations_by_class_step_total: dict[str, int] = {}
         for x in runs:
             for cls, cnt in (x.get("violations_by_class_step") or {}).items():
                 violations_by_class_step_total[cls] = (
                     violations_by_class_step_total.get(cls, 0) + int(cnt))
-        # In-zone exposure aggregation.
         avg_in_zone_steps = float(np.mean([x.get("in_zone_total_steps", 0) for x in runs])) if runs else 0.0
         in_zone_by_class_step_total: dict[str, int] = {}
         for x in runs:
@@ -1530,9 +1687,8 @@ def aggregate_results(results: list[dict]) -> dict:
         min_ttc_vals = [x.get("min_ttc_sec") for x in runs if x.get("min_ttc_sec") is not None]
         route_len_vals = [x.get("route_length_m") for x in runs if x.get("route_length_m") is not None]
         dist_vals = [x.get("distance_travelled_m") for x in runs if x.get("distance_travelled_m") is not None]
-        key = f"{backend}:{sign}"
-        summary[key] = {
-            "backend": backend,
+        summary[sign] = {
+            "backend": "sumo",
             "sign_type": sign,
             "total_runs": len(runs),
             "success_rate": success_rate,
@@ -1564,18 +1720,16 @@ def aggregate_results(results: list[dict]) -> dict:
     return summary
 
 
-def _episode_key_from_row(row: dict) -> tuple[str, str, str, int]:
+def _episode_key_from_row(row: dict) -> tuple[str, str, int]:
     return (
-        str(row.get("_backend", "")),
         str(row.get("scene_id", "")),
         str(row.get("_sign_code") or row.get("sign_code") or row.get("pdd_code") or row.get("sign_type") or ""),
         int(row.get("seed") or row.get("deterministic_seed") or -1),
     )
 
 
-def _episode_key_from_result(r: dict) -> tuple[str, str, str, int]:
+def _episode_key_from_result(r: dict) -> tuple[str, str, int]:
     return (
-        str(r.get("backend", "")),
         str(r.get("scene_id", "")),
         str(r.get("sign_type", "")),
         int(r.get("seed") or -1),
@@ -1599,11 +1753,12 @@ def _load_existing_results(path: Path) -> list[dict]:
                 rows.append(row)
     return rows
 
+
 import time
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run policies on per_sign_bench full manifests")
+    parser = argparse.ArgumentParser(description="Run policies on real SUMO maps (yield sign benchmark)")
     parser.add_argument("--policy", required=True,
                         choices=["idm", "modified_idm", "comprehensive_rule_expert",
                                  "rule_compliant", "ppo_lidar",
@@ -1615,11 +1770,9 @@ def main():
     parser.add_argument("--preset", type=str, default="full", choices=["full", "full_last"])
     parser.add_argument("--benchmark-output", type=str, default="benchmark_output",
                         help="Base dir that contains <preset>/")
-    parser.add_argument("--scenes-root", type=str, default=str(PDD_BENCH_DIR / "scenes"))
-    parser.add_argument("--backends", type=str, default="sumo,pgmap,paired,citymap",
-                        help="Comma-separated: sumo,pgmap,paired,citymap")
+    parser.add_argument("--scenes-root", type=str, default=str(BENCH_DIR / "scenes"))
     parser.add_argument("--sign-type", type=str, default=None,
-                        help="Single sign code, e.g. 2.1")
+                        help="Single sign code, e.g. 2.4")
     parser.add_argument("--sign-types", type=str, default="",
                         help="Comma-separated sign codes")
     parser.add_argument("--max-scenes-per-sign", type=int, default=None)
@@ -1631,51 +1784,78 @@ def main():
     parser.add_argument("--rerun-failed", action="store_true",
                         help="Recompute scenes with existing failed records (ok=false)")
     parser.add_argument("--force-rerun", action="store_true",
-                        help="Ignore existing results and rerun all scenes (useful for regenerating GIFs)")
+                        help="Ignore existing results and rerun all scenes")
     parser.add_argument("--skip-error-episodes", action="store_true",
                         help="When used with --rerun-failed, keep previously errored episodes skipped")
     parser.add_argument("--debug-one-way-sign-selection", action="store_true",
-                        help="Enable verbose lane-selection debug logs for signs 5.7.1/5.7.2")
+                        help="Enable verbose lane-selection debug logs")
     parser.add_argument("--emit-replay-sidecar", action="store_true",
-                        help="Also emit per-(scene_uid, variant) replay.json sidecar in expert_replay layout (no pkl).")
+                        help="Also emit per-(scene_uid, variant) replay.json sidecar")
     parser.add_argument("--replay-root", type=str, default=None,
-                        help="Output dir for sidecar files (used with --emit-replay-sidecar). "
-                             "Default: <out_dir>/replays")
+                        help="Output dir for sidecar files")
     parser.add_argument("--unique-scene-id", action="store_true",
-                        help="Dedup manifest rows by (backend, scene_id) — run each unique "
-                             "(map × sign) only ONCE, ignoring var_idx/seed variants.")
+                        help="Dedup manifest rows by scene_id")
     parser.add_argument("--scene-id", type=str, default=None,
-                        help="Run only the scene with this scene_id (combine with "
-                             "--sign-type to disambiguate across signs).")
+                        help="Run only the scene with this scene_id")
     parser.add_argument("--scene-uid", type=str, default=None,
-                        help="Run only the scene matching this exact UID "
-                             "<backend>:<scene_id>:<sign_type>:<seed>. "
-                             "Mutually exclusive with --scene-id.")
+                        help="Run only the scene matching this exact UID <scene_id>:<sign_type>:<seed>")
     parser.add_argument("--manifest", type=str, default=None,
-                        help="Path to a custom *.jsonl manifest. Overrides "
-                             "--preset/--sign-type/--backends scanning.")
+                        help="Path to a custom *.jsonl manifest")
     parser.add_argument("--save-gifs", action="store_true",
-                        help="Record top-down GIF per episode (slow, ~3-5x overhead).")
+                        help="Record top-down GIF per episode")
     parser.add_argument("--gif-dir", type=str, default=None,
-                        help="Directory for GIFs (default: <out_dir>/gifs).")
+                        help="Directory for GIFs")
+    parser.add_argument("--output-dir", type=str, default=None,
+                        help="Write episodes/summary/gifs here directly "
+                             "(skips <benchmark-output>/<preset>/policy_eval/<run-name>)")
     parser.add_argument("--plant2-action-mode", type=str, default="pid",
                         choices=["pid", "wps_pure_pursuit"],
-                        help="How PlanT2 converts pred_plan -> action. "
-                             "'pid' (default) = plant2_predictions_to_action with "
-                             "PCHIP+LateralPID on pred_path. 'wps_pure_pursuit' = "
-                             "pure-pursuit on pred_wps[1] + softmax(pred_speed) "
-                             "throttle (matches eval_plant2_wps_steer.py). "
-                             "Applies to --policy plant2 and plant2_rule.")
+                        help="How PlanT2 converts pred_plan -> action")
+    parser.add_argument("--hide-signs", action="store_true",
+                        help="Hide traffic sign visual models (signs still affect behavior)")
 
-    # Main road traffic options for yield sign scenarios
-    parser.add_argument("--main-road-traffic", action="store_true", default=True,
-                        help="Spawn NPC vehicle on the incoming main road (for yield sign scenarios)")
-    parser.add_argument("--main-road-num-vehicles", type=int, default=1,
-                        help="Number of vehicles on the main road (default: 1)")
-    parser.add_argument("--main-road-velocity", type=float, default=10.0,
-                        help="Spawn velocity for main road traffic (m/s, default: 10.0)")
-    parser.add_argument("--main-road-trigger-distance", type=float, default=35.0,
-                        help="Spawn main road traffic when ego is within this distance of yield sign (m, default: 15.0)")
+    # Auxiliary agent options
+    parser.add_argument("--auxiliary-agent", action="store_true", default=True,
+                        help="Spawn an auxiliary agent on an incoming lane near intersection")
+    parser.add_argument(
+        "--aux-distance-from-intersection",
+        type=float,
+        default=DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+        help=f"Fallback aux spawn distance from intersection (meters); "
+             f"manifest row aux_distance_from_intersection takes precedence "
+             f"(default: {DEFAULT_AUX_DISTANCE_FROM_INTERSECTION})",
+    )
+    parser.add_argument("--aux-policy", type=str, default="idm", choices=["idm", "stationary"],
+                        help="Auxiliary agent behavior: idm drives to outgoing lane, stationary stays put")
+    parser.add_argument(
+        "--aux-spawn-velocity-ms",
+        type=float,
+        default=DEFAULT_SPAWN_VELOCITY_MS,
+        help=f"Aux IDM cruise/release speed in m/s (default: {DEFAULT_SPAWN_VELOCITY_MS})",
+    )
+    parser.add_argument("--aux-release-when-ego-within-m", type=float, default=20.0,
+                        help="Release gated IDM aux when ego is within this distance of spawn lane end (m); 0 = immediate")
+    parser.add_argument(
+        "--aux-convoy-size",
+        type=int,
+        default=DEFAULT_CONVOY_SIZE,
+        help=f"Max convoy size at manifest generation; spawns rows for sizes 1..N "
+             f"(default: {DEFAULT_CONVOY_SIZE}). Per-row size is stored as aux_convoy_size.",
+    )
+    parser.add_argument(
+        "--aux-convoy-gap-m",
+        type=float,
+        default=DEFAULT_CONVOY_GAP_M,
+        help=f"Longitudinal spacing between convoy vehicles in meters (default: {DEFAULT_CONVOY_GAP_M})",
+    )
+    parser.add_argument(
+        "--aux-lanes-occupied",
+        type=int,
+        default=DEFAULT_AUX_LANES_OCCUPIED_MAX,
+        help=f"Fallback max main-road lanes to occupy when manifest row omits aux_lanes_occupied "
+             f"(default: {DEFAULT_AUX_LANES_OCCUPIED_MAX})",
+    )
+
     args = parser.parse_args()
 
     if args.scene_id and args.scene_uid:
@@ -1684,8 +1864,6 @@ def main():
     assert args.ego_variant in ("default", "s1", "s2", "s3", "s4"), \
         f"--ego-variant must be one of default/s1/s2/s3/s4, got {args.ego_variant!r}"
 
-    # Determinism smoke-test for sampled IDM variants — fail loudly here if
-    # sample_ego_params is non-reproducible (e.g. RNG state pollution regression).
     if args.ego_variant != "default":
         _t = args.ego_sample_seed_base + 12345
         _p1 = sample_ego_params(_t)
@@ -1703,14 +1881,6 @@ def main():
         raise ValueError(f"Benchmark output not found: {benchmark_output_dir}")
 
     scenes_root = Path(args.scenes_root).resolve()
-    # if not scenes_root.exists():
-    #     raise ValueError(f"Scenes root not found: {scenes_root}")
-
-    backends = [b.strip() for b in args.backends.split(",") if b.strip()]
-    allowed = {"sumo", "pgmap", "paired", "citymap"}
-    bad = [b for b in backends if b not in allowed]
-    if bad:
-        raise ValueError(f"Unsupported backends: {bad}; allowed={sorted(allowed)}")
 
     only_codes: set[str] = set()
     if args.sign_type:
@@ -1720,31 +1890,28 @@ def main():
 
     print(f"Policy: {args.policy}")
     print(f"Preset: {args.preset}")
-    print(f"Backends: {backends}")
+    print(f"Backend: sumo (real maps only)")
     print(f"Input: {benchmark_output_dir}")
-    if args.main_road_traffic:
-        print(f"Main road traffic: ENABLED")
-        print(f"  - Number of vehicles: {args.main_road_num_vehicles}")
-        print(f"  - Velocity: {args.main_road_velocity} m/s")
-        print(f"  - Trigger distance: {args.main_road_trigger_distance}m from yield sign")
+    if args.auxiliary_agent:
+        print(f"Auxiliary agent: ENABLED ({args.aux_policy}, near intersection)")
+        print(f"  - Distance from intersection: {args.aux_distance_from_intersection}m")
+        if args.aux_policy == "idm":
+            print(f"  - Release when ego within: {args.aux_release_when_ego_within_m}m of spawn lane end")
+            print(f"  - Speed after release: {args.aux_spawn_velocity_ms} m/s")
+            print(f"  - Convoy size: from manifest row aux_convoy_size (CLI default {args.aux_convoy_size})")
+            print(f"  - Lanes occupied: from manifest row aux_lanes_occupied (CLI default {args.aux_lanes_occupied})")
+            print(f"  - Convoy gap: {args.aux_convoy_gap_m}m")
+            print(f"  - Route: incoming lane -> reachable outgoing lane")
 
     if args.manifest:
-        manifest_path = Path(args.manifest).resolve()
+        manifest_path = Path(args.manifest)
         if not manifest_path.exists():
             raise FileNotFoundError(f"--manifest not found: {manifest_path}")
-        # Per-row `_backend` is preferred; fall back to single value from --backends
-        # when row doesn't carry it. Multi-backend manifests work as long as every
-        # row has _backend tagged (e.g. converted from full_test_250_x10_by_var_idx).
         rows: list[dict] = []
-        for row in _load_jsonl_rows(manifest_path):
+        for row in _load_enriched_manifest_rows(manifest_path):
             if "valid" in row and not row["valid"]:
                 continue
-            if not row.get("_backend"):
-                if len(backends) != 1:
-                    raise ValueError(
-                        "--manifest rows lack `_backend` field — pass --backends "
-                        "with exactly one backend, or pre-tag rows.")
-                row["_backend"] = backends[0]
+            row["_backend"] = "sumo"
             if not row.get("_sign_code"):
                 row["_sign_code"] = (row.get("sign_code") or row.get("pdd_code")
                                       or row.get("sign_type") or "")
@@ -1752,18 +1919,14 @@ def main():
     else:
         rows = collect_rows(
             benchmark_output_dir=benchmark_output_dir,
-            backends=backends,
             only_codes=only_codes,
             max_scenes_per_sign=args.max_scenes_per_sign,
             unique_scene_id=args.unique_scene_id,
         )
 
-    # Single-scene filters (apply after the broader collect step so they work
-    # equally for --manifest and benchmark-output scans).
     if args.scene_id:
         rows = [r for r in rows if str(r.get("scene_id")) == args.scene_id]
     if args.scene_uid:
-        # _episode_key_from_row → tuple, joined with ":" matches user input format.
         print(f"[DEBUG] Looking for scene_uid: {args.scene_uid}")
         print(f"[DEBUG] Available scene keys (first 5):")
         for i, r in enumerate(rows[:5]):
@@ -1775,7 +1938,7 @@ def main():
 
     if not rows:
         raise RuntimeError(
-            "No scenes selected. Check --preset/--backends/--sign-type/"
+            "No scenes selected. Check --preset/--sign-type/"
             "--scene-id/--scene-uid/--manifest")
 
     print(f"Selected scenes: {len(rows)}")
@@ -1783,18 +1946,19 @@ def main():
         args.policy, args.model_path, plant2_action_mode=args.plant2_action_mode,
     )
 
-    out_dir = benchmark_output_dir / "policy_eval" / args.run_name
+    if args.output_dir:
+        out_dir = Path(args.output_dir).resolve()
+    else:
+        out_dir = benchmark_output_dir / "policy_eval" / args.run_name
     out_dir.mkdir(parents=True, exist_ok=True)
     episodes_path = out_dir / f"episodes_{args.policy}.jsonl"
 
-    # Sidecar root (expert_replay layout) — only if requested.
     replay_root: Path | None = None
     if args.emit_replay_sidecar:
         replay_root = Path(args.replay_root) if args.replay_root else (out_dir / "replays")
         replay_root.mkdir(parents=True, exist_ok=True)
         print(f"Sidecars: {replay_root}")
 
-    # GIF output dir — only when --save-gifs is set.
     gifs_dir: Path | None = None
     if args.save_gifs:
         gifs_dir = Path(args.gif_dir) if args.gif_dir else (out_dir / "gifs")
@@ -1802,17 +1966,9 @@ def main():
         print(f"GIFs: {gifs_dir}")
 
     existing_results = _load_existing_results(episodes_path)
-    existing_by_key: dict[tuple[str, str, str, int], dict] = {}
+    existing_by_key: dict[tuple[str, str, int], dict] = {}
     for r in existing_results:
         existing_by_key[_episode_key_from_result(r)] = r
-
-    ego_params_manifest_path = out_dir / "ego_params_manifest.json"
-    ego_params_manifest = {
-        "policy": args.policy,
-        "ego_variant": args.ego_variant,
-        "ego_sample_seed_base": args.ego_sample_seed_base,
-        "params_per_scene_uid": {},
-    }
 
     rows_to_run: list[dict] = []
     skipped = 0
@@ -1836,14 +1992,13 @@ def main():
     print(f"Resume: loaded {len(existing_results)} existing episodes, skip {skipped}, run {len(rows_to_run)}"
           + (" (--force-rerun: ignoring existing)" if args.force_rerun else ""))
 
-    results_by_key: dict[tuple[str, str, str, int], dict] = dict(existing_by_key)
+    results_by_key: dict[tuple[str, str, int], dict] = dict(existing_by_key)
     write_mode = "a" if episodes_path.exists() else "w"
     with open(episodes_path, write_mode, encoding="utf-8") as f:
         for idx, row in enumerate(rows_to_run, start=1):
-            backend = str(row["_backend"])
             scene_id = row.get("scene_id")
             sign_code = row.get("_sign_code")
-            print(f"[{idx}/{len(rows_to_run)}] backend={backend} sign={sign_code} scene={scene_id}")
+            print(f"[{idx}/{len(rows_to_run)}] sign={sign_code} scene={scene_id}")
             
             if args.debug_one_way_sign_selection:
                 row["debug_one_way_sign_selection"] = True
@@ -1857,7 +2012,6 @@ def main():
 
             r = run_one_episode(
                 row=row,
-                backend=backend,
                 policy_type=args.policy,
                 models=models,
                 scenes_root=scenes_root,
@@ -1866,13 +2020,23 @@ def main():
                 ego_sample_seed_base=args.ego_sample_seed_base,
                 replay_root=replay_root,
                 save_gif=gif_path,
-                main_road_traffic=args.main_road_traffic,
-                main_road_num_vehicles=args.main_road_num_vehicles,
-                main_road_velocity=args.main_road_velocity,
-                main_road_trigger_distance=args.main_road_trigger_distance,
+                hide_signs=args.hide_signs,
+                auxiliary_agent=args.auxiliary_agent,
+                aux_distance_from_intersection=args.aux_distance_from_intersection,
+                aux_policy=args.aux_policy,
+                aux_spawn_velocity_ms=args.aux_spawn_velocity_ms,
+                aux_release_when_ego_within_m=args.aux_release_when_ego_within_m,
+                aux_convoy_size=args.aux_convoy_size,
+                aux_convoy_gap_m=args.aux_convoy_gap_m,
+                aux_lanes_occupied=args.aux_lanes_occupied,
             )
             episode_dt = time.time() - episode_t0
             print(f"{args.policy}  elapsed_s={episode_dt:.3f}")
+
+            key = _episode_key_from_row(row)
+            results_by_key[key] = r
+            f.write(json.dumps(r, default=str) + "\n")
+            f.flush()
 
     results: list[dict] = list(results_by_key.values())
     summary = aggregate_results(results)

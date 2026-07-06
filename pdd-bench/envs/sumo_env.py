@@ -1448,18 +1448,40 @@ class TrafficSignSumoEnv(BaseEnv):
         self._braking_spawn_info = info
         return info
 
-    def _pick_destination_with_min_hops(self, start_lane_index, road_network, min_hops: int, max_hops: int):
+    @staticmethod
+    def _spawn_edge_id(lane_index: str) -> str:
+        raw = lane_index[5:] if lane_index.startswith("lane_") else lane_index
+        return raw.rsplit("_", 1)[0] if "_" in raw else raw
+
+    def _pick_destination_with_min_hops(
+        self,
+        start_lane_index,
+        road_network,
+        min_hops: int,
+        max_hops: int,
+        *,
+        exclude_lane_indices=None,
+    ):
         if start_lane_index not in road_network.graph:
             return None
         min_hops = max(1, int(min_hops))
         max_hops = max(min_hops, int(max_hops))
+        excluded = set(exclude_lane_indices or [])
+        excluded.add(start_lane_index)
+        spawn_edge = self._spawn_edge_id(start_lane_index)
 
         visited = {start_lane_index}
         queue = [(start_lane_index, 0)]
         fallback = None
 
         def _is_routable_destination(lane_idx):
-            return lane_idx is not None and not str(lane_idx).startswith("lane_:")
+            if lane_idx is None or str(lane_idx).startswith("lane_:"):
+                return False
+            if lane_idx in excluded:
+                return False
+            if self._spawn_edge_id(lane_idx) == spawn_edge:
+                return False
+            return True
 
         while queue:
             lane_idx, depth = queue.pop(0)
@@ -1574,8 +1596,33 @@ class TrafficSignSumoEnv(BaseEnv):
             explicit_destination = getattr(self.vehicle, "config", {}).get("destination", None)
             if explicit_destination is not None:
                 destination = explicit_destination
-            destination = None
             nav.set_route(spawn_lane.index, destination)
+            route_failed = (
+                destination is not None
+                and (
+                    len(nav.checkpoints) <= 1
+                    or nav.checkpoints[-1] == spawn_lane.index
+                    or nav.checkpoints[0] == nav.checkpoints[-1]
+                )
+            )
+            if route_failed:
+                if explicit_destination is not None:
+                    # Don't override explicit destination - log warning instead
+                    logging.warning(
+                        f"[Navigation] Route from {spawn_lane.index} to explicit destination "
+                        f"{explicit_destination} failed (checkpoints loop back). "
+                        f"Scene may have invalid routing."
+                    )
+                else:
+                    # Only fall back to random destination if no explicit one was given
+                    destination = self._pick_destination_with_min_hops(
+                        spawn_lane.index,
+                        road_network,
+                        min_hops=min_hops,
+                        max_hops=max_hops,
+                        exclude_lane_indices=[explicit_destination],
+                    )
+                    nav.set_route(spawn_lane.index, destination)
             nav.update_localization(self.vehicle)
         except Exception:
             pass
@@ -1916,8 +1963,16 @@ class TrafficSignSumoEnv(BaseEnv):
         # still points to lane_0's checkpoints and the IDM/policy steers ego back
         # toward the original lane (often into oncoming traffic).
         lane_num = self.config.get("spawn_lane_num", None)
-        if lane_num is not None and int(lane_num) > 0 and self.meta and "road_id" in self.meta:
+        road_id = None
+        vehicle_cfg = self.config.get("vehicle_config") or {}
+        if vehicle_cfg.get("spawn_lane_index"):
+            # yield scenes: explicit spawn_lane_index (lane 0 included)
+            road_id = str(vehicle_cfg["spawn_lane_index"])
+        elif (self.meta and self.meta.get("road_id")
+                and lane_num is not None and int(lane_num) > 0):
+            # legacy path: relocate via meta.road_id only for lanes > 0
             road_id = str(self.meta["road_id"])
+        if lane_num is not None and road_id:
             target_key = f"lane_{road_id}_{int(lane_num)}"
             try:
                 target_lane = road_network.get_lane(target_key)
