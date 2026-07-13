@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from lib.crosswalk_layout import build_crosswalk_approaches, net_has_crossings
+from lib.crosswalk_layout import build_crosswalk_approaches, count_net_crossings, net_has_crossings
 from lib.manifest_config import DEFAULT_SPAWN_DISTANCE_BEFORE_END
 from lib.sumo_utils import load_scene_meta, resolve_net_file
 
@@ -29,7 +29,8 @@ def check_manifest_viability(
     **_kwargs: Any,
 ) -> ManifestViabilityResult:
     """Return whether a scene would survive crosswalk manifest filters."""
-    del meta
+    target_crosswalk_id = (meta or {}).get("crosswalk_id")
+
     if not net_path.is_file():
         return ManifestViabilityResult(
             viable=False,
@@ -44,7 +45,17 @@ def check_manifest_viability(
             detail="SUMO net has no pedestrian crossing edges",
         )
 
+    crossing_count = count_net_crossings(net_path)
+    if crossing_count != 1:
+        return ManifestViabilityResult(
+            viable=False,
+            reason="multiple_crossings",
+            detail=f"expected exactly 1 crossing in cropped scene, found {crossing_count}",
+        )
+
     approaches = build_crosswalk_approaches(net_path, min_approach_length=min_ego_lane_m)
+    if target_crosswalk_id:
+        approaches = [a for a in approaches if a.crosswalk_id == target_crosswalk_id]
     if approaches:
         return ManifestViabilityResult(
             viable=True,

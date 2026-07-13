@@ -11,6 +11,7 @@ Selection rules:
   - Consider all SUMO pedestrian crossings with at least one vehicle approach lane.
   - Sort by longest approach lane, then number of approach arms.
   - Keep at most --max-crosswalks picks per core scene (default 8).
+  - Each crop keeps only the picked crossing; other crossings are pruned from the net.
   - By default, skip crops that would fail generate_manifest.py.
 
 Examples:
@@ -111,12 +112,34 @@ def write_crosswalks_index(
     index_path.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
 
 
+def mark_core_crop_attempted(
+    core_scene_dir: Path,
+    core_scene_name: str,
+    *,
+    dry_run: bool,
+    skipped: str | None = None,
+) -> None:
+    """Record that this core was processed so build_scene_pool does not retry forever."""
+    if dry_run:
+        return
+    index_path = core_scene_dir / "crosswalks.json"
+    payload = [
+        {
+            "written": False,
+            "skipped": skipped or "no_viable_crop",
+            "scene_name": core_scene_name,
+        }
+    ]
+    index_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
 def process_core_scene(
     core_scene_dir: Path,
     scenes_root: Path,
     *,
     radius_m: float,
     crop_mode: str,
+    trim_geometry: bool,
     min_approach_lane_m: float,
     max_crosswalks: int,
     preview_name: str,
@@ -138,6 +161,12 @@ def process_core_scene(
         )
     except (FileNotFoundError, JunctionLayoutError) as exc:
         print(f"  [skip] {exc}")
+        mark_core_crop_attempted(
+            core_scene_dir,
+            core_scene_name,
+            dry_run=dry_run,
+            skipped=str(exc),
+        )
         return 0
 
     print(f"  source net: {source_net.name}")
@@ -183,6 +212,7 @@ def process_core_scene(
                 source_net=source_net,
                 radius_m=radius_m,
                 crop_mode=crop_mode,
+                trim_geometry=trim_geometry,
                 output_dir=tmp_dir,
                 output_scene_name=scene_name,
                 base_meta=base_meta,
@@ -257,7 +287,12 @@ def main() -> None:
         "--crop-mode",
         choices=("geo", "junction"),
         default="geo",
-        help="geo = square bbox around crossing (larger scenes); junction = junction arms only",
+        help="geo = square bbox around crossing center (default); junction = junction arms only",
+    )
+    parser.add_argument(
+        "--trim-geometry",
+        action="store_true",
+        help="Clip lane shapes at the geo boundary (default: keep full edges that extend past radius)",
     )
     parser.add_argument(
         "--min-approach-lane",
@@ -311,6 +346,7 @@ def main() -> None:
             scenes_root,
             radius_m=args.radius,
             crop_mode=args.crop_mode,
+            trim_geometry=args.trim_geometry,
             min_approach_lane_m=args.min_approach_lane,
             max_crosswalks=args.max_crosswalks,
             preview_name=args.preview_name,

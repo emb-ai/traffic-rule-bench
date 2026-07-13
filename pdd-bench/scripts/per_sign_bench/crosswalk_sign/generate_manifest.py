@@ -16,8 +16,12 @@ import hydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
-from lib.crosswalk_layout import CrosswalkApproach, build_crosswalk_approaches, net_has_crossings
-from lib.lane_keys import lane_edge_id
+from lib.crosswalk_layout import (
+    CrosswalkApproach,
+    build_crosswalk_approaches,
+    net_has_crossings,
+)
+from lib.lane_keys import lane_edge_id, make_lane_key
 from lib.manifest_config import DEFAULT_SPAWN_DISTANCE_BEFORE_END
 from lib.sumo_utils import resolve_net_file
 
@@ -42,6 +46,7 @@ class ScenarioConfig:
     augment: bool = True
     max_scenarios_per_scene: Optional[int] = None
     respect_scene_selection: bool = True
+    validate_metadrive_routes: bool = True
 
 
 @dataclass
@@ -56,9 +61,12 @@ class SimulationConfig:
 
 @dataclass
 class PedestrianConfig:
-    initial_pedestrians: int = 2
-    max_pedestrians: int = 6
-    spawn_probability: float = 0.12
+    spawn_mode: str = "ego_proximity"
+    ego_spawn_distance_m: float = 15.0
+    initial_pedestrians: int = 0
+    max_pedestrians: int = 3
+    pedestrian_spawn_gap_s: float = 2.5
+    spawn_probability: float = 0.0
     crossing_interval_range: Tuple[float, float] = (5.0, 10.0)
     max_active_per_crosswalk: int = 1
     speed_mean: float = 1.2
@@ -146,15 +154,24 @@ def load_scene_metadata(scene_dir: Path) -> Dict[str, Any]:
     return meta
 
 
-def _pedestrian_manager_dict(ped_cfg: PedestrianConfig) -> dict[str, Any]:
+def _pedestrian_manager_dict(
+    ped_cfg: PedestrianConfig,
+    *,
+    target_pedestrian_count: int,
+) -> dict[str, Any]:
+    count = max(1, int(target_pedestrian_count))
     return {
         "enabled": True,
+        "spawn_mode": ped_cfg.spawn_mode,
+        "ego_spawn_distance_m": ped_cfg.ego_spawn_distance_m,
+        "target_pedestrian_count": count,
+        "pedestrian_spawn_gap_s": ped_cfg.pedestrian_spawn_gap_s,
         "initial_pedestrians": ped_cfg.initial_pedestrians,
-        "max_pedestrians": ped_cfg.max_pedestrians,
-        "spawn_by_interval": True,
+        "max_pedestrians": count,
+        "spawn_by_interval": ped_cfg.spawn_mode != "ego_proximity",
         "spawn_probability": ped_cfg.spawn_probability,
         "crossing_interval_range": list(ped_cfg.crossing_interval_range),
-        "max_active_per_crosswalk": ped_cfg.max_active_per_crosswalk,
+        "max_active_per_crosswalk": count,
         "speed_mean": ped_cfg.speed_mean,
         "speed_std": ped_cfg.speed_std,
         "yield_distance": ped_cfg.yield_distance,
@@ -162,6 +179,97 @@ def _pedestrian_manager_dict(ped_cfg: PedestrianConfig) -> dict[str, Any]:
         "yield_to_vehicles": True,
         "yield_on_crosswalk": False,
     }
+
+
+def filter_approaches_to_metadrive_routes(
+    approaches: List[CrosswalkApproach],
+    scene_dir: Path,
+    scenes_root: Path,
+    meta: Dict[str, Any],
+    *,
+    min_hops_after_depart: int,
+) -> List[CrosswalkApproach]:
+    """Keep only crosswalk approaches with a MetaDrive-routable spawn->destination path."""
+    if not approaches:
+        return []
+
+    try:
+        from run_benchmark import _apply_crosswalk_navigation, _apply_manifest_ego_spawn_lane
+        from run_benchmark import _build_sumo_env, _reposition_ego_before_lane_end, _unwrap_base_env
+    except Exception as exc:
+        print(f"  [manifest] Could not import MetaDrive route validator: {exc}")
+        return approaches
+
+    net_file = meta.get("net_file", resolve_net_file(scene_dir, meta))
+    rel_net_path = scene_dir.relative_to(scenes_root) / net_file
+    probe = approaches[0]
+    probe_row = {
+        "net_path": str(rel_net_path),
+        "sign_code": PDD_CODE,
+        "sign_type": SIGN_TYPE,
+        "pdd_code": PDD_CODE,
+        "traffic_density": 0.0,
+        "horizon": 5,
+        "road_id": probe.approach_edge_id,
+        "spawn_lane_num": probe.approach_lane_num,
+        "depart_edge_id": probe.depart_edge_id,
+        "destination_lane_id": probe.destination_lane_id,
+        "spawn_distance_before_end": 0.0,
+        "min_hops_after_depart": min_hops_after_depart,
+    }
+
+    env = None
+    try:
+        env = _build_sumo_env(probe_row, scenes_root, max_steps=5)
+        env.reset(seed=0)
+        base_env = _unwrap_base_env(env)
+        _apply_manifest_ego_spawn_lane(base_env, probe_row)
+
+        filtered: List[CrosswalkApproach] = []
+        for approach in approaches:
+            row = {
+                **probe_row,
+                "road_id": approach.approach_edge_id,
+                "spawn_lane_num": approach.approach_lane_num,
+                "depart_edge_id": approach.depart_edge_id,
+                "destination_lane_id": approach.destination_lane_id,
+            }
+            _apply_manifest_ego_spawn_lane(base_env, row)
+            dest = _apply_crosswalk_navigation(base_env, row)
+            if not dest:
+                continue
+            nav = getattr(base_env.agent, "navigation", None)
+            checkpoints = getattr(nav, "checkpoints", []) if nav is not None else []
+            spawn_lane_key = make_lane_key(approach.approach_edge_id, approach.approach_lane_num)
+            if (
+                checkpoints
+                and len(checkpoints) > 1
+                and checkpoints[-1] == dest
+                and checkpoints[0] != checkpoints[-1]
+                and checkpoints[-1] != spawn_lane_key
+            ):
+                approach = CrosswalkApproach(
+                    crosswalk_id=approach.crosswalk_id,
+                    junction_id=approach.junction_id,
+                    crossed_edge_ids=approach.crossed_edge_ids,
+                    approach_edge_id=approach.approach_edge_id,
+                    depart_edge_id=approach.depart_edge_id,
+                    approach_lane_num=approach.approach_lane_num,
+                    approach_lane_length=approach.approach_lane_length,
+                    destination_lane_id=dest,
+                    scenario_id=approach.scenario_id,
+                )
+                filtered.append(approach)
+        return filtered
+    except Exception as exc:
+        print(f"  [manifest] MetaDrive route validation failed: {exc}")
+        return approaches
+    finally:
+        if env is not None:
+            try:
+                env.close()
+            except Exception:
+                pass
 
 
 def build_manifest_entry(
@@ -172,12 +280,16 @@ def build_manifest_entry(
     variant: int,
     sim_cfg: SimulationConfig,
     ped_cfg: PedestrianConfig,
+    *,
+    pedestrian_count: int,
 ) -> Dict[str, Any]:
     scene_name = meta.get("scene_name", scene_dir.name)
     net_file = meta.get("net_file", resolve_net_file(scene_dir, meta))
     net_path = scene_dir.relative_to(scenes_root) / net_file
-    seed = _stable_seed(scene_name, variant, approach.scenario_id)
-    scene_id = f"{scene_name}_{approach.scenario_id}_v{variant}"
+    ped_count = max(1, int(pedestrian_count))
+    seed_key = f"{approach.scenario_id}_p{ped_count}"
+    seed = _stable_seed(scene_name, variant, seed_key)
+    scene_id = f"{scene_name}_{approach.scenario_id}_p{ped_count}_v{variant}"
 
     return {
         "valid": True,
@@ -191,6 +303,7 @@ def build_manifest_entry(
         "seed": seed,
         "deterministic_seed": seed,
         "var_idx": variant,
+        "pedestrian_count": ped_count,
         "scenario_id": approach.scenario_id,
         "crosswalk_id": approach.crosswalk_id,
         "junction_id": approach.junction_id,
@@ -206,7 +319,7 @@ def build_manifest_entry(
         "horizon": sim_cfg.horizon,
         "use_pedestrian_manager": True,
         "use_pedestrian_yield_rule": True,
-        "pedestrian_manager": _pedestrian_manager_dict(ped_cfg),
+        "pedestrian_manager": _pedestrian_manager_dict(ped_cfg, target_pedestrian_count=ped_count),
         "auxiliary_agent": False,
         "center_lat": meta.get("center_lat"),
         "center_lon": meta.get("center_lon"),
@@ -251,24 +364,49 @@ def generate_manifest(
             print(f"  [skip] {scene_name}: no viable approach lanes")
             continue
 
+        if scenario_cfg.validate_metadrive_routes:
+            total_before = len(approaches)
+            approaches = filter_approaches_to_metadrive_routes(
+                approaches,
+                scene_dir,
+                scenes_dir,
+                meta,
+                min_hops_after_depart=sim_cfg.min_hops_after_depart,
+            )
+            dropped = total_before - len(approaches)
+            print(
+                f"  [manifest] MetaDrive-routable approaches: {len(approaches)} "
+                f"(dropped {dropped})"
+            )
+            if not approaches:
+                print(f"  [skip] {scene_name}: no MetaDrive-routable approaches")
+                continue
+
         if scenario_cfg.max_scenarios_per_scene is not None:
             random.shuffle(approaches)
             approaches = approaches[: scenario_cfg.max_scenarios_per_scene]
 
         n_variants = max(1, scenario_cfg.n_variants) if scenario_cfg.augment else 1
+        if scenario_cfg.augment:
+            pedestrian_counts = list(range(1, max(1, ped_cfg.max_pedestrians) + 1))
+        else:
+            pedestrian_counts = [max(1, ped_cfg.max_pedestrians)]
+
         for approach in approaches:
-            for variant in range(n_variants):
-                entries.append(
-                    build_manifest_entry(
-                        scene_dir=scene_dir,
-                        scenes_root=scenes_dir,
-                        meta=meta,
-                        approach=approach,
-                        variant=variant,
-                        sim_cfg=sim_cfg,
-                        ped_cfg=ped_cfg,
+            for pedestrian_count in pedestrian_counts:
+                for variant in range(n_variants):
+                    entries.append(
+                        build_manifest_entry(
+                            scene_dir=scene_dir,
+                            scenes_root=scenes_dir,
+                            meta=meta,
+                            approach=approach,
+                            variant=variant,
+                            sim_cfg=sim_cfg,
+                            ped_cfg=ped_cfg,
+                            pedestrian_count=pedestrian_count,
+                        )
                     )
-                )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "real_manifest.jsonl"
@@ -285,11 +423,17 @@ def generate_manifest(
         "variants_per_scene": scenario_cfg.n_variants,
         "augment": scenario_cfg.augment,
         "max_scenarios_per_scene": scenario_cfg.max_scenarios_per_scene,
+        "validate_metadrive_routes": scenario_cfg.validate_metadrive_routes,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
         "traffic_density": sim_cfg.traffic_density,
         "horizon": sim_cfg.horizon,
         "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
-        "pedestrian_manager": _pedestrian_manager_dict(ped_cfg),
+        "pedestrian_max_count": ped_cfg.max_pedestrians,
+        "pedestrian_spawn_gap_s": ped_cfg.pedestrian_spawn_gap_s,
+        "pedestrian_manager": _pedestrian_manager_dict(
+            ped_cfg,
+            target_pedestrian_count=max(1, ped_cfg.max_pedestrians),
+        ),
         "auxiliary_agent": False,
         "generated_at": datetime.now().isoformat(),
         "scenes": [s.name for s in scenes],
@@ -313,6 +457,15 @@ def _iter_jsonl_rows(path: Path):
             line = line.strip()
             if line:
                 yield json.loads(line)
+
+
+def _expected_gif_path(row: dict, gif_dir: Path, policy: str) -> Path:
+    """Mirror run_benchmark.py GIF naming so saved GIFs can be verified."""
+    scene_id = row.get("scene_id") or "scene"
+    seed_val = int(row.get("seed") or row.get("deterministic_seed") or 0)
+    var_idx = int(row.get("var_idx", 0) or 0)
+    uid = f"{scene_id}_v{var_idx}_s{seed_val}"
+    return gif_dir / f"{uid}_{policy}_default.gif"
 
 
 def render_gifs_from_manifest(
@@ -358,8 +511,10 @@ def render_gifs_from_manifest(
     print(f"\n[GIF] Rendering {len(rows)} scene(s)...")
     rendered = 0
     failed = 0
+    missing = 0
     for i, row in enumerate(rows, start=1):
         scene_uid = f"{row['scene_id']}:{row['pdd_code']}:{row['seed']}"
+        expected_gif_path = _expected_gif_path(row, gif_dir, gif_cfg.policy)
         cmd = [
             sys.executable,
             str(RUN_BENCH_SCRIPT),
@@ -389,17 +544,22 @@ def render_gifs_from_manifest(
             rendered += 1
             continue
         res = subprocess.run(cmd, cwd=str(RUN_BENCH_SCRIPT.parent))
-        if res.returncode == 0:
-            rendered += 1
-        else:
+        if res.returncode != 0:
             failed += 1
             print(f"[GIF] Command failed with code {res.returncode}")
-    return rendered, failed
+        elif expected_gif_path.is_file() and expected_gif_path.stat().st_size > 0:
+            rendered += 1
+        else:
+            missing += 1
+            print(f"[GIF] No GIF file produced: {expected_gif_path.name}")
+    if missing:
+        print(f"[GIF] Missing GIF files after successful runs: {missing}")
+    return rendered, failed + missing
 
 
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(cfg: DictConfig) -> None:
-    scenes_dir = Path(cfg.paths.scenes_dir)
+    scenes_dir = Path(cfg.paths.scenes_dir).resolve()
     experiment_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     experiment_dir.mkdir(parents=True, exist_ok=True)
     config_path = experiment_dir / "config.yaml"
@@ -411,6 +571,7 @@ def main(cfg: DictConfig) -> None:
         augment=cfg.scenario.augment,
         max_scenarios_per_scene=cfg.scenario.max_scenarios_per_scene,
         respect_scene_selection=cfg.scenario.get("respect_scene_selection", True),
+        validate_metadrive_routes=cfg.scenario.get("validate_metadrive_routes", True),
     )
     sim_cfg = SimulationConfig(
         spawn_velocity_ms=cfg.simulation.spawn_velocity_ms,
@@ -422,8 +583,11 @@ def main(cfg: DictConfig) -> None:
     )
     ped_interval = cfg.pedestrian.crossing_interval_range
     ped_cfg = PedestrianConfig(
+        spawn_mode=str(cfg.pedestrian.get("spawn_mode", "ego_proximity")),
+        ego_spawn_distance_m=float(cfg.pedestrian.get("ego_spawn_distance_m", 15.0)),
         initial_pedestrians=cfg.pedestrian.initial_pedestrians,
         max_pedestrians=cfg.pedestrian.max_pedestrians,
+        pedestrian_spawn_gap_s=float(cfg.pedestrian.get("pedestrian_spawn_gap_s", 2.5)),
         spawn_probability=cfg.pedestrian.spawn_probability,
         crossing_interval_range=(float(ped_interval[0]), float(ped_interval[1])),
         max_active_per_crosswalk=cfg.pedestrian.max_active_per_crosswalk,

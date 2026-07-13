@@ -21,6 +21,7 @@ scenario:
   augment: true
   max_scenarios_per_scene: null   # null = all crosswalk approaches per scene
   respect_scene_selection: true
+  validate_metadrive_routes: true  # Drop routes MetaDrive navigation cannot follow
 
 simulation:
   spawn_velocity_ms: 2.5
@@ -31,9 +32,12 @@ simulation:
   max_destination_hops: 8            # Max BFS depth when searching destination
 
 pedestrian:
-  initial_pedestrians: 2
-  max_pedestrians: 6
-  spawn_probability: 0.12
+  spawn_mode: ego_proximity
+  ego_spawn_distance_m: 10.0
+  initial_pedestrians: 0
+  max_pedestrians: 3          # with scenario.augment=true -> 1,2,3 ped scenarios per scene
+  pedestrian_spawn_gap_s: 2.5  # gap between chained pedestrian spawns (seconds)
+  spawn_probability: 0.0
   crossing_interval_range: [5.0, 10.0]
   max_active_per_crosswalk: 1
   speed_mean: 1.2

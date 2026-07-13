@@ -32,7 +32,7 @@ from traffic_signs.priority_signs import (
 )
 from lib.junction_priority_layout import secondary_side_from_main_arm
 from lib.lane_keys import make_lane_key
-from lib.crosswalk_layout import pick_destination_from_road_network
+from lib.crosswalk_layout import enumerate_crosswalk_dest_candidates, pick_destination_from_road_network
 from lib.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
     DEFAULT_CONVOY_SIZE,
@@ -919,20 +919,18 @@ def _apply_crosswalk_navigation(base_env, row: dict) -> str | None:
     min_hops = int(row.get("min_hops_after_depart", 2) or 2)
     depart_lane_key = make_lane_key(str(depart_edge_id), lane_num) if depart_edge_id else None
 
+    road_network = base_env.engine.current_map.road_network
     candidates: list[str] = []
-    if explicit_dest:
-        candidates.append(str(explicit_dest))
-
     if depart_lane_key:
-        road_network = base_env.engine.current_map.road_network
-        picked = pick_destination_from_road_network(
+        candidates = enumerate_crosswalk_dest_candidates(
             road_network,
             spawn_lane_key,
             depart_lane_key,
+            str(explicit_dest) if explicit_dest else None,
             min_hops_after_depart=min_hops,
         )
-        if picked and picked not in candidates:
-            candidates.append(picked)
+    elif explicit_dest:
+        candidates = [str(explicit_dest)]
 
     nav = getattr(vehicle, "navigation", None)
     if nav is None:

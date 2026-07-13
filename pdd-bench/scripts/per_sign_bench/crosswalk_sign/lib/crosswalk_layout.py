@@ -36,6 +36,18 @@ def parse_crossing_junction_id(crossing_edge_id: str) -> Optional[str]:
     return body.split("_c", 1)[0]
 
 
+def count_net_crossings(net_path: Path) -> int:
+    """Return the number of SUMO pedestrian crossing edges in a net."""
+    if not net_path.is_file():
+        return 0
+    root = ET.parse(net_path).getroot()
+    return sum(
+        1
+        for edge in root.findall("edge")
+        if edge.get("function") == "crossing" and edge.get("crossingEdges")
+    )
+
+
 def net_has_crossings(net_path: Path) -> bool:
     """Return True when the SUMO net defines at least one pedestrian crossing."""
     if not net_path.is_file():
@@ -136,22 +148,19 @@ def resolve_destination_beyond_crosswalk(
     return depart_lane_key
 
 
-def pick_destination_from_road_network(
+def _lane_depths_from_spawn(
     road_network,
     spawn_lane_key: str,
-    depart_lane_key: str,
     *,
-    min_hops_after_depart: int = 2,
     max_hops: int = 12,
-) -> Optional[str]:
-    """Runtime fallback: pick a MetaDrive lane past the crosswalk using the road graph."""
+) -> dict[str, int]:
+    """BFS lane depths from spawn; internal ``lane_:`` lanes are traversable but not destinations."""
     if spawn_lane_key not in road_network.graph:
-        return None
+        return {}
 
-    depths: dict[str, int] = {}
+    depths: dict[str, int] = {spawn_lane_key: 0}
     queue: list[tuple[str, int]] = [(spawn_lane_key, 0)]
     visited = {spawn_lane_key}
-    depths[spawn_lane_key] = 0
 
     while queue:
         lane_key, depth = queue.pop(0)
@@ -164,11 +173,28 @@ def pick_destination_from_road_network(
         for nxt in exit_lanes:
             if nxt not in road_network.graph or nxt in visited:
                 continue
-            if str(nxt).startswith("lane_:"):
-                continue
             visited.add(nxt)
             depths[nxt] = depth + 1
             queue.append((nxt, depth + 1))
+    return depths
+
+
+def _is_internal_lane_key(lane_key: str) -> bool:
+    return str(lane_key).startswith("lane_:")
+
+
+def pick_destination_from_road_network(
+    road_network,
+    spawn_lane_key: str,
+    depart_lane_key: str,
+    *,
+    min_hops_after_depart: int = 2,
+    max_hops: int = 12,
+) -> Optional[str]:
+    """Runtime fallback: pick a MetaDrive lane past the crosswalk using the road graph."""
+    depths = _lane_depths_from_spawn(road_network, spawn_lane_key, max_hops=max_hops)
+    if not depths:
+        return None
 
     depart_depth = depths.get(depart_lane_key)
     if depart_depth is None:
@@ -176,25 +202,82 @@ def pick_destination_from_road_network(
         depart_depths = [d for key, d in depths.items() if lane_edge_id(key) == depart_edge]
         depart_depth = min(depart_depths) if depart_depths else None
 
+    for min_hops in range(min_hops_after_depart, 0, -1):
+        if depart_depth is None:
+            min_depth = min_hops
+        else:
+            min_depth = depart_depth + min_hops
+
+        candidates = [
+            (key, depth)
+            for key, depth in depths.items()
+            if depth >= min_depth
+            and key != spawn_lane_key
+            and not _is_internal_lane_key(key)
+        ]
+        if candidates:
+            candidates.sort(key=lambda item: item[1], reverse=True)
+            return candidates[0][0]
+
+    return None
+
+
+def enumerate_crosswalk_dest_candidates(
+    road_network,
+    spawn_lane_key: str,
+    depart_lane_key: str,
+    explicit_dest: str | None = None,
+    *,
+    min_hops_after_depart: int = 2,
+    max_hops: int = 12,
+) -> list[str]:
+    """Ordered destination lane keys to try for crosswalk navigation."""
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add(key: str | None) -> None:
+        if not key or key in seen or _is_internal_lane_key(key):
+            return
+        seen.add(key)
+        candidates.append(key)
+
+    add(explicit_dest)
+    picked = pick_destination_from_road_network(
+        road_network,
+        spawn_lane_key,
+        depart_lane_key,
+        min_hops_after_depart=min_hops_after_depart,
+        max_hops=max_hops,
+    )
+    add(picked)
+
+    depths = _lane_depths_from_spawn(road_network, spawn_lane_key, max_hops=max_hops)
+    depart_depth = depths.get(depart_lane_key)
     if depart_depth is None:
-        candidates = [
+        depart_edge = lane_edge_id(depart_lane_key)
+        depart_depths = [d for d, key in ((depths[k], k) for k in depths) if lane_edge_id(key) == depart_edge]
+        depart_depth = min(depart_depths) if depart_depths else None
+
+    ranked = sorted(
+        (
             (key, depth)
             for key, depth in depths.items()
-            if depth >= min_hops_after_depart and key != spawn_lane_key
-        ]
+            if key != spawn_lane_key and not _is_internal_lane_key(key)
+        ),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    if depart_depth is not None:
+        for min_hops in range(min_hops_after_depart, 0, -1):
+            min_depth = depart_depth + min_hops
+            for key, depth in ranked:
+                if depth >= min_depth:
+                    add(key)
     else:
-        min_depth = depart_depth + min_hops_after_depart
-        candidates = [
-            (key, depth)
-            for key, depth in depths.items()
-            if depth >= min_depth and key != spawn_lane_key
-        ]
+        for key, _depth in ranked:
+            add(key)
 
-    if not candidates:
-        return None
-
-    candidates.sort(key=lambda item: item[1], reverse=True)
-    return candidates[0][0]
+    return candidates
 
 
 def build_crosswalk_approaches(

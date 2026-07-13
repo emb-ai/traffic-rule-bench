@@ -472,6 +472,87 @@ def crop_net_to_junction_only(
     tree.write(out_path, encoding="unicode", xml_declaration=True)
 
 
+def _discover_edge_ids_in_geo_boundary(
+    net_path: Path,
+    center_lat: float,
+    center_lon: float,
+    radius_m: float,
+) -> set[str]:
+    """Return normal edge ids whose geometry intersects a geo square around center."""
+    import tempfile
+
+    boundary = geo_boundary_for_center(center_lat, center_lon, radius_m)
+    with tempfile.NamedTemporaryFile(suffix=".net.xml", delete=False) as handle:
+        tmp_out = Path(handle.name)
+
+    try:
+        cmd = [
+            _find_netconvert(),
+            "--sumo-net-file",
+            str(net_path),
+            "-o",
+            str(tmp_out),
+            "--keep-edges.in-geo-boundary",
+            boundary,
+            "--geometry.remove",
+            "true",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise JunctionLayoutError(
+                f"netconvert geo discovery failed for {net_path}:\n"
+                f"{result.stderr or result.stdout}"
+            )
+
+        kept: set[str] = set()
+        root = ET.parse(tmp_out).getroot()
+        for edge in root.findall("edge"):
+            edge_id = edge.get("id", "")
+            if not edge_id or edge_id.startswith(":"):
+                continue
+            if edge.get("function", "normal") in {"crossing", "walkingarea", "internal"}:
+                continue
+            kept.add(edge_id)
+        return kept
+    finally:
+        tmp_out.unlink(missing_ok=True)
+
+
+def _crop_net_by_edge_ids(net_path: Path, edge_ids: set[str], out_path: Path) -> None:
+    """Keep full edges (and regenerated junction links) via netconvert input list."""
+    import tempfile
+
+    if not edge_ids:
+        raise JunctionLayoutError(f"No edges selected for crop from {net_path}")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
+        handle.write("\n".join(sorted(edge_ids)))
+        edge_list_file = Path(handle.name)
+
+    try:
+        cmd = [
+            _find_netconvert(),
+            "--sumo-net-file",
+            str(net_path),
+            "-o",
+            str(out_path),
+            "--keep-edges.input-file",
+            str(edge_list_file),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise JunctionLayoutError(
+                f"netconvert edge-list crop failed for {net_path}:\n"
+                f"{result.stderr or result.stdout}"
+            )
+    finally:
+        edge_list_file.unlink(missing_ok=True)
+
+    if not out_path.is_file():
+        raise JunctionLayoutError(f"netconvert did not write {out_path}")
+
+
 def crop_net_around_latlon(
     net_path: Path,
     center_lat: float,
@@ -479,28 +560,25 @@ def crop_net_around_latlon(
     out_path: Path,
     *,
     radius_m: float,
+    trim_geometry: bool = False,
+    junction_id: Optional[str] = None,
 ) -> None:
-    """Crop a SUMO net to a geo boundary using netconvert."""
-    boundary = geo_boundary_for_center(center_lat, center_lon, radius_m)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        _find_netconvert(),
-        "--sumo-net-file",
-        str(net_path),
-        "-o",
-        str(out_path),
-        "--keep-edges.in-geo-boundary",
-        boundary,
-        "--geometry.remove",
-        "true",
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise JunctionLayoutError(
-            f"netconvert crop failed for {net_path}:\n{result.stderr or result.stdout}"
-        )
-    if not out_path.is_file():
-        raise JunctionLayoutError(f"netconvert did not write {out_path}")
+    """Crop a SUMO net to a geo boundary using netconvert.
+
+    Discovers normal edges inside the geo square, optionally unions all arms of
+    ``junction_id``, then re-imports those edges from the full source net so
+    junction internal links are rebuilt and lane geometry is not clipped.
+    """
+    del trim_geometry  # kept for CLI compatibility; edge-list crop keeps full geometry
+
+    edge_ids = _discover_edge_ids_in_geo_boundary(net_path, center_lat, center_lon, radius_m)
+    if junction_id:
+        try:
+            edge_ids.update(collect_junction_arm_edge_ids(net_path, junction_id))
+        except JunctionLayoutError:
+            pass
+
+    _crop_net_by_edge_ids(net_path, edge_ids, out_path)
 
 
 def resolve_full_source_net(scene_dir: Path, meta: dict) -> Path:

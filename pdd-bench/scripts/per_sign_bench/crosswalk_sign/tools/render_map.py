@@ -31,10 +31,14 @@ def parse_sumo_net(net_path: Path):
     junctions = []
     
     for edge in root.findall("edge"):
-        edge_id = edge.get("id")
-        if edge_id.startswith(":"):
+        edge_id = edge.get("id", "")
+        if not edge_id:
             continue
-        
+        fn = edge.get("function", "normal")
+        if fn in {"crossing", "walkingarea"}:
+            continue
+
+        is_internal = edge_id.startswith(":")
         for lane in edge.findall("lane"):
             shape_str = lane.get("shape")
             if shape_str:
@@ -48,6 +52,7 @@ def parse_sumo_net(net_path: Path):
                         "lane_id": lane.get("id"),
                         "points": points,
                         "width": float(lane.get("width", 3.2)),
+                        "internal": is_internal,
                     })
     
     for junction in root.findall("junction"):
@@ -88,20 +93,39 @@ def render_network(
                                        linewidth=0.5, alpha=0.7)
             ax.add_patch(polygon)
     
-    lines = []
-    widths = []
+    lines_external = []
+    lines_internal = []
+    widths_external = []
+    widths_internal = []
     for edge in edges:
         pts = edge["points"]
-        if len(pts) >= 2:
-            lines.append(pts)
-            widths.append(edge["width"])
-    
-    if lines:
-        lc = LineCollection(lines, colors="#404040", linewidths=2.0, alpha=0.9)
+        if len(pts) < 2:
+            continue
+        if edge.get("internal"):
+            lines_internal.append(pts)
+            widths_internal.append(edge["width"])
+        else:
+            lines_external.append(pts)
+            widths_external.append(edge["width"])
+
+    if lines_internal:
+        lc_internal = LineCollection(
+            lines_internal, colors="#505050", linewidths=1.6, alpha=0.85, zorder=2
+        )
+        ax.add_collection(lc_internal)
+
+    if lines_external:
+        lc = LineCollection(lines_external, colors="#404040", linewidths=2.0, alpha=0.9, zorder=3)
         ax.add_collection(lc)
-        
-        lc_center = LineCollection(lines, colors="#ffffff", linewidths=0.5, 
-                                   alpha=0.5, linestyles="dashed")
+
+        lc_center = LineCollection(
+            lines_external,
+            colors="#ffffff",
+            linewidths=0.5,
+            alpha=0.5,
+            linestyles="dashed",
+            zorder=4,
+        )
         ax.add_collection(lc_center)
 
     if marker_xy is not None:

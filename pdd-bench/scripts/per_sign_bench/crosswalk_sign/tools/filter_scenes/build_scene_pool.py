@@ -128,6 +128,7 @@ def crop_core_batch(
     max_cores: int | None,
     radius_m: float,
     crop_mode: str,
+    trim_geometry: bool,
     min_approach_lane_m: float,
     max_crosswalks: int,
     preview_name: str,
@@ -149,6 +150,7 @@ def crop_core_batch(
             scenes_root,
             radius_m=radius_m,
             crop_mode=crop_mode,
+            trim_geometry=trim_geometry,
             min_approach_lane_m=min_approach_lane_m,
             max_crosswalks=max_crosswalks,
             preview_name=preview_name,
@@ -169,6 +171,7 @@ def crop_until_candidates(
     target: int,
     radius_m: float,
     crop_mode: str,
+    trim_geometry: bool,
     min_approach_lane_m: float,
     max_crosswalks: int,
     preview_name: str,
@@ -194,12 +197,14 @@ def crop_until_candidates(
             )
             break
 
+        next_core = remaining[0].name
         written, cores = crop_core_batch(
             core_root,
             scenes_root,
             max_cores=1,
             radius_m=radius_m,
             crop_mode=crop_mode,
+            trim_geometry=trim_geometry,
             min_approach_lane_m=min_approach_lane_m,
             max_crosswalks=max_crosswalks,
             preview_name=preview_name,
@@ -212,6 +217,13 @@ def crop_until_candidates(
         total_cores += cores
         candidates = len(discover_review_scenes(scenes_root, preview_name=preview_name))
         if written == 0:
+            still = uncropped_core_dirs(core_root)
+            if still and still[0].name == next_core:
+                print(
+                    f"  [stop] core {next_core!r} was not marked processed; "
+                    "aborting to avoid an infinite loop"
+                )
+                break
             print("  [skip core] no manifest-viable crossings; trying next core map")
 
     return total_written, total_cores
@@ -224,6 +236,7 @@ def fill_after_review(
     target: int,
     radius_m: float,
     crop_mode: str,
+    trim_geometry: bool,
     min_approach_lane_m: float,
     max_crosswalks: int,
     preview_name: str,
@@ -268,12 +281,14 @@ def fill_after_review(
             )
             break
 
+        next_core = remaining[0].name
         written, _ = crop_core_batch(
             core_root,
             scenes_root,
             max_cores=1,
             radius_m=radius_m,
             crop_mode=crop_mode,
+            trim_geometry=trim_geometry,
             min_approach_lane_m=min_approach_lane_m,
             max_crosswalks=max_crosswalks,
             preview_name=preview_name,
@@ -284,6 +299,13 @@ def fill_after_review(
         )
         total_written += written
         if written == 0:
+            still = uncropped_core_dirs(core_root)
+            if still and still[0].name == next_core:
+                print(
+                    f"  [stop] core {next_core!r} was not marked processed; "
+                    "aborting to avoid an infinite loop"
+                )
+                break
             print("  [skip core] no manifest-viable crossings; trying next core map")
 
     status = collect_pool_status(
@@ -315,7 +337,12 @@ def add_crop_args(parser: argparse.ArgumentParser) -> None:
         "--crop-mode",
         choices=("geo", "junction"),
         default="geo",
-        help="geo = bbox around crossing (larger); junction = junction arms only",
+        help="geo = bbox around crossing center (default); junction = junction arms only",
+    )
+    parser.add_argument(
+        "--trim-geometry",
+        action="store_true",
+        help="Clip lane shapes at the geo boundary (default: keep full edges past radius)",
     )
     parser.add_argument(
         "--min-approach-lane",
@@ -347,6 +374,7 @@ def _crop_kwargs(args: argparse.Namespace) -> dict:
     return {
         "radius_m": args.radius,
         "crop_mode": args.crop_mode,
+        "trim_geometry": args.trim_geometry,
         "min_approach_lane_m": args.min_approach_lane,
         "max_crosswalks": args.max_crosswalks,
         "preview_name": args.preview_name,

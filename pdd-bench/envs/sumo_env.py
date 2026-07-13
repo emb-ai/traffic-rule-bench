@@ -175,6 +175,10 @@ SUMO_DEFAULT_CONFIG = dict(
         # Suppress spawn on crosswalks whose adjacent TL is green for cars.
         green_tl_spawn_probability=0.05,
         tl_match_radius=40.0,
+        spawn_mode="interval",
+        ego_spawn_distance_m=15.0,
+        target_pedestrian_count=1,
+        pedestrian_spawn_gap_s=2.5,
     ),
     pedestrian_yield_enforcer=dict(
         enabled=True,
