@@ -102,8 +102,10 @@ def discover_review_scenes(
                 "name": name,
                 "preview": preview_name,
                 "core_scene_name": meta.get("core_scene_name", ""),
-                "junction_rank": meta.get("junction_rank"),
+                "crosswalk_rank": meta.get("crosswalk_rank"),
+                "crosswalk_id": meta.get("crosswalk_id", ""),
                 "junction_id": meta.get("junction_id", ""),
+                "junction_rank": meta.get("junction_rank"),
                 "junction_arm_count": meta.get("junction_arm_count"),
                 "sign_id": meta.get("sign_id"),
             }

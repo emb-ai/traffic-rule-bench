@@ -32,6 +32,7 @@ from traffic_signs.priority_signs import (
 )
 from lib.junction_priority_layout import secondary_side_from_main_arm
 from lib.lane_keys import make_lane_key
+from lib.crosswalk_layout import pick_destination_from_road_network
 from lib.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
     DEFAULT_CONVOY_SIZE,
@@ -233,7 +234,6 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
     traffic_density = _manifest_traffic_density(row, default=0.0)
     horizon = _manifest_horizon(row, fallback=max_steps)
     net_path = str(scenes_root / row["net_path"]) if not str(row["net_path"]).startswith("/") else str(row["net_path"])
-    sign_spawn_distance = _resolve_sign_spawn_distance(row, scenes_root)
 
     vehicle_config: dict = {"show_lidar": False}
     spawn_vel = float(row.get("spawn_velocity_ms", 0.0) or 0.0)
@@ -241,29 +241,32 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         vehicle_config["spawn_velocity"] = [spawn_vel, 0.0]
         vehicle_config["spawn_velocity_car_frame"] = True
 
+    ped_cfg = dict(row.get("pedestrian_manager") or {})
+    use_ped = bool(row.get("use_pedestrian_manager", True))
+    use_yield = bool(row.get("use_pedestrian_yield_rule", True))
+
     config = dict(
         use_render=False,
         manual_control=False,
         use_mesh_terrain=False,
         log_level=logging.CRITICAL,
         map_name=net_path,
-        sign_type=row.get("sign_code") or row.get("sign_type"),
+        sign_type=row.get("sign_code") or row.get("sign_type") or "5.19",
         traffic_density=traffic_density,
         tl_speed_factor=float(row.get("tl_speed_factor", 20.0)),
-        sign_spawn_distance=sign_spawn_distance,
-        min_route_hops_after_spawn=int(row.get("min_route_hops_after_spawn", 10)),
-        max_route_hops_after_spawn=int(row.get("max_route_hops_after_spawn", 10)),
         horizon=horizon,
         num_scenarios=100000,
         vehicle_config=vehicle_config,
-        debug_one_way_sign_selection=bool(row.get("debug_one_way_sign_selection", False)),
         show_lane_arrows=row.get("show_lane_arrows", False),
         show_traffic_lights=row.get("show_traffic_lights", False),
         show_npc_vehicles=row.get("show_npc_vehicles", False),
         skip_auto_signs=True,
-        use_pedestrian_manager=False,
-        use_pedestrian_yield_rule=False,
+        use_pedestrian_manager=use_ped,
+        use_pedestrian_yield_rule=use_yield,
+        enforce_pedestrian_yield_for_traffic=False,
     )
+    if ped_cfg:
+        config["pedestrian_manager"] = ped_cfg
     if row.get("road_id"):
         config["vehicle_config"]["spawn_lane_index"] = row["road_id"]
     if "spawn_lane_num" in row:
@@ -366,6 +369,28 @@ def _violation_bucket(sign_obj) -> str:
     if "crosswalk" in name or "pedestrian" in name or "zebra" in name:
         return "crosswalk"
     return "sign"
+
+
+def _get_pedestrian_yield_status(sign_mgr, vehicle) -> dict:
+    if sign_mgr is None or vehicle is None:
+        return {}
+    for rule in getattr(sign_mgr, "rules", []):
+        if type(rule).__name__ == "PedestrianYieldRule":
+            try:
+                return rule.get_status(vehicle)
+            except Exception:
+                return {}
+    return {}
+
+
+def _pedestrian_manager_status(base_env) -> dict:
+    ped_mgr = getattr(base_env.engine, "pedestrian_manager", None)
+    if ped_mgr is None:
+        return {}
+    active = getattr(ped_mgr, "_scenario_id_to_obj_id", None)
+    if isinstance(active, dict):
+        return {"pedestrians": len(active)}
+    return {}
 
 
 def _on_same_road(lane_a, lane_b) -> bool:
@@ -861,6 +886,72 @@ def _reposition_ego_before_lane_end(env, distance_before_end: float) -> bool:
         return False
 
 
+def _crosswalk_route_is_valid(base_env, spawn_lane_key: str, destination_lane_key: str) -> bool:
+    nav = getattr(base_env.vehicle, "navigation", None)
+    if nav is None or not spawn_lane_key or not destination_lane_key:
+        return False
+    try:
+        nav.set_route(spawn_lane_key, destination_lane_key)
+        checkpoints = getattr(nav, "checkpoints", []) or []
+        if not checkpoints:
+            return False
+        return (
+            len(checkpoints) > 1
+            and checkpoints[-1] == destination_lane_key
+            and checkpoints[0] != checkpoints[-1]
+            and checkpoints[-1] != spawn_lane_key
+        )
+    except Exception:
+        return False
+
+
+def _apply_crosswalk_navigation(base_env, row: dict) -> str | None:
+    """Set ego destination past the crosswalk using manifest + MetaDrive graph fallback."""
+    vehicle = base_env.agent
+    spawn_lane = getattr(vehicle, "lane", None)
+    if vehicle is None or spawn_lane is None:
+        return None
+
+    spawn_lane_key = spawn_lane.index
+    explicit_dest = row.get("destination_lane_id")
+    depart_edge_id = row.get("depart_edge_id")
+    lane_num = int(row.get("spawn_lane_num", 0) or 0)
+    min_hops = int(row.get("min_hops_after_depart", 2) or 2)
+    depart_lane_key = make_lane_key(str(depart_edge_id), lane_num) if depart_edge_id else None
+
+    candidates: list[str] = []
+    if explicit_dest:
+        candidates.append(str(explicit_dest))
+
+    if depart_lane_key:
+        road_network = base_env.engine.current_map.road_network
+        picked = pick_destination_from_road_network(
+            road_network,
+            spawn_lane_key,
+            depart_lane_key,
+            min_hops_after_depart=min_hops,
+        )
+        if picked and picked not in candidates:
+            candidates.append(picked)
+
+    nav = getattr(vehicle, "navigation", None)
+    if nav is None:
+        return explicit_dest
+
+    for dest_lane_key in candidates:
+        if not _crosswalk_route_is_valid(base_env, spawn_lane_key, dest_lane_key):
+            continue
+        vehicle.config["destination"] = dest_lane_key
+        nav.update_localization(vehicle)
+        if dest_lane_key != explicit_dest:
+            print(f"[CrosswalkNav] destination {dest_lane_key} (past crosswalk)")
+        return dest_lane_key
+
+    if explicit_dest:
+        print(f"[CrosswalkNav] WARNING: could not validate route to {explicit_dest}")
+    return explicit_dest
+
+
 def _get_junction_layout(row: dict, scenes_root: Path) -> dict | None:
     """Load junction layout from manifest row or build from scene net.xml."""
     if row.get("junction_layout"):
@@ -1079,7 +1170,6 @@ def run_one_episode(
     except ImportError:
         pass
 
-    _ensure_secondary_ego_spawn(row, scenes_root)
     env = _build_sumo_env(row, scenes_root=scenes_root, max_steps=max_steps)
 
     raw_env = env
@@ -1118,35 +1208,31 @@ def run_one_episode(
         if spawn_distance > 0:
             _reposition_ego_before_lane_end(base_env, spawn_distance)
 
-        # Validate route: check that destination is different from spawn
+        destination_lane = _apply_crosswalk_navigation(base_env, row)
+
         nav = getattr(base_env.vehicle, "navigation", None)
-        if nav is not None:
+        if nav is not None and destination_lane:
             checkpoints = getattr(nav, "checkpoints", [])
             spawn_lane_idx = getattr(base_env.vehicle.lane, "index", None)
             if checkpoints and spawn_lane_idx:
-                if len(checkpoints) <= 1 or checkpoints[-1] == spawn_lane_idx or checkpoints[0] == checkpoints[-1]:
+                if (
+                    len(checkpoints) <= 1
+                    or checkpoints[-1] == spawn_lane_idx
+                    or checkpoints[0] == checkpoints[-1]
+                ):
                     scene_id = row.get("scene_id", "unknown")
-                    dest = row.get("destination_lane_id", "unknown")
-                    print(f"[RouteValidation] INVALID: {scene_id} - route loops back to spawn. "
-                          f"spawn={spawn_lane_idx}, dest={dest}, checkpoints={checkpoints[:3]}...")
+                    print(
+                        f"[RouteValidation] INVALID: {scene_id} - route loops back to spawn. "
+                        f"spawn={spawn_lane_idx}, dest={destination_lane}, "
+                        f"checkpoints={checkpoints[:5]}..."
+                    )
                     return {
                         "ok": False,
-                        "error": f"Invalid route: spawn and destination are the same or unreachable",
+                        "error": "Invalid route: spawn and destination are the same or unreachable",
                         "scene_id": scene_id,
                     }
 
-        # Place 2.3.x / yield signs on all junction arms from layout
-        sign_distance = float(row.get("sign_distance_before_end", 20.0))
-        _place_junction_priority_signs(
-            base_env,
-            row,
-            scenes_root=scenes_root,
-            distance_before_end=sign_distance,
-            show_model=not hide_signs,
-        )
-
-        # Analyze and print junction lanes (for debugging/info only)
-        incoming_lanes, outgoing_lanes = _analyze_junction_lanes(base_env)
+        # Crosswalk benchmark: no junction traffic signs; yield is enforced via PedestrianYieldRule.
 
         policy_obj = None
         sampled_ego_params = None
@@ -1430,51 +1516,24 @@ def run_one_episode(
                     "Step": step,
                     "Speed": f"{vehicle.speed_km_h:.2f} km/h",
                     "Vehicle lane: ": vehicle.lane.index,
-                    "Aux lanes": len(aux_spawn_lanes),
-                    "Current lane width: ": vehicle.lane.width,
-                    "Violations: ": sign_violations,
+                    "Crosswalk": row.get("crosswalk_id", ""),
+                    "Violations: ": sign_violations + crosswalk_violations,
                 }
-                
-                ego_in_yield_zone = False
-                ego_violating_yield = False
-                main_road_has_traffic = False
-                
-                if sign_mgr is not None and vehicle is not None:
-                    yield_signs = [
-                        sign for sign in sign_mgr.signs
-                        if isinstance(sign, YieldSign)
-                    ]
-                    text_dict["Yield signs"] = len(yield_signs)
-                    text_dict["Secondary road signs"] = sum(
-                        1 for sign in sign_mgr.signs
-                        if isinstance(sign, (SecondaryRoadSign, SecondaryRoadLeftSign, SecondaryRoadRightSign))
+
+                ped_status = _get_pedestrian_yield_status(sign_mgr, vehicle)
+                if ped_status:
+                    text_dict["CW active"] = ped_status.get("crosswalk_active_count", 0)
+                    text_dict["In yield zone"] = ped_status.get("in_yield_zone", False)
+                    text_dict["Must stop"] = ped_status.get("must_stop", False)
+                    text_dict["Target dist"] = (
+                        f"{ped_status['target_distance_m']:.1f}m"
+                        if ped_status.get("target_distance_m") is not None
+                        else "-"
                     )
-                    for sign in yield_signs:
-                        has_traffic, _ = sign.has_main_road_traffic(exclude_vehicle=vehicle)
-                        main_road_has_traffic = main_road_has_traffic or has_traffic
-                        if sign._is_vehicle_in_zone(vehicle):
-                            ego_in_yield_zone = True
-                        if sign._is_violating(vehicle):
-                            ego_violating_yield = True
-                
-                text_dict["Main road traffic"] = main_road_has_traffic
-                text_dict["Ego in yield zone"] = ego_in_yield_zone
-                text_dict["Yield violation"] = ego_violating_yield
-                
-                # Add auxiliary agent status
-                if aux_agent_mgr is not None:
-                    aux_status = aux_agent_mgr.get_status()
-                    text_dict["Aux agents"] = aux_status.get("count", 0)
-                    text_dict["Aux lanes"] = aux_status.get("lanes_occupied", aux_lanes_occupied)
-                    text_dict["Aux convoy size"] = aux_status.get("convoy_size", aux_convoy_size)
-                    text_dict["Aux policy"] = aux_status.get("policy", aux_policy)
-                    agents = aux_status.get("agents") or []
-                    if agents:
-                        text_dict["Aux dest"] = agents[0].get("destination_lane", "")
-                        text_dict["Aux released"] = agents[0].get("released", False)
-                        ego_dist = agents[0].get("ego_dist_to_spawn_lane_end_m")
-                        if ego_dist is not None:
-                            text_dict["Ego to lane end"] = f"{ego_dist:.1f}m"
+
+                ped_mgr_status = _pedestrian_manager_status(base_env)
+                if ped_mgr_status:
+                    text_dict["Pedestrians"] = ped_mgr_status.get("pedestrians", 0)
 
             if current_violation_texts:
                 text_dict["Violation"] = current_violation_texts[0]
@@ -1793,7 +1852,7 @@ import time
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run policies on real SUMO maps (secondary road / 2.3 benchmark)")
+    parser = argparse.ArgumentParser(description="Run policies on real SUMO maps (pedestrian crossing / 5.19 benchmark)")
     parser.add_argument("--policy", required=True,
                         choices=["idm", "modified_idm", "comprehensive_rule_expert",
                                  "rule_compliant", "ppo_lidar",
@@ -1849,9 +1908,11 @@ def main():
     parser.add_argument("--hide-signs", action="store_true",
                         help="Hide traffic sign visual models (signs still affect behavior)")
 
-    # Auxiliary agent options
-    parser.add_argument("--auxiliary-agent", action="store_true", default=True,
-                        help="Spawn an auxiliary agent on an incoming lane near intersection")
+    # Auxiliary agents are disabled for crosswalk benchmark by default.
+    parser.add_argument("--auxiliary-agent", action="store_true", default=False,
+                        help="Spawn auxiliary agents on incoming lanes (off by default for 5.19)")
+    parser.add_argument("--no-auxiliary-agent", action="store_false", dest="auxiliary_agent",
+                        help="Disable auxiliary agents")
     parser.add_argument(
         "--aux-distance-from-intersection",
         type=float,
@@ -2056,7 +2117,7 @@ def main():
                 replay_root=replay_root,
                 save_gif=gif_path,
                 hide_signs=args.hide_signs,
-                auxiliary_agent=args.auxiliary_agent,
+                auxiliary_agent=bool(row.get("auxiliary_agent", args.auxiliary_agent)),
                 aux_distance_from_intersection=args.aux_distance_from_intersection,
                 aux_policy=args.aux_policy,
                 aux_spawn_velocity_ms=args.aux_spawn_velocity_ms,

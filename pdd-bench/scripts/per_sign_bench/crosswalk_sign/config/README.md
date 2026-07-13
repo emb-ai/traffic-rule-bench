@@ -1,17 +1,12 @@
 # Configuration
 
-Hydra-based configuration for manifest generation.
+Hydra-based configuration for crosswalk (5.19) manifest generation.
 
 ## Usage
 
 ```bash
-# Default configuration
 python generate_manifest.py
-
-# Override parameters
-python generate_manifest.py auxiliary.lanes_occupied=2 auxiliary.convoy_size=3 gif.enabled=true
-
-# Custom experiment name
+python generate_manifest.py pedestrian.initial_pedestrians=3 gif.enabled=true
 python generate_manifest.py paths.experiment_name=my_experiment
 ```
 
@@ -20,16 +15,16 @@ python generate_manifest.py paths.experiment_name=my_experiment
 ### `paths`
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `scenes_dir` | `null` (= `./scenes`) | Input scenes directory |
-| `output_base` | `benchmark_output/2_3` | Base output directory |
+| `scenes_dir` | `scenes` | Input scenes directory |
+| `output_base` | `benchmark_output/5_19` | Base output directory |
 | `experiment_name` | `<timestamp>` | Experiment folder name |
 
 ### `scenario`
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `n_variants` | `1` | Number of variants per scene |
-| `augment` | `true` | Enable scenario augmentation |
-| `max_scenarios_per_scene` | `null` | Limit total manifest rows per scene (after convoy/lanes expansion) |
+| `n_variants` | `1` | Variants per crosswalk approach |
+| `augment` | `true` | Enable variant enumeration |
+| `max_scenarios_per_scene` | `null` | Limit approaches per scene |
 
 ### `simulation`
 | Parameter | Default | Description |
@@ -37,42 +32,32 @@ python generate_manifest.py paths.experiment_name=my_experiment
 | `spawn_velocity_ms` | `2.5` | Ego initial velocity (m/s) |
 | `traffic_density` | `0.0` | Background traffic density |
 | `horizon` | `600` | Max simulation steps |
-| `sign_distance_before_end` | `0.0` | Sign placement offset |
-| `spawn_distance_before_end` | `20.0` | Ego spawn distance from lane end |
+| `spawn_distance_before_end` | `20.0` | Ego spawn distance before crosswalk (m) |
 
-### `auxiliary`
+### `pedestrian`
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `enabled` | `true` | Enable auxiliary (main road) agents |
-| `distance_from_intersection` | `20.0` | Aux spawn distance from junction |
-| `convoy_size` | `1` | Vehicles per lane (convoy depth) |
-| `lanes_occupied` | `1` | Number of main lanes with aux agents |
-| `convoy_gap_m` | `10.0` | Gap between convoy vehicles |
+| `initial_pedestrians` | `2` | Pedestrians at episode start |
+| `max_pedestrians` | `6` | Max simultaneous pedestrians |
+| `spawn_probability` | `0.12` | Per-step spawn chance |
+| `crossing_interval_range` | `[5, 10]` | Seconds between crossings |
+| `yield_distance` | `12.0` | Yield zone distance (m) |
+| `no_stop_before_crosswalk_m` | `3.0` | No-stop zone before crosswalk (m) |
 
 ### `gif`
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `enabled` | `true` | Generate visualization GIFs |
+| `enabled` | `false` | Generate visualization GIFs |
 | `policy` | `idm` | Policy for GIF rendering |
 | `max_scenes` | `null` | Limit GIFs to generate |
-| `dry_run` | `false` | Skip actual rendering |
-| `hide_signs` | `true` | Hide traffic signs in GIFs |
-| `dir` | `null` (= `<exp>/gifs`) | GIF output directory |
-| `run_name` | `null` | Custom run name |
 
 ## Output Structure
 
-Each run creates a timestamped folder:
-
 ```
-benchmark_output/2_3/<experiment_name>/
-├── real_manifest.jsonl      # Scenario definitions
-├── manifest.json            # Manifest metadata
+benchmark_output/5_19/<experiment_name>/
+├── real_manifest.jsonl
+├── manifest.json
 ├── real_manifest_summary.json
-├── config.yaml              # Resolved config
-├── .hydra/                  # Hydra metadata
-│   ├── config.yaml
-│   ├── hydra.yaml
-│   └── overrides.yaml
+├── config.yaml
 └── gifs/                    # If gif.enabled=true
 ```

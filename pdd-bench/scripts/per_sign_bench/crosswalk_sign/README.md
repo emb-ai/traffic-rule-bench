@@ -1,6 +1,7 @@
-# Secondary Road Sign (2.3) Benchmark
+# Pedestrian Crossing Sign (5.19) Benchmark
 
-Benchmark for evaluating autonomous driving policies at junctions with secondary-road warning signs (2.3.x) on main approaches and yield signs (2.4) on the secondary stem.
+Benchmark for evaluating autonomous driving policies at pedestrian crossings (PDD 5.19).
+Uses `CrosswalkPedestrianManager` for synthetic pedestrian tracks and `PedestrianYieldRule` for verification.
 
 ## Setup
 
@@ -11,44 +12,51 @@ conda activate zinkovich-plant2
 ## Folder Structure
 
 ```
-secondary_sign/
-├── build_scene.py          # Step 1: OSM → SUMO network
-├── generate_manifest.py    # Step 2: Create evaluation manifest
-├── eval_pipeline.py        # Step 3: Run policy evaluation
+crosswalk_sign/
+├── generate_manifest.py    # Create evaluation manifest from scenes with SUMO crossings
+├── eval_pipeline.py        # Run policy evaluation
 ├── run_benchmark.py        # Benchmark runner (used internally)
-├── lib/                    # Core library modules
-├── tools/filter_scenes/    # Catalog import, crop, review
+├── lib/
+│   ├── crosswalk_layout.py # Parse SUMO crossing edges and approach lanes
+│   └── ...
+├── tools/filter_scenes/    # Catalog import and scene review
 ├── config/                 # Hydra configuration
-├── scenes/                 # Scene data (OSM + SUMO networks)
+├── scenes/                 # Scene data (SUMO networks with crossings)
 └── benchmark_output/       # Evaluation results
 ```
 
-## Sign placement (GIF / simulation)
+## Scene requirements
 
-| Junction | Main-road arms | Secondary arm |
-|----------|----------------|---------------|
-| **X** (4-arm) | **2.3.1** (`SecondaryRoadSign`) | **2.4** yield |
-| **T** (3-arm) | **2.3.2** left (`SecondaryRoadLeftSign`), **2.3.3** right (`SecondaryRoadRightSign`) | **2.4** yield |
+Each scene must contain a SUMO `.net.xml` with at least one `function="crossing"` edge.
+Ego spawns on a vehicle lane approaching the crosswalk; pedestrians are spawned by `CrosswalkPedestrianManager`.
 
-Ego spawns on the secondary arm; auxiliary agents occupy main-road lanes.
+## Catalog import
 
-## Catalog import (equal split)
-
-Import from three catalogs with round-robin selection:
+Import scenes from the 5.19 catalog into `scenes/core/` (filters nets that contain crossings):
 
 ```bash
 python tools/filter_scenes/import_catalog_scenes.py --limit 30
 ```
 
-Sources (default): `pdd-bench/scenes/2.3.1`, `scenes/2.3.2`, `scenes/2.3.3`. Takes equally from each; when one folder is exhausted, continues with the rest.
+Source catalog (default): `pdd-bench/scenes/5.19`.
 
-## Workflow
+## Scene pool workflow
 
 ```bash
 python tools/filter_scenes/import_catalog_scenes.py --limit 30
 python tools/filter_scenes/build_scene_pool.py crop --target 100
+python tools/filter_scenes/review_junction_scenes.py
+python tools/filter_scenes/build_scene_pool.py fill --target 100
 python generate_manifest.py
-python eval_pipeline.py --policies idm --manifest benchmark_output/2_3/<timestamp> --scenes-root scenes
+python eval_pipeline.py --policies idm --manifest benchmark_output/5_19/<timestamp> --scenes-root scenes
 ```
 
-Output: `benchmark_output/2_3/<timestamp>/`.
+Output: `benchmark_output/5_19/<timestamp>/`.
+
+## Verification
+
+- **Rule**: `PedestrianYieldRule` in `pdd-bench/traffic_signs/pedestrian_yield_rule.py`
+- **Spawn**: `CrosswalkPedestrianManager` in `pdd-bench/envs/pedestrian_manager.py`
+- **Visualization**: zebra crosswalk polygons in MetaDrive top-down renderer
+
+Violations are counted in the `crosswalk_violations` metric bucket.

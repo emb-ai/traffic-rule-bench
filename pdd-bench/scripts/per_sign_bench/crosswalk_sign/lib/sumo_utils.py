@@ -82,10 +82,56 @@ class VehicleRouteIndex:
                 queue.append((state, depth + 1))
         return False
 
+    def farthest_reachable_lane(
+        self,
+        from_edge: str,
+        from_lane: int,
+        *,
+        min_hops: int = 1,
+        max_hops: int = 8,
+    ) -> Optional[tuple[str, int]]:
+        """BFS from a lane; return the farthest real-edge lane at least ``min_hops`` away."""
+        start = (from_edge, from_lane)
+        queue: deque[tuple[tuple[str, int], int]] = deque([(start, 0)])
+        visited = {start}
+        best: Optional[tuple[tuple[str, int], int]] = None
+
+        while queue:
+            (edge, lane), depth = queue.popleft()
+            if depth > max_hops:
+                continue
+            if depth >= min_hops and is_real_sumo_edge_id(edge):
+                if best is None or depth > best[1]:
+                    best = ((edge, lane), depth)
+            for next_edge, next_lane in self._adj.get((edge, lane), []):
+                fn = self._edge_fn.get(next_edge)
+                if fn in {"walkingarea", "crossing"}:
+                    continue
+                state = (next_edge, next_lane)
+                if state in visited:
+                    continue
+                visited.add(state)
+                queue.append((state, depth + 1))
+
+        return best[0] if best else None
+
 
 def load_vehicle_route_index(net_path: Path) -> VehicleRouteIndex:
     root = ET.parse(net_path).getroot()
     return VehicleRouteIndex(root)
+
+
+def crosswalk_scene_name(core_scene_name: str, rank: int) -> str:
+    """Build a crosswalk crop folder name, e.g. sign_71853 + 0 -> sign_71853_cw0."""
+    return f"{core_scene_name}_cw{rank}"
+
+
+def is_crosswalk_scene_name(name: str) -> bool:
+    """True for crosswalk crop folders like sign_71853_cw0."""
+    if "_cw" not in name:
+        return False
+    base, suffix = name.rsplit("_cw", 1)
+    return base.startswith("sign_") and suffix.isdigit()
 
 
 def junction_scene_name(core_scene_name: str, rank: int) -> str:
