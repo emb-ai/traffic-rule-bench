@@ -21,6 +21,12 @@ from lib.crosswalk_layout import (
     build_crosswalk_approaches,
     net_has_crossings,
 )
+from lib.pedestrian_presets import (
+    MAX_PEDESTRIAN_PRESETS,
+    PedestrianPreset,
+    list_pedestrian_presets,
+    pedestrian_manager_from_preset,
+)
 from lib.lane_keys import lane_edge_id, make_lane_key
 from lib.manifest_config import DEFAULT_SPAWN_DISTANCE_BEFORE_END
 from lib.sumo_utils import resolve_net_file
@@ -44,6 +50,7 @@ class PathsConfig:
 class ScenarioConfig:
     n_variants: int = 1
     augment: bool = True
+    num_presets: int = 5
     max_scenarios_per_scene: Optional[int] = None
     respect_scene_selection: bool = True
     validate_metadrive_routes: bool = True
@@ -64,7 +71,6 @@ class PedestrianConfig:
     spawn_mode: str = "ego_proximity"
     ego_spawn_distance_m: float = 15.0
     initial_pedestrians: int = 0
-    max_pedestrians: int = 3
     pedestrian_spawn_gap_s: float = 2.5
     spawn_probability: float = 0.0
     crossing_interval_range: Tuple[float, float] = (5.0, 10.0)
@@ -156,28 +162,74 @@ def load_scene_metadata(scene_dir: Path) -> Dict[str, Any]:
 
 def _pedestrian_manager_dict(
     ped_cfg: PedestrianConfig,
-    *,
-    target_pedestrian_count: int,
+    preset: PedestrianPreset,
 ) -> dict[str, Any]:
-    count = max(1, int(target_pedestrian_count))
+    return pedestrian_manager_from_preset(
+        preset,
+        default_ego_spawn_distance_m=ped_cfg.ego_spawn_distance_m,
+        default_speed_mean=ped_cfg.speed_mean,
+        default_speed_std=ped_cfg.speed_std,
+        default_spawn_gap_s=ped_cfg.pedestrian_spawn_gap_s,
+        yield_distance=ped_cfg.yield_distance,
+        no_stop_before_crosswalk_m=ped_cfg.no_stop_before_crosswalk_m,
+    )
+
+
+def build_manifest_entry(
+    scene_dir: Path,
+    scenes_root: Path,
+    meta: Dict[str, Any],
+    approach: CrosswalkApproach,
+    variant: int,
+    sim_cfg: SimulationConfig,
+    ped_cfg: PedestrianConfig,
+    *,
+    preset: PedestrianPreset,
+) -> Dict[str, Any]:
+    scene_name = meta.get("scene_name", scene_dir.name)
+    net_file = meta.get("net_file", resolve_net_file(scene_dir, meta))
+    net_path = scene_dir.relative_to(scenes_root) / net_file
+    ped_count = max(1, int(preset.target_pedestrian_count))
+    seed_key = f"{approach.scenario_id}_s{preset.id}"
+    seed = _stable_seed(scene_name, variant, seed_key)
+    scene_id = f"{scene_name}_{approach.scenario_id}_s{preset.id}_v{variant}"
+
     return {
-        "enabled": True,
-        "spawn_mode": ped_cfg.spawn_mode,
-        "ego_spawn_distance_m": ped_cfg.ego_spawn_distance_m,
-        "target_pedestrian_count": count,
-        "pedestrian_spawn_gap_s": ped_cfg.pedestrian_spawn_gap_s,
-        "initial_pedestrians": ped_cfg.initial_pedestrians,
-        "max_pedestrians": count,
-        "spawn_by_interval": ped_cfg.spawn_mode != "ego_proximity",
-        "spawn_probability": ped_cfg.spawn_probability,
-        "crossing_interval_range": list(ped_cfg.crossing_interval_range),
-        "max_active_per_crosswalk": count,
-        "speed_mean": ped_cfg.speed_mean,
-        "speed_std": ped_cfg.speed_std,
-        "yield_distance": ped_cfg.yield_distance,
-        "no_stop_before_crosswalk_m": ped_cfg.no_stop_before_crosswalk_m,
-        "yield_to_vehicles": True,
-        "yield_on_crosswalk": False,
+        "valid": True,
+        "scene_id": scene_id,
+        "scene_name": scene_name,
+        "sign_id": meta.get("sign_id", scene_name.replace("sign_", "")),
+        "pdd_code": PDD_CODE,
+        "sign_type": SIGN_TYPE,
+        "sign_code": PDD_CODE,
+        "net_path": str(net_path),
+        "seed": seed,
+        "deterministic_seed": seed,
+        "var_idx": variant,
+        "pedestrian_preset_id": preset.id,
+        "pedestrian_preset_name": preset.name,
+        "pedestrian_count": ped_count,
+        "scenario_id": approach.scenario_id,
+        "crosswalk_id": approach.crosswalk_id,
+        "junction_id": approach.junction_id,
+        "road_id": approach.approach_edge_id,
+        "spawn_lane_num": approach.approach_lane_num,
+        "depart_edge_id": approach.depart_edge_id,
+        "destination_lane_id": approach.destination_lane_id,
+        "destination_edge_id": lane_edge_id(approach.destination_lane_id),
+        "min_hops_after_depart": sim_cfg.min_hops_after_depart,
+        "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
+        "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
+        "traffic_density": sim_cfg.traffic_density,
+        "horizon": sim_cfg.horizon,
+        "use_pedestrian_manager": True,
+        "use_pedestrian_yield_rule": True,
+        "pedestrian_manager": _pedestrian_manager_dict(ped_cfg, preset),
+        "auxiliary_agent": False,
+        "center_lat": meta.get("center_lat"),
+        "center_lon": meta.get("center_lon"),
+        "approach_lane_length_m": approach.approach_lane_length,
+        "crossed_edge_ids": list(approach.crossed_edge_ids),
     }
 
 
@@ -272,62 +324,6 @@ def filter_approaches_to_metadrive_routes(
                 pass
 
 
-def build_manifest_entry(
-    scene_dir: Path,
-    scenes_root: Path,
-    meta: Dict[str, Any],
-    approach: CrosswalkApproach,
-    variant: int,
-    sim_cfg: SimulationConfig,
-    ped_cfg: PedestrianConfig,
-    *,
-    pedestrian_count: int,
-) -> Dict[str, Any]:
-    scene_name = meta.get("scene_name", scene_dir.name)
-    net_file = meta.get("net_file", resolve_net_file(scene_dir, meta))
-    net_path = scene_dir.relative_to(scenes_root) / net_file
-    ped_count = max(1, int(pedestrian_count))
-    seed_key = f"{approach.scenario_id}_p{ped_count}"
-    seed = _stable_seed(scene_name, variant, seed_key)
-    scene_id = f"{scene_name}_{approach.scenario_id}_p{ped_count}_v{variant}"
-
-    return {
-        "valid": True,
-        "scene_id": scene_id,
-        "scene_name": scene_name,
-        "sign_id": meta.get("sign_id", scene_name.replace("sign_", "")),
-        "pdd_code": PDD_CODE,
-        "sign_type": SIGN_TYPE,
-        "sign_code": PDD_CODE,
-        "net_path": str(net_path),
-        "seed": seed,
-        "deterministic_seed": seed,
-        "var_idx": variant,
-        "pedestrian_count": ped_count,
-        "scenario_id": approach.scenario_id,
-        "crosswalk_id": approach.crosswalk_id,
-        "junction_id": approach.junction_id,
-        "road_id": approach.approach_edge_id,
-        "spawn_lane_num": approach.approach_lane_num,
-        "depart_edge_id": approach.depart_edge_id,
-        "destination_lane_id": approach.destination_lane_id,
-        "destination_edge_id": lane_edge_id(approach.destination_lane_id),
-        "min_hops_after_depart": sim_cfg.min_hops_after_depart,
-        "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
-        "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
-        "traffic_density": sim_cfg.traffic_density,
-        "horizon": sim_cfg.horizon,
-        "use_pedestrian_manager": True,
-        "use_pedestrian_yield_rule": True,
-        "pedestrian_manager": _pedestrian_manager_dict(ped_cfg, target_pedestrian_count=ped_count),
-        "auxiliary_agent": False,
-        "center_lat": meta.get("center_lat"),
-        "center_lon": meta.get("center_lon"),
-        "approach_lane_length_m": approach.approach_lane_length,
-        "crossed_edge_ids": list(approach.crossed_edge_ids),
-    }
-
-
 def generate_manifest(
     scenes_dir: Path,
     output_dir: Path,
@@ -387,13 +383,16 @@ def generate_manifest(
             approaches = approaches[: scenario_cfg.max_scenarios_per_scene]
 
         n_variants = max(1, scenario_cfg.n_variants) if scenario_cfg.augment else 1
-        if scenario_cfg.augment:
-            pedestrian_counts = list(range(1, max(1, ped_cfg.max_pedestrians) + 1))
-        else:
-            pedestrian_counts = [max(1, ped_cfg.max_pedestrians)]
+        pedestrian_presets = list_pedestrian_presets(
+            scenario_cfg.num_presets,
+            default_ego_spawn_distance_m=ped_cfg.ego_spawn_distance_m,
+            default_speed_mean=ped_cfg.speed_mean,
+            default_speed_std=ped_cfg.speed_std,
+            default_spawn_gap_s=ped_cfg.pedestrian_spawn_gap_s,
+        )
 
         for approach in approaches:
-            for pedestrian_count in pedestrian_counts:
+            for preset in pedestrian_presets:
                 for variant in range(n_variants):
                     entries.append(
                         build_manifest_entry(
@@ -404,7 +403,7 @@ def generate_manifest(
                             variant=variant,
                             sim_cfg=sim_cfg,
                             ped_cfg=ped_cfg,
-                            pedestrian_count=pedestrian_count,
+                            preset=preset,
                         )
                     )
 
@@ -414,6 +413,13 @@ def generate_manifest(
         for entry in entries:
             f.write(json.dumps(entry, default=str) + "\n")
 
+    pedestrian_presets = list_pedestrian_presets(
+        scenario_cfg.num_presets,
+        default_ego_spawn_distance_m=ped_cfg.ego_spawn_distance_m,
+        default_speed_mean=ped_cfg.speed_mean,
+        default_speed_std=ped_cfg.speed_std,
+        default_spawn_gap_s=ped_cfg.pedestrian_spawn_gap_s,
+    )
     summary = {
         "pdd_code": PDD_CODE,
         "sign_type": SIGN_TYPE,
@@ -422,18 +428,30 @@ def generate_manifest(
         "total_entries": len(entries),
         "variants_per_scene": scenario_cfg.n_variants,
         "augment": scenario_cfg.augment,
+        "num_presets": scenario_cfg.num_presets,
+        "pedestrian_presets": [
+            {
+                "id": preset.id,
+                "name": preset.name,
+                "description": preset.describe(),
+                "pedestrian_manager": _pedestrian_manager_dict(ped_cfg, preset),
+            }
+            for preset in pedestrian_presets
+        ],
         "max_scenarios_per_scene": scenario_cfg.max_scenarios_per_scene,
         "validate_metadrive_routes": scenario_cfg.validate_metadrive_routes,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
         "traffic_density": sim_cfg.traffic_density,
         "horizon": sim_cfg.horizon,
         "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
-        "pedestrian_max_count": ped_cfg.max_pedestrians,
-        "pedestrian_spawn_gap_s": ped_cfg.pedestrian_spawn_gap_s,
-        "pedestrian_manager": _pedestrian_manager_dict(
-            ped_cfg,
-            target_pedestrian_count=max(1, ped_cfg.max_pedestrians),
-        ),
+        "pedestrian_defaults": {
+            "ego_spawn_distance_m": ped_cfg.ego_spawn_distance_m,
+            "speed_mean": ped_cfg.speed_mean,
+            "speed_std": ped_cfg.speed_std,
+            "pedestrian_spawn_gap_s": ped_cfg.pedestrian_spawn_gap_s,
+            "yield_distance": ped_cfg.yield_distance,
+            "no_stop_before_crosswalk_m": ped_cfg.no_stop_before_crosswalk_m,
+        },
         "auxiliary_agent": False,
         "generated_at": datetime.now().isoformat(),
         "scenes": [s.name for s in scenes],
@@ -569,6 +587,10 @@ def main(cfg: DictConfig) -> None:
     scenario_cfg = ScenarioConfig(
         n_variants=cfg.scenario.n_variants,
         augment=cfg.scenario.augment,
+        num_presets=min(
+            MAX_PEDESTRIAN_PRESETS,
+            max(1, int(cfg.scenario.get("num_presets", MAX_PEDESTRIAN_PRESETS))),
+        ),
         max_scenarios_per_scene=cfg.scenario.max_scenarios_per_scene,
         respect_scene_selection=cfg.scenario.get("respect_scene_selection", True),
         validate_metadrive_routes=cfg.scenario.get("validate_metadrive_routes", True),
@@ -586,7 +608,6 @@ def main(cfg: DictConfig) -> None:
         spawn_mode=str(cfg.pedestrian.get("spawn_mode", "ego_proximity")),
         ego_spawn_distance_m=float(cfg.pedestrian.get("ego_spawn_distance_m", 15.0)),
         initial_pedestrians=cfg.pedestrian.initial_pedestrians,
-        max_pedestrians=cfg.pedestrian.max_pedestrians,
         pedestrian_spawn_gap_s=float(cfg.pedestrian.get("pedestrian_spawn_gap_s", 2.5)),
         spawn_probability=cfg.pedestrian.spawn_probability,
         crossing_interval_range=(float(ped_interval[0]), float(ped_interval[1])),

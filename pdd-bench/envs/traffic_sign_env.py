@@ -56,6 +56,8 @@ TRAFFIC_SIGN_DEFAULT_CONFIG = dict(
         ego_spawn_distance_m=15.0,
         target_pedestrian_count=1,
         pedestrian_spawn_gap_s=2.5,
+        pedestrian_spawn_chain="time_gap",
+        crosswalk_active_tolerance_m=0.05,
     ),
     pedestrian_yield_enforcer=dict(
         enabled=True,

@@ -126,6 +126,8 @@ class CrosswalkPedestrianManager(BaseManager):
         self.ego_spawn_distance_m = float(self._cfg.get("ego_spawn_distance_m", 15.0))
         self.target_pedestrian_count = max(1, int(self._cfg.get("target_pedestrian_count", 1) or 1))
         self.pedestrian_spawn_gap_s = float(self._cfg.get("pedestrian_spawn_gap_s", 2.5))
+        self.pedestrian_spawn_chain = str(self._cfg.get("pedestrian_spawn_chain", "time_gap")).strip().lower()
+        self.crosswalk_active_tolerance_m = float(self._cfg.get("crosswalk_active_tolerance_m", 0.05))
 
         self._crosswalks: Dict[str, _CrosswalkSpec] = {}
         self._tracks: Dict[str, dict] = {}
@@ -393,6 +395,8 @@ class CrosswalkPedestrianManager(BaseManager):
             inward = min(0.6, max(0.15, 0.1 * spec.walk_length))
             start = start + spec.walk_dir * inward
             end = end - spec.walk_dir * inward
+            start = self._snap_point_into_crosswalk(start, spec, spec.walk_dir)
+            end = self._snap_point_into_crosswalk(end, spec, -spec.walk_dir)
 
         if not self._is_position_free(start):
             return False
@@ -548,7 +552,10 @@ class CrosswalkPedestrianManager(BaseManager):
         else:
             if crosswalk_id is None:
                 return
-            if current_step < self._next_ego_spawn_step:
+            if self.pedestrian_spawn_chain == "after_previous":
+                if self._count_pedestrians_on_crosswalk(crosswalk_id) > 0:
+                    return
+            elif current_step < self._next_ego_spawn_step:
                 return
 
         if self._schedule_track(crosswalk_id, on_crosswalk=True, immediate=True):
@@ -558,6 +565,16 @@ class CrosswalkPedestrianManager(BaseManager):
                 int(round(self.pedestrian_spawn_gap_s / max(self._sim_dt(), 1e-3))),
             )
             self._next_ego_spawn_step = current_step + gap_steps
+
+    def _count_pedestrians_on_crosswalk(self, crosswalk_id: str) -> int:
+        count = 0
+        for scenario_id, cw_id in self._scenario_id_to_crosswalk_id.items():
+            if str(cw_id) != str(crosswalk_id):
+                continue
+            obj_id = self._scenario_id_to_obj_id.get(scenario_id)
+            if obj_id and obj_id in self.spawned_objects:
+                count += 1
+        return count
 
     def _resolve_crosswalk_tl_mapping(self):
         """Match each crosswalk to the nearest TrafficLightSign within tl_match_radius."""
@@ -774,6 +791,42 @@ class CrosswalkPedestrianManager(BaseManager):
             return True
         return False
 
+    def _snap_point_into_crosswalk(
+        self,
+        point: np.ndarray,
+        spec: _CrosswalkSpec,
+        search_dir: np.ndarray,
+    ) -> np.ndarray:
+        """Move a point onto the crosswalk polygon along ``search_dir``."""
+        p = np.asarray(point[:2], dtype=np.float64)
+        if self._point_in_polygon(p, spec.polygon):
+            return p
+
+        direction = np.asarray(search_dir[:2], dtype=np.float64)
+        norm = float(np.linalg.norm(direction))
+        if norm > 1e-6:
+            direction = direction / norm
+        else:
+            direction = (np.asarray(spec.center[:2], dtype=np.float64) - p)
+            norm = float(np.linalg.norm(direction))
+            if norm > 1e-6:
+                direction = direction / norm
+
+        max_travel = max(spec.walk_length, float(np.linalg.norm(spec.center[:2] - p)))
+        for dist in np.linspace(0.05, max_travel, max(8, int(max_travel / 0.1))):
+            candidate = p + direction * float(dist)
+            if self._point_in_polygon(candidate, spec.polygon):
+                return candidate
+
+        return np.asarray(spec.center[:2], dtype=np.float64)
+
+    def _pedestrian_counts_as_active(self, pos: np.ndarray, polygon: np.ndarray) -> bool:
+        """True only when the pedestrian is on the crosswalk marking itself."""
+        if self._point_in_polygon(pos, polygon):
+            return True
+        tol = max(0.0, float(self.crosswalk_active_tolerance_m))
+        return tol > 0.0 and self._distance_to_polygon(pos, polygon) <= tol
+
     def get_active_crosswalk_state(self) -> Dict[str, dict]:
         """
         Returns current per-crosswalk pedestrian occupancy for external verifiers.
@@ -802,7 +855,7 @@ class CrosswalkPedestrianManager(BaseManager):
             entry["pedestrian_count"] += 1
             entry["pedestrian_positions"].append(pos.copy())
             entry["pedestrian_ids"].append(obj_id)
-            if self._point_in_polygon(pos, entry["polygon"]) or self._distance_to_polygon(pos, entry["polygon"]) <= 0.2:
+            if self._pedestrian_counts_as_active(pos, entry["polygon"]):
                 entry["active"] = True
 
         return state
