@@ -1,9 +1,4 @@
-"""Modified IDM + sign compliance (same overlay pattern as CarlSignCompliantPolicy).
-
-ModifiedIDMPolicy handles defensive driving (intersection crossing brake,
-curvature limits) without traffic-sign rules. SignComplianceMixin adds stop,
-yield, priority, and other traffic-sign rules as post-processing on each act().
-"""
+"""Modified IDM + sign compliance (same overlay pattern as CarlSignCompliantPolicy)."""
 
 from __future__ import annotations
 
@@ -12,6 +7,10 @@ import numpy as np
 from metadrive.policy.idm_policy import ModifiedIDMPolicy
 
 from agents.policies._sign_compliance_mixin import SignComplianceMixin
+
+
+# Keep MetaDrive submodule untouched: neutralize StopSign
+ModifiedIDMPolicy._find_relevant_stop_sign = lambda self: None  # type: ignore[method-assign]
 
 
 class ModifiedIDMSignCompliantPolicy(SignComplianceMixin, ModifiedIDMPolicy):
