@@ -39,7 +39,7 @@ DEFAULT_MODEL_PATHS = {
 }
 
 
-def build_catalog_row(scene_dir: Path, meta: dict, var_idx: int = 0) -> dict:
+def build_catalog_row(scene_dir: Path, meta: dict, var_idx: int = 0, pdd_code: str = "4.1.1") -> dict:
     """Build a catalog row from scene meta.json."""
     scene_name = meta.get("scene_name", scene_dir.name)
     
@@ -61,7 +61,8 @@ def build_catalog_row(scene_dir: Path, meta: dict, var_idx: int = 0) -> dict:
     
     return {
         "scene_id": f"sumo_{scene_name}",
-        "sign_code": "4.1.1",  # direction sign / 4.1.1
+        "sign_code": pdd_code,
+        "pdd_code": pdd_code,
         "sign_id": 0,
         "road_id": road_id,
         "net_path": net_path,
@@ -86,6 +87,7 @@ def build_env(catalog_row: dict, scenes_root: Path, traffic_density: float, max_
     
     sign_spawn_distance = max(float(catalog_row.get("sign_spawn_distance", 30.0)), 30.0)
     map_path = str(scenes_root / catalog_row["net_path"])
+    sign_type = str(catalog_row.get("pdd_code") or catalog_row.get("sign_code") or "4.1.1")
     
     config = dict(
         use_render=False,
@@ -93,7 +95,7 @@ def build_env(catalog_row: dict, scenes_root: Path, traffic_density: float, max_
         use_mesh_terrain=False,
         log_level=logging.CRITICAL,
         map_name=map_path,
-        sign_type="4.1.1",  # direction sign 4.1.1
+        sign_type=sign_type,
         sign_spawn_distance=sign_spawn_distance,
         traffic_density=traffic_density,
         horizon=max_steps,
@@ -246,6 +248,11 @@ def main():
                         help="Top-down view scaling (default: 12.0)")
     parser.add_argument("--screen-size", type=int, default=800,
                         help="Screen size for GIF (default: 800)")
+    parser.add_argument(
+        "--pdd-code",
+        default="4.1.1",
+        help="Direction-sign code 4.1.1–4.1.6 (default: 4.1.1)",
+    )
     args = parser.parse_args()
 
     logging.getLogger().setLevel(logging.CRITICAL)
@@ -271,7 +278,9 @@ def main():
     # Load scene
     print(f"Loading scene: {scene_dir}")
     meta = load_scene_meta(scene_dir)
-    catalog_row = build_catalog_row(scene_dir, meta, var_idx=args.var_idx)
+    catalog_row = build_catalog_row(
+        scene_dir, meta, var_idx=args.var_idx, pdd_code=args.pdd_code
+    )
     
     print(f"  scene_name: {meta.get('scene_name', scene_dir.name)}")
     print(f"  policy: {args.policy}")

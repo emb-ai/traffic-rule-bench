@@ -44,3 +44,8 @@ from .direction_sign_spec import (
     get_direction_sign_spec,
     resolve_sign_class,
 )
+from .direction_dual_path import (
+    DualPathScenario,
+    find_dual_path_scenarios,
+    pick_best_dual_path_scenario,
+)

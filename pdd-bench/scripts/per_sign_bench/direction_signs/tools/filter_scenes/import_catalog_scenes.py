@@ -49,6 +49,10 @@ from lib.junction_crop import (  # noqa: E402
     try_find_junction_for_arm_counts,
     try_find_junction_with_arm_count,
 )
+from lib.direction_sign_spec import (  # noqa: E402
+    DEFAULT_PDD_CODE,
+    get_direction_sign_spec,
+)
 from lib.sumo_utils import load_scene_meta, resolve_net_file  # noqa: E402
 from tools.render_map import parse_sumo_net, render_network  # noqa: E402
 
@@ -418,8 +422,14 @@ def main() -> None:
     parser.add_argument(
         "--source",
         type=Path,
-        default=DEFAULT_SOURCE,
-        help=f"Catalog root (default: {DEFAULT_SOURCE})",
+        default=None,
+        help=f"Catalog root (default: pdd-bench/scenes/<pdd_code>, initially {DEFAULT_SOURCE})",
+    )
+    parser.add_argument(
+        "--pdd-code",
+        type=str,
+        default=DEFAULT_PDD_CODE,
+        help="Direction-sign family member (4.1.1–4.1.6); sets default --source catalog",
     )
     parser.add_argument(
         "--dest",
@@ -445,15 +455,15 @@ def main() -> None:
         "--arms",
         type=int,
         nargs="+",
-        default=[4, 3],
+        default=[4],
         metavar="N",
-        help="Junction arm count(s) to require: 3, 4, or both (default: 4 3)",
+        help="Junction arm count(s) to require: 3, 4, or both (default: 4)",
     )
     parser.add_argument(
         "--min-lane-length",
         type=float,
-        default=20.0,
-        help="Each arm must have a lane longer than this (default: 10 m)",
+        default=0.5,
+        help="Each arm must have a lane longer than this (default: 0.5 m; OSM stubs are often short)",
     )
     parser.add_argument(
         "--no-junction-filter",
@@ -495,7 +505,11 @@ def main() -> None:
 
     arm_counts = parse_arm_counts(args.arms)
     junction_filter = not args.no_junction_filter
-    source_dir = args.source.expanduser().resolve()
+    sign_spec = get_direction_sign_spec(args.pdd_code)
+    if args.source is None:
+        source_dir = (PDD_BENCH_DIR / "scenes" / sign_spec.catalog_subdir).resolve()
+    else:
+        source_dir = args.source.expanduser().resolve()
     dest_root = args.dest.expanduser().resolve()
     dest_root.mkdir(parents=True, exist_ok=True)
 
@@ -504,6 +518,7 @@ def main() -> None:
 
     run_sim = args.run_simulation and not args.no_simulation
 
+    print(f"Sign:   {sign_spec.pdd_code} ({sign_spec.title})")
     print(f"Source: {source_dir}")
     print(f"Dest:   {dest_root}")
     if junction_filter:

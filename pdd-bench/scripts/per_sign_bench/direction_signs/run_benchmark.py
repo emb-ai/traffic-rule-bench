@@ -41,7 +41,6 @@ from lib.auxiliary_agent import (
 from lib.manifest_config import DEFAULT_AUX_LANES_OCCUPIED_MAX
 from lib.junction_sign_placement import (
     SIGN_SHOULDER_OFFSET_M,
-    collect_lanes_for_keys,
     lateral_offset_beside_lane,
     resolve_sign_lane_for_edge,
     sign_longitudinal_offset,
@@ -959,7 +958,7 @@ def _place_direction_signs(
         )
         spec = get_direction_sign_spec(pdd_code)
         print(
-            f"[DirectionSign] Placed {pdd_code} ({spec.title_ru}) on {ego_edge}, "
+            f"[DirectionSign] Placed {pdd_code} ({spec.title}) on {ego_edge}, "
             f"allowed={sorted(spec.allowed_dirs)}, "
             f"shoulder offset={SIGN_SHOULDER_OFFSET_M}m"
         )

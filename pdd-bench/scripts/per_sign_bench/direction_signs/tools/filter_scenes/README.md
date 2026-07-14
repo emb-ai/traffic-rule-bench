@@ -1,48 +1,40 @@
 The sequence of commands for the direction-sign (4.1.x) scene pool workflow.
 
-Default catalog is ``pdd-bench/scenes/4.1.1``. Override the source when working on
-another family member:
+Default catalog is ``pdd-bench/scenes/4.1.1``. Override when working on another
+family member:
 
 ```
-python tools/filter_scenes/import_catalog_scenes.py --source ../../../../scenes/4.1.2 --limit 10
+python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.2 --limit 10
 ```
 
-1. Import qualifying catalog scenes into scenes/core/ (3/4-arm junction check)
-```
-python tools/filter_scenes/import_catalog_scenes.py --limit 30
-```
+### 4.1.1 dual-path crop (variant 1)
 
-2. Build junction scene pool, then review
+1. Import cores (4-arm preferred):
 
 ```
-python tools/filter_scenes/build_scene_pool.py crop --target 100
-python tools/filter_scenes/review_junction_scenes.py
-python tools/filter_scenes/build_scene_pool.py status --target 100
+python tools/filter_scenes/import_catalog_scenes.py --arms 4 --limit 30
 ```
 
-Direction-aware route filtering is not applied yet — crops use the shared
-junction viability checks (layout + spawn geometry).
+2. Select + crop scenes where the **same destination** is reachable by a
+   shorter turn (l/r) and a longer straight path through an X junction. Crop
+   bbox = union of both paths + margin (not junction-stub-only):
 
-Analyze drops:
 ```
-python tools/analyze_manifest_drops.py
-```
-
-3. Optionally move rejected scenes aside
-```
-python tools/filter_scenes/review_junction_scenes.py --apply
+python tools/filter_scenes/crop_junction_scene.py --limit 10
+python tools/filter_scenes/crop_junction_scene.py --dry-run --limit 20
+python tools/filter_scenes/crop_junction_scene.py sign_72915 --overwrite --min-gain 20 --margin 40
 ```
 
-4. Generate manifest (default sign 4.1.1)
+Each written scene stores ``road_id``, ``destination_edge_id``, and a
+``dual_path`` block in ``meta.json``.
+
+3. Manifest / eval:
+
 ```
 python generate_manifest.py
-python generate_manifest.py sign.pdd_code=4.1.2 paths.output_base=benchmark_output/4_1_2
 ```
 
-### Lower-level
+### Notes
 
-```
-python tools/filter_scenes/crop_junction_scene.py
-python tools/filter_scenes/import_catalog_scenes.py --limit 10 --arms 4 3
-python tools/review_benchmark_gifs.py benchmark_output/4_1_1/<timestamp>
-```
+Not every OSM extract has a reconverging turn+straight pair. Cores without a
+dual-path hit are skipped (see ``junctions.json`` / console output).

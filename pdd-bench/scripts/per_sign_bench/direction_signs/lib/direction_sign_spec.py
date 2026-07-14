@@ -34,7 +34,7 @@ class DirectionSignSpec:
     """One member of the 4.1.x family."""
 
     pdd_code: str
-    title_ru: str
+    title: str
     allowed_dirs: FrozenSet[str]
     # MetaDrive / traffic_signs class basename (without module path).
     class_name: str
@@ -53,37 +53,37 @@ class DirectionSignSpec:
 DIRECTION_SIGN_SPECS: dict[str, DirectionSignSpec] = {
     "4.1.1": DirectionSignSpec(
         pdd_code="4.1.1",
-        title_ru="Движение прямо",
+        title="Proceed straight",
         allowed_dirs=frozenset({"s"}),
         class_name="LaneAllowedDirectionSign4_1_1",
     ),
     "4.1.2": DirectionSignSpec(
         pdd_code="4.1.2",
-        title_ru="Движение направо",
+        title="Turn right",
         allowed_dirs=frozenset({"r"}),
         class_name="LaneAllowedDirectionSign4_1_2",
     ),
     "4.1.3": DirectionSignSpec(
         pdd_code="4.1.3",
-        title_ru="Движение налево",
+        title="Turn left",
         allowed_dirs=frozenset({"l"}),
         class_name="LaneAllowedDirectionSign4_1_3",
     ),
     "4.1.4": DirectionSignSpec(
         pdd_code="4.1.4",
-        title_ru="Движение прямо или направо",
+        title="Straight or right",
         allowed_dirs=frozenset({"s", "r"}),
         class_name="LaneAllowedDirectionSign4_1_4",
     ),
     "4.1.5": DirectionSignSpec(
         pdd_code="4.1.5",
-        title_ru="Движение прямо или налево",
+        title="Straight or left",
         allowed_dirs=frozenset({"s", "l"}),
         class_name="LaneAllowedDirectionSign4_1_5",
     ),
     "4.1.6": DirectionSignSpec(
         pdd_code="4.1.6",
-        title_ru="Движение направо или налево",
+        title="Right or left",
         allowed_dirs=frozenset({"l", "r"}),
         class_name="LaneAllowedDirectionSign4_1_6",
     ),

@@ -1,22 +1,22 @@
 # Direction Signs (4.1.1–4.1.6)
 
-Один пакет для всей группы предписывающих знаков направления. Члены семейства
-отличаются только разрешёнными направлениями (`allowed_dirs`); каркас сцен /
-манifest / бенчмарка общий.
+One package for the whole family of mandatory movement-direction signs.
+Members differ only by allowed directions (`allowed_dirs`); scene / manifest /
+benchmark scaffolding is shared.
 
-Спецификация семьи: `lib/direction_sign_spec.py`.
+Family registry: `lib/direction_sign_spec.py`.
 
-| Код   | Знак                         | `allowed_dirs` |
-|-------|------------------------------|----------------|
-| 4.1.1 | Движение прямо               | `s`            |
-| 4.1.2 | Движение направо             | `r`            |
-| 4.1.3 | Движение налево              | `l` (+разворот)|
-| 4.1.4 | Движение прямо или направо   | `s`, `r`       |
-| 4.1.5 | Движение прямо или налево    | `s`, `l`       |
-| 4.1.6 | Движение направо или налево  | `l`, `r`       |
+| Code  | Title                | `allowed_dirs`   |
+|-------|----------------------|------------------|
+| 4.1.1 | Proceed straight     | `s`              |
+| 4.1.2 | Turn right           | `r`              |
+| 4.1.3 | Turn left            | `l` (+ U-turn)   |
+| 4.1.4 | Straight or right    | `s`, `r`         |
+| 4.1.5 | Straight or left     | `s`, `l`         |
+| 4.1.6 | Right or left        | `l`, `r`         |
 
-Сейчас по умолчанию активен **4.1.1**. Фильтрация маршрутов / генерация сцен
-по направлению ещё не реализована — только подготовка общей структуры.
+Default active member is **4.1.1**. Route filtering / direction-aware scene
+generation is not implemented yet — only shared structure is in place.
 
 ## Setup
 
@@ -30,38 +30,44 @@ cd pdd-bench/scripts/per_sign_bench/direction_signs
 ```
 direction_signs/
 ├── build_scene.py
-├── generate_manifest.py      # Hydra; sign.pdd_code выбирает члена семьи
+├── generate_manifest.py      # Hydra; sign.pdd_code selects family member
 ├── eval_pipeline.py
-├── run_benchmark.py          # Ставит LaneAllowedDirectionSign4_1_* на ego
+├── run_benchmark.py          # Places LaneAllowedDirectionSign4_1_* on ego
 ├── lib/
-│   ├── direction_sign_spec.py   # реестр 4.1.1–4.1.6
-│   ├── junction_*.py            # общая junction-топология (как main/stop)
+│   ├── direction_sign_spec.py   # registry for 4.1.1–4.1.6
+│   ├── junction_*.py            # shared junction topology (like main/stop)
 │   └── …
-├── tools/filter_scenes/      # import/crop из каталога pdd-bench/scenes/<code>/
+├── tools/filter_scenes/      # import/crop from pdd-bench/scenes/<code>/
 ├── config/config.yaml
 ├── scenes/
 └── benchmark_output/
 ```
 
-## Workflow (пока каркас)
+## Workflow (scaffold)
 
-1. Импорт из каталога (по умолчанию `scenes/4.1.1`):
+1. Import from catalog (prefer 4-arm junctions):
 
 ```bash
-python tools/filter_scenes/import_catalog_scenes.py --limit 10
+python tools/filter_scenes/import_catalog_scenes.py --arms 4 --limit 20
 ```
 
-2. Crop пересечений:
+2. Crop **dual-path** scenes for 4.1.1 (variant 1):
+
+   - Find an X approach where the **same** destination is reachable via a
+     shorter left/right turn **and** a longer straight path.
+   - Crop to the XY bbox of both paths (+ margin), not a tight stub around the
+     junction alone.
 
 ```bash
 python tools/filter_scenes/crop_junction_scene.py --limit 5
+python tools/filter_scenes/crop_junction_scene.py sign_72915 --overwrite --min-gain 20 --margin 40
 ```
 
-3. Manifest (активный знак из конфига):
+3. Manifest (active sign from config):
 
 ```bash
 python generate_manifest.py
-# другой член семьи:
+# another family member:
 python generate_manifest.py sign.pdd_code=4.1.2 paths.output_base=benchmark_output/4_1_2
 ```
 
@@ -76,5 +82,6 @@ python eval_pipeline.py \
 
 ## Next
 
-- Генерация / отбор сцен и ego-destination только по `allowed_dirs` знака
-- Разделение каталогов/сидов по шести кодам при необходимости
+- Manifest: force ego dest from cropped ``dual_path`` meta (already stored)
+- Extend dual-path selection to other 4.1.x ``allowed_dirs``
+- Split catalogs / seeds per code if needed

@@ -503,6 +503,43 @@ def crop_net_around_latlon(
         raise JunctionLayoutError(f"netconvert did not write {out_path}")
 
 
+def crop_net_to_xy_boundary(
+    net_path: Path,
+    bbox_xy: Tuple[float, float, float, float],
+    out_path: Path,
+) -> None:
+    """Crop a SUMO net to a cartesian boundary ``(xmin, ymin, xmax, ymax)``."""
+    xmin, ymin, xmax, ymax = bbox_xy
+    if xmax <= xmin or ymax <= ymin:
+        raise JunctionLayoutError(f"Degenerate XY boundary: {bbox_xy}")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    boundary = f"{xmin},{ymin},{xmax},{ymax}"
+    cmd = [
+        _find_netconvert(),
+        "--sumo-net-file",
+        str(net_path),
+        "-o",
+        str(out_path),
+        "--keep-edges.in-boundary",
+        boundary,
+        "--geometry.remove",
+        "true",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise JunctionLayoutError(
+            f"netconvert XY-boundary crop failed for {net_path}:\n"
+            f"{result.stderr or result.stdout}"
+        )
+    if not out_path.is_file():
+        raise JunctionLayoutError(f"netconvert did not write {out_path}")
+
+    tree = ET.parse(out_path)
+    _update_net_bounds(tree.getroot())
+    ET.indent(tree, space="  ")
+    tree.write(out_path, encoding="unicode", xml_declaration=True)
+
+
 def resolve_full_source_net(scene_dir: Path, meta: dict) -> Path:
     """Return the uncropped SUMO net for a scene (backup or catalog net)."""
     from .sumo_utils import resolve_net_file

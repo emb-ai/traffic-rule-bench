@@ -220,7 +220,7 @@ def build_junction_layout_for_scene(
     sign_lat: Optional[float] = None,
     sign_lon: Optional[float] = None,
 ) -> Optional[dict]:
-    """Build equal-priority junction layout from a scene net.xml."""
+    """Build junction layout from a scene net.xml (shared scaffold for 4.1.x)."""
     try:
         layout = build_junction_priority_layout(
             net_path,
@@ -393,7 +393,7 @@ def build_manifest_entry(
         "sign_type": SIGN_TYPE,
         "sign_family": SIGN_FAMILY,
         "allowed_dirs": sorted(_ACTIVE_SIGN.allowed_dirs),
-        "sign_title_ru": _ACTIVE_SIGN.title_ru,
+        "sign_title": _ACTIVE_SIGN.title,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
         "traffic_density": sim_cfg.traffic_density,
         "horizon": sim_cfg.horizon,
@@ -603,7 +603,7 @@ def generate_manifest(
         "pdd_code": PDD_CODE,
         "sign_type": SIGN_TYPE,
         "sign_family": SIGN_FAMILY,
-        "sign_name": _ACTIVE_SIGN.title_ru,
+        "sign_name": _ACTIVE_SIGN.title,
         "allowed_dirs": sorted(_ACTIVE_SIGN.allowed_dirs),
         "direction_route_filter": "pending",
         "total_scenes": len(scenes),
@@ -749,7 +749,7 @@ def main(cfg: DictConfig) -> None:
     active = _set_active_sign(pdd_code)
     print(
         f"[direction_signs] Active sign {active.pdd_code} "
-        f"({active.title_ru}), allowed_dirs={sorted(active.allowed_dirs)}"
+        f"({active.title}), allowed_dirs={sorted(active.allowed_dirs)}"
     )
 
     scenes_dir = Path(cfg.paths.scenes_dir)
