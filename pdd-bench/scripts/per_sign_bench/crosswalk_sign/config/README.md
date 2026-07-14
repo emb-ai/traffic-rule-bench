@@ -24,13 +24,15 @@ python generate_manifest.py paths.experiment_name=my_experiment
 |-----------|---------|-------------|
 | `n_variants` | `1` | Variants per crosswalk approach |
 | `augment` | `true` | Enable variant enumeration |
-| `max_scenarios_per_scene` | `null` | Limit approaches per scene |
+| `max_scenarios_per_scene` | `null` | Limit crosswalk approaches per scene (before preset/density expansion) |
+| `max_entries_per_scene` | `null` | Shuffle all expanded combos per scene and keep at most N manifest rows |
 
 ### `simulation`
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `spawn_velocity_ms` | `2.5` | Ego initial velocity (m/s) |
-| `traffic_density` | `0.0` | Background traffic density |
+| `traffic_density` | `0.0` | Background traffic density when augment is off |
+| `traffic_density_augment` | `true` | Emit 3 nuPlan-derived density levels per scenario |
 | `horizon` | `600` | Max simulation steps |
 | `spawn_distance_before_end` | `20.0` | Ego spawn distance before crosswalk (m) |
 

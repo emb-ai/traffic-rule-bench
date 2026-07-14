@@ -107,6 +107,9 @@ def write_crosswalks_index(
                 entry["manifest_skip_detail"] = viability.detail
         if record.get("written"):
             entry["written"] = True
+        crop_skip = record.get("crop_skip_reason")
+        if crop_skip:
+            entry["crop_skip_reason"] = crop_skip
         entries.append(entry)
     index_path = core_scene_dir / "crosswalks.json"
     index_path.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
@@ -182,9 +185,20 @@ def process_core_scene(
     if dry_run:
         return len(picks)
 
+    if not picks:
+        print("  [skip] no qualifying crossings")
+        mark_core_crop_attempted(
+            core_scene_dir,
+            core_scene_name,
+            dry_run=dry_run,
+            skipped="no_qualifying_crossings",
+        )
+        return 0
+
     base_meta = meta
     created = 0
     skipped_manifest = 0
+    skipped_crop = 0
     pick_records: list[dict] = []
     for rank, pick in enumerate(picks):
         scene_name = crosswalk_scene_name(core_scene_name, rank)
@@ -204,42 +218,53 @@ def process_core_scene(
                 continue
             shutil.rmtree(out_dir)
 
-        with tempfile.TemporaryDirectory(prefix="crosswalk_crop_") as tmp:
-            tmp_dir = Path(tmp)
-            crop_scene_to_crosswalk_pick(
-                core_scene_dir,
-                pick,
-                source_net=source_net,
-                radius_m=radius_m,
-                crop_mode=crop_mode,
-                trim_geometry=trim_geometry,
-                output_dir=tmp_dir,
-                output_scene_name=scene_name,
-                base_meta=base_meta,
-                backup_original=False,
-                crosswalk_rank=rank,
-                core_scene_name=core_scene_name,
-            )
-
-            viability: ManifestViabilityResult | None = None
-            if require_manifest_viable:
-                scene_meta = json.loads((tmp_dir / "meta.json").read_text(encoding="utf-8"))
-                net_file = scene_meta.get("net_file", "map.net.xml")
-                viability = check_manifest_viability(
-                    tmp_dir / net_file,
-                    meta=scene_meta,
-                    min_ego_lane_m=min_ego_lane_m,
+        try:
+            with tempfile.TemporaryDirectory(prefix="crosswalk_crop_") as tmp:
+                tmp_dir = Path(tmp)
+                crop_scene_to_crosswalk_pick(
+                    core_scene_dir,
+                    pick,
+                    source_net=source_net,
+                    radius_m=radius_m,
+                    crop_mode=crop_mode,
+                    trim_geometry=trim_geometry,
+                    output_dir=tmp_dir,
+                    output_scene_name=scene_name,
+                    base_meta=base_meta,
+                    backup_original=False,
+                    crosswalk_rank=rank,
+                    core_scene_name=core_scene_name,
                 )
-                record["viability"] = viability
-                if not viability.viable:
-                    print(
-                        f"  [skip manifest] {scene_name}: "
-                        f"{viability.reason} — {viability.detail}"
-                    )
-                    skipped_manifest += 1
-                    continue
 
-            shutil.copytree(tmp_dir, out_dir)
+                viability: ManifestViabilityResult | None = None
+                if require_manifest_viable:
+                    scene_meta = json.loads((tmp_dir / "meta.json").read_text(encoding="utf-8"))
+                    net_file = scene_meta.get("net_file", "map.net.xml")
+                    viability = check_manifest_viability(
+                        tmp_dir / net_file,
+                        meta=scene_meta,
+                        min_ego_lane_m=min_ego_lane_m,
+                    )
+                    record["viability"] = viability
+                    if not viability.viable:
+                        print(
+                            f"  [skip manifest] {scene_name}: "
+                            f"{viability.reason} — {viability.detail}"
+                        )
+                        skipped_manifest += 1
+                        continue
+
+                shutil.copytree(tmp_dir, out_dir)
+        except JunctionLayoutError as exc:
+            print(f"  [skip crop] {scene_name}: {exc}")
+            record["crop_skip_reason"] = str(exc)
+            skipped_crop += 1
+            continue
+        except Exception as exc:
+            print(f"  [skip crop] {scene_name}: {type(exc).__name__}: {exc}")
+            record["crop_skip_reason"] = f"{type(exc).__name__}: {exc}"
+            skipped_crop += 1
+            continue
 
         preview_path = out_dir / preview_name
         render_preview(out_dir, pick.center_xy, preview_path)
@@ -249,6 +274,8 @@ def process_core_scene(
 
     write_crosswalks_index(core_scene_dir, core_scene_name, pick_records)
     print(f"  wrote core/{core_scene_name}/crosswalks.json")
+    if skipped_crop:
+        print(f"  skipped {skipped_crop} crossing(s) that failed crop/prune")
     if skipped_manifest:
         print(f"  skipped {skipped_manifest} crossing(s) that would fail manifest generation")
     return created

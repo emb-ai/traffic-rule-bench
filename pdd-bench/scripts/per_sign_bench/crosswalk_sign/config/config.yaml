@@ -20,13 +20,15 @@ scenario:
   n_variants: 1
   augment: true
   num_presets: 5              # 1..5 predefined pedestrian scenarios (see lib/pedestrian_presets.py)
-  max_scenarios_per_scene: null   # null = all crosswalk approaches per scene
+  max_scenarios_per_scene: null   # limit crosswalk approaches per scene (before expansion)
+  max_entries_per_scene: 10       # shuffle expanded combos and keep at most N per scene; null = keep all
   respect_scene_selection: true
   validate_metadrive_routes: true  # Drop routes MetaDrive navigation cannot follow
 
 simulation:
   spawn_velocity_ms: 2.5
-  traffic_density: 0.0
+  traffic_density: 0.0          # used when traffic_density_augment=false
+  traffic_density_augment: true # 3 nuPlan-derived levels (see lib/traffic_density_levels.py)
   horizon: 600
   spawn_distance_before_end: 20.0   # Ego spawn offset before crosswalk (m)
   min_hops_after_depart: 2          # Destination lane hops past the crossing

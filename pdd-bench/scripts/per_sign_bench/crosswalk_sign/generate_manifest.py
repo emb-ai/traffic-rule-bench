@@ -27,6 +27,11 @@ from lib.pedestrian_presets import (
     list_pedestrian_presets,
     pedestrian_manager_from_preset,
 )
+from lib.traffic_density_levels import (
+    MAX_TRAFFIC_DENSITY_LEVELS,
+    TrafficDensityLevel,
+    list_traffic_density_levels,
+)
 from lib.lane_keys import lane_edge_id, make_lane_key
 from lib.manifest_config import DEFAULT_SPAWN_DISTANCE_BEFORE_END
 from lib.sumo_utils import resolve_net_file
@@ -52,6 +57,7 @@ class ScenarioConfig:
     augment: bool = True
     num_presets: int = 5
     max_scenarios_per_scene: Optional[int] = None
+    max_entries_per_scene: Optional[int] = None
     respect_scene_selection: bool = True
     validate_metadrive_routes: bool = True
 
@@ -60,6 +66,7 @@ class ScenarioConfig:
 class SimulationConfig:
     spawn_velocity_ms: float = 2.5
     traffic_density: float = 0.0
+    traffic_density_augment: bool = True
     horizon: int = 600
     spawn_distance_before_end: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END
     min_hops_after_depart: int = 2
@@ -185,14 +192,24 @@ def build_manifest_entry(
     ped_cfg: PedestrianConfig,
     *,
     preset: PedestrianPreset,
+    density_level: TrafficDensityLevel | None = None,
 ) -> Dict[str, Any]:
     scene_name = meta.get("scene_name", scene_dir.name)
     net_file = meta.get("net_file", resolve_net_file(scene_dir, meta))
     net_path = scene_dir.relative_to(scenes_root) / net_file
     ped_count = max(1, int(preset.target_pedestrian_count))
-    seed_key = f"{approach.scenario_id}_s{preset.id}"
+    traffic_density = (
+        float(density_level.traffic_density)
+        if density_level is not None
+        else float(sim_cfg.traffic_density)
+    )
+    if density_level is not None:
+        seed_key = f"{approach.scenario_id}_s{preset.id}_td{density_level.id}"
+        scene_id = f"{scene_name}_{approach.scenario_id}_s{preset.id}_td{density_level.id}_v{variant}"
+    else:
+        seed_key = f"{approach.scenario_id}_s{preset.id}"
+        scene_id = f"{scene_name}_{approach.scenario_id}_s{preset.id}_v{variant}"
     seed = _stable_seed(scene_name, variant, seed_key)
-    scene_id = f"{scene_name}_{approach.scenario_id}_s{preset.id}_v{variant}"
 
     return {
         "valid": True,
@@ -209,6 +226,11 @@ def build_manifest_entry(
         "pedestrian_preset_id": preset.id,
         "pedestrian_preset_name": preset.name,
         "pedestrian_count": ped_count,
+        "traffic_density_level_id": density_level.id if density_level is not None else None,
+        "traffic_density_level_name": density_level.name if density_level is not None else None,
+        "nuplan_vehicles_per_frame": (
+            density_level.nuplan_vehicles_per_frame if density_level is not None else None
+        ),
         "scenario_id": approach.scenario_id,
         "crosswalk_id": approach.crosswalk_id,
         "junction_id": approach.junction_id,
@@ -220,7 +242,7 @@ def build_manifest_entry(
         "min_hops_after_depart": sim_cfg.min_hops_after_depart,
         "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
-        "traffic_density": sim_cfg.traffic_density,
+        "traffic_density": traffic_density,
         "horizon": sim_cfg.horizon,
         "use_pedestrian_manager": True,
         "use_pedestrian_yield_rule": True,
@@ -390,22 +412,44 @@ def generate_manifest(
             default_speed_std=ped_cfg.speed_std,
             default_spawn_gap_s=ped_cfg.pedestrian_spawn_gap_s,
         )
+        density_levels = (
+            list_traffic_density_levels(MAX_TRAFFIC_DENSITY_LEVELS)
+            if sim_cfg.traffic_density_augment
+            else [None]
+        )
 
+        scene_entries: List[Dict[str, Any]] = []
         for approach in approaches:
             for preset in pedestrian_presets:
-                for variant in range(n_variants):
-                    entries.append(
-                        build_manifest_entry(
-                            scene_dir=scene_dir,
-                            scenes_root=scenes_dir,
-                            meta=meta,
-                            approach=approach,
-                            variant=variant,
-                            sim_cfg=sim_cfg,
-                            ped_cfg=ped_cfg,
-                            preset=preset,
+                for density_level in density_levels:
+                    for variant in range(n_variants):
+                        scene_entries.append(
+                            build_manifest_entry(
+                                scene_dir=scene_dir,
+                                scenes_root=scenes_dir,
+                                meta=meta,
+                                approach=approach,
+                                variant=variant,
+                                sim_cfg=sim_cfg,
+                                ped_cfg=ped_cfg,
+                                preset=preset,
+                                density_level=density_level,
+                            )
                         )
-                    )
+
+        if scenario_cfg.max_entries_per_scene is not None:
+            limit = max(1, int(scenario_cfg.max_entries_per_scene))
+            expanded = len(scene_entries)
+            if expanded > limit:
+                rng = random.Random(_stable_seed(scene_name, 0, "entry_sample"))
+                rng.shuffle(scene_entries)
+                scene_entries = scene_entries[:limit]
+                print(
+                    f"  [manifest] Sampled {limit} entries from {expanded} "
+                    f"expanded combos (max_entries_per_scene)"
+                )
+
+        entries.extend(scene_entries)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "real_manifest.jsonl"
@@ -420,6 +464,7 @@ def generate_manifest(
         default_speed_std=ped_cfg.speed_std,
         default_spawn_gap_s=ped_cfg.pedestrian_spawn_gap_s,
     )
+    traffic_density_levels = list_traffic_density_levels(MAX_TRAFFIC_DENSITY_LEVELS)
     summary = {
         "pdd_code": PDD_CODE,
         "sign_type": SIGN_TYPE,
@@ -438,7 +483,20 @@ def generate_manifest(
             }
             for preset in pedestrian_presets
         ],
+        "traffic_density_augment": sim_cfg.traffic_density_augment,
+        "traffic_density_levels": [
+            {
+                "id": level.id,
+                "name": level.name,
+                "percentile": level.percentile,
+                "nuplan_vehicles_per_frame": level.nuplan_vehicles_per_frame,
+                "traffic_density": level.traffic_density,
+                "description": level.describe(),
+            }
+            for level in traffic_density_levels
+        ],
         "max_scenarios_per_scene": scenario_cfg.max_scenarios_per_scene,
+        "max_entries_per_scene": scenario_cfg.max_entries_per_scene,
         "validate_metadrive_routes": scenario_cfg.validate_metadrive_routes,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
         "traffic_density": sim_cfg.traffic_density,
@@ -592,12 +650,14 @@ def main(cfg: DictConfig) -> None:
             max(1, int(cfg.scenario.get("num_presets", MAX_PEDESTRIAN_PRESETS))),
         ),
         max_scenarios_per_scene=cfg.scenario.max_scenarios_per_scene,
+        max_entries_per_scene=cfg.scenario.get("max_entries_per_scene"),
         respect_scene_selection=cfg.scenario.get("respect_scene_selection", True),
         validate_metadrive_routes=cfg.scenario.get("validate_metadrive_routes", True),
     )
     sim_cfg = SimulationConfig(
         spawn_velocity_ms=cfg.simulation.spawn_velocity_ms,
         traffic_density=cfg.simulation.traffic_density,
+        traffic_density_augment=bool(cfg.simulation.get("traffic_density_augment", True)),
         horizon=cfg.simulation.horizon,
         spawn_distance_before_end=cfg.simulation.spawn_distance_before_end,
         min_hops_after_depart=int(cfg.simulation.get("min_hops_after_depart", 2)),

@@ -73,6 +73,7 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 # Policy categories 
@@ -105,6 +106,148 @@ DEFAULT_MODEL_PATHS: dict[str, Path] = {
 def run(cmd: list[str], cwd: Path | None = None) -> None:
     print(f"\n$ {' '.join(cmd)}")
     subprocess.run(cmd, check=True, cwd=cwd)
+
+
+def build_benchmark_cmd(
+    *,
+    policy: str,
+    variant: str,
+    input_manifest: Path,
+    scenes_root: str,
+    bench_root: Path,
+    replay_root: Path,
+    model_paths: dict[str, str],
+    no_auxiliary_agent: bool,
+    save_gifs: bool,
+    plant2_action_mode: str,
+) -> list[str]:
+    run_name = f"{policy}_{variant}"
+    cmd = [
+        sys.executable,
+        str(BENCH_DIR / "run_benchmark.py"),
+        "--policy",
+        policy,
+        "--run-name",
+        run_name,
+        "--manifest",
+        str(input_manifest),
+        "--scenes-root",
+        scenes_root,
+        "--ego-variant",
+        variant,
+        "--benchmark-output",
+        str(bench_root),
+        "--emit-replay-sidecar",
+        "--replay-root",
+        str(replay_root),
+    ]
+    if not no_auxiliary_agent:
+        cmd.append("--auxiliary-agent")
+    if save_gifs:
+        cmd.append("--save-gifs")
+    if policy in NN_NEED_CHECKPOINT:
+        cmd += ["--model-path", model_paths[policy]]
+    if policy in ("plant2", "plant2_rule"):
+        cmd += ["--plant2-action-mode", plant2_action_mode]
+    return cmd
+
+
+def run_benchmark_baselines(
+    baselines: list[tuple[str, str]],
+    *,
+    input_manifest: Path,
+    scenes_root: str,
+    bench_root: Path,
+    out_dir: Path,
+    model_paths: dict[str, str],
+    no_auxiliary_agent: bool,
+    save_gifs: bool,
+    plant2_action_mode: str,
+    jobs: int,
+) -> None:
+    def _run_one(policy: str, variant: str) -> str:
+        run_name = f"{policy}_{variant}"
+        replay_root = out_dir / "runs" / "var_0" / run_name / "replays"
+        cmd = build_benchmark_cmd(
+            policy=policy,
+            variant=variant,
+            input_manifest=input_manifest,
+            scenes_root=scenes_root,
+            bench_root=bench_root,
+            replay_root=replay_root,
+            model_paths=model_paths,
+            no_auxiliary_agent=no_auxiliary_agent,
+            save_gifs=save_gifs,
+            plant2_action_mode=plant2_action_mode,
+        )
+        run(cmd)
+        return run_name
+
+    if jobs <= 1 or len(baselines) <= 1:
+        for policy, variant in baselines:
+            _run_one(policy, variant)
+        return
+
+    print(f"Running {len(baselines)} baseline(s) with jobs={jobs}")
+    failures: list[str] = []
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures = {
+            pool.submit(_run_one, policy, variant): f"{policy}_{variant}"
+            for policy, variant in baselines
+        }
+        for future in as_completed(futures):
+            run_name = futures[future]
+            try:
+                future.result()
+                print(f"[jobs] finished {run_name}")
+            except subprocess.CalledProcessError as exc:
+                failures.append(f"{run_name} (exit {exc.returncode})")
+            except Exception as exc:
+                failures.append(f"{run_name} ({exc})")
+    if failures:
+        sys.exit("Benchmark failures:\n  - " + "\n  - ".join(failures))
+
+
+def run_metrics_pipeline(out_dir: Path) -> None:
+    no_manifests = out_dir / "_no_manifests"
+    no_manifests.mkdir(exist_ok=True)
+
+    run(
+        [
+            sys.executable,
+            str(BENCH_DIR.parent / "build_episode_metrics_csv.py"),
+            "--runs-root",
+            str(out_dir / "runs"),
+            "--out",
+            str(out_dir / "metrics_per_episode.csv"),
+            "--vars",
+            "0",
+            "--manifests-root",
+            str(no_manifests),
+        ]
+    )
+
+    run(
+        [
+            sys.executable,
+            str(BENCH_DIR.parent / "aggregate_episode_metrics.py"),
+            "--csv",
+            str(out_dir / "metrics_per_episode.csv"),
+            "--out-dir",
+            str(out_dir),
+        ]
+    )
+
+    run(
+        [
+            sys.executable,
+            str(BENCH_DIR.parent / "generate_cumulative_markdown_report.py"),
+            "--run-root",
+            str(out_dir),
+            "--cumulative",
+            str(out_dir / "reports" / "cumulative.json"),
+        ]
+    )
 
 
 def parse_model_paths(spec: str | None) -> dict[str, str]:
@@ -184,10 +327,11 @@ def main() -> None:
                          "'policy:path,policy:path'. Defaults to files under "
                          f"{CHECKPOINTS_DIR} when omitted. Required for: "
                          f"{sorted(NN_NEED_CHECKPOINT)}"))
-    p.add_argument("--manifest", nargs="+", required=True,
+    p.add_argument("--manifest", nargs="+", default=None,
                    help=("one or more manifest .jsonl files, or benchmark run "
                          f"directories containing {RUN_MANIFEST_NAME} "
-                         "(space-separated)"))
+                         "(space-separated). Not needed with --metrics-only when "
+                         "--out-dir is set."))
     p.add_argument("--scenes-root", default="pdd-bench/scenes",
                    help="path to pdd-bench/scenes")
     p.add_argument("--scene-line", type=int, default=None,
@@ -207,19 +351,39 @@ def main() -> None:
                    help="Disable auxiliary agents on main road")
     p.add_argument("--save-gifs", action="store_true",
                    help="Write per-episode GIFs via run_benchmark.py (slower; off by default)")
+    p.add_argument("--jobs", type=int, default=1,
+                   help=("Run benchmark baselines in parallel (default: 1 = sequential). "
+                         "Each baseline writes to its own output subdir. "
+                         "Use 1-2 for NN policies on a single GPU; 4-8 is fine for IDM-only."))
+    p.add_argument("--benchmark-only", action="store_true",
+                   help="Run run_benchmark.py baselines only; skip metrics/report aggregation")
+    p.add_argument("--metrics-only", action="store_true",
+                   help="Only rebuild metrics/report from existing replays in --out-dir")
     args = p.parse_args()
+
+    if args.benchmark_only and args.metrics_only:
+        sys.exit("Use only one of --benchmark-only or --metrics-only")
+
+    if args.metrics_only:
+        if args.out_dir is None and not args.manifest:
+            sys.exit("--metrics-only requires --out-dir or --manifest (run folder)")
+    elif not args.manifest:
+        sys.exit("--manifest is required unless using --metrics-only with --out-dir")
 
     manifest_paths: list[Path] = []
     run_dirs: list[Path] = []
-    for raw in args.manifest:
-        manifest_path, run_dir = resolve_manifest_path(Path(raw))
-        manifest_paths.append(manifest_path)
-        if run_dir is not None:
-            run_dirs.append(run_dir)
+    if args.manifest:
+        for raw in args.manifest:
+            manifest_path, run_dir = resolve_manifest_path(Path(raw))
+            manifest_paths.append(manifest_path)
+            if run_dir is not None:
+                run_dirs.append(run_dir)
 
     if args.out_dir is not None:
         out_dir = Path(args.out_dir).resolve()
-    elif len(run_dirs) == 1 and len(args.manifest) == 1:
+    elif args.metrics_only and len(run_dirs) == 1:
+        out_dir = run_dirs[0] / RUN_EVAL_OUT_DIRNAME
+    elif len(run_dirs) == 1 and args.manifest and len(args.manifest) == 1:
         out_dir = run_dirs[0] / RUN_EVAL_OUT_DIRNAME
         print(f"Using run eval output directory: {out_dir}")
     else:
@@ -243,6 +407,17 @@ def main() -> None:
 
     OUT = out_dir
     OUT.mkdir(parents=True, exist_ok=True)
+
+    if args.metrics_only:
+        if not (OUT / "runs").is_dir():
+            sys.exit(f"--metrics-only: missing replays under {OUT / 'runs'}")
+        run_metrics_pipeline(OUT)
+        report = OUT / "reports" / "report_cumulative.md"
+        print("\n" + "=" * 60)
+        print("DONE (metrics only).")
+        print(f"  Report: {report}")
+        print("=" * 60)
+        return
 
     # Assemble input manifest (apply experiment defaults from manifest.json)
     all_lines: list[str] = []
@@ -297,54 +472,29 @@ def main() -> None:
     # --replay-root writes replays straight into the layout build_csv expects:
     # <OUT>/runs/var_0/<run_name>/replays/<sign>/by_sign/.../replay.json
     bench_root = OUT / "benchmark"
-    for policy, variant in baselines:
-        run_name = f"{policy}_{variant}"
-        replay_root = OUT / "runs" / "var_0" / run_name / "replays"
-        cmd = [
-            sys.executable, str(BENCH_DIR / "run_benchmark.py"),
-            "--policy",           policy,
-            "--run-name",         run_name,
-            "--manifest",         str(input_manifest),
-            "--scenes-root",      args.scenes_root,
-            # "--backends",         args.backends,
-            "--ego-variant",      variant,
-            "--benchmark-output", str(bench_root),
-            "--emit-replay-sidecar",
-            "--replay-root",      str(replay_root),
-        ]
-        if not args.no_auxiliary_agent:
-            cmd.append("--auxiliary-agent")
-        if args.save_gifs:
-            cmd.append("--save-gifs")
-        if policy in NN_NEED_CHECKPOINT:
-            cmd += ["--model-path", model_paths[policy]]
-        if policy in ("plant2", "plant2_rule"):
-            cmd += ["--plant2-action-mode", args.plant2_action_mode]
-        run(cmd)
+    run_benchmark_baselines(
+        baselines,
+        input_manifest=input_manifest,
+        scenes_root=args.scenes_root,
+        bench_root=bench_root,
+        out_dir=OUT,
+        model_paths=model_paths,
+        no_auxiliary_agent=args.no_auxiliary_agent,
+        save_gifs=args.save_gifs,
+        plant2_action_mode=args.plant2_action_mode,
+        jobs=max(1, int(args.jobs)),
+    )
 
-    # metrics pipeline (build --  aggregate -- MD report) 
-    no_manifests = OUT / "_no_manifests"  # placeholder for build_csv
-    no_manifests.mkdir(exist_ok=True)
+    if args.benchmark_only:
+        print("\n" + "=" * 60)
+        print("DONE (benchmark only).")
+        print(f"  Baselines: {len(baselines)}")
+        print(f"  Replays: {OUT / 'runs'}")
+        print("  Run with --metrics-only when all baselines are finished.")
+        print("=" * 60)
+        return
 
-    run([
-        sys.executable, str(BENCH_DIR.parent / "build_episode_metrics_csv.py"),
-        "--runs-root",      str(OUT / "runs"),
-        "--out",            str(OUT / "metrics_per_episode.csv"),
-        "--vars",           "0",
-        "--manifests-root", str(no_manifests),
-    ])
-
-    run([
-        sys.executable, str(BENCH_DIR.parent / "aggregate_episode_metrics.py"),
-        "--csv",     str(OUT / "metrics_per_episode.csv"),
-        "--out-dir", str(OUT),
-    ])
-
-    run([
-        sys.executable, str(BENCH_DIR.parent / "generate_cumulative_markdown_report.py"),
-        "--run-root",   str(OUT),
-        "--cumulative", str(OUT / "reports" / "cumulative.json"),
-    ])
+    run_metrics_pipeline(OUT)
 
     # --- Done ---------------------------------------------------------------
     report = OUT / "reports" / "report_cumulative.md"

@@ -1387,6 +1387,22 @@ def run_one_episode(
                         step_in_any_zone = True
                         cls = type(_s).__name__
                         in_zone_by_class_step[cls] = in_zone_by_class_step.get(cls, 0) + 1
+                for rule in getattr(sign_mgr, "rules", []):
+                    if type(rule).__name__ != "PedestrianYieldRule":
+                        continue
+                    try:
+                        ped_status = rule.get_status(vehicle)
+                    except Exception:
+                        continue
+                    if (
+                        ped_status.get("in_yield_zone")
+                        or ped_status.get("in_crosswalk")
+                        or ped_status.get("in_no_stop_zone")
+                    ):
+                        step_in_any_zone = True
+                        in_zone_by_class_step["PedestrianYieldRule"] = (
+                            in_zone_by_class_step.get("PedestrianYieldRule", 0) + 1
+                        )
                 if step_in_any_zone:
                     in_zone_total_steps += 1
 

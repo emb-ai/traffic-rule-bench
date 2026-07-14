@@ -60,6 +60,7 @@ SIGN_CLASS_MAP = {
     "5.14.4": "EndBikeLaneSign",
     "5.15.2": "DirectionSign",
     "5.16":   "BusStationSign",
+    "5.19":   "PedestrianYieldRule",
     "5.31":   "ZoneSpeedLimitSign",
     "5.32":   "EndOfZoneSpeedLimitSign",
 }
