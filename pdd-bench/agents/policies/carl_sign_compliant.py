@@ -89,6 +89,10 @@ class CarlSignCompliantPolicy(SignComplianceMixin, BasePolicy):
         return self._lateral_pid
 
     def act(self, agent_id=None):
+        if self.APPLY_RULE_OVERLAY:
+            # Replan / speed-cap state before CaRL so route is updated early.
+            self._process_signs()
+
         adapter = self._get_adapter()
         # CaRL returns a MetaDrive-compatible [steering, throttle] numpy array.
         try:
@@ -103,9 +107,6 @@ class CarlSignCompliantPolicy(SignComplianceMixin, BasePolicy):
         throttle = float(action[1])
 
         if self.APPLY_RULE_OVERLAY:
-            # Process signs → sets _speed_cap, _speed_floor, _lc_target_lane, etc.
-            self._process_signs()
-
             # Lane-change steering override from sign logic.
             if self.APPLY_LANE_CHANGE_OVERRIDE:
                 self._update_lane_change()

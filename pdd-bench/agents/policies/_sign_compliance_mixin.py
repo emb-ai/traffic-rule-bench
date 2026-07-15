@@ -346,6 +346,13 @@ class SignComplianceMixin:
         checkpoints = getattr(nav, "checkpoints", None)
         if not checkpoints or len(checkpoints) < 2:
             return False
+
+        # SUMO EdgeRoadNetwork uses string lane ids — PG NodeRoadNetwork uses tuples.
+        if isinstance(checkpoints[0], str):
+            ok = self._reroute_sumo_blocked_edge(blocked_from, blocked_to)
+            self._rerouted_edges[edge_key] = bool(ok)
+            return bool(ok)
+
         destination = checkpoints[-1]
 
         veh_lane = self.control_object.lane
@@ -412,6 +419,163 @@ class SignComplianceMixin:
 
         self._rerouted_edges[edge_key] = True
         return True
+
+    @staticmethod
+    def _normalize_turn_dir(raw_dir) -> str:
+        d = str(raw_dir or "").strip().lower()
+        if d in ("r", "right"):
+            return "r"
+        if d in ("l", "left"):
+            return "l"
+        if d in ("s", "straight"):
+            return "s"
+        if d in ("t", "u", "uturn", "u-turn"):
+            return "t"
+        return d
+
+    def _is_sumo_edge_nav(self, nav) -> bool:
+        checkpoints = getattr(nav, "checkpoints", None) or []
+        return bool(checkpoints) and isinstance(checkpoints[0], str)
+
+    def _apply_sumo_nav_path(self, nav, path) -> bool:
+        """Install a lane-id checkpoint list onto EdgeNetworkNavigation."""
+        if not path or len(path) < 2:
+            return False
+        road_network = self.engine.current_map.road_network
+        try:
+            nav.checkpoints = list(path)
+            nav._target_checkpoints_index = [0, 1]
+            nav.final_lane = road_network.get_lane(path[-1])
+            if getattr(nav, "_navi_info", None) is not None:
+                nav._navi_info.fill(0.0)
+            cur_idx = getattr(nav, "current_checkpoint_lane_index", path[0])
+            next_idx = getattr(nav, "next_checkpoint_lane_index", path[1])
+            nav.current_ref_lanes = road_network.get_peer_lanes_from_index(cur_idx)
+            nav.next_ref_lanes = road_network.get_peer_lanes_from_index(next_idx)
+            return True
+        except Exception as exc:
+            logger.debug("SUMO nav path apply failed: %s", exc)
+            return False
+
+    def _find_sumo_path_avoiding_source_exits(
+        self,
+        start_lane_id: str,
+        goal_lane_id: str,
+        source_lane_id: str,
+        blocked_exits_from_source,
+        *,
+        max_len: int = 40,
+    ):
+        """BFS on EdgeRoadNetwork.exit_lanes.
+
+        Forbidden exits are blocked only when leaving ``source_lane_id`` so
+        later rejoining those lanes (after a compliant detour) remains allowed.
+        """
+        road_network = self.engine.current_map.road_network
+        graph = getattr(road_network, "graph", None)
+        if graph is None or start_lane_id not in graph:
+            return None
+        blocked = set(blocked_exits_from_source or ())
+        from collections import deque
+
+        queue = deque([(start_lane_id, [start_lane_id])])
+        while queue:
+            lane_id, path = queue.popleft()
+            lane_data = graph.get(lane_id)
+            if lane_data is None:
+                continue
+            for nxt in sorted(set(getattr(lane_data, "exit_lanes", None) or [])):
+                if lane_id == source_lane_id and nxt in blocked:
+                    continue
+                if nxt in path or nxt not in graph:
+                    continue
+                new_path = path + [nxt]
+                if nxt == goal_lane_id:
+                    return new_path
+                if len(new_path) < max_len:
+                    queue.append((nxt, new_path))
+        return None
+
+    def _reroute_sumo_blocked_edge(self, blocked_from, blocked_to) -> bool:
+        """SUMO fallback used by PG-style ``_reroute_around`` callers."""
+        nav = getattr(self.control_object, "navigation", None)
+        if nav is None or not self._is_sumo_edge_nav(nav):
+            return False
+        checkpoints = nav.checkpoints
+        destination = checkpoints[-1]
+        start = getattr(self.control_object.lane, "index", None) or checkpoints[0]
+        path = self._find_sumo_path_avoiding_source_exits(
+            start,
+            destination,
+            blocked_from if isinstance(blocked_from, str) else start,
+            {blocked_to} if isinstance(blocked_to, str) else set(),
+        )
+        return bool(path) and self._apply_sumo_nav_path(nav, path)
+
+    def _direction_blocked_exits_from_source(self, sign, source_lane) -> set:
+        """First-hop via/to_lane targets for directions NOT allowed by the sign."""
+        allowed_dirs = set(
+            self._normalize_turn_dir(d)
+            for d in (getattr(sign, "ALLOWED_DIRS", None) or ())
+        )
+        blocked = set()
+        for turn in getattr(source_lane, "turns", None) or []:
+            d = self._normalize_turn_dir(turn.get("direction"))
+            if allowed_dirs and d not in allowed_dirs:
+                if turn.get("via_lane"):
+                    blocked.add(turn["via_lane"])
+                if turn.get("to_lane"):
+                    blocked.add(turn["to_lane"])
+        return blocked
+
+    def _sumo_route_uses_blocked_source_exit(
+        self, nav, source_lane_id: str, blocked_exits
+    ) -> bool:
+        """True if checkpoints leave ``source_lane_id`` via a blocked exit."""
+        checkpoints = list(getattr(nav, "checkpoints", None) or [])
+        if not checkpoints or not blocked_exits:
+            return False
+        for i, ck in enumerate(checkpoints[:-1]):
+            if ck == source_lane_id and checkpoints[i + 1] in blocked_exits:
+                return True
+        return False
+
+    def _reroute_sumo_for_direction_sign(self, sign) -> bool:
+        """Replan EdgeRoadNetwork route to honour LaneAllowedDirectionSign."""
+        nav = getattr(self.control_object, "navigation", None)
+        if nav is None or not self._is_sumo_edge_nav(nav):
+            return False
+        source_lane = sign.lane
+        source_id = getattr(source_lane, "index", None)
+        if not isinstance(source_id, str):
+            return False
+        blocked = self._direction_blocked_exits_from_source(sign, source_lane)
+        if not blocked:
+            return False
+        if not self._sumo_route_uses_blocked_source_exit(nav, source_id, blocked):
+            return False
+
+        cache_key = ("sumo_dir", source_id, frozenset(blocked), nav.checkpoints[-1])
+        if cache_key in self._rerouted_edges:
+            return bool(self._rerouted_edges[cache_key])
+
+        start = getattr(self.control_object.lane, "index", None) or source_id
+        destination = nav.checkpoints[-1]
+        path = self._find_sumo_path_avoiding_source_exits(
+            start, destination, source_id, blocked, max_len=40
+        )
+        ok = bool(path) and path[-1] == destination and self._apply_sumo_nav_path(nav, path)
+        if ok:
+            logger.info(
+                "Direction replan (%s): %s → %s via %d hops (blocked %d exits)",
+                type(sign).__name__,
+                start,
+                destination,
+                len(path),
+                len(blocked),
+            )
+        self._rerouted_edges[cache_key] = ok
+        return ok
 
     # ------------------------------------------------------------------
     # Sign handlers — speed
@@ -957,12 +1121,37 @@ class SignComplianceMixin:
     def _handle_direction_compliance(self, sign):
         """Handle DirectionSign, PGDirectionSign, LaneAllowedDirectionSign.
 
-        Adds non-allowed successor lanes to ``_blocked_lanes`` and
-        pre-positions the vehicle into a lane whose allowed directions
-        match the navigation target.
+        On SUMO EdgeRoadNetwork: if the planned route leaves the signed approach
+        via a forbidden turn, BFS-replan to the same destination while only
+        blocking those first-hop exits (downstream rejoins remain allowed).
+
+        On PG NodeRoadNetwork: keep the existing lane-change pre-positioning.
         """
         if not on_same_road(self.control_object.lane, sign.lane):
             return
+
+        nav = getattr(self.control_object, "navigation", None)
+        if nav is not None and self._is_sumo_edge_nav(nav):
+            # Resolve allowed targets for blocking / debugging.
+            by_src = getattr(sign, "allowed_lanes_by_source", None) or {}
+            source_id = getattr(sign.lane, "index", None)
+            allowed = set(by_src.get(source_id) or ())
+            if not allowed:
+                allowed_dirs = {
+                    self._normalize_turn_dir(d)
+                    for d in (getattr(sign, "ALLOWED_DIRS", None) or ())
+                }
+                for turn in getattr(sign.lane, "turns", None) or []:
+                    if self._normalize_turn_dir(turn.get("direction")) in allowed_dirs:
+                        if turn.get("to_lane"):
+                            allowed.add(turn["to_lane"])
+            blocked = self._direction_blocked_exits_from_source(sign, sign.lane)
+            for lid in blocked:
+                self._blocked_lanes.add(lid)
+            self._reroute_sumo_for_direction_sign(sign)
+            return
+
+        # ---- PG / legacy path (tuple checkpoints) ----
         # Determine allowed successors for this sign's lane
         allowed = getattr(sign, "allowed_to_lanes", None) or getattr(sign, "allowed_lanes", None)
         if allowed is None:
@@ -976,7 +1165,6 @@ class SignComplianceMixin:
                 self._blocked_lanes.add(to_lane)
         # Pre-positioning: if current lane's allowed set doesn't contain the
         # navigation target road, find and move to a lane that does.
-        nav = getattr(self.control_object, "navigation", None)
         if nav is None:
             return
         checkpoints = getattr(nav, "checkpoints", None)

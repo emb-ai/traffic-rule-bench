@@ -135,6 +135,9 @@ class PlanT2SignCompliantPolicy(SignComplianceMixin, BasePolicy):
         return self._lateral_pid
 
     def act(self, agent_id=None):
+        if self.APPLY_RULE_OVERLAY:
+            self._process_signs()
+
         adapter = self._get_adapter()
         try:
             action = adapter.get_action(self.control_object, self.engine)
@@ -146,10 +149,6 @@ class PlanT2SignCompliantPolicy(SignComplianceMixin, BasePolicy):
         throttle = float(action[1])
 
         if self.APPLY_RULE_OVERLAY:
-            # Process signs → sets _speed_cap, _speed_floor, _lc_target_lane,
-            # _no_overtaking_active, _blocked_lanes, etc.
-            self._process_signs()
-
             # Steering override for sign-driven lane changes (mixin path).
             if self.APPLY_LANE_CHANGE_OVERRIDE:
                 self._update_lane_change()

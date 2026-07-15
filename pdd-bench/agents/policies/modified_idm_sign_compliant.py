@@ -30,13 +30,16 @@ class ModifiedIDMSignCompliantPolicy(SignComplianceMixin, ModifiedIDMPolicy):
         return self.lateral_pid
 
     def act(self, *args, **kwargs):
+        # Process signs (incl. direction replan) BEFORE base IDM so steering
+        # follows the updated checkpoints on the same step.
+        if self.APPLY_RULE_OVERLAY:
+            self._process_signs()
+
         action = ModifiedIDMPolicy.act(self, *args, **kwargs)
         steering = float(action[0])
         throttle = float(action[1])
 
         if self.APPLY_RULE_OVERLAY:
-            self._process_signs()
-
             if self.APPLY_LANE_CHANGE_OVERRIDE:
                 self._update_lane_change()
                 if self._lc_target_lane is not None:
