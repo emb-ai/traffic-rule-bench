@@ -54,6 +54,8 @@ class RuleCompliantExpertPolicy(SignComplianceMixin, ExpertPolicy):
                 self._steering_control_for_lc(self._lc_target_lane), -1.0, 1.0
             )
 
+        steering = self._maybe_override_steering_for_direction_exit(steering)
+
         # No-overtaking steering guard: if PPO steers toward the opposite
         # lane heading, clamp it to keep the vehicle in its lane.
         if self._no_overtaking_active and self._lc_target_lane is None:

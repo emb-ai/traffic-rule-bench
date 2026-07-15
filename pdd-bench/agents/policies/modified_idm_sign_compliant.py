@@ -51,6 +51,8 @@ class ModifiedIDMSignCompliantPolicy(SignComplianceMixin, ModifiedIDMPolicy):
                         )
                     )
 
+            steering = self._maybe_override_steering_for_direction_exit(steering)
+
             if self._no_overtaking_active and self._lc_target_lane is None:
                 ego = self.control_object
                 cur_lane = ego.lane

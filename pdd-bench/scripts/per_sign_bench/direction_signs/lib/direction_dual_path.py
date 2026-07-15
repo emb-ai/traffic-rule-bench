@@ -1,10 +1,19 @@
-"""Select 4.1.1 scenes with one dest reachable via turn (shorter) and straight (longer).
+"""Select dual-path scenes: short forbidden baseline + long compliant route.
 
-Pipeline (variant 1):
-  1. On the full core net, find an X junction + ego approach with both ``s`` and
-     ``l``/``r`` first exits.
-  2. Pick a destination edge reachable after *either* first exit, with
-     ``len(turn) + min_gain < len(straight)``.
+Benchmark incentive (shared by the 4.1.x family):
+  * ``turn_*`` fields = **baseline** path (shorter, forbidden first exit)
+  * ``straight_*`` fields = **compliant** path (longer, allowed first exit)
+
+Examples:
+  * 4.1.1 (straight only): baseline ``l``/``r``, compliant ``s``
+  * 4.1.2 (right only): baseline ``s``/``l``, compliant ``r``
+  * 4.1.3 (left only): baseline ``s``/``r``, compliant ``l``
+
+Pipeline:
+  1. On the full core net, find an X junction + ego approach with both a
+     baseline and a compliant first exit.
+  2. Pick a destination reachable after *either* first exit, with
+     ``len(baseline) + min_gain < len(compliant)``.
   3. Crop later by the XY bounding box of the two edge paths (+ margin).
 """
 
@@ -18,18 +27,43 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+from .direction_sign_spec import (
+    DEFAULT_PDD_CODE,
+    dirs_allowed_by_sign,
+    get_direction_sign_spec,
+)
 from .junction_crop import JunctionPick, collect_intersection_junction_candidates
 from .junction_priority_layout import INTERSECTION_JUNCTION_TYPES, JunctionLayoutError, _load_net
 from .lane_keys import make_lane_key
 from .sumo_utils import is_real_sumo_edge_id, is_vehicle_drivable_lane
 
 
-TurnDir = str  # "l" | "r"
+TurnDir = str  # baseline first-exit direction: "s" | "l" | "r"
+
+# Preference when several baseline / compliant exits exist on an approach.
+_BASELINE_DIR_ORDER = ("s", "r", "l")
+_COMPLIANT_DIR_ORDER = ("s", "r", "l")
+_CARDINAL_DIRS = frozenset({"s", "r", "l"})
+
+
+def dual_path_role_dirs(pdd_code: str) -> Tuple[List[str], List[str]]:
+    """Return ``(baseline_dirs, compliant_dirs)`` for dual-path search.
+
+    Baseline = short forbidden temptation; compliant = long allowed route.
+    """
+    allowed = set(dirs_allowed_by_sign(pdd_code, include_uturn_for_left=False)) & _CARDINAL_DIRS
+    compliant = [d for d in _COMPLIANT_DIR_ORDER if d in allowed]
+    baseline = [d for d in _BASELINE_DIR_ORDER if d in _CARDINAL_DIRS and d not in allowed]
+    return baseline, compliant
 
 
 @dataclass(frozen=True)
 class DualPathScenario:
-    """One ego approach + shared dest with turn-shorter / straight-longer routes."""
+    """One ego approach + shared dest: baseline shorter / compliant longer.
+
+    Meta keys keep the historical ``turn_*`` / ``straight_*`` names:
+    turn = baseline (short, forbidden), straight = compliant (long, allowed).
+    """
 
     junction_id: str
     junction_center_xy: Tuple[float, float]
@@ -44,10 +78,16 @@ class DualPathScenario:
     straight_path: Tuple[str, ...]
     turn_length_m: float
     straight_length_m: float
+    compliant_dir: str = "s"
+    pdd_code: str = DEFAULT_PDD_CODE
 
     @property
     def gain_m(self) -> float:
         return float(self.straight_length_m - self.turn_length_m)
+
+    @property
+    def baseline_dir(self) -> str:
+        return self.turn_dir
 
     @property
     def path_edge_ids(self) -> Tuple[str, ...]:
@@ -60,6 +100,7 @@ class DualPathScenario:
         return tuple(out)
 
     def to_meta_fields(self) -> dict:
+        spec = get_direction_sign_spec(self.pdd_code)
         return {
             "road_id": self.ego_edge_id,
             "spawn_lane_num": self.ego_lane_num,
@@ -67,6 +108,8 @@ class DualPathScenario:
             "destination_lane_id": make_lane_key(self.dest_edge_id, self.dest_lane_num),
             "dual_path": {
                 "turn_dir": self.turn_dir,
+                "baseline_dir": self.turn_dir,
+                "compliant_dir": self.compliant_dir,
                 "turn_first_exit": self.turn_first_exit,
                 "straight_first_exit": self.straight_first_exit,
                 "turn_path": list(self.turn_path),
@@ -75,8 +118,8 @@ class DualPathScenario:
                 "straight_length_m": self.straight_length_m,
                 "gain_m": self.gain_m,
             },
-            "pdd_code": "4.1.1",
-            "allowed_dirs": ["s"],
+            "pdd_code": spec.pdd_code,
+            "allowed_dirs": sorted(spec.allowed_dirs),
         }
 
 
@@ -368,9 +411,52 @@ def straight_path_has_dead_end_uturn(
     )
 
 
+def path_revisits_signed_approach(
+    ego_edge_id: str,
+    path: Sequence[str],
+) -> bool:
+    """True if the post-exit path uses the signed approach edge again.
+
+    The direction sign only applies on the ego approach. Invalid case
+    (classic ``sign_100588_j0``): leave via the allowed exit → loop → drive
+    ``ego_edge_id`` again → enter the same X under the still-active sign.
+
+    Re-entering the *junction* from a different arm is allowed — that arm has
+    no 4.1.x sign. An earlier filter rejected any ``to_node == junction_id``
+    revisit and wiped most dual-path crops; approach-only is the right check.
+    """
+    if not ego_edge_id or not path:
+        return False
+    return ego_edge_id in path
+
+
+def path_reenters_signed_junction(
+    graph: _EdgeGraph,
+    ego_edge_id: str,
+    junction_id: str,
+    path: Sequence[str],
+) -> bool:
+    """Deprecated name: now means ``path_revisits_signed_approach`` (not junction)."""
+    del graph, junction_id
+    return path_revisits_signed_approach(ego_edge_id, path)
+
+
+def straight_path_reenters_signed_junction(
+    net_path: Path | str,
+    scenario: DualPathScenario,
+) -> bool:
+    """True if the compliant route revisits the signed approach edge."""
+    del net_path  # approach check is purely path-based
+    return path_revisits_signed_approach(
+        scenario.ego_edge_id,
+        scenario.straight_path,
+    )
+
+
 def find_dual_path_scenarios(
     net_path: Path | str,
     *,
+    pdd_code: str = DEFAULT_PDD_CODE,
     min_lane_length_m: float = 8.0,
     min_arm_lane_m: float = 0.5,
     min_gain_m: float = 20.0,
@@ -381,16 +467,29 @@ def find_dual_path_scenarios(
     junction_ids: Optional[Sequence[str]] = None,
     require_uturn_continuation: bool = True,
 ) -> List[DualPathScenario]:
-    """Find dual-path (turn shorter, straight longer) scenarios for 4.1.1.
+    """Find dual-path scenarios: baseline shorter, compliant longer.
+
+    Roles come from ``pdd_code`` via ``dual_path_role_dirs``:
+      * baseline → stored as ``turn_*`` (short forbidden first exit)
+      * compliant → stored as ``straight_*`` (long allowed first exit)
 
     ``min_lane_length_m`` applies to the ego approach only (spawnable arm).
     Other X arms only need ``min_arm_lane_m`` so stubby OSM arms are allowed.
-    Preference order: shorter turn path (MetaDrive ``shortest_path`` is capped
-    at 10 hops and rejects far dual-path dests), then larger length gain.
-    ``dests_per_arm`` keeps multiple dests per ego for MetaDrive filtering.
-    ``require_uturn_continuation`` drops candidates whose straight path
-    U-turns at a dead end (baseline planners can't turn around there).
+    Preference order: shorter baseline path (MetaDrive ``shortest_path`` is
+    capped at 10 hops), then larger length gain.
+    ``require_uturn_continuation`` drops candidates whose *compliant* path
+    U-turns at a dead end. Compliant paths that revisit the signed approach
+    edge after the first exit (loop onto the same arm under the sign) are
+    always dropped.
     """
+    pdd_code = get_direction_sign_spec(pdd_code).pdd_code
+    baseline_dirs, compliant_dirs = dual_path_role_dirs(pdd_code)
+    if not baseline_dirs or not compliant_dirs:
+        return []
+
+    max_baseline_length_m = max_turn_length_m
+    max_compliant_length_m = max_straight_length_m
+
     net_path = Path(net_path)
     graph = build_edge_graph(net_path)
     incident = _junction_incident_edges(graph) if require_uturn_continuation else None
@@ -427,72 +526,88 @@ def find_dual_path_scenarios(
             if graph.edge_length.get(ego, 0.0) <= min_lane_length_m:
                 continue
             exits = graph.first_exits.get(ego) or {}
-            s_exits = set(exits.get("s") or ())
-            if not s_exits:
-                continue
-            turn_options: List[Tuple[TurnDir, Set[str]]] = []
-            for d in ("r", "l"):
+
+            compliant_options: List[Tuple[str, Set[str]]] = []
+            for d in compliant_dirs:
                 ex = set(exits.get(d) or ())
                 if ex:
-                    turn_options.append((d, ex))
-            if not turn_options:
+                    compliant_options.append((d, ex))
+            if not compliant_options:
                 continue
 
-            for turn_dir, turn_exits in turn_options:
-                turn_starts = [(e, graph.edge_length[e]) for e in turn_exits]
-                straight_starts = [(e, graph.edge_length[e]) for e in s_exits]
-                turn_dist, turn_prev = _dijkstra_from(
-                    graph, turn_starts, max_cost=max_turn_length_m
-                )
-                straight_dist, straight_prev = _dijkstra_from(
-                    graph, straight_starts, max_cost=max_straight_length_m
+            baseline_options: List[Tuple[TurnDir, Set[str]]] = []
+            for d in baseline_dirs:
+                ex = set(exits.get(d) or ())
+                if ex:
+                    baseline_options.append((d, ex))
+            if not baseline_options:
+                continue
+
+            for compliant_dir, compliant_exits in compliant_options:
+                compliant_starts = [
+                    (e, graph.edge_length[e]) for e in compliant_exits
+                ]
+                compliant_dist, compliant_prev = _dijkstra_from(
+                    graph, compliant_starts, max_cost=max_compliant_length_m
                 )
 
-                shared = set(turn_dist) & set(straight_dist)
-                shared -= {ego} | turn_exits | s_exits
-                # Drop other approaches into the same junction (not beyond it).
-                shared = {
-                    dest for dest in shared if graph.edge_to_node.get(dest) != jid
-                }
-
-                # Rank by short turn first so dests stay within MetaDrive's
-                # 10-hop navigation limit; secondary key is larger gain.
-                arm_cands: List[DualPathScenario] = []
-                for dest in shared:
-                    lt = turn_dist[dest]
-                    ls = straight_dist[dest]
-                    if lt > max_turn_length_m or ls > max_straight_length_m:
-                        continue
-                    if ls - lt < min_gain_m:
-                        continue
-                    t_path = _rebuild_path(turn_prev, turn_exits, dest)
-                    s_path = _rebuild_path(straight_prev, s_exits, dest)
-                    if not t_path or not s_path:
-                        continue
-                    if require_uturn_continuation and dead_end_uturn_junctions(
-                        graph, ego, s_path, incident=incident
-                    ):
-                        continue
-                    arm_cands.append(
-                        DualPathScenario(
-                            junction_id=jid,
-                            junction_center_xy=center,
-                            ego_edge_id=ego,
-                            ego_lane_num=_default_lane_num(graph, ego),
-                            dest_edge_id=dest,
-                            dest_lane_num=_default_lane_num(graph, dest),
-                            turn_dir=turn_dir,
-                            turn_first_exit=t_path[0],
-                            straight_first_exit=s_path[0],
-                            turn_path=tuple(t_path),
-                            straight_path=tuple(s_path),
-                            turn_length_m=float(lt),
-                            straight_length_m=float(ls),
-                        )
+                for baseline_dir, baseline_exits in baseline_options:
+                    baseline_starts = [
+                        (e, graph.edge_length[e]) for e in baseline_exits
+                    ]
+                    baseline_dist, baseline_prev = _dijkstra_from(
+                        graph, baseline_starts, max_cost=max_baseline_length_m
                     )
-                arm_cands.sort(key=lambda s: (s.turn_length_m, -s.gain_m))
-                for cand in arm_cands[:max(1, dests_per_arm)]:
-                    scenarios.append(cand)
+
+                    shared = set(baseline_dist) & set(compliant_dist)
+                    shared -= {ego} | baseline_exits | compliant_exits
+                    # Drop other approaches into the same junction (not beyond it).
+                    shared = {
+                        dest for dest in shared if graph.edge_to_node.get(dest) != jid
+                    }
+
+                    # Rank by short baseline first so dests stay within MetaDrive's
+                    # 10-hop navigation limit; secondary key is larger gain.
+                    arm_cands: List[DualPathScenario] = []
+                    for dest in shared:
+                        lt = baseline_dist[dest]
+                        ls = compliant_dist[dest]
+                        if lt > max_baseline_length_m or ls > max_compliant_length_m:
+                            continue
+                        if ls - lt < min_gain_m:
+                            continue
+                        t_path = _rebuild_path(baseline_prev, baseline_exits, dest)
+                        s_path = _rebuild_path(compliant_prev, compliant_exits, dest)
+                        if not t_path or not s_path:
+                            continue
+                        if require_uturn_continuation and dead_end_uturn_junctions(
+                            graph, ego, s_path, incident=incident
+                        ):
+                            continue
+                        if path_revisits_signed_approach(ego, s_path):
+                            continue
+                        arm_cands.append(
+                            DualPathScenario(
+                                junction_id=jid,
+                                junction_center_xy=center,
+                                ego_edge_id=ego,
+                                ego_lane_num=_default_lane_num(graph, ego),
+                                dest_edge_id=dest,
+                                dest_lane_num=_default_lane_num(graph, dest),
+                                turn_dir=baseline_dir,
+                                turn_first_exit=t_path[0],
+                                straight_first_exit=s_path[0],
+                                turn_path=tuple(t_path),
+                                straight_path=tuple(s_path),
+                                turn_length_m=float(lt),
+                                straight_length_m=float(ls),
+                                compliant_dir=compliant_dir,
+                                pdd_code=pdd_code,
+                            )
+                        )
+                    arm_cands.sort(key=lambda s: (s.turn_length_m, -s.gain_m))
+                    for cand in arm_cands[:max(1, dests_per_arm)]:
+                        scenarios.append(cand)
 
     scenarios.sort(
         key=lambda s: (s.turn_length_m, -s.gain_m, s.junction_id, s.ego_edge_id)
@@ -544,6 +659,16 @@ def dual_path_scenario_from_meta(meta: dict) -> Optional[DualPathScenario]:
         )
     except ValueError:
         dest_lane_num = 0
+    pdd_code = str(meta.get("pdd_code") or dp.get("pdd_code") or DEFAULT_PDD_CODE)
+    try:
+        pdd_code = get_direction_sign_spec(pdd_code).pdd_code
+    except ValueError:
+        pdd_code = DEFAULT_PDD_CODE
+    _baseline_dirs, _compliant_dirs = dual_path_role_dirs(pdd_code)
+    compliant_dir = str(
+        dp.get("compliant_dir") or (_compliant_dirs[0] if _compliant_dirs else "s")
+    )
+    baseline_dir = str(dp.get("baseline_dir") or dp.get("turn_dir") or "r")
     return DualPathScenario(
         junction_id=str(meta.get("junction_id") or ""),
         junction_center_xy=center_xy,
@@ -551,13 +676,15 @@ def dual_path_scenario_from_meta(meta: dict) -> Optional[DualPathScenario]:
         ego_lane_num=int(meta.get("spawn_lane_num") or 0),
         dest_edge_id=str(dest),
         dest_lane_num=dest_lane_num,
-        turn_dir=str(dp.get("turn_dir") or "r"),
+        turn_dir=baseline_dir,
         turn_first_exit=str(dp.get("turn_first_exit") or turn_path[0]),
         straight_first_exit=str(dp.get("straight_first_exit") or straight_path[0]),
         turn_path=turn_path,
         straight_path=straight_path,
         turn_length_m=float(dp.get("turn_length_m") or 0.0),
         straight_length_m=float(dp.get("straight_length_m") or 0.0),
+        compliant_dir=compliant_dir,
+        pdd_code=pdd_code,
     )
 
 
@@ -568,7 +695,7 @@ def rebuild_dual_path_on_net(
     max_turn_length_m: float = 350.0,
     max_straight_length_m: float = 700.0,
 ) -> Optional[DualPathScenario]:
-    """Recompute turn/straight paths for the same ego→dest on ``net_path``.
+    """Recompute baseline/compliant paths for the same ego→dest on ``net_path``.
 
     Preserves crop-time endpoints when only geometry/paths need refreshing after
     a crop. Returns None if either path is missing on the net.
@@ -579,22 +706,22 @@ def rebuild_dual_path_on_net(
     if ego not in graph.edge_length or dest not in graph.edge_length:
         return None
     exits = graph.first_exits.get(ego) or {}
-    s_exits = set(exits.get("s") or ())
-    turn_exits = set(exits.get(scenario.turn_dir) or ())
-    if not s_exits or not turn_exits:
+    baseline_exits = set(exits.get(scenario.turn_dir) or ())
+    compliant_exits = set(exits.get(scenario.compliant_dir) or ())
+    if not baseline_exits or not compliant_exits:
         return None
-    turn_starts = [(e, graph.edge_length[e]) for e in turn_exits]
-    straight_starts = [(e, graph.edge_length[e]) for e in s_exits]
-    turn_dist, turn_prev = _dijkstra_from(
-        graph, turn_starts, goal=dest, max_cost=max_turn_length_m
+    baseline_starts = [(e, graph.edge_length[e]) for e in baseline_exits]
+    compliant_starts = [(e, graph.edge_length[e]) for e in compliant_exits]
+    baseline_dist, baseline_prev = _dijkstra_from(
+        graph, baseline_starts, goal=dest, max_cost=max_turn_length_m
     )
-    straight_dist, straight_prev = _dijkstra_from(
-        graph, straight_starts, goal=dest, max_cost=max_straight_length_m
+    compliant_dist, compliant_prev = _dijkstra_from(
+        graph, compliant_starts, goal=dest, max_cost=max_straight_length_m
     )
-    if dest not in turn_dist or dest not in straight_dist:
+    if dest not in baseline_dist or dest not in compliant_dist:
         return None
-    t_path = _rebuild_path(turn_prev, turn_exits, dest)
-    s_path = _rebuild_path(straight_prev, s_exits, dest)
+    t_path = _rebuild_path(baseline_prev, baseline_exits, dest)
+    s_path = _rebuild_path(compliant_prev, compliant_exits, dest)
     if not t_path or not s_path:
         return None
     info = graph.junctions.get(scenario.junction_id)
@@ -614,8 +741,10 @@ def rebuild_dual_path_on_net(
         straight_first_exit=s_path[0],
         turn_path=tuple(t_path),
         straight_path=tuple(s_path),
-        turn_length_m=float(turn_dist[dest]),
-        straight_length_m=float(straight_dist[dest]),
+        turn_length_m=float(baseline_dist[dest]),
+        straight_length_m=float(compliant_dist[dest]),
+        compliant_dir=scenario.compliant_dir,
+        pdd_code=scenario.pdd_code,
     )
 
 
@@ -631,6 +760,7 @@ def pick_best_dual_path_scenario(
 def find_ranked_dual_path_picks(
     net_path: Path | str,
     *,
+    pdd_code: str = DEFAULT_PDD_CODE,
     min_lane_length_m: float = 10.0,
     min_gain_m: float = 20.0,
     max_scenarios: int = 5,
@@ -640,6 +770,7 @@ def find_ranked_dual_path_picks(
     net_path = Path(net_path)
     scenarios = find_dual_path_scenarios(
         net_path,
+        pdd_code=pdd_code,
         min_lane_length_m=min_lane_length_m,
         min_gain_m=min_gain_m,
         max_scenarios=max_scenarios,
@@ -730,6 +861,13 @@ def crop_scene_to_dual_path_scenario(
                     f"dest={scenario.dest_edge_id} (margin={attempt_margin})"
                 )
                 continue
+            if straight_path_reenters_signed_junction(out_net, rebuilt):
+                last_error = JunctionLayoutError(
+                    f"Compliant path revisits signed approach "
+                    f"{scenario.ego_edge_id} after the first exit "
+                    f"(junction {scenario.junction_id}, dest={scenario.dest_edge_id})"
+                )
+                continue
             cropped_scenario = rebuilt
             used_margin = attempt_margin
             used_bbox = attempt_bbox
@@ -738,6 +876,7 @@ def crop_scene_to_dual_path_scenario(
 
         still = find_dual_path_scenarios(
             out_net,
+            pdd_code=scenario.pdd_code,
             junction_ids=[scenario.junction_id],
             min_gain_m=max(5.0, scenario.gain_m * 0.25),
             min_lane_length_m=5.0,

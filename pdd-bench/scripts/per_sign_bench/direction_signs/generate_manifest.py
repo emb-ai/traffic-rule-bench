@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Generate evaluation manifest from scenes (direction signs 4.1.1–4.1.6).
 
-For 4.1.1 each row reuses crop-time spawn/dest from scene ``meta.json``:
-the same destination is reachable by a shorter left/right turn *and* a longer
-straight path through an X junction. ``run_benchmark.py`` places sign 4.1.1 on
-the ego approach.
+Dual-path rows reuse crop-time spawn/dest from scene ``meta.json``: the same
+destination is reachable by a shorter *forbidden* (baseline) first exit and a
+longer *allowed* (compliant) path. Roles depend on ``sign.pdd_code``
+(e.g. 4.1.1: baseline l/r + compliant s; 4.1.2: baseline s/l + compliant r;
+4.1.3: baseline s/r + compliant l).
+``run_benchmark.py`` places the matching ``LaneAllowedDirectionSign4_1_*``.
 """
 from __future__ import annotations
 
@@ -29,6 +31,7 @@ from lib.direction_dual_path import (
     DualPathScenario,
     dual_path_scenario_from_meta,
     straight_path_has_dead_end_uturn,
+    straight_path_reenters_signed_junction,
 )
 from lib.direction_sign_spec import (
     DEFAULT_PDD_CODE,
@@ -51,6 +54,15 @@ from lib.sumo_utils import CORE_SCENES_SUBDIR
 SCRIPT_DIR = Path(__file__).parent.resolve()
 RUN_BENCH_SCRIPT = SCRIPT_DIR / "run_benchmark.py"
 PDD_BENCH_DIR = SCRIPT_DIR.parents[2]
+
+# Hydra: paths.output_base: benchmark_output/${pdd_slug:${sign.pdd_code}}
+# so ``sign.pdd_code=4.1.2`` lands in ``benchmark_output/4_1_2/…`` without a
+# manual paths.output_base override.
+OmegaConf.register_new_resolver(
+    "pdd_slug",
+    lambda code: str(code).replace(".", "_"),
+    replace=True,
+)
 DEFAULT_CARL_CKPT = (
     PDD_BENCH_DIR / "checkpoints" / "carl" / "nuplan_51479_1B" / "model_best.pth"
 )
@@ -114,6 +126,14 @@ def resolve_dual_path_scenarios_for_scene(
         print(
             f"    skip: straight path U-turns at a dead end "
             f"(junction {scenario.junction_id}, dest {scenario.dest_edge_id})"
+        )
+        return []
+    if straight_path_reenters_signed_junction(net_path, scenario):
+        print(
+            f"    skip: compliant path revisits signed approach "
+            f"{scenario.ego_edge_id} after the first exit "
+            f"(junction {scenario.junction_id}, dest={scenario.dest_edge_id}) "
+            f"— sign would still forbid the second pass"
         )
         return []
     return [scenario]
@@ -512,7 +532,9 @@ def build_manifest_entry(
         entry["turn_length_m"] = dual_path.turn_length_m
         entry["straight_length_m"] = dual_path.straight_length_m
         entry["dual_path_gain_m"] = dual_path.gain_m
-        # Sign 4.1.1: compliant route is straight; turn is the shorter baseline without the sign.
+        # turn_* = baseline (short, forbidden); straight_* = compliant (long, allowed).
+        entry["compliant_dir"] = dual_path.compliant_dir
+        entry["baseline_dir"] = dual_path.turn_dir
         entry["compliant_first_exit"] = dual_path.straight_first_exit
         entry["baseline_first_exit"] = dual_path.turn_first_exit
 
@@ -581,10 +603,11 @@ def generate_manifest(
         else:
             print("  Junction layout: unavailable (sign will use ego-lane placement)")
 
-        if PDD_CODE != "4.1.1":
+        scene_pdd = str(meta.get("pdd_code") or PDD_CODE)
+        if scene_pdd != PDD_CODE:
             print(
-                f"  [skip] dual-path manifest generation is implemented for 4.1.1 only "
-                f"(active={PDD_CODE})"
+                f"  [skip] scene pdd_code={scene_pdd!r} != active {PDD_CODE!r} "
+                f"(re-crop with --pdd-code {PDD_CODE})"
             )
             continue
 
@@ -618,8 +641,10 @@ def generate_manifest(
         print(f"  Dual-path from meta: {len(dual_paths)}")
         for dp in dual_paths:
             print(
-                f"    ego={dp.ego_edge_id} dest={dp.dest_edge_id} turn={dp.turn_dir} "
-                f"Lt={dp.turn_length_m:.0f}m Ls={dp.straight_length_m:.0f}m gain={dp.gain_m:.0f}m"
+                f"    ego={dp.ego_edge_id} dest={dp.dest_edge_id} "
+                f"baseline={dp.turn_dir} compliant={dp.compliant_dir} "
+                f"Lb={dp.turn_length_m:.0f}m Lc={dp.straight_length_m:.0f}m "
+                f"gain={dp.gain_m:.0f}m"
             )
 
         scene_entries: List[Dict] = []
@@ -672,7 +697,10 @@ def generate_manifest(
         "sign_family": SIGN_FAMILY,
         "sign_name": _ACTIVE_SIGN.title,
         "allowed_dirs": sorted(_ACTIVE_SIGN.allowed_dirs),
-        "direction_route_filter": "dual_path_turn_shorter_straight_longer",
+        "direction_route_filter": (
+            f"dual_path_baseline_shorter_compliant_longer"
+            f"(baseline_dirs≠allowed, compliant={sorted(_ACTIVE_SIGN.allowed_dirs)})"
+        ),
         "sign_placement": "LaneAllowedDirectionSign on ego approach (road_id)",
         "total_scenes": len(scenes),
         "total_entries": len(entries),
@@ -849,12 +877,19 @@ def main(cfg: DictConfig) -> None:
         f"({active.title}), allowed_dirs={sorted(active.allowed_dirs)}"
     )
 
-    scenes_dir = Path(cfg.paths.scenes_dir)
+    scenes_dir_cfg = getattr(cfg.paths, "scenes_dir", None)
+    scenes_base_cfg = getattr(cfg.paths, "scenes_base", "scenes") or "scenes"
+    if scenes_dir_cfg in (None, "", "null"):
+        scenes_dir = Path(scenes_base_cfg) / active.output_slug
+    else:
+        scenes_dir = Path(scenes_dir_cfg)
     if not scenes_dir.is_absolute():
         scenes_dir = (SCRIPT_DIR / scenes_dir).resolve()
+    print(f"[direction_signs] Scenes dir: {scenes_dir}")
 
     experiment_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     experiment_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[direction_signs] Output dir: {experiment_dir}")
     config_path = experiment_dir / "config.yaml"
     with open(config_path, "w", encoding="utf-8") as f:
         f.write(OmegaConf.to_yaml(cfg))

@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""Crop core maps into 4.1.1 dual-path scenes (variant 1).
+"""Crop core maps into dual-path direction-sign scenes.
 
 Selection first: on the full core net find an X-junction approach where the same
-destination is reachable via a *shorter* left/right turn and a *longer* straight
-path through the junction. Then crop to the XY bbox of both paths (+ margin).
+destination is reachable via a *shorter* forbidden (baseline) first exit and a
+*longer* allowed (compliant) path. Roles come from ``--pdd-code``:
+
+  * 4.1.1: baseline l/r, compliant s
+  * 4.1.2: baseline s/l, compliant r
+  * 4.1.3: baseline s/r, compliant l
+
+Then crop to the XY bbox of both paths (+ margin).
 
 Examples:
     python tools/filter_scenes/crop_junction_scene.py --limit 5
+    python tools/filter_scenes/crop_junction_scene.py --pdd-code 4.1.2 --limit 5
     python tools/filter_scenes/crop_junction_scene.py sign_72915 --overwrite
     python tools/filter_scenes/crop_junction_scene.py --min-gain 25 --margin 50
 """
@@ -21,15 +28,24 @@ from pathlib import Path
 
 TOOLS_DIR = Path(__file__).resolve().parent
 DIRECTION_SIGNS_DIR = TOOLS_DIR.parent.parent
-SCENES_DIR_DEFAULT = DIRECTION_SIGNS_DIR / "scenes"
-CORE_DIR_DEFAULT = SCENES_DIR_DEFAULT / "core"
+SCENES_BASE_DEFAULT = DIRECTION_SIGNS_DIR / "scenes"
+SCENES_DIR_DEFAULT = SCENES_BASE_DEFAULT  # resolved per --pdd-code in main()
+CORE_DIR_DEFAULT = SCENES_BASE_DEFAULT / "core"  # legacy; prefer local_core_scenes_root
 
 sys.path.insert(0, str(DIRECTION_SIGNS_DIR))
 
 from lib.direction_dual_path import (  # noqa: E402
     DualPathScenario,
     crop_scene_to_dual_path_scenario,
+    dual_path_role_dirs,
     find_ranked_dual_path_picks,
+)
+from lib.direction_sign_spec import (  # noqa: E402
+    DEFAULT_PDD_CODE,
+    DIRECTION_SIGN_CODES,
+    get_direction_sign_spec,
+    local_core_scenes_root,
+    local_scenes_root,
 )
 from lib.junction_crop import (  # noqa: E402
     JunctionLayoutError,
@@ -162,20 +178,29 @@ def process_core_scene(
     dry_run: bool,
     overwrite: bool,
     validate_metadrive: bool,
+    pdd_code: str = DEFAULT_PDD_CODE,
 ) -> int:
     """Find dual-path scenarios and crop each to its path-union bbox.
 
     Chosen spawn/dest + both paths are written into ``meta.json`` and become the
     canonical endpoints for ``generate_manifest`` (no rediscovery).
     """
+    sign_spec = get_direction_sign_spec(pdd_code)
+    pdd_code = sign_spec.pdd_code
+    baseline_dirs, compliant_dirs = dual_path_role_dirs(pdd_code)
     core_scene_name = core_scene_dir.name
-    print(f"\n=== {core_scene_name} (core) ===")
+    print(
+        f"\n=== {core_scene_name} (core) === "
+        f"sign={pdd_code} ({sign_spec.title}); "
+        f"baseline={baseline_dirs} compliant={compliant_dirs}"
+    )
     try:
         meta = load_scene_meta(core_scene_dir)
         source_net = resolve_full_source_net(core_scene_dir, meta)
         # Several dests per arm so MetaDrive hop-cap can pick a routable one.
         ranked = find_ranked_dual_path_picks(
             source_net,
+            pdd_code=pdd_code,
             min_lane_length_m=min_lane_length_m,
             min_gain_m=min_gain_m,
             max_scenarios=max(max_scenarios * 8, 40),
@@ -186,7 +211,9 @@ def process_core_scene(
         return 0
 
     if not ranked:
-        print("  [skip] no dual-path (turn shorter / straight longer) scenario found")
+        print(
+            "  [skip] no dual-path (baseline shorter / compliant longer) scenario found"
+        )
         write_junctions_index(core_scene_dir, core_scene_name, [])
         return 0
 
@@ -198,6 +225,7 @@ def process_core_scene(
                 source_net,
                 one_per_ego=False,
                 max_keep=None,
+                pdd_code=pdd_code,
             )
             print(
                 f"  MetaDrive filter on core net: kept {len(kept)}, dropped {dropped}"
@@ -264,9 +292,10 @@ def process_core_scene(
         scene_name = junction_scene_name(core_scene_name, rank)
         print(
             f"    [{rank}] j={pick.junction_id} ego={scenario.ego_edge_id} "
-            f"dest={scenario.dest_edge_id} turn={scenario.turn_dir} "
-            f"Lt={scenario.turn_length_m:.0f}m Ls={scenario.straight_length_m:.0f}m "
-            f"gain={scenario.gain_m:.0f}m -> scenes/{scene_name}"
+            f"dest={scenario.dest_edge_id} "
+            f"baseline={scenario.turn_dir} compliant={scenario.compliant_dir} "
+            f"Lb={scenario.turn_length_m:.0f}m Lc={scenario.straight_length_m:.0f}m "
+            f"gain={scenario.gain_m:.0f}m -> {scenes_root.name}/{scene_name}"
         )
 
     if dry_run:
@@ -323,7 +352,7 @@ def process_core_scene(
             junction_xy=pick.center_xy,
         )
         print(
-            f"  wrote scenes/{scene_name}/ "
+            f"  wrote {scenes_root.name}/{scene_name}/ "
             f"(spawn={record['scenario'].ego_edge_id} "
             f"dest={record['scenario'].dest_edge_id}, {preview_name})"
         )
@@ -358,7 +387,7 @@ def uncropped_core_dirs(core_root: Path, *, retry_failed: bool = False) -> list[
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Crop core scenes into 4.1.1 dual-path folders under scenes/",
+        description="Crop core scenes into dual-path folders under scenes/",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -368,23 +397,35 @@ def main() -> None:
         help="Core scene folder name(s) under --core-dir (e.g. sign_72915)",
     )
     parser.add_argument(
+        "--pdd-code",
+        default=DEFAULT_PDD_CODE,
+        choices=list(DIRECTION_SIGN_CODES),
+        help=f"Direction-sign member for dual-path roles (default: {DEFAULT_PDD_CODE})",
+    )
+    parser.add_argument(
         "--core-dir",
         type=Path,
-        default=CORE_DIR_DEFAULT,
-        help=f"Core scenes root (default: {CORE_DIR_DEFAULT})",
+        default=None,
+        help="Core scenes root (default: scenes/<slug>/core)",
     )
     parser.add_argument(
         "--scenes-dir",
         type=Path,
-        default=SCENES_DIR_DEFAULT,
-        help=f"Output scenes root (default: {SCENES_DIR_DEFAULT})",
+        default=None,
+        help="Output cropped-scenes root (default: scenes/<slug>)",
+    )
+    parser.add_argument(
+        "--scenes-base",
+        type=Path,
+        default=SCENES_BASE_DEFAULT,
+        help=f"Parent of per-sign folders (default: {SCENES_BASE_DEFAULT})",
     )
     parser.add_argument("--limit", type=int, default=None, help="Process first N core scenes when none named")
     parser.add_argument(
         "--margin",
         type=float,
         default=40.0,
-        help="XY margin (m) around turn+straight path union bbox (default: 40)",
+        help="XY margin (m) around baseline+compliant path union bbox (default: 40)",
     )
     parser.add_argument(
         "--min-lane-length",
@@ -396,7 +437,7 @@ def main() -> None:
         "--min-gain",
         type=float,
         default=20.0,
-        help="Min straight_length - turn_length (m) (default: 20)",
+        help="Min compliant_length - baseline_length (m) (default: 20)",
     )
     parser.add_argument(
         "--max-scenarios",
@@ -425,8 +466,18 @@ def main() -> None:
     if args.max_scenarios < 1:
         sys.exit("--max-scenarios must be at least 1")
 
-    core_root = args.core_dir.expanduser().resolve()
-    scenes_root = args.scenes_dir.expanduser().resolve()
+    sign_spec = get_direction_sign_spec(args.pdd_code)
+    scenes_base = args.scenes_base.expanduser().resolve()
+    core_root = (
+        args.core_dir.expanduser().resolve()
+        if args.core_dir is not None
+        else local_core_scenes_root(scenes_base, sign_spec.pdd_code).resolve()
+    )
+    scenes_root = (
+        args.scenes_dir.expanduser().resolve()
+        if args.scenes_dir is not None
+        else local_scenes_root(scenes_base, sign_spec.pdd_code).resolve()
+    )
     scenes_root.mkdir(parents=True, exist_ok=True)
 
     if not core_root.is_dir():
@@ -445,6 +496,12 @@ def main() -> None:
     if not core_scene_dirs:
         sys.exit(f"No core scenes found under {core_root}")
 
+    print(
+        f"Cropping dual-path for {sign_spec.pdd_code} ({sign_spec.title}); "
+        f"roles baseline={dual_path_role_dirs(sign_spec.pdd_code)[0]} "
+        f"compliant={dual_path_role_dirs(sign_spec.pdd_code)[1]}"
+    )
+
     ok = 0
     created_total = 0
     for core_scene_dir in core_scene_dirs:
@@ -459,6 +516,7 @@ def main() -> None:
             dry_run=args.dry_run,
             overwrite=args.overwrite,
             validate_metadrive=not args.skip_metadrive_check,
+            pdd_code=sign_spec.pdd_code,
         )
         if created > 0 or args.dry_run:
             ok += 1

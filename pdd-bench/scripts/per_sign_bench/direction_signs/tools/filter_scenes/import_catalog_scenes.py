@@ -1,28 +1,20 @@
 #!/usr/bin/env python3
-"""Import direction-sign catalog scenes into direction_signs/scenes/core with junction filtering.
+"""Import direction-sign catalog scenes into scenes/<slug>/core with junction filtering.
 
-Scans the catalog (default: pdd-bench/scenes/4.1.1), keeps only scenes with a valid
-3- and/or 4-arm junction (each arm has a lane longer than --min-lane-length),
-then copies them into direction_signs/scenes/core/, renders custom.png, and optionally
-runs a simulation GIF.
+Scans the catalog (default: pdd-bench/scenes/<pdd_code>), keeps only scenes with a
+valid 3- and/or 4-arm junction (each arm has a lane longer than --min-lane-length),
+then copies them into ``direction_signs/scenes/<4_1_x>/core/``, renders custom.png,
+and optionally runs a simulation GIF.
 
-Use crop_junction_scene.py afterward to emit junction crops as sibling folders
-under direction_signs/scenes/ (e.g. sign_72424_j0, sign_72424_j1).
+Use crop_junction_scene.py afterward to emit junction crops as siblings under
+``scenes/<4_1_x>/`` (e.g. ``scenes/4_1_2/sign_72424_j0``).
 
 Examples:
-    # Import next 10 qualifying catalog scenes not yet in scenes/core/
     python tools/filter_scenes/import_catalog_scenes.py --limit 10
-
-    # Prefer 4-arm, else accept 3-arm (default)
+    python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.2 --limit 10
     python tools/filter_scenes/import_catalog_scenes.py --limit 10 --arms 4 3
-
-    # Import specific scenes (still checked unless --no-junction-filter)
     python tools/filter_scenes/import_catalog_scenes.py sign_79054 75605
-
-    # Import by numeric sign id
     python tools/filter_scenes/import_catalog_scenes.py --sign-ids 79054 75605
-
-    # Preview only, no simulation
     python tools/filter_scenes/import_catalog_scenes.py sign_79054 --no-simulation
 """
 from __future__ import annotations
@@ -40,8 +32,8 @@ FILTER_SCENES_DIR = Path(__file__).resolve().parent
 TOOLS_DIR = FILTER_SCENES_DIR.parent
 DIRECTION_SIGNS_DIR = TOOLS_DIR.parent
 PDD_BENCH_DIR = DIRECTION_SIGNS_DIR.parent.parent.parent
+SCENES_BASE_DEFAULT = DIRECTION_SIGNS_DIR / "scenes"
 DEFAULT_SOURCE = PDD_BENCH_DIR / "scenes" / "4.1.1"
-DEFAULT_DEST = DIRECTION_SIGNS_DIR / "scenes" / "core"
 
 sys.path.insert(0, str(DIRECTION_SIGNS_DIR))
 
@@ -52,6 +44,7 @@ from lib.junction_crop import (  # noqa: E402
 from lib.direction_sign_spec import (  # noqa: E402
     DEFAULT_PDD_CODE,
     get_direction_sign_spec,
+    local_core_scenes_root,
 )
 from lib.sumo_utils import load_scene_meta, resolve_net_file  # noqa: E402
 from tools.render_map import parse_sumo_net, render_network  # noqa: E402
@@ -434,8 +427,15 @@ def main() -> None:
     parser.add_argument(
         "--dest",
         type=Path,
-        default=DEFAULT_DEST,
-        help=f"Destination core-scenes root (default: {DEFAULT_DEST})",
+        default=None,
+        help="Destination core-scenes root "
+        f"(default: scenes/<slug>/core under {SCENES_BASE_DEFAULT})",
+    )
+    parser.add_argument(
+        "--scenes-base",
+        type=Path,
+        default=SCENES_BASE_DEFAULT,
+        help=f"Parent of per-sign scene folders (default: {SCENES_BASE_DEFAULT})",
     )
     parser.add_argument(
         "--sign-ids",
@@ -510,7 +510,11 @@ def main() -> None:
         source_dir = (PDD_BENCH_DIR / "scenes" / sign_spec.catalog_subdir).resolve()
     else:
         source_dir = args.source.expanduser().resolve()
-    dest_root = args.dest.expanduser().resolve()
+    scenes_base = args.scenes_base.expanduser().resolve()
+    if args.dest is None:
+        dest_root = local_core_scenes_root(scenes_base, sign_spec.pdd_code).resolve()
+    else:
+        dest_root = args.dest.expanduser().resolve()
     dest_root.mkdir(parents=True, exist_ok=True)
 
     if not source_dir.is_dir():

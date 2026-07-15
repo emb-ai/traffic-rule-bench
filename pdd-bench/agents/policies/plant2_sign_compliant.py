@@ -157,6 +157,8 @@ class PlanT2SignCompliantPolicy(SignComplianceMixin, BasePolicy):
                         self._steering_control_for_lc(self._lc_target_lane), -1.0, 1.0
                     ))
 
+            steering = self._maybe_override_steering_for_direction_exit(steering)
+
             # No-overtaking steering guard (matches RuleCompliantExpertPolicy:59-71):
             # if PlanT2 is steering toward the opposite lane while overtaking is
             # forbidden, clamp it back toward lane-following.

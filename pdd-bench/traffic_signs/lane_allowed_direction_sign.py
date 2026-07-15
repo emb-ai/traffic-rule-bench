@@ -14,6 +14,9 @@ def _normalize_turn_direction(raw_dir: str) -> str:
     return d
 
 
+_CARDINAL_DIRS = frozenset({"l", "r", "s"})
+
+
 class LaneAllowedDirectionSign(BaseTrafficSign):
     ALLOWED_DIRS = frozenset()
 
@@ -26,7 +29,13 @@ class LaneAllowedDirectionSign(BaseTrafficSign):
             if to_lane:
                 self.allowed_lanes.add(to_lane)
         self._preset_applicable_lane_indices = kwargs.pop("applicable_lane_indices", None)
+        # lane_id -> last seen approach lane while agent still under this sign
         self.active_agents = {}
+        # Agents whose *first* departure from the signed approach was already
+        # judged. Dual-path compliant routes (esp. 4.1.2) often loop back onto
+        # the same approach and continue with a different exit; that second
+        # pass must not re-trigger the rule.
+        self._cleared_agents = set()
         super().__init__(lane=lane, **kwargs)
         self.applicable_lanes = self._collect_applicable_lanes()
         self.applicable_lane_ids = {getattr(l, "index", None) for l in self.applicable_lanes}
@@ -68,9 +77,11 @@ class LaneAllowedDirectionSign(BaseTrafficSign):
             dirs = {
                 _normalize_turn_direction(t.get("direction"))
                 for t in (getattr(lane_obj, "turns", None) or [])
-                if _normalize_turn_direction(t.get("direction")) in {"l", "r", "s"}
+                if _normalize_turn_direction(t.get("direction")) in _CARDINAL_DIRS
             }
-            if dirs == set(self.ALLOWED_DIRS):
+            # Compare cardinal directions only: "t" (U-turn) is an enforcement
+            # extra for left-turn signs, never part of lane turn matching.
+            if dirs == (set(self.ALLOWED_DIRS) & _CARDINAL_DIRS):
                 lanes.append(lane_obj)
         return lanes
 
@@ -170,6 +181,9 @@ class LaneAllowedDirectionSign(BaseTrafficSign):
         agent_id = vehicle.name
         current_lane = vehicle.lane_index
 
+        if agent_id in self._cleared_agents:
+            return False
+
         if current_lane in self.applicable_lane_ids:
             self.active_agents[agent_id] = current_lane
             return False
@@ -180,10 +194,13 @@ class LaneAllowedDirectionSign(BaseTrafficSign):
                 if isinstance(current_lane, str) and (
                     "junction_" in current_lane or "lane_:" in current_lane
                 ):
+                    # Still inside the junction connector; wait for the landing
+                    # lane before judging the first exit.
                     return False
                 allowed_targets = self.allowed_lanes_by_source.get(prev_lane, set())
                 src_lane_obj = self._lane_for_id(prev_lane)
                 self.active_agents.pop(agent_id, None)
+                self._cleared_agents.add(agent_id)
                 if self._is_pre_junction_lane_change(src_lane_obj, current_lane):
                     return False
                 if current_lane not in allowed_targets:
@@ -217,7 +234,8 @@ class LaneAllowedDirectionSign4_1_2(LaneAllowedDirectionSign):
         super().__init__(lane, icon_path="4.1.2.png", **kwargs)  
         
 class LaneAllowedDirectionSign4_1_3(LaneAllowedDirectionSign):
-    ALLOWED_DIRS = frozenset({"l"})
+    # Per PDD, signs permitting a left turn also permit a U-turn ("t").
+    ALLOWED_DIRS = frozenset({"l", "t"})
 
     def __init__(self, lane, **kwargs):
         super().__init__(lane, icon_path="4.1.3.png", **kwargs)  
@@ -229,13 +247,13 @@ class LaneAllowedDirectionSign4_1_4(LaneAllowedDirectionSign):
         super().__init__(lane, icon_path="4.1.4.png", **kwargs)  
         
 class LaneAllowedDirectionSign4_1_5(LaneAllowedDirectionSign):
-    ALLOWED_DIRS = frozenset({"s", "l"})
+    ALLOWED_DIRS = frozenset({"s", "l", "t"})
 
     def __init__(self, lane, **kwargs):
         super().__init__(lane, icon_path="4.1.5.png", **kwargs)  
         
 class LaneAllowedDirectionSign4_1_6(LaneAllowedDirectionSign):
-    ALLOWED_DIRS = frozenset({"l", "r"})
+    ALLOWED_DIRS = frozenset({"l", "r", "t"})
 
     def __init__(self, lane, **kwargs):
         super().__init__(lane, icon_path="4.1.6.png", **kwargs)  

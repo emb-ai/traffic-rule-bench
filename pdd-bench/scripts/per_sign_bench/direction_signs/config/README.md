@@ -20,12 +20,13 @@ python generate_manifest.py gif.enabled=true
 ### `sign`
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `pdd_code` | `4.1.1` | Active member of 4.1.1–4.1.6 (`lib/direction_sign_spec.py`) |
+| `pdd_code` | `4.1.1` | Active member of 4.1.1–4.1.6 (`lib/direction_sign_spec.py`). Dual-path crop/manifest supported for `4.1.1`, `4.1.2` and `4.1.3`. |
 
 ### `paths`
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `scenes_dir` | `scenes` | Input scenes directory |
+| `scenes_base` | `scenes` | Parent of per-sign folders (`scenes/4_1_1`, …) |
+| `scenes_dir` | `null` → `scenes/<slug>` | Cropped scenes for the active `sign.pdd_code` |
 | `output_base` | `benchmark_output/4_1_1` | Base output directory |
 | `experiment_name` | `<timestamp>` | Experiment folder name |
 

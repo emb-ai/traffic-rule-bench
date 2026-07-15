@@ -300,6 +300,8 @@ class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
                 self._steering_control_for_lc(self._lc_target_lane), -1.0, 1.0
             )
 
+        steering = self._maybe_override_steering_for_direction_exit(steering)
+
         # Sync IDM target_speed with sign constraints
         if self._speed_cap is not None:
             if self._speed_cap < 1.0:

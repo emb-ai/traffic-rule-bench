@@ -12,6 +12,7 @@ Directions use the same codes as ``LaneAllowedDirectionSign`` / ``sumo_env``:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import FrozenSet, Iterable
 
 
@@ -98,6 +99,17 @@ def get_direction_sign_spec(pdd_code: str | None = None) -> DirectionSignSpec:
     except KeyError as exc:
         known = ", ".join(DIRECTION_SIGN_CODES)
         raise ValueError(f"Unknown direction sign code {code!r}; expected one of: {known}") from exc
+
+
+def local_scenes_root(base: Path | str, pdd_code: str | None = None) -> Path:
+    """Local cropped-scene root: ``<base>/<output_slug>`` (e.g. ``scenes/4_1_2``)."""
+    spec = get_direction_sign_spec(pdd_code)
+    return Path(base) / spec.output_slug
+
+
+def local_core_scenes_root(base: Path | str, pdd_code: str | None = None) -> Path:
+    """Imported core maps for one sign: ``<base>/<output_slug>/core``."""
+    return local_scenes_root(base, pdd_code) / "core"
 
 
 def is_direction_sign_code(pdd_code: str | None) -> bool:

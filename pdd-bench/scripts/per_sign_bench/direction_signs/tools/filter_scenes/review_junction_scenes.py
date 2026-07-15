@@ -34,12 +34,16 @@ from urllib.parse import parse_qs, urlparse
 
 FILTER_SCENES_DIR = Path(__file__).resolve().parent
 DIRECTION_SIGNS_DIR = FILTER_SCENES_DIR.parent.parent
-SCENES_DIR_DEFAULT = DIRECTION_SIGNS_DIR / "scenes"
-SELECTION_FILE = "scene_selection.json"
-PREVIEW_NAME_DEFAULT = "custom_cropped.png"
+SCENES_BASE_DEFAULT = DIRECTION_SIGNS_DIR / "scenes"
+SCENES_DIR_DEFAULT = SCENES_BASE_DEFAULT
 
 sys.path.insert(0, str(DIRECTION_SIGNS_DIR))
 
+from lib.direction_sign_spec import (  # noqa: E402
+    DEFAULT_PDD_CODE,
+    DIRECTION_SIGN_CODES,
+    local_scenes_root,
+)
 from lib.scene_selection import (  # noqa: E402
     REJECTED_SUBDIR,
     RESERVED_SCENE_DIRS,
@@ -51,6 +55,9 @@ from lib.scene_selection import (  # noqa: E402
     set_scene_verdict,
 )
 from lib.sumo_utils import load_scene_meta  # noqa: E402
+
+SELECTION_FILE = "scene_selection.json"
+PREVIEW_NAME_DEFAULT = "custom_cropped.png"
 
 
 def selection_path(scenes_root: Path) -> Path:
@@ -657,10 +664,22 @@ def main() -> None:
         epilog=__doc__,
     )
     parser.add_argument(
+        "--pdd-code",
+        default=DEFAULT_PDD_CODE,
+        choices=list(DIRECTION_SIGN_CODES),
+        help=f"Direction-sign member; default scenes dir (default: {DEFAULT_PDD_CODE})",
+    )
+    parser.add_argument(
         "--scenes-dir",
         type=Path,
-        default=SCENES_DIR_DEFAULT,
-        help=f"Scenes root (default: {SCENES_DIR_DEFAULT})",
+        default=None,
+        help="Scenes root (default: scenes/<slug>)",
+    )
+    parser.add_argument(
+        "--scenes-base",
+        type=Path,
+        default=SCENES_BASE_DEFAULT,
+        help=f"Parent of per-sign folders (default: {SCENES_BASE_DEFAULT})",
     )
     parser.add_argument(
         "--preview-name",
@@ -687,7 +706,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    scenes_root = args.scenes_dir.expanduser().resolve()
+    scenes_root = (
+        args.scenes_dir.expanduser().resolve()
+        if args.scenes_dir is not None
+        else local_scenes_root(args.scenes_base, args.pdd_code).resolve()
+    )
 
     if args.list_kept:
         for name in kept_scene_names(scenes_root, preview_name=args.preview_name):

@@ -30,11 +30,16 @@ from .direction_sign_spec import (
     SIGN_FAMILY,
     DirectionSignSpec,
     get_direction_sign_spec,
+    local_core_scenes_root,
+    local_scenes_root,
     resolve_sign_class,
 )
 from .direction_dual_path import (
     DualPathScenario,
+    dual_path_role_dirs,
     find_dual_path_scenarios,
     pick_best_dual_path_scenario,
+    path_revisits_signed_approach,
     straight_path_has_dead_end_uturn,
+    straight_path_reenters_signed_junction,
 )

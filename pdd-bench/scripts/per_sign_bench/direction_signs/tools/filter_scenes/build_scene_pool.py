@@ -37,12 +37,17 @@ DEFAULT_TARGET = 100
 
 sys.path.insert(0, str(DIRECTION_SIGNS_DIR))
 
+from lib.direction_sign_spec import (  # noqa: E402
+    DEFAULT_PDD_CODE,
+    DIRECTION_SIGN_CODES,
+    local_core_scenes_root,
+    local_scenes_root,
+)
 from lib.manifest_config import DEFAULT_SPAWN_DISTANCE_BEFORE_END  # noqa: E402
 from lib.manifest_viability import check_scene_dir_viability  # noqa: E402
 from lib.scene_selection import VERDICT_PENDING  # noqa: E402
 from tools.filter_scenes.crop_junction_scene import (  # noqa: E402
-    CORE_DIR_DEFAULT,
-    SCENES_DIR_DEFAULT,
+    SCENES_BASE_DEFAULT,
     discover_core_scene_dirs,
     process_core_scene,
     uncropped_core_dirs,
@@ -132,14 +137,15 @@ def crop_core_batch(
     scenes_root: Path,
     *,
     max_cores: int | None,
-    radius_m: float,
+    margin_m: float,
     min_lane_length_m: float,
-    max_junctions: int,
+    min_gain_m: float,
+    max_scenarios: int,
     preview_name: str,
     dry_run: bool,
     overwrite: bool,
-    require_manifest_viable: bool = True,
-    min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+    validate_metadrive: bool = True,
+    pdd_code: str = DEFAULT_PDD_CODE,
     retry_failed: bool = False,
     cores: list[Path] | None = None,
 ) -> tuple[int, int, list[str]]:
@@ -156,14 +162,15 @@ def crop_core_batch(
         created = process_core_scene(
             core_dir,
             scenes_root,
-            radius_m=radius_m,
+            margin_m=margin_m,
             min_lane_length_m=min_lane_length_m,
-            max_junctions=max_junctions,
+            min_gain_m=min_gain_m,
+            max_scenarios=max_scenarios,
             preview_name=preview_name,
             dry_run=dry_run,
             overwrite=overwrite,
-            require_manifest_viable=require_manifest_viable,
-            min_ego_lane_m=min_ego_lane_m,
+            validate_metadrive=validate_metadrive,
+            pdd_code=pdd_code,
         )
         processed += 1
         processed_names.append(core_dir.name)
@@ -176,14 +183,15 @@ def crop_until_candidates(
     core_root: Path,
     *,
     target: int,
-    radius_m: float,
+    margin_m: float,
     min_lane_length_m: float,
-    max_junctions: int,
+    min_gain_m: float,
+    max_scenarios: int,
     preview_name: str,
     dry_run: bool,
     overwrite: bool,
-    require_manifest_viable: bool = True,
-    min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+    validate_metadrive: bool = True,
+    pdd_code: str = DEFAULT_PDD_CODE,
     retry_failed: bool = False,
 ) -> tuple[int, int]:
     """Crop uncropped cores until at least ``target`` reviewable scenes exist."""
@@ -212,14 +220,15 @@ def crop_until_candidates(
             core_root,
             scenes_root,
             max_cores=1,
-            radius_m=radius_m,
+            margin_m=margin_m,
             min_lane_length_m=min_lane_length_m,
-            max_junctions=max_junctions,
+            min_gain_m=min_gain_m,
+            max_scenarios=max_scenarios,
             preview_name=preview_name,
             dry_run=dry_run,
             overwrite=overwrite,
-            require_manifest_viable=require_manifest_viable,
-            min_ego_lane_m=min_ego_lane_m,
+            validate_metadrive=validate_metadrive,
+            pdd_code=pdd_code,
             retry_failed=retry_failed,
             cores=remaining[:1],
         )
@@ -229,7 +238,7 @@ def crop_until_candidates(
         if written == 0:
             if names:
                 skipped_failed.add(names[0])
-            print("  [skip core] no manifest-viable junctions; trying next core map")
+            print("  [skip core] no dual-path junctions; trying next core map")
 
     return total_written, total_cores
 
@@ -239,14 +248,16 @@ def fill_after_review(
     core_root: Path,
     *,
     target: int,
-    radius_m: float,
+    margin_m: float,
     min_lane_length_m: float,
-    max_junctions: int,
+    min_gain_m: float,
+    max_scenarios: int,
     preview_name: str,
     dry_run: bool,
     overwrite: bool,
     force: bool,
-    require_manifest_viable: bool = True,
+    validate_metadrive: bool = True,
+    pdd_code: str = DEFAULT_PDD_CODE,
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     retry_failed: bool = False,
 ) -> int:
@@ -294,14 +305,15 @@ def fill_after_review(
             core_root,
             scenes_root,
             max_cores=1,
-            radius_m=radius_m,
+            margin_m=margin_m,
             min_lane_length_m=min_lane_length_m,
-            max_junctions=max_junctions,
+            min_gain_m=min_gain_m,
+            max_scenarios=max_scenarios,
             preview_name=preview_name,
             dry_run=dry_run,
             overwrite=overwrite,
-            require_manifest_viable=require_manifest_viable,
-            min_ego_lane_m=min_ego_lane_m,
+            validate_metadrive=validate_metadrive,
+            pdd_code=pdd_code,
             retry_failed=retry_failed,
             cores=remaining[:1],
         )
@@ -309,7 +321,7 @@ def fill_after_review(
         if written == 0:
             if names:
                 skipped_failed.add(names[0])
-            print("  [skip core] no manifest-viable junctions; trying next core map")
+            print("  [skip core] no dual-path junctions; trying next core map")
 
     status = collect_pool_status(
         scenes_root,
@@ -330,18 +342,29 @@ def fill_after_review(
 
 
 def add_crop_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--radius", type=float, default=80.0, help="Max arm length in meters (default: 80)")
+    parser.add_argument(
+        "--margin",
+        type=float,
+        default=40.0,
+        help="XY margin (m) around dual-path bbox (default: 40)",
+    )
     parser.add_argument(
         "--min-lane-length",
         type=float,
-        default=10.0,
-        help="Each arm must have a lane longer than this (default: 10 m)",
+        default=8.0,
+        help="Min ego approach lane length (m) (default: 8)",
     )
     parser.add_argument(
-        "--max-junctions",
+        "--min-gain",
+        type=float,
+        default=20.0,
+        help="Min compliant - baseline path length (m) (default: 20)",
+    )
+    parser.add_argument(
+        "--max-scenarios",
         type=int,
         default=5,
-        help="Maximum junctions to crop per core scene (default: 5)",
+        help="Maximum dual-path scenarios per core scene (default: 5)",
     )
     parser.add_argument(
         "--preview-name",
@@ -351,9 +374,9 @@ def add_crop_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--overwrite", action="store_true", help="Replace existing junction scene folders")
     parser.add_argument("--dry-run", action="store_true", help="Only report picks, do not write files")
     parser.add_argument(
-        "--no-require-manifest-viable",
+        "--skip-metadrive-check",
         action="store_true",
-        help="Write all cropped junctions even if they would be dropped by generate_manifest.py",
+        help="Do not require MetaDrive-routable spawn→dest",
     )
     parser.add_argument(
         "--retry-failed-cores",
@@ -364,14 +387,15 @@ def add_crop_args(parser: argparse.ArgumentParser) -> None:
 
 def _crop_kwargs(args: argparse.Namespace) -> dict:
     return {
-        "radius_m": args.radius,
+        "margin_m": args.margin,
         "min_lane_length_m": args.min_lane_length,
-        "max_junctions": args.max_junctions,
+        "min_gain_m": args.min_gain,
+        "max_scenarios": args.max_scenarios,
         "preview_name": args.preview_name,
         "dry_run": args.dry_run,
         "overwrite": args.overwrite,
-        "require_manifest_viable": not args.no_require_manifest_viable,
-        "min_ego_lane_m": args.min_ego_lane,
+        "validate_metadrive": not args.skip_metadrive_check,
+        "pdd_code": args.pdd_code,
         "retry_failed": args.retry_failed_cores,
     }
 
@@ -385,16 +409,28 @@ def main() -> None:
         help=f"Target number of kept scenes (default: {DEFAULT_TARGET})",
     )
     common.add_argument(
+        "--pdd-code",
+        default=DEFAULT_PDD_CODE,
+        choices=list(DIRECTION_SIGN_CODES),
+        help=f"Direction-sign member; sets default scene paths (default: {DEFAULT_PDD_CODE})",
+    )
+    common.add_argument(
+        "--scenes-base",
+        type=Path,
+        default=SCENES_BASE_DEFAULT,
+        help=f"Parent of per-sign scene folders (default: {SCENES_BASE_DEFAULT})",
+    )
+    common.add_argument(
         "--core-dir",
         type=Path,
-        default=CORE_DIR_DEFAULT,
-        help=f"Core scenes root (default: {CORE_DIR_DEFAULT})",
+        default=None,
+        help="Core scenes root (default: scenes/<slug>/core)",
     )
     common.add_argument(
         "--scenes-dir",
         type=Path,
-        default=SCENES_DIR_DEFAULT,
-        help=f"Junction scenes root (default: {SCENES_DIR_DEFAULT})",
+        default=None,
+        help="Junction scenes root (default: scenes/<slug>)",
     )
     common.add_argument(
         "--min-ego-lane",
@@ -434,12 +470,24 @@ def main() -> None:
     if args.target < 1:
         sys.exit("--target must be at least 1")
 
-    core_root = args.core_dir.expanduser().resolve()
-    scenes_root = args.scenes_dir.expanduser().resolve()
+    scenes_base = args.scenes_base.expanduser().resolve()
+    core_root = (
+        args.core_dir.expanduser().resolve()
+        if args.core_dir is not None
+        else local_core_scenes_root(scenes_base, args.pdd_code).resolve()
+    )
+    scenes_root = (
+        args.scenes_dir.expanduser().resolve()
+        if args.scenes_dir is not None
+        else local_scenes_root(scenes_base, args.pdd_code).resolve()
+    )
     scenes_root.mkdir(parents=True, exist_ok=True)
 
     if not core_root.is_dir():
-        sys.exit(f"Core scenes directory not found: {core_root}\nRun import_catalog_scenes.py first.")
+        sys.exit(
+            f"Core scenes directory not found: {core_root}\n"
+            f"Run: python tools/filter_scenes/import_catalog_scenes.py --pdd-code {args.pdd_code}"
+        )
 
     if args.command == "status":
         status = collect_pool_status(
