@@ -193,6 +193,11 @@ def build_catalog(
         else:
             lane_range = list(range(n_lanes))
             n_lanes_field = n_lanes
+        # Detour (4.2.x): ego is pinned to the obstacle lane by sumo_env (the
+        # spawn_lane_num teleport is skipped there) — enumerating other lanes
+        # would only produce duplicate rows.
+        if scene.sign_code in ("4.2.1", "4.2.2", "4.2.3"):
+            lane_range = [int(scene.sign_lane_index or 0)]
 
         is_braking = scene.sign_code in BRAKING_SPAWN_CODES
         is_accel = scene.sign_code in ACCEL_SPAWN_CODES
@@ -265,6 +270,13 @@ def build_catalog(
                     "spawn_lane_num": spawn_lane_num,
                     "var_idx": var_idx,
                 }
+                if scene.sign_code in ("4.2.1", "4.2.2", "4.2.3"):
+                    base["sign_lane_index"] = int(scene.sign_lane_index or 0)
+                    # Half the scenes get the physical cone cluster, half only
+                    # the sign — tests reaction to the SIGN itself vs the
+                    # obstacle. Deterministic per scene (stable across runs).
+                    base["detour_cones"] = (
+                        stable_hash(scene.scene_id, "detour_cones") % 2 == 0)
                 if not is_spawn:
                     base["seed"] = stable_hash(scene.scene_id, spawn_lane_num, var_idx)
                     base["spawn_velocity_ms"] = 0.0
