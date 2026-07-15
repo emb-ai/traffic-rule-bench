@@ -33,6 +33,8 @@ class SumoTrajectoryIDMPolicy(TrajectoryIDMPolicy):
     NORMAL_SPEED = 30  # km/h — urban SUMO maps
     INTERSECTION_SCAN_RADIUS = 5.0   # metres — only imminent collisions
     INTERSECTION_HALF_ANGLE = math.pi / 4  # 45° — tighter cone
+    # Front hemisphere for ego-yield (wider than intersection cone so T-bones slow).
+    EGO_YIELD_HALF_ANGLE = math.pi / 2  # 90°
     CURVATURE_LOOK_AHEAD = 8.0  # metres — look further ahead
     CURVATURE_MU = 0.03  # conservative — slow down more for tight turns
     CURVATURE_MIN_SPEED = 3.0  # km/h
@@ -89,6 +91,13 @@ class SumoTrajectoryIDMPolicy(TrajectoryIDMPolicy):
                     if cross_obj is not None and cross_dist < acc_front_dist:
                         acc_front_obj = cross_obj
                         acc_front_dist = cross_dist
+
+                # Optional skill-bench mode: treat ego as a hard obstacle when
+                # nearby so NPC T-bones don't poison sign-compliance eval.
+                ego_obj, ego_dist = self._find_ego_to_yield()
+                if ego_obj is not None and ego_dist < acc_front_dist:
+                    acc_front_obj = ego_obj
+                    acc_front_dist = ego_dist
 
                 acc = self.acceleration(acc_front_obj, acc_front_dist)
             else:
@@ -200,3 +209,39 @@ class SumoTrajectoryIDMPolicy(TrajectoryIDMPolicy):
                 best_obj = obj
 
         return best_obj, best_dist
+
+    def _find_ego_to_yield(self):
+        """If npc_ego_yield_radius > 0, return the ego agent when it is inside
+        that radius and in the NPC's front hemisphere.
+
+        Returns (ego_vehicle, distance) or (None, inf). Distance fed into IDM
+        is slightly tightened so NPCs start braking earlier than for peers.
+        """
+        try:
+            radius = float(self.engine.global_config.get("npc_ego_yield_radius", 0.0) or 0.0)
+        except Exception:
+            radius = 0.0
+        if radius <= 0.0:
+            return None, float("inf")
+
+        agents = getattr(self.engine.agent_manager, "active_agents", None) or {}
+        if not agents:
+            return None, float("inf")
+        ego = next(iter(agents.values()))
+        if ego is None or ego is self.control_object:
+            return None, float("inf")
+
+        npc = self.control_object
+        dx = float(ego.position[0] - npc.position[0])
+        dy = float(ego.position[1] - npc.position[1])
+        dist = math.hypot(dx, dy)
+        if dist > radius or dist < 0.5:
+            return None, float("inf")
+
+        angle_to_ego = math.atan2(dy, dx)
+        angle_diff = abs(wrap_to_pi(angle_to_ego - npc.heading_theta))
+        if angle_diff > self.EGO_YIELD_HALF_ANGLE:
+            return None, float("inf")
+
+        # Slightly under-report distance so IDM brakes with more margin.
+        return ego, max(0.5, dist * 0.7)

@@ -48,22 +48,12 @@ scenario:
 # =============================================================================
 simulation:
   spawn_velocity_ms: 2.5          # Ego initial velocity (m/s)
-  traffic_density: 0.0            # Background traffic [0.0 - 1.0]
+  traffic_density: 0.0            # Used when traffic_density_augment=false
+  # 3 nuPlan-derived density levels per scenario (see lib/traffic_density_levels.py)
+  traffic_density_augment: true
   horizon: 600                    # Max simulation steps
   sign_distance_before_end: 0.0   # Sign offset from lane end (m)
   spawn_distance_before_end: 20.0 # Ego spawn offset from lane end (m)
-
-# =============================================================================
-# Auxiliary Agents
-# =============================================================================
-# Placeholder defaults (copied from junction benches). Direction-aware aux
-# placement will be revisited with scene generation.
-auxiliary:
-  enabled: false                  # Off until direction-aware scenes exist
-  distance_from_intersection: 20.0  # Distance from junction (m)
-  convoy_size: 3                  # Vehicles per lane
-  lanes_occupied: 4               # Lanes to occupy
-  convoy_gap_m: 10.0              # Gap between convoy vehicles (m)
 
 # =============================================================================
 # GIF Visualization

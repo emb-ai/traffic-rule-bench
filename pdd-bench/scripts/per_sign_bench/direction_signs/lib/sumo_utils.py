@@ -21,7 +21,7 @@ def is_real_sumo_edge_id(edge_id: str) -> bool:
 
 
 def is_vehicle_drivable_lane(lane_el: ET.Element) -> bool:
-    """True when a SUMO lane can carry ego/aux vehicles (not pedestrian-only)."""
+    """True when a SUMO lane can carry vehicles (not pedestrian-only)."""
     allow = (lane_el.get("allow") or "").strip()
     if not allow:
         return True

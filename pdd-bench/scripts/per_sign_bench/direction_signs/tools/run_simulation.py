@@ -83,7 +83,7 @@ def build_env(catalog_row: dict, scenes_root: Path, traffic_density: float, max_
     from envs.sumo_env import TrafficSignSumoEnv
     from envs.sumo_traffic_manager import SumoTrafficManager
     
-    SumoTrafficManager.EGO_SAFE_RADIUS = 15
+    SumoTrafficManager.EGO_SAFE_RADIUS = 30
     
     sign_spawn_distance = max(float(catalog_row.get("sign_spawn_distance", 30.0)), 30.0)
     map_path = str(scenes_root / catalog_row["net_path"])
@@ -104,6 +104,7 @@ def build_env(catalog_row: dict, scenes_root: Path, traffic_density: float, max_
         max_route_hops_after_spawn=10,
         num_scenarios=100000,
         vehicle_config={"show_lidar": False},
+        npc_ego_yield_radius=15.0,
     )
     
     if catalog_row.get("road_id"):

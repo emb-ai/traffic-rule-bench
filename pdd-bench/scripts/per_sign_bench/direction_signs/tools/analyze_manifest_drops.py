@@ -11,10 +11,7 @@ from typing import Dict, List
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from lib.manifest_config import (  # noqa: E402
-    DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
-    DEFAULT_SPAWN_DISTANCE_BEFORE_END,
-)
+from lib.manifest_config import DEFAULT_SPAWN_DISTANCE_BEFORE_END  # noqa: E402
 from lib.manifest_viability import check_scene_dir_viability  # noqa: E402
 
 
@@ -22,7 +19,6 @@ def diagnose_scene(scene_dir: Path) -> dict:
     result = check_scene_dir_viability(
         scene_dir,
         min_ego_lane_m=DEFAULT_SPAWN_DISTANCE_BEFORE_END,
-        aux_distance_from_intersection=DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     )
     return {
         "scene": scene_dir.name,

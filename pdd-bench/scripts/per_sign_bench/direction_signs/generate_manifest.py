@@ -25,12 +25,6 @@ from omegaconf import DictConfig, OmegaConf
 
 from lib.junction_priority_layout import JunctionLayoutError, build_junction_priority_layout
 from lib.lane_keys import make_lane_key
-from lib.auxiliary_agent import (
-    DEFAULT_CONVOY_GAP_M,
-    DEFAULT_CONVOY_SIZE,
-    right_lane_keys_for_aux,
-    select_occupied_main_lanes,
-)
 from lib.direction_dual_path import (
     DualPathScenario,
     dual_path_scenario_from_meta,
@@ -42,13 +36,14 @@ from lib.direction_sign_spec import (
     DirectionSignSpec,
     get_direction_sign_spec,
 )
-from lib.manifest_config import (
-    DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
-    DEFAULT_AUX_LANES_OCCUPIED_MAX,
-    DEFAULT_SPAWN_DISTANCE_BEFORE_END,
-)
+from lib.manifest_config import DEFAULT_SPAWN_DISTANCE_BEFORE_END
 from lib.metadrive_route_check import filter_dual_paths_metadrive
 from lib.scene_augmentation import SpawnScenario
+from lib.traffic_density_levels import (
+    MAX_TRAFFIC_DENSITY_LEVELS,
+    TrafficDensityLevel,
+    list_traffic_density_levels,
+)
 from lib.scene_selection import is_reserved_scene_dir, is_scene_rejected
 from lib.sumo_utils import CORE_SCENES_SUBDIR
 
@@ -85,18 +80,13 @@ def _set_active_sign(pdd_code: str | None) -> DirectionSignSpec:
 
 
 def dual_path_to_spawn_scenario(dp: DualPathScenario) -> SpawnScenario:
-    """Adapt a dual-path pick to the junction SpawnScenario shape (aux unused)."""
+    """Adapt a dual-path pick to the junction SpawnScenario shape."""
     dest_key = make_lane_key(dp.dest_edge_id, dp.dest_lane_num)
     return SpawnScenario(
         ego_edge_id=dp.ego_edge_id,
         ego_lane_num=dp.ego_lane_num,
         ego_destination_edge_id=dp.dest_edge_id,
         ego_destination_lane_key=dest_key,
-        # Aux disabled for 4.1.1; keep fields populated for schema compatibility.
-        aux_edge_id=dp.ego_edge_id,
-        aux_lane_num=dp.ego_lane_num,
-        aux_destination_edge_id=dp.dest_edge_id,
-        aux_destination_lane_key=dest_key,
         scenario_id=(
             f"dual_{dp.junction_id}_{dp.ego_edge_id}_{dp.dest_edge_id}_{dp.turn_dir}"
         ),
@@ -186,18 +176,10 @@ class ScenarioConfig:
 class SimulationConfig:
     spawn_velocity_ms: float = 2.5
     traffic_density: float = 0.0
+    traffic_density_augment: bool = True
     horizon: int = 600
     sign_distance_before_end: float = 0.0
     spawn_distance_before_end: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END
-
-
-@dataclass
-class AuxiliaryConfig:
-    enabled: bool = True
-    distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION
-    convoy_size: int = 1
-    convoy_gap_m: float = DEFAULT_CONVOY_GAP_M
-    lanes_occupied: int = 1
 
 
 @dataclass
@@ -217,7 +199,6 @@ class ManifestConfig:
     paths: PathsConfig = field(default_factory=PathsConfig)
     scenario: ScenarioConfig = field(default_factory=ScenarioConfig)
     simulation: SimulationConfig = field(default_factory=SimulationConfig)
-    auxiliary: AuxiliaryConfig = field(default_factory=AuxiliaryConfig)
     gif: GifConfig = field(default_factory=GifConfig)
 
 
@@ -347,10 +328,8 @@ def _stable_seed(
     scene_name: str,
     variant: int = 0,
     scenario_id: str = "",
-    convoy_size: int = 0,
-    lanes_occupied: int = 0,
 ) -> int:
-    """Generate deterministic 32-bit seed from scene name, variant, scenario, and aux dims."""
+    """Generate deterministic 32-bit seed from scene name, variant, and scenario."""
     h = hashlib.sha256()
     h.update(scene_name.encode("utf-8"))
     h.update(b"|")
@@ -358,33 +337,7 @@ def _stable_seed(
     if scenario_id:
         h.update(b"|")
         h.update(scenario_id.encode("utf-8"))
-    if convoy_size > 0:
-        h.update(b"|convoy")
-        h.update(str(convoy_size).encode("utf-8"))
-    if lanes_occupied > 0:
-        h.update(b"|lanes")
-        h.update(str(lanes_occupied).encode("utf-8"))
     return int.from_bytes(h.digest()[:4], "big")
-
-
-# -----------------------------------------------------------------------------
-# Auxiliary agent dimension expansion
-# -----------------------------------------------------------------------------
-def sizes_up_to(
-    max_value: int,
-    *,
-    auxiliary_enabled: bool = True,
-    available: Optional[int] = None,
-) -> List[int]:
-    """Return values to materialize: {1, 2, ..., cap} for aux manifest expansion."""
-    if not auxiliary_enabled:
-        return [1]
-    if available is not None and available <= 0:
-        return [1]
-    cap = max(1, int(max_value))
-    if available is not None:
-        cap = min(cap, int(available))
-    return list(range(1, cap + 1))
 
 
 # -----------------------------------------------------------------------------
@@ -441,13 +394,11 @@ def build_manifest_entry(
     meta: Dict,
     variant: int,
     sim_cfg: SimulationConfig,
-    aux_cfg: AuxiliaryConfig,
-    aux_convoy_size: int,
-    aux_lanes_occupied: int,
     spawn_lanes_cache: Optional[List[SumoLaneInfo]] = None,
     junction_layout_cache: Optional[dict] = None,
     spawn_scenario: Optional[SpawnScenario] = None,
     dual_path: Optional[DualPathScenario] = None,
+    density_level: Optional[TrafficDensityLevel] = None,
 ) -> Dict:
     """Build a single manifest entry for a scene."""
     scene_name = meta.get("scene_name", scene_dir.name)
@@ -457,13 +408,18 @@ def build_manifest_entry(
     net_full_path = scene_dir / net_file
     
     scenario_id = spawn_scenario.scenario_id if spawn_scenario else ""
-    seed = _stable_seed(
-        scene_name,
-        variant,
-        scenario_id,
-        convoy_size=aux_convoy_size,
-        lanes_occupied=aux_lanes_occupied if aux_cfg.enabled else 0,
+    traffic_density = (
+        float(density_level.traffic_density)
+        if density_level is not None
+        else float(sim_cfg.traffic_density)
     )
+    if density_level is not None:
+        seed_key = f"{scenario_id}_td{density_level.id}"
+        scene_id = f"{scene_name}_td{density_level.id}"
+    else:
+        seed_key = scenario_id
+        scene_id = scene_name
+    seed = _stable_seed(scene_name, variant, seed_key)
 
     if spawn_lanes_cache is None:
         spawn_lanes_cache = parse_sumo_net_for_spawn_lanes(
@@ -488,7 +444,8 @@ def build_manifest_entry(
         selected_lane = select_random_spawn_lane(spawn_lanes_cache, seed)
     
     entry = {
-        "scene_id": scene_name,
+        "scene_id": scene_id,
+        "scene_name": scene_name,
         "net_path": str(net_path),
         "seed": seed,
         "var_idx": variant,
@@ -499,7 +456,18 @@ def build_manifest_entry(
         "allowed_dirs": sorted(_ACTIVE_SIGN.allowed_dirs),
         "sign_title": _ACTIVE_SIGN.title,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
-        "traffic_density": sim_cfg.traffic_density,
+        "traffic_density": traffic_density,
+        "traffic_density_level_id": (
+            density_level.id if density_level is not None else None
+        ),
+        "traffic_density_level_name": (
+            density_level.name if density_level is not None else None
+        ),
+        "nuplan_vehicles_per_frame": (
+            density_level.nuplan_vehicles_per_frame
+            if density_level is not None
+            else None
+        ),
         "horizon": sim_cfg.horizon,
         "sign_distance_before_end": sim_cfg.sign_distance_before_end,
         "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
@@ -510,24 +478,10 @@ def build_manifest_entry(
         "source_osm": meta.get("source_osm"),
         "osm_file": meta.get("osm_file"),
         "junction_id": meta.get("junction_id"),
-        "auxiliary_agent": aux_cfg.enabled,
-        "aux_distance_from_intersection": aux_cfg.distance_from_intersection,
-        "aux_convoy_size": aux_convoy_size,
-        "aux_convoy_gap_m": aux_cfg.convoy_gap_m,
-        "aux_lanes_occupied": aux_lanes_occupied,
     }
     
     if spawn_scenario is not None:
         entry.update(spawn_scenario.to_manifest_fields())
-        if aux_cfg.enabled:
-            suffix_parts = []
-            if aux_lanes_occupied > 1:
-                suffix_parts.append(f"lanes{aux_lanes_occupied}")
-            if aux_convoy_size > 1:
-                suffix_parts.append(f"convoy{aux_convoy_size}")
-            if suffix_parts:
-                base_aug = entry.get("augmentation_id") or scenario_id
-                entry["augmentation_id"] = f"{base_aug}_{'_'.join(suffix_parts)}"
         if selected_lane is not None:
             entry["spawn_lane_length"] = selected_lane.length
             entry["spawn_to_junction"] = selected_lane.to_junction
@@ -564,31 +518,6 @@ def build_manifest_entry(
 
     if junction_layout_cache is not None:
         entry["junction_layout"] = junction_layout_cache
-        entry["main_lane_keys"] = [
-            lane_key
-            for arm in junction_layout_cache.get("arms", [])
-            for lane_key in arm.get("lane_keys", [])
-        ]
-        ego_edge = entry.get("road_id") or (
-            spawn_scenario.ego_edge_id if spawn_scenario is not None else None
-        )
-        entry["right_lane_keys"] = right_lane_keys_for_aux(
-            junction_layout_cache, ego_edge
-        )
-        if aux_cfg.enabled:
-            available_right = entry["right_lane_keys"]
-            prefer_aux = None
-            if spawn_scenario is not None:
-                prefer_aux = make_lane_key(
-                    spawn_scenario.aux_edge_id,
-                    spawn_scenario.aux_lane_num,
-                )
-            entry["right_arm_edge_id"] = (
-                spawn_scenario.aux_edge_id if spawn_scenario is not None else None
-            )
-            entry["aux_occupied_lane_keys"] = select_occupied_main_lanes(
-                available_right, aux_lanes_occupied, prefer_lane_key=prefer_aux
-            )
     
     entry = {k: v for k, v in entry.items() if v is not None}
     
@@ -603,7 +532,6 @@ def generate_manifest(
     output_dir: Path,
     scenario_cfg: ScenarioConfig,
     sim_cfg: SimulationConfig,
-    aux_cfg: AuxiliaryConfig,
 ) -> List[Dict]:
     """Generate real_manifest.jsonl from dual-path direction-sign scenes."""
     scenes = discover_scenes(
@@ -615,6 +543,15 @@ def generate_manifest(
         f"[direction_signs] Generating manifest for {PDD_CODE} "
         f"({_ACTIVE_SIGN.title}); scenes={len(scenes)}"
     )
+
+    density_levels: List[Optional[TrafficDensityLevel]]
+    if sim_cfg.traffic_density_augment:
+        density_levels = list(list_traffic_density_levels(MAX_TRAFFIC_DENSITY_LEVELS))
+        print("[direction_signs] Traffic density levels (nuPlan):")
+        for level in density_levels:
+            print(f"  td{level.id} {level.describe()}")
+    else:
+        density_levels = [None]
 
     for scene_dir in scenes:
         meta = load_scene_metadata(scene_dir)
@@ -685,50 +622,38 @@ def generate_manifest(
                 f"Lt={dp.turn_length_m:.0f}m Ls={dp.straight_length_m:.0f}m gain={dp.gain_m:.0f}m"
             )
 
-        convoy_sizes = sizes_up_to(aux_cfg.convoy_size, auxiliary_enabled=aux_cfg.enabled)
         scene_entries: List[Dict] = []
         for variant, dual in enumerate(dual_paths):
             spawn_scenario = dual_path_to_spawn_scenario(dual)
-            if aux_cfg.enabled and junction_layout is not None:
-                scene_right_lanes = right_lane_keys_for_aux(
-                    junction_layout, dual.ego_edge_id
-                )
-                scene_lane_counts = sizes_up_to(
-                    aux_cfg.lanes_occupied,
-                    auxiliary_enabled=True,
-                    available=len(scene_right_lanes),
-                )
-            else:
-                scene_lane_counts = [1]
-            for lanes_n in scene_lane_counts:
-                for convoy_n in convoy_sizes:
-                    for _rep in range(max(1, scenario_cfg.n_variants)):
-                        entry = build_manifest_entry(
-                            scene_dir=scene_dir,
-                            scenes_root=scenes_dir,
-                            meta=meta,
-                            variant=variant,
-                            sim_cfg=sim_cfg,
-                            aux_cfg=aux_cfg,
-                            aux_convoy_size=convoy_n,
-                            aux_lanes_occupied=lanes_n,
-                            spawn_lanes_cache=spawn_lanes,
-                            junction_layout_cache=junction_layout,
-                            spawn_scenario=spawn_scenario,
-                            dual_path=dual,
-                        )
-                        scene_entries.append(entry)
+            for density_level in density_levels:
+                for _rep in range(max(1, scenario_cfg.n_variants)):
+                    entry = build_manifest_entry(
+                        scene_dir=scene_dir,
+                        scenes_root=scenes_dir,
+                        meta=meta,
+                        variant=variant,
+                        sim_cfg=sim_cfg,
+                        spawn_lanes_cache=spawn_lanes,
+                        junction_layout_cache=junction_layout,
+                        spawn_scenario=spawn_scenario,
+                        dual_path=dual,
+                        density_level=density_level,
+                    )
+                    scene_entries.append(entry)
 
-        if (
-            scenario_cfg.max_scenarios_per_scene is not None
-            and len(scene_entries) > scenario_cfg.max_scenarios_per_scene
-        ):
+        # Cap counts dual-path picks; density levels multiply rows on top.
+        max_entries = (
+            scenario_cfg.max_scenarios_per_scene * len(density_levels)
+            if scenario_cfg.max_scenarios_per_scene is not None
+            else None
+        )
+        if max_entries is not None and len(scene_entries) > max_entries:
             print(
-                f"  Retained {scenario_cfg.max_scenarios_per_scene} of "
+                f"  Retained {max_entries} of "
                 f"{len(scene_entries)} manifest entries for {scene_name}"
             )
             random.shuffle(scene_entries)
-            scene_entries = scene_entries[: scenario_cfg.max_scenarios_per_scene]
+            scene_entries = scene_entries[:max_entries]
         else:
             print(f"  Manifest entries for {scene_name}: {len(scene_entries)}")
 
@@ -758,14 +683,22 @@ def generate_manifest(
         "validate_metadrive_routes": scenario_cfg.validate_metadrive_routes,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
         "traffic_density": sim_cfg.traffic_density,
+        "traffic_density_augment": sim_cfg.traffic_density_augment,
+        "traffic_density_levels": [
+            {
+                "id": level.id,
+                "name": level.name,
+                "percentile": level.percentile,
+                "nuplan_vehicles_per_frame": level.nuplan_vehicles_per_frame,
+                "traffic_density": level.traffic_density,
+                "description": level.describe(),
+            }
+            for level in density_levels
+            if level is not None
+        ],
         "horizon": sim_cfg.horizon,
         "sign_distance_before_end": sim_cfg.sign_distance_before_end,
         "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
-        "auxiliary_agent": aux_cfg.enabled,
-        "aux_distance_from_intersection": aux_cfg.distance_from_intersection,
-        "aux_convoy_size_max": aux_cfg.convoy_size,
-        "aux_convoy_gap_m": aux_cfg.convoy_gap_m,
-        "aux_lanes_occupied_max": aux_cfg.lanes_occupied,
         "generated_at": datetime.now().isoformat(),
         "scenes": [s.name for s in scenes],
     }
@@ -800,7 +733,6 @@ def render_gifs_from_manifest(
     experiment_dir: Path,
     scenes_root: Path,
     gif_cfg: GifConfig,
-    aux_cfg: AuxiliaryConfig,
 ) -> Tuple[int, int]:
     """Render GIFs for scenes from a manifest file."""
     if not RUN_BENCH_SCRIPT.is_file():
@@ -870,10 +802,6 @@ def render_gifs_from_manifest(
             cmd.extend(["--model-path", model_path])
         if gif_cfg.hide_signs:
             cmd.append("--hide-signs")
-        
-        if aux_cfg.enabled:
-            cmd.append("--auxiliary-agent")
-            cmd.extend(["--aux-distance-from-intersection", str(aux_cfg.distance_from_intersection)])
         
         print(f"\n[GIF {i}/{len(rows)}] {scene_uid}")
         print("  " + " ".join(cmd))
@@ -949,16 +877,12 @@ def main(cfg: DictConfig) -> None:
     sim_cfg = SimulationConfig(
         spawn_velocity_ms=cfg.simulation.spawn_velocity_ms,
         traffic_density=cfg.simulation.traffic_density,
+        traffic_density_augment=bool(
+            getattr(cfg.simulation, "traffic_density_augment", True)
+        ),
         horizon=cfg.simulation.horizon,
         sign_distance_before_end=cfg.simulation.sign_distance_before_end,
         spawn_distance_before_end=cfg.simulation.spawn_distance_before_end,
-    )
-    aux_cfg = AuxiliaryConfig(
-        enabled=cfg.auxiliary.enabled,
-        distance_from_intersection=cfg.auxiliary.distance_from_intersection,
-        convoy_size=cfg.auxiliary.convoy_size,
-        convoy_gap_m=cfg.auxiliary.convoy_gap_m,
-        lanes_occupied=cfg.auxiliary.lanes_occupied,
     )
     gif_cfg = GifConfig(
         enabled=cfg.gif.enabled,
@@ -976,7 +900,6 @@ def main(cfg: DictConfig) -> None:
         output_dir=experiment_dir,
         scenario_cfg=scenario_cfg,
         sim_cfg=sim_cfg,
-        aux_cfg=aux_cfg,
     )
     
     if gif_cfg.enabled and entries:
@@ -987,7 +910,6 @@ def main(cfg: DictConfig) -> None:
             experiment_dir=experiment_dir,
             scenes_root=scenes_dir,
             gif_cfg=gif_cfg,
-            aux_cfg=aux_cfg,
         )
 
         resolved_gif_dir = Path(gif_cfg.dir) if gif_cfg.dir else (experiment_dir / "gifs")

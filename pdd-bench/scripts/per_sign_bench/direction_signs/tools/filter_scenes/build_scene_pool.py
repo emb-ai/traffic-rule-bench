@@ -37,10 +37,7 @@ DEFAULT_TARGET = 100
 
 sys.path.insert(0, str(DIRECTION_SIGNS_DIR))
 
-from lib.manifest_config import (  # noqa: E402
-    DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
-    DEFAULT_SPAWN_DISTANCE_BEFORE_END,
-)
+from lib.manifest_config import DEFAULT_SPAWN_DISTANCE_BEFORE_END  # noqa: E402
 from lib.manifest_viability import check_scene_dir_viability  # noqa: E402
 from lib.scene_selection import VERDICT_PENDING  # noqa: E402
 from tools.filter_scenes.crop_junction_scene import (  # noqa: E402
@@ -78,7 +75,6 @@ def collect_pool_status(
     target: int,
     preview_name: str,
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
-    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 ) -> PoolStatus:
     records = scene_records(scenes_root, preview_name=preview_name)
     kept = sum(1 for r in records if r["verdict"] != "reject")
@@ -92,7 +88,6 @@ def collect_pool_status(
         result = check_scene_dir_viability(
             scene_dir,
             min_ego_lane_m=min_ego_lane_m,
-            aux_distance_from_intersection=aux_distance_from_intersection,
         )
         if result.viable:
             manifest_viable += 1
@@ -145,7 +140,6 @@ def crop_core_batch(
     overwrite: bool,
     require_manifest_viable: bool = True,
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
-    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     retry_failed: bool = False,
     cores: list[Path] | None = None,
 ) -> tuple[int, int, list[str]]:
@@ -170,7 +164,6 @@ def crop_core_batch(
             overwrite=overwrite,
             require_manifest_viable=require_manifest_viable,
             min_ego_lane_m=min_ego_lane_m,
-            aux_distance_from_intersection=aux_distance_from_intersection,
         )
         processed += 1
         processed_names.append(core_dir.name)
@@ -191,7 +184,6 @@ def crop_until_candidates(
     overwrite: bool,
     require_manifest_viable: bool = True,
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
-    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     retry_failed: bool = False,
 ) -> tuple[int, int]:
     """Crop uncropped cores until at least ``target`` reviewable scenes exist."""
@@ -228,7 +220,6 @@ def crop_until_candidates(
             overwrite=overwrite,
             require_manifest_viable=require_manifest_viable,
             min_ego_lane_m=min_ego_lane_m,
-            aux_distance_from_intersection=aux_distance_from_intersection,
             retry_failed=retry_failed,
             cores=remaining[:1],
         )
@@ -257,7 +248,6 @@ def fill_after_review(
     force: bool,
     require_manifest_viable: bool = True,
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
-    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     retry_failed: bool = False,
 ) -> int:
     """Add junction crops from new core maps when kept count is below target."""
@@ -267,7 +257,6 @@ def fill_after_review(
         target=target,
         preview_name=preview_name,
         min_ego_lane_m=min_ego_lane_m,
-        aux_distance_from_intersection=aux_distance_from_intersection,
     )
     print_pool_status(status)
 
@@ -313,7 +302,6 @@ def fill_after_review(
             overwrite=overwrite,
             require_manifest_viable=require_manifest_viable,
             min_ego_lane_m=min_ego_lane_m,
-            aux_distance_from_intersection=aux_distance_from_intersection,
             retry_failed=retry_failed,
             cores=remaining[:1],
         )
@@ -329,7 +317,6 @@ def fill_after_review(
         target=target,
         preview_name=preview_name,
         min_ego_lane_m=min_ego_lane_m,
-        aux_distance_from_intersection=aux_distance_from_intersection,
     )
     print(f"\nAdded {total_written} junction scene(s) this run.")
     print_pool_status(status)
@@ -385,7 +372,6 @@ def _crop_kwargs(args: argparse.Namespace) -> dict:
         "overwrite": args.overwrite,
         "require_manifest_viable": not args.no_require_manifest_viable,
         "min_ego_lane_m": args.min_ego_lane,
-        "aux_distance_from_intersection": args.aux_distance,
         "retry_failed": args.retry_failed_cores,
     }
 
@@ -416,16 +402,6 @@ def main() -> None:
         default=DEFAULT_SPAWN_DISTANCE_BEFORE_END,
         help=f"Min vehicle approach lane for manifest check (default: {DEFAULT_SPAWN_DISTANCE_BEFORE_END})",
     )
-    common.add_argument(
-        "--aux-distance",
-        type=float,
-        default=DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
-        help=(
-            "Aux spawn distance for manifest check "
-            f"(default: {DEFAULT_AUX_DISTANCE_FROM_INTERSECTION})"
-        ),
-    )
-
     parser = argparse.ArgumentParser(
         description="Build a reviewed junction scene pool up to a target size",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -472,7 +448,6 @@ def main() -> None:
             target=args.target,
             preview_name=PREVIEW_NAME_DEFAULT,
             min_ego_lane_m=args.min_ego_lane,
-            aux_distance_from_intersection=args.aux_distance,
         )
         print_pool_status(status)
         if status.kept < status.target and status.cores_remaining == 0:
@@ -494,7 +469,6 @@ def main() -> None:
             target=args.target,
             preview_name=args.preview_name,
             min_ego_lane_m=args.min_ego_lane,
-            aux_distance_from_intersection=args.aux_distance,
         )
         print_pool_status(status)
         print(

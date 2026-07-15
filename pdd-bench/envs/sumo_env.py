@@ -147,6 +147,10 @@ SUMO_DEFAULT_CONFIG = dict(
     # ===== Pedestrians & yield rule =====
     use_pedestrian_manager=True,
     use_pedestrian_yield_rule=True,
+    # NPC background traffic: metres. >0 → SumoTrajectoryIDMPolicy brakes for ego.
+    # Off by default so other benches keep realistic NPC priority; set in
+    # direction_signs (and similar skill benches) where NPC→ego crashes poison eval.
+    npc_ego_yield_radius=0.0,
     enforce_pedestrian_yield_for_traffic=True,
     pedestrian_manager=dict(
         enabled=True,

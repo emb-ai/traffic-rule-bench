@@ -31,14 +31,6 @@ from lib.direction_sign_spec import (
     get_direction_sign_spec,
     resolve_sign_class,
 )
-from lib.auxiliary_agent import (
-    DEFAULT_CONVOY_GAP_M,
-    DEFAULT_CONVOY_SIZE,
-    DEFAULT_SPAWN_VELOCITY_MS,
-    add_auxiliary_agents,
-    resolve_aux_spawn_plan,
-)
-from lib.manifest_config import DEFAULT_AUX_LANES_OCCUPIED_MAX
 from lib.junction_sign_placement import (
     SIGN_SHOULDER_OFFSET_M,
     lateral_offset_beside_lane,
@@ -51,7 +43,6 @@ from lib.junction_priority_layout import (
     build_junction_priority_layout,
 )
 from lib.manifest_config import (
-    DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     enrich_manifest_row,
     load_manifest_config,
 )
@@ -183,7 +174,9 @@ def collect_rows(
 
 
 def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSignSumoEnv:
-    SumoTrafficManager.EGO_SAFE_RADIUS = 15
+    # Keep background traffic off the ego approach so spawn/T-bone pileups
+    # don't start the episode already blocked.
+    SumoTrafficManager.EGO_SAFE_RADIUS = 30
     _apply_manifest_profile_to_npcs(row)
     traffic_density = _manifest_traffic_density(row, default=0.0)
     horizon = _manifest_horizon(row, fallback=max_steps)
@@ -218,6 +211,9 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         skip_auto_signs=True,
         use_pedestrian_manager=False,
         use_pedestrian_yield_rule=False,
+        # NPCs brake for ego in a 15 m front hemisphere so T-bones don't
+        # fail the 4.1.x skill check for the planner under test.
+        npc_ego_yield_radius=15.0,
     )
     if row.get("road_id"):
         config["vehicle_config"]["spawn_lane_index"] = row["road_id"]
@@ -996,14 +992,6 @@ def run_one_episode(
     replay_root: Path | None = None,
     save_gif: Path | None = None,
     hide_signs: bool = False,
-    auxiliary_agent: bool = False,
-    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
-    aux_policy: str = "idm",
-    aux_spawn_velocity_ms: float = DEFAULT_SPAWN_VELOCITY_MS,
-    aux_release_when_ego_within_m: float = 5.0,
-    aux_convoy_size: int = DEFAULT_CONVOY_SIZE,
-    aux_convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
-    aux_lanes_occupied: int = DEFAULT_AUX_LANES_OCCUPIED_MAX,
 ) -> dict:
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
     np.random.seed(seed)
@@ -1100,79 +1088,6 @@ def run_one_episode(
                     apply_ego_sampled(policy_obj, sampled_ego_params)
                 else:
                     apply_ego_defaults(policy_obj)
-
-        # Add auxiliary agents on every incoming lane (except ego's road)
-        # aux_agent_mgr = None
-        # if auxiliary_agent:
-        #     ego_lane_index = getattr(base_env.vehicle.lane, "index", "")
-        #     aux_spawn_lanes = [
-        #         lane["lane_name"]
-        #         for lane in incoming_lanes
-        #         # if lane["edge_id"] not in ego_lane_index
-        #     ]
-        #     if aux_spawn_lanes:
-        #         aux_agent_mgr = add_auxiliary_agents(
-        #             base_env,
-        #             spawn_lane_indices=aux_spawn_lanes,
-        #             distance_from_intersection=aux_distance_from_intersection,
-        #         )
-        #         print(f"[AuxAgent] Spawned on {len(aux_spawn_lanes)} incoming lane(s)")
-        #     else:
-        #         print("[AuxAgent] No incoming lanes available for auxiliary agents")
-
-        aux_agent_mgr = None
-        aux_spawn_lanes: list[str] = []
-        if auxiliary_agent:
-            aux_distance_from_intersection = float(
-                row.get("aux_distance_from_intersection", aux_distance_from_intersection)
-            )
-            aux_spawn_velocity_ms = float(
-                row.get("aux_spawn_velocity_ms", aux_spawn_velocity_ms)
-            )
-            aux_convoy_size = int(row.get("aux_convoy_size", aux_convoy_size))
-            aux_convoy_gap_m = float(row.get("aux_convoy_gap_m", aux_convoy_gap_m))
-            aux_lanes_occupied = int(row.get("aux_lanes_occupied", aux_lanes_occupied))
-            ego_lane_index = (
-                make_lane_key(str(row.get("road_id")), int(row.get("spawn_lane_num", 0) or 0))
-                if row.get("road_id")
-                else str(getattr(base_env.vehicle.lane, "index", ""))
-            )
-
-            aux_spawn_lanes, aux_destination_lanes, alternate_spawn_dest_map = (
-                resolve_aux_spawn_plan(
-                    row,
-                    ego_lane_index=str(ego_lane_index),
-                    incoming_lanes=incoming_lanes,
-                    aux_lanes_occupied=aux_lanes_occupied,
-                    aux_distance_from_intersection=aux_distance_from_intersection,
-                )
-            )
-            aux_destination_lanes = [
-                dest or None for dest in aux_destination_lanes
-            ]
-
-            if aux_spawn_lanes:
-                aux_agent_mgr = add_auxiliary_agents(
-                    base_env,
-                    spawn_lane_indices=aux_spawn_lanes,
-                    outgoing_lanes=outgoing_lanes,
-                    distance_from_intersection=aux_distance_from_intersection,
-                    policy=aux_policy,
-                    spawn_velocity_ms=aux_spawn_velocity_ms,
-                    destination_lanes=aux_destination_lanes,
-                    ego_vehicle=base_env.vehicle,
-                    ego_spawn_lane_index=ego_lane_index,
-                    ego_release_distance_before_end=aux_release_when_ego_within_m,
-                    convoy_size=aux_convoy_size,
-                    convoy_gap_m=aux_convoy_gap_m,
-                    alternate_spawn_dest_map=alternate_spawn_dest_map,
-                )
-                if aux_agent_mgr is not None:
-                    print(
-                        f"[AuxAgent] lanes={len(aux_spawn_lanes)}, "
-                        f"convoy_size={aux_convoy_size}, gap={aux_convoy_gap_m}m, "
-                        f"spawned={aux_agent_mgr.get_status().get('count', 0)}"
-                    )
 
         total_reward = 0.0
         violations = 0
@@ -1368,7 +1283,6 @@ def run_one_episode(
                     "Step": step,
                     "Speed": f"{vehicle.speed_km_h:.2f} km/h",
                     "Vehicle lane: ": vehicle.lane.index,
-                    "Aux lanes": len(aux_spawn_lanes),
                     "Current lane width: ": vehicle.lane.width,
                     "Violations: ": sign_violations,
                 }
@@ -1382,21 +1296,6 @@ def run_one_episode(
                     allowed = getattr(direction_signs[0], "ALLOWED_DIRS", None)
                     if allowed is not None:
                         text_dict["Allowed dirs"] = ",".join(sorted(allowed))
-                
-                # Add auxiliary agent status
-                if aux_agent_mgr is not None:
-                    aux_status = aux_agent_mgr.get_status()
-                    text_dict["Aux agents"] = aux_status.get("count", 0)
-                    text_dict["Aux lanes"] = aux_status.get("lanes_occupied", aux_lanes_occupied)
-                    text_dict["Aux convoy size"] = aux_status.get("convoy_size", aux_convoy_size)
-                    text_dict["Aux policy"] = aux_status.get("policy", aux_policy)
-                    agents = aux_status.get("agents") or []
-                    if agents:
-                        text_dict["Aux dest"] = agents[0].get("destination_lane", "")
-                        text_dict["Aux released"] = agents[0].get("released", False)
-                        ego_dist = agents[0].get("ego_dist_to_spawn_lane_end_m")
-                        if ego_dist is not None:
-                            text_dict["Ego to lane end"] = f"{ego_dist:.1f}m"
 
             if current_violation_texts:
                 text_dict["Violation"] = current_violation_texts[0]
@@ -1773,48 +1672,6 @@ def main():
     parser.add_argument("--hide-signs", action="store_true",
                         help="Hide traffic sign visual models (signs still affect behavior)")
 
-    # Auxiliary agent options
-    parser.add_argument("--auxiliary-agent", action="store_true", default=True,
-                        help="Spawn an auxiliary agent on an incoming lane near intersection")
-    parser.add_argument(
-        "--aux-distance-from-intersection",
-        type=float,
-        default=DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
-        help=f"Fallback aux spawn distance from intersection (meters); "
-             f"manifest row aux_distance_from_intersection takes precedence "
-             f"(default: {DEFAULT_AUX_DISTANCE_FROM_INTERSECTION})",
-    )
-    parser.add_argument("--aux-policy", type=str, default="idm", choices=["idm", "stationary"],
-                        help="Auxiliary agent behavior: idm drives to outgoing lane, stationary stays put")
-    parser.add_argument(
-        "--aux-spawn-velocity-ms",
-        type=float,
-        default=DEFAULT_SPAWN_VELOCITY_MS,
-        help=f"Aux IDM cruise/release speed in m/s (default: {DEFAULT_SPAWN_VELOCITY_MS})",
-    )
-    parser.add_argument("--aux-release-when-ego-within-m", type=float, default=20.0,
-                        help="Release gated IDM aux when ego is within this distance of spawn lane end (m); 0 = immediate")
-    parser.add_argument(
-        "--aux-convoy-size",
-        type=int,
-        default=DEFAULT_CONVOY_SIZE,
-        help=f"Max convoy size at manifest generation; spawns rows for sizes 1..N "
-             f"(default: {DEFAULT_CONVOY_SIZE}). Per-row size is stored as aux_convoy_size.",
-    )
-    parser.add_argument(
-        "--aux-convoy-gap-m",
-        type=float,
-        default=DEFAULT_CONVOY_GAP_M,
-        help=f"Longitudinal spacing between convoy vehicles in meters (default: {DEFAULT_CONVOY_GAP_M})",
-    )
-    parser.add_argument(
-        "--aux-lanes-occupied",
-        type=int,
-        default=DEFAULT_AUX_LANES_OCCUPIED_MAX,
-        help=f"Fallback max main-road lanes to occupy when manifest row omits aux_lanes_occupied "
-             f"(default: {DEFAULT_AUX_LANES_OCCUPIED_MAX})",
-    )
-
     args = parser.parse_args()
 
     if args.scene_id and args.scene_uid:
@@ -1851,16 +1708,6 @@ def main():
     print(f"Preset: {args.preset}")
     print(f"Backend: sumo (real maps only)")
     print(f"Input: {benchmark_output_dir}")
-    if args.auxiliary_agent:
-        print(f"Auxiliary agent: ENABLED ({args.aux_policy}, near intersection)")
-        print(f"  - Distance from intersection: {args.aux_distance_from_intersection}m")
-        if args.aux_policy == "idm":
-            print(f"  - Release when ego within: {args.aux_release_when_ego_within_m}m of spawn lane end")
-            print(f"  - Speed after release: {args.aux_spawn_velocity_ms} m/s")
-            print(f"  - Convoy size: from manifest row aux_convoy_size (CLI default {args.aux_convoy_size})")
-            print(f"  - Lanes occupied: from manifest row aux_lanes_occupied (CLI default {args.aux_lanes_occupied})")
-            print(f"  - Convoy gap: {args.aux_convoy_gap_m}m")
-            print(f"  - Route: incoming lane -> reachable outgoing lane")
 
     if args.manifest:
         manifest_path = Path(args.manifest)
@@ -1980,14 +1827,6 @@ def main():
                 replay_root=replay_root,
                 save_gif=gif_path,
                 hide_signs=args.hide_signs,
-                auxiliary_agent=args.auxiliary_agent,
-                aux_distance_from_intersection=args.aux_distance_from_intersection,
-                aux_policy=args.aux_policy,
-                aux_spawn_velocity_ms=args.aux_spawn_velocity_ms,
-                aux_release_when_ego_within_m=args.aux_release_when_ego_within_m,
-                aux_convoy_size=args.aux_convoy_size,
-                aux_convoy_gap_m=args.aux_convoy_gap_m,
-                aux_lanes_occupied=args.aux_lanes_occupied,
             )
             episode_dt = time.time() - episode_t0
             print(f"{args.policy}  elapsed_s={episode_dt:.3f}")

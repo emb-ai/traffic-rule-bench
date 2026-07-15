@@ -25,6 +25,9 @@ class SumoTrafficManager(BaseManager):
     VEHICLE_GAP_ON_LANE = 12  # metres between vehicles on the same lane
     MAX_PER_LANE = 6       # max vehicles per lane
     IDM_ACT_BATCH_SIZE = 5
+    # NPC↔NPC pile-ups: if two traffic cars contact and either has
+    # crash_vehicle, remove both so they don't block the skill scene.
+    NPC_NPC_CRASH_DIST = 4.0  # metres — approximate contact envelope
     # Stuck-cascade prevention: previously 2.0 km/h + 40 steps (~4 s) was so
     # aggressive that any traffic-light queue or yield negotiation culled
     # the entire surrounding fleet in one tick. Now we only count *truly*
@@ -696,6 +699,9 @@ class SumoTrafficManager(BaseManager):
                     remove_reasons[v.name] = f"arrived age={age}"
                     continue
 
+            # --- Guard 4: NPC↔NPC collision → both disappear ----------------
+            # Handled after the per-vehicle loop (needs pairwise scan).
+
             # Remove stuck vehicles — but ONLY count as stuck if the vehicle is
             # also off-track (wrong heading or lateral drift). Vehicles stopped
             # in a legitimate traffic jam / at a red light / before a crosswalk
@@ -723,6 +729,32 @@ class SumoTrafficManager(BaseManager):
                         remove_reasons[v.name] = f"stuck_on_track {cnt} steps"
             else:
                 self._stuck_counter[v.id] = 0
+
+        # --- Guard 4: NPC↔NPC contact → cull both (don't poison ego eval) ---
+        # Ego collisions are left alone — episode crash attribution handles them.
+        already = {id(v) for v in to_remove}
+        npc_list = [v for v in self._traffic_vehicles if id(v) not in already]
+        crash_dist2 = self.NPC_NPC_CRASH_DIST ** 2
+        for i in range(len(npc_list)):
+            vi = npc_list[i]
+            vi_crash = bool(getattr(vi, "crash_vehicle", False))
+            for j in range(i + 1, len(npc_list)):
+                vj = npc_list[j]
+                vj_crash = bool(getattr(vj, "crash_vehicle", False))
+                if not (vi_crash or vj_crash):
+                    continue
+                dx = float(vi.position[0] - vj.position[0])
+                dy = float(vi.position[1] - vj.position[1])
+                if dx * dx + dy * dy > crash_dist2:
+                    continue
+                if id(vi) not in already:
+                    to_remove.append(vi)
+                    remove_reasons[vi.name] = "npc_npc_crash"
+                    already.add(id(vi))
+                if id(vj) not in already:
+                    to_remove.append(vj)
+                    remove_reasons[vj.name] = "npc_npc_crash"
+                    already.add(id(vj))
 
         # --- log removals ---
         for v in to_remove:

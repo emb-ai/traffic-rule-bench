@@ -11,7 +11,6 @@ from .junction_priority_layout import (
     INTERSECTION_JUNCTION_TYPES,
     JunctionPriorityLayout,
     build_junction_priority_layout,
-    right_arm_for_layout,
 )
 from .lane_keys import lane_num_from_key, make_lane_key
 from .sumo_utils import VehicleRouteIndex, is_vehicle_drivable_lane, load_vehicle_route_index
@@ -26,16 +25,12 @@ class ApproachSpawnLane:
 
 @dataclass(frozen=True)
 class SpawnScenario:
-    """One ego/aux spawn + ego destination combination."""
+    """One ego spawn + destination combination."""
 
     ego_edge_id: str
     ego_lane_num: int
     ego_destination_edge_id: str
     ego_destination_lane_key: str
-    aux_edge_id: str
-    aux_lane_num: int
-    aux_destination_edge_id: str
-    aux_destination_lane_key: str
     scenario_id: str
 
     def to_manifest_fields(self) -> dict:
@@ -44,11 +39,6 @@ class SpawnScenario:
             "spawn_lane_num": self.ego_lane_num,
             "destination_lane_id": self.ego_destination_lane_key,
             "destination_edge_id": self.ego_destination_edge_id,
-            "aux_road_id": self.aux_edge_id,
-            "aux_spawn_lane_num": self.aux_lane_num,
-            "aux_spawn_lane_index": _lane_key(self.aux_edge_id, self.aux_lane_num),
-            "aux_destination_lane_id": self.aux_destination_lane_key,
-            "aux_destination_edge_id": self.aux_destination_edge_id,
             "augmentation_id": self.scenario_id,
         }
 
@@ -84,13 +74,6 @@ def _ego_destination_edges(layout: JunctionPriorityLayout, ego_edge_id: str) -> 
     return list(arm.straight_to) or list(arm.left_to)
 
 
-def _aux_straight_destination(layout: JunctionPriorityLayout, aux_edge_id: str) -> Optional[str]:
-    arm = layout.arm_for_edge(aux_edge_id)
-    if arm is None or not arm.straight_to:
-        return None
-    return arm.straight_to[0]
-
-
 def _is_valid_departure(
     spawn_edge: str,
     spawn_lane: int,
@@ -111,7 +94,7 @@ def enumerate_spawn_scenarios(
     min_lane_length: float = 20.0,
     lane_lengths: Optional[Dict[Tuple[str, int], float]] = None,
 ) -> List[SpawnScenario]:
-    """Enumerate ego on any arm; aux only on the right-hand conflicting arm."""
+    """Enumerate ego spawn + destination combinations on any arm."""
     lane_lengths = lane_lengths or {}
     lane_keys_by_edge: Dict[str, List[str]] = {
         arm.edge_id: list(arm.lane_keys) for arm in layout.arms
@@ -121,25 +104,12 @@ def enumerate_spawn_scenarios(
     scenarios: List[SpawnScenario] = []
 
     for ego_edge in ego_edges:
-        right_arm = right_arm_for_layout(layout, ego_edge)
-        if right_arm is None:
-            continue
-
-        aux_edge = right_arm.edge_id
         ego_lane_nums = spawn_lanes_by_edge.get(ego_edge, [])
         if not ego_lane_nums:
             continue
 
         ego_dest_edges = _ego_destination_edges(layout, ego_edge)
         if not ego_dest_edges:
-            continue
-
-        aux_dest_edge = _aux_straight_destination(layout, aux_edge)
-        if aux_dest_edge is None:
-            continue
-
-        aux_lane_nums = spawn_lanes_by_edge.get(aux_edge, [])
-        if not aux_lane_nums:
             continue
 
         for ego_lane in ego_lane_nums:
@@ -153,42 +123,24 @@ def enumerate_spawn_scenarios(
                     lane_keys_by_edge,
                 )
 
-                for aux_lane in aux_lane_nums:
-                    if lane_lengths.get((aux_edge, aux_lane), min_lane_length) < min_lane_length:
-                        continue
+                if not _is_valid_departure(
+                    ego_edge,
+                    ego_lane,
+                    ego_dest_edge,
+                    ego_dest_lane_key,
+                ):
+                    continue
 
-                    if not _is_valid_departure(
-                        ego_edge,
-                        ego_lane,
-                        ego_dest_edge,
-                        ego_dest_lane_key,
-                    ):
-                        continue
-
-                    aux_dest_lane_key = _pick_outgoing_lane_key(
-                        aux_dest_edge,
-                        aux_lane,
-                        lane_keys_by_edge,
+                scenario_id = f"ego_{ego_edge}_L{ego_lane}_to_{ego_dest_edge}"
+                scenarios.append(
+                    SpawnScenario(
+                        ego_edge_id=ego_edge,
+                        ego_lane_num=ego_lane,
+                        ego_destination_edge_id=ego_dest_edge,
+                        ego_destination_lane_key=ego_dest_lane_key,
+                        scenario_id=scenario_id,
                     )
-
-                    scenario_id = (
-                        f"ego_{ego_edge}_L{ego_lane}"
-                        f"_to_{ego_dest_edge}"
-                        f"_aux_{aux_edge}_L{aux_lane}"
-                    )
-                    scenarios.append(
-                        SpawnScenario(
-                            ego_edge_id=ego_edge,
-                            ego_lane_num=ego_lane,
-                            ego_destination_edge_id=ego_dest_edge,
-                            ego_destination_lane_key=ego_dest_lane_key,
-                            aux_edge_id=aux_edge,
-                            aux_lane_num=aux_lane,
-                            aux_destination_edge_id=aux_dest_edge,
-                            aux_destination_lane_key=aux_dest_lane_key,
-                            scenario_id=scenario_id,
-                        )
-                    )
+                )
 
     return scenarios
 
@@ -214,7 +166,7 @@ def augment_layout_for_scene(
     sign_lat: Optional[float] = None,
     sign_lon: Optional[float] = None,
 ) -> Tuple[JunctionPriorityLayout, List[SpawnScenario]]:
-    """Build equal-priority layout and enumerate right-hand aux scenarios."""
+    """Build equal-priority layout and enumerate ego spawn scenarios."""
     layout = build_junction_priority_layout(
         net_path,
         mode="main_main",
