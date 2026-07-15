@@ -20,11 +20,32 @@ from tqdm import tqdm
 from shapely.ops import nearest_points
 import json
 
-OVERPASS_URLS = [
+# Pure-stdlib sign-orientation helper (lives beside this script). Ensure the
+# script's own directory is importable whether run as a script or imported.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from sign_edge_orientation import orient_sign_edge
+
+# Overpass endpoints, tried in order. Override at runtime without editing code:
+#   OVERPASS_URLS="https://overpass.openstreetmap.fr/api/interpreter,..." python ...
+_DEFAULT_OVERPASS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.openstreetmap.fr/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
 ]
+OVERPASS_URLS = [u.strip() for u in os.environ.get("OVERPASS_URLS", "").split(",")
+                 if u.strip()] or _DEFAULT_OVERPASS
+
+# Per-sign-code highway-type filter for road matching. A residential/living zone
+# (5.21 residential zone / 5.22 end of residential zone) is NEVER on a through-road, so
+# restrict matching to courtyard/residential ways and PREFER an actual
+# `living_street` when one is reasonably close. Codes not listed here keep the
+# legacy behavior: nearest car-accessible way regardless of highway type.
+THROUGH_ROADS = {"motorway", "trunk", "primary", "secondary", "tertiary"}
+RESIDENTIAL_WAYS = {"living_street", "service", "residential", "unclassified", "road"}
+SIGN_HIGHWAY_FILTER = {
+    "5.21": {"allowed": RESIDENTIAL_WAYS, "prefer": {"living_street"}},
+    "5.22": {"allowed": RESIDENTIAL_WAYS, "prefer": {"living_street"}},
+}
 
 class AsyncOSMDownloader:
     def __init__(self, max_concurrent=5):
@@ -59,6 +80,11 @@ class AsyncOSMDownloader:
                 async with self.session.post(url, data={"data": query}, timeout=aiohttp.ClientTimeout(total=60)) as response:
                     if response.status == 200:
                         content = await response.text()
+                        # Don't accept a 200 with no map data (regional/empty mirror) —
+                        # it would write an empty fragment that netconvert rejects.
+                        if "<node" not in content and "<way" not in content:
+                            print(f"Empty data from {url}, trying next endpoint")
+                            continue
                         async with aiofiles.open(output_path, "w", encoding="utf-8") as f:
                             await f.write(content)
                         return True
@@ -69,14 +95,26 @@ class AsyncOSMDownloader:
         raise RuntimeError(f"All Overpass endpoints failed for ({lat}, {lon})")
 
 class BatchSignProcessor:
-    def __init__(self, csv_path, scenes_dir, max_concurrent_downloads=5, max_concurrent_netconvert=2):
+    def __init__(self, csv_path, scenes_dir, max_concurrent_downloads=5, max_concurrent_netconvert=2,
+                 dedup_osm_way=False, geo_spread=False, geo_spread_seed=42):
         self.csv_path = csv_path
         self.scenes_dir = Path(scenes_dir)
         self.max_concurrent_downloads = max_concurrent_downloads
         self.max_concurrent_netconvert = max_concurrent_netconvert
         self.df = None
         self.existing_ids = set()
-        self.existing_counts = {} 
+        self.existing_counts = {}
+        # Geometry-diversity options (opt-in; off = legacy behavior).
+        self.dedup_osm_way = dedup_osm_way      # ≤1 scene per unique road (osm_way_id) per code
+        self.geo_spread = geo_spread            # round-robin candidate order across districts
+        self.geo_spread_seed = geo_spread_seed
+        self.seen_ways = {}                     # {sign_type: set(normalized osm_way_id)}
+
+    @staticmethod
+    def _norm_way(way_id):
+        """Normalize an OSM/SUMO way id to a road key: drop '#<seg>' and a leading '-'."""
+        s = str(way_id).split("#", 1)[0]
+        return s[1:] if s.startswith("-") else s
         
     def load_data(self):
         """Load the CSV with sign data"""
@@ -84,17 +122,47 @@ class BatchSignProcessor:
         self.df = pd.read_csv(self.csv_path, sep=";", low_memory=False)
         self.df["ID"] = self.df["ID"].astype(int)
         
-    def filter_signs(self, sign_types):
-        """Filter signs by one or more types"""
+    def filter_signs(self, sign_types, spread=False):
+        """Filter signs by one or more types.
+
+        spread=False: deterministic ID order (legacy).
+        spread=True:  round-robin across District (fallback AdmArea) so candidates
+                      are pulled from all over the city first — finds DIFFERENT roads
+                      faster and avoids clustering many scenes on one street.
+        """
         if isinstance(sign_types, str):
             sign_types = [sign_types]
-        
+
         pattern = "|".join([f"^{st}" for st in sign_types])
         filtered = self.df[self.df["SignType"].str.contains(pattern, na=False, regex=True)]
-        
         filtered = filtered.sort_values(by="ID", ascending=True)
-        
-        return filtered
+
+        if not spread:
+            return filtered
+
+        group_col = "District" if "District" in filtered.columns else (
+            "AdmArea" if "AdmArea" in filtered.columns else None)
+        if group_col is None:
+            return filtered
+
+        groups = {}
+        for _, row in filtered.iterrows():
+            g = str(row.get(group_col) or "")
+            groups.setdefault(g, []).append(row)
+        order = list(groups.keys())
+        random.Random(self.geo_spread_seed).shuffle(order)
+
+        out_rows, i = [], 0
+        while True:
+            added = False
+            for g in order:
+                if i < len(groups[g]):
+                    out_rows.append(groups[g][i])
+                    added = True
+            if not added:
+                break
+            i += 1
+        return pd.DataFrame(out_rows)
     
     def collect_existing_counts(self):
         """
@@ -120,6 +188,11 @@ class BatchSignProcessor:
                                 if sign_id:
                                     existing_ids.add(sign_id)
                                     count += 1
+                                # Seed per-road dedup set so a top-up run never re-uses
+                                # a road already collected for this code.
+                                way = meta.get("osm_way_id")
+                                if way is not None:
+                                    self.seen_ways.setdefault(sign_type, set()).add(self._norm_way(way))
                         except (json.JSONDecodeError, KeyError):
                             continue
             if count > 0:
@@ -177,18 +250,39 @@ class BatchSignProcessor:
                 osm_raw, net_output_path
             )
             
+            _hwf = SIGN_HIGHWAY_FILTER.get(sign_type, {})
             way_id, distance_from_start = await loop.run_in_executor(
                 None,
                 self.find_closest_way_and_distance,
-                osm_raw, lat, lon
+                osm_raw, lat, lon, _hwf.get("allowed"), _hwf.get("prefer")
             )
-            
+
+            # Per-road dedup: ≤1 scene per unique road (osm_way_id) per code, so the
+            # sign lands on a DIFFERENT road each time. Check-and-add here with NO
+            # await in between => atomic under cooperative asyncio (no lock needed).
+            if self.dedup_osm_way:
+                norm_way = self._norm_way(way_id)
+                seen = self.seen_ways.setdefault(sign_type, set())
+                if norm_way in seen:
+                    print(f" Skipping dup road {norm_way} for {sign_type} (sign {sign_id})")
+                    return {"sign_id": sign_id, "sign_type": sign_type, "status": "skipped_dup_way"}
+                seen.add(norm_way)
+
             road_id, s_offset = await loop.run_in_executor(
                 None,
                 self.find_edge_and_offset_in_sumo,
                 net_output_path, way_id, distance_from_start
             )
-            
+
+            # Zone-entry signs (5.21): orient onto the directed edge whose
+            # upstream side reaches the big road, so the braking-spawn route is
+            # big-road -> sign -> courtyard (no-op for other codes).
+            road_id, s_offset, _orient = await loop.run_in_executor(
+                None,
+                orient_sign_edge,
+                str(net_output_path), road_id, s_offset, sign_type
+            )
+
             scene_dir.mkdir(parents=True, exist_ok=True)
             (scene_dir / net_file).write_bytes(net_output_path.read_bytes())
             
@@ -332,35 +426,59 @@ class BatchSignProcessor:
         return default_widths.get(highway, 5.0)
     
     @staticmethod
-    def find_closest_way_and_distance(osm_path, sign_lat, sign_lon):
+    def find_closest_way_and_distance(osm_path, sign_lat, sign_lon,
+                                      allowed_highways=None, prefer_highways=None,
+                                      prefer_margin_m=20.0):
+        """Find the OSM way nearest to the sign and the normalized offset along it.
 
+        `allowed_highways` (set of highway= values): if given, only ways of these
+        types are considered — used to keep zone signs (5.21/5.22) off through-
+        roads. `prefer_highways`: if a way of one of these types lies within
+        `prefer_margin_m` of the nearest allowed way, prefer it (so an actual
+        `living_street` wins over an adjacent service road). None = legacy
+        behavior (nearest car-accessible way of any type)."""
         tree = ET.parse(osm_path)
         root = tree.getroot()
-        nodes = {n.get("id"): (float(n.get("lat")), float(n.get("lon"))) 
+        nodes = {n.get("id"): (float(n.get("lat")), float(n.get("lon")))
                 for n in root.findall("node")}
-        
+
         proj = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32637", always_xy=True)
         sign_x, sign_y = proj.transform(sign_lon, sign_lat)
         sign_point = Point(sign_x, sign_y)
-        
-        min_dist = float("inf")
-        closest_way_id = None
-        distance_from_start = None
-        
+
+        def _frac_along(line):
+            nearest_on_road = nearest_points(line, sign_point)[0]
+            dist_along = 0.0
+            coords = list(line.coords)
+            for i in range(len(coords) - 1):
+                segment = LineString([coords[i], coords[i + 1]])
+                if segment.distance(nearest_on_road) < 1e-6:
+                    dist_along += Point(coords[i]).distance(nearest_on_road)
+                    break
+                dist_along += segment.length
+            return dist_along / line.length if line.length > 0 else 0.0
+
+        # (dist, way_id, frac) for the nearest allowed way and the nearest preferred way.
+        best_any = (float("inf"), None, None)
+        best_pref = (float("inf"), None, None)
+
         for way in root.findall("way"):
-            if not any(tag.get("k") == "highway" for tag in way.findall("tag")):
+            tags = {tag.get("k"): tag.get("v") for tag in way.findall("tag")}
+            highway = tags.get("highway")
+            if highway is None:
                 continue
             if not BatchSignProcessor.is_car_accessible(way):
                 continue
-            
-            blocks = []   
+            if allowed_highways is not None and highway not in allowed_highways:
+                continue
+
+            blocks = []
             current_block = []
             for nd in way.findall("nd"):
                 nid = nd.get("ref")
                 if nid in nodes:
                     lat, lon = nodes[nid]
-                    x, y = proj.transform(lon, lat)
-                    current_block.append((x, y))
+                    current_block.append(proj.transform(lon, lat))
                 else:
                     if len(current_block) >= 2:
                         blocks.append(current_block)
@@ -368,29 +486,24 @@ class BatchSignProcessor:
             if len(current_block) >= 2:
                 blocks.append(current_block)
 
+            width = BatchSignProcessor.get_road_width(way)
             for block_coords in blocks:
                 line = LineString(block_coords)
-                width = BatchSignProcessor.get_road_width(way)
-                polygon = line.buffer(width / 2)
-                dist = sign_point.distance(polygon)
-                if dist < min_dist:
-                    min_dist = dist
-                    closest_way_id = way.get("id")
-                    nearest_on_road = nearest_points(line, sign_point)[0]
-                    dist_along = 0.0
-                    block_coords_list = list(line.coords)
-                    for i in range(len(block_coords_list) - 1):
-                        segment = LineString([block_coords_list[i], block_coords_list[i+1]])
-                        if segment.distance(nearest_on_road) < 1e-6:
-                            dist_along += Point(block_coords_list[i]).distance(nearest_on_road)
-                            break
-                        else:
-                            dist_along += segment.length
-                   distance_from_start = dist_along / line.length
+                dist = sign_point.distance(line.buffer(width / 2))
+                if dist < best_any[0]:
+                    best_any = (dist, way.get("id"), _frac_along(line))
+                if prefer_highways and highway in prefer_highways and dist < best_pref[0]:
+                    best_pref = (dist, way.get("id"), _frac_along(line))
 
-        if closest_way_id is None:
-            raise ValueError(f"No road found near ({sign_lat}, {sign_lon})")
-        return closest_way_id, distance_from_start
+        if best_any[1] is None:
+            extra = (f" within allowed highways {sorted(allowed_highways)}"
+                     if allowed_highways else "")
+            raise ValueError(f"No road found near ({sign_lat}, {sign_lon}){extra}")
+        # Prefer an actual living_street when it is about as close as the nearest allowed way.
+        if (prefer_highways and best_pref[1] is not None
+                and best_pref[0] <= best_any[0] + prefer_margin_m):
+            return best_pref[1], best_pref[2]
+        return best_any[1], best_any[2]
         
     @staticmethod
     def find_edge_and_offset_in_sumo(net_path, way_id, target_distance):
@@ -454,20 +567,30 @@ class BatchSignProcessor:
     
         targets = {}
         remaining_to_collect = {}
+        base_existing = {}
         for st in sign_types:
-            existing = self.existing_counts.get(st, 0)
+            # Under --dedup-osm-way the target counts UNIQUE ROADS, not scenes
+            # (a code may already have more scenes than roads). So "existing" =
+            # distinct roads already collected; we top up to max_signs_per_type roads.
+            if self.dedup_osm_way:
+                existing = len(self.seen_ways.get(st, set()))
+                unit = "roads"
+            else:
+                existing = self.existing_counts.get(st, 0)
+                unit = "scenes"
+            base_existing[st] = existing
             needed = max_signs_per_type - existing
             if needed <= 0:
-                print(f"Type {st}: already have {existing} scenes (limit {max_signs_per_type}), no new ones needed.")
+                print(f"Type {st}: already have {existing} {unit} (limit {max_signs_per_type}), no new ones needed.")
             else:
-                print(f"Type {st}: already have {existing}, need to create {needed} more (total {max_signs_per_type})")
+                print(f"Type {st}: already have {existing} {unit}, need to create {needed} more (total {max_signs_per_type})")
             targets[st] = max_signs_per_type
             remaining_to_collect[st] = needed
     
         success_count = {st: 0 for st in sign_types}
         iterators = {}
         for sign_type in sign_types:
-            filtered = self.filter_signs(sign_type)
+            filtered = self.filter_signs(sign_type, spread=self.geo_spread)
             iterators[sign_type] = filtered.iterrows()
 
         semaphore = asyncio.Semaphore(self.max_concurrent_downloads)
@@ -502,7 +625,7 @@ class BatchSignProcessor:
                     results.append(result)
                     if result and result.get("status") == "success":
                         success_count[st] += 1
-                        collected = self.existing_counts.get(st, 0) + success_count[st]
+                        collected = base_existing[st] + success_count[st]
                         target = targets[st]
                         print(f" {st}: progress {collected}/{target} ({target - collected} remaining)")
                     if success_count[st] < remaining_to_collect[st]:
@@ -518,11 +641,13 @@ class BatchSignProcessor:
 
         successful = [r for r in results if r and r.get("status") == "success"]
         failed = [r for r in results if r and r.get("status") == "failed"]
+        dup_roads = [r for r in results if r and r.get("status") == "skipped_dup_way"]
 
         print("\n" + "="*50)
         for st in sign_types:
             print(f" {st}: {success_count[st]} / {remaining_to_collect[st]} successful")
-        print(f" Total successful: {len(successful)}, failed: {len(failed)}")
+        print(f" Total successful: {len(successful)}, failed: {len(failed)}, "
+              f"skipped dup-road: {len(dup_roads)}")
 
         if failed:
             print("\nFailed signs:")
@@ -541,17 +666,28 @@ async def main():
                        help="Maximum concurrent downloads")
     parser.add_argument("--max-signs-per-type", type=int, default=250,
                        help="Maximum signs per type")
-    
+    parser.add_argument("--dedup-osm-way", action="store_true",
+                       help="Collect at most ONE scene per unique road (osm_way_id) per "
+                            "code, so the sign lands on a different road each time.")
+    parser.add_argument("--geo-spread", action="store_true",
+                       help="Order candidates round-robin across districts (find diverse "
+                            "roads faster, less clustering).")
+    parser.add_argument("--geo-spread-seed", type=int, default=42,
+                       help="Seed for --geo-spread district ordering.")
+
     args = parser.parse_args()
-    
+
     Path("osm_fragments").mkdir(exist_ok=True)
     Path("maps").mkdir(exist_ok=True)
     Path(args.scenes_dir).mkdir(exist_ok=True)
-    
+
     processor = BatchSignProcessor(
-        args.csv, 
+        args.csv,
         args.scenes_dir,
-        max_concurrent_downloads=args.max_concurrent
+        max_concurrent_downloads=args.max_concurrent,
+        dedup_osm_way=args.dedup_osm_way,
+        geo_spread=args.geo_spread,
+        geo_spread_seed=args.geo_spread_seed,
     )
     
     results = await processor.process_batch(

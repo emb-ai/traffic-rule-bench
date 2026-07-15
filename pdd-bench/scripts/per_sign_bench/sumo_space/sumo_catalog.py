@@ -25,35 +25,73 @@ from .sumo_scene_enumerator import (
 )
 
 # Signs whose scenes get a braking-spawn (ego starts above the limit, placed far
-# enough before the sign to slow down). Currently only the speed-limit sign 3.24.
-BRAKING_SPAWN_CODES = {"3.24"}
+# enough before the sign to slow down). Speed-limit 3.24 + speed-zone signs:
+# 5.21 (residential zone, fixed 20 km/h) and 5.31 (zone speed limit).
+BRAKING_SPAWN_CODES = {"3.24", "5.21", "5.31"}
+
+# Minimum-speed sign 4.6: built like a braking-spawn scene (ego placed upstream
+# with an approach run, route through the sign), but MIRRORED — the ego starts
+# BELOW the minimum and must ACCELERATE up to it instead of braking down.
+ACCEL_SPAWN_CODES = {"4.6"}
+ACCEL_DEFICIT_KMH = 15.0        # ego spawns this far BELOW the minimum speed
+ACCEL_V0_FLOOR_KMH = 5.0        # but never slower than this
+# Upstream approach (runway) for a MIN-speed sign: ego spawns this far before
+# the sign at v0=(min-deficit) and must accelerate UP to the minimum. The zone
+# only begins +10 m past the sign, so the runway to reach the min before the
+# zone is ACCEL_APPROACH_M + 10. Needs to be long enough that a compliant policy
+# at full throttle reaches the minimum (up to 60 km/h from min-15) BEFORE the
+# zone starts — otherwise it enters below the min and violates at the zone start.
+ACCEL_APPROACH_M = 20.0
+MIN_SPEED_FLOOR_KMH = 35.0      # drop 4.6 scenes whose realistic min (road-10, cap) is below
+                                # this — a min <= base cruise (~30) isn't discriminative
+
+
+# Enforced limits a braking scene (3.24 / 5.31) may use.
+ALLOWED_LIMITS_KMH = (20, 30, 40)
+
+# Uniform distribution of target limits (strategy A6 from the run_v60_x10
+# analysis, see that run's reports/filtration_scenarios.md):
+# 3.24/5.31 — nearest-snap put 85% of scenes on v40 ≈ base-policy cruise →
+# vacuous compliance (idm_default 0.99); round-robin gives an exact 1/3 split.
+SPEED_LIMIT_TARGETS_KMH = (20, 30, 40)
+# 4.6 — cap {40,60} put 61% of scenes on min=40 ≈ plant2 cruise (~41 km/h,
+# vacuous, pair gap 0.09); round-robin {40,50,60} fixes the plant2 pair
+# (min gap 0.159→0.234 post-hoc; {50,60} would give 0.311, but 40 is kept
+# for donor-scene volume).
+MIN_SPEED_TARGETS_KMH = (40, 50, 60)
 
 
 def bucket_limit_kmh(raw_kmh: float, selector: Optional[int] = None):
-    """Snap a raw OSM speed limit to the canonical 3.24 sign set {20,40,50}.
+    """Snap a raw OSM speed limit to the NEAREST of {20, 30, 40} km/h.
 
-    <20 → 20 ; 20–40 → 40 ; 40–80 → 40 or 50 (split evenly) ; >80 → None (dropped).
-
-    The former 60 bucket is removed: its scenes are spread UNIFORMLY over 40 and 50
-    using the parity of `selector` (a stable per-scene hash). With no selector the
-    fallback is 50 (the higher of the pair). All targets have icons (3.24_40/50.png)
-    and keep v0 (cap 22 m/s) above the limit.
+    DEPRECATED in the 3.24/5.31 enumeration (build_catalog round-robins over
+    SPEED_LIMIT_TARGETS_KMH there); kept for tests and external callers.
+    >80 km/h → None (dropped).
     """
     if raw_kmh > 80:
         return None
-    if raw_kmh < 21:
-        return 20
-    if raw_kmh <= 40:
-        return 40
-    # was 60 → now an even 40/50 split keyed off the per-scene selector
-    if selector is None:
-        return 50
-    return 40 if (selector % 2 == 0) else 50
+    return min(ALLOWED_LIMITS_KMH, key=lambda b: abs(b - raw_kmh))
 
-BRAKE_DECEL_MPS2_DEFAULT = 2.5     # = ego DEACC_FACTOR (ego_defaults.py)
-BRAKE_DELAY_S_DEFAULT = 1.0        # reaction/latency
-BRAKE_MARGIN_M_DEFAULT = 5.0
+BRAKE_DECEL_MPS2_DEFAULT = 3.5     # assumed braking decel (firm but achievable;
+                                   # idm brakes harder than its 2.5 comfort decel).
+                                   # Higher -> shorter d_brake -> shorter approach.
+BRAKE_DELAY_S_DEFAULT = 0.5        # small reaction buffer (room to settle → fewer OOR/crashes)
+BRAKE_MARGIN_M_DEFAULT = 3.0       # small buffer: reach v_target ~3 m before the sign
 V0_MIN_EXCESS_MPS_DEFAULT = 2.0    # min amount v0 must exceed the limit
+# Cap how far above the limit ego may spawn (km/h).
+V0_MAX_EXCESS_KMH = 30.0
+# Full braking distance (=1.0): a SIGN-AWARE agent has exactly enough room to
+# brake from v0 to v_target by the sign and comply; a SIGN-UNAWARE agent that
+# doesn't brake enters the zone at v0 > v_target and VIOLATES. This is the whole
+# point of the scene — discriminate aware vs unaware, not test braking strength.
+BRAKE_DIST_FACTOR = 1.0
+# Spawn-velocity ceiling: the agent's INITIAL speed at spawn may reach up to
+# 60 km/h. v0 is set directly via set_velocity (not clamped), then the IDM decays
+# toward its desired speed — so the agent ENTERS the approach above the limit and an
+# unaware policy carries that over-speed into the zone (violates). 60 km/h is the
+# fastest realistic entry and bounds the braking distance / off-road risk.
+EGO_MAX_SPAWN_MPS = 60.0 / 3.6   # = 16.667 m/s ≈ 60 km/h
+EGO_DESIRED_SPEED_MPS = 11.0     # legacy ref (~40 km/h); no longer caps v0
 SPAWN_VELOCITY_MAX_MPS = 22.0      # nuPlan clip upper bound
 
 
@@ -143,6 +181,10 @@ def build_catalog(
     rows: List[dict] = []
     insufficient_v0 = 0
     dropped_high_limit = 0
+    dropped_slow_min = 0   # 4.6 scenes whose road is too slow for a meaningful min
+    # Round-robin counters for target limits, one per sign_code — made
+    # deterministic by stratified_sample order → exact split within each code.
+    limit_rr: dict = {}
     for scene in sampled:
         n_lanes = count_lanes_on_road(scene.net_path, scene.road_id)
         if n_lanes <= 0:
@@ -153,20 +195,57 @@ def build_catalog(
             n_lanes_field = n_lanes
 
         is_braking = scene.sign_code in BRAKING_SPAWN_CODES
-        # Sign speed limit (km/h) from the net edge — same as lane.speed×3.6.
+        is_accel = scene.sign_code in ACCEL_SPAWN_CODES
+        is_spawn = is_braking or is_accel
+        # Enforced speed limit (km/h) ego must brake to before the sign.
         v_target_kmh = 0.0
         v_target_raw_kmh = 0.0
-        if is_braking:
+        if is_accel:
+            # 4.6 minimum-speed: target = min(road_speed - 10, achievable cap),
+            # cap split 40 / 60. The minimum must sit ABOVE the base policies'
+            # natural cruise (~30 km/h) so an unaware agent UNDER-shoots it
+            # (violates) while a compliant agent accelerates up to it (obeys) —
+            # the mirror of 3.24. Roads whose realistic min (<= road_speed-10)
+            # falls below MIN_SPEED_FLOOR_KMH are dropped (a 20 km/h min on a
+            # 30 km/h road isn't discriminative — base already complies).
             net_abs = str(scenes_root / scene.net_path)
             v_target_raw_kmh = round(edge_speed_mps(net_abs, scene.road_id) * 3.6)
-            # selector keyed on scene_id → even, reproducible 40/50 split of the
-            # former 60 bucket (independent of v0/var/lane axes).
-            bucketed = bucket_limit_kmh(v_target_raw_kmh,
-                                        selector=stable_hash(scene.scene_id, "limit40_50"))
-            if bucketed is None:        # raw limit > 80 km/h → drop the scene
-                dropped_high_limit += 1
+            # Balance the minimum over {40,50,60}: a scene gets the LEAST
+            # filled of the ACHIEVABLE buckets (v_target ≤ road−10). Blind
+            # round-robin skewed the split (50/60 are only achievable on roads
+            # ≥60/≥70 while fast roads were handed "40"); greedy spends fast
+            # roads on deficit buckets → uniformity is limited only by the
+            # road pool. Deterministic via stratified_sample order.
+            achievable = [t for t in MIN_SPEED_TARGETS_KMH
+                          if t <= v_target_raw_kmh - 10]
+            if achievable:
+                counts = limit_rr.setdefault(
+                    ("min_counts", scene.sign_code),
+                    {t: 0 for t in MIN_SPEED_TARGETS_KMH})
+                v_target_kmh = min(achievable, key=lambda t: (counts[t], t))
+                counts[v_target_kmh] += 1
+            else:
+                # 45–49 km/h road: the only meaningful minimum is road−10
+                v_target_kmh = v_target_raw_kmh - 10
+            if v_target_kmh < MIN_SPEED_FLOOR_KMH:
+                dropped_slow_min += 1
                 continue
-            v_target_kmh = bucketed
+        elif is_braking:
+            if scene.sign_code == "5.21":
+                # Residential zone: fixed 20 km/h, independent of the road's speed.
+                v_target_kmh = v_target_raw_kmh = 20.0
+            else:
+                net_abs = str(scenes_root / scene.net_path)
+                v_target_raw_kmh = round(edge_speed_mps(net_abs, scene.road_id) * 3.6)
+                if v_target_raw_kmh > 80:   # motorways — geometry unsuitable for 20/30
+                    dropped_high_limit += 1
+                    continue
+                # 3.24 AND 5.31: uniform round-robin of the limit over
+                # {20,30,40} (exact 1/3 split within each code) instead of the
+                # nearest-snap that put 85% of scenes on non-discriminative v40.
+                idx = limit_rr.get(scene.sign_code, 0)
+                limit_rr[scene.sign_code] = idx + 1
+                v_target_kmh = SPEED_LIMIT_TARGETS_KMH[idx % len(SPEED_LIMIT_TARGETS_KMH)]
 
         for spawn_lane_num in lane_range:
             for var_idx in range(n_variations):
@@ -186,10 +265,36 @@ def build_catalog(
                     "spawn_lane_num": spawn_lane_num,
                     "var_idx": var_idx,
                 }
-                if not is_braking:
+                if not is_spawn:
                     base["seed"] = stable_hash(scene.scene_id, spawn_lane_num, var_idx)
                     base["spawn_velocity_ms"] = 0.0
                     rows.append(base)
+                    continue
+
+                if is_accel:
+                    # Acceleration-spawn (4.6): ego starts BELOW the minimum and
+                    # must speed up. One row; placed d_required upstream at v0 so a
+                    # compliant policy reaches the minimum by the zone.
+                    seed = stable_hash(scene.scene_id, spawn_lane_num, var_idx)
+                    v_target_mps = v_target_kmh / 3.6
+                    v0 = max(ACCEL_V0_FLOOR_KMH / 3.6,
+                             (v_target_kmh - ACCEL_DEFICIT_KMH) / 3.6)
+                    # Short approach: ego accelerates IN the post-sign zone, so it
+                    # only needs to be at v0 just before the sign.
+                    d_req = ACCEL_APPROACH_M
+                    row = dict(base)
+                    row["seed"] = seed
+                    row["spawn_velocity_ms"] = round(v0, 4)
+                    row["v_target_kmh"] = v_target_kmh
+                    row["v_target_raw_kmh"] = v_target_raw_kmh
+                    row["d_required_m"] = round(d_req, 3)
+                    row["sign_s"] = scene.distance_from_start
+                    row["brake_decel_mps2"] = brake_decel_mps2
+                    row["brake_delay_s"] = brake_delay_s
+                    row["brake_margin_m"] = brake_margin_m
+                    row["braking_spawn"] = True
+                    row["spawn_mode"] = "accel"
+                    rows.append(row)
                     continue
 
                 # Braking-spawn (3.24): one row per v0 sample; ego starts above
@@ -203,14 +308,27 @@ def build_catalog(
                 v_target_mps = v_target_kmh / 3.6
                 for v_idx in range(max(1, n_v0_samples)):
                     vseed = stable_hash(scene.scene_id, spawn_lane_num, var_idx, "v0", v_idx)
+                    # Cap v0 at the ego's DESIRED speed (else it's shed instantly
+                    # at spawn) AND near the limit (short approach). The ego holds
+                    # this speed in, then must brake for the zone.
+                    # Ceiling: limit + up-to-30 km/h over-speed, capped at the 60 km/h
+                    # spawn ceiling. So 30/40 limits can spawn up to 60; 20 tops at 50
+                    # (a 40 km/h over-speed in a 20 zone is undrivable).
+                    v0_cap_mps = min(float(v0_max_kmh) / 3.6,
+                                     (v_target_kmh + V0_MAX_EXCESS_KMH) / 3.6,
+                                     EGO_MAX_SPAWN_MPS)
                     v0 = _v0_sampler(vseed, v_target_mps,
                                      min_excess=v0_min_excess_mps,
-                                     max_v=float(v0_max_kmh) / 3.6)
+                                     max_v=v0_cap_mps)
                     if v0 <= v_target_mps + 1e-6:   # never with the floored sampler
                         insufficient_v0 += 1
                         continue
-                    d_req = _braking_dist(v0, v_target_mps, brake_decel_mps2,
-                                          brake_delay_s, brake_margin_m)
+                    # Spawn at a FRACTION of the full braking distance: baseline
+                    # (decel 2.5) can't reach v_target by the sign -> overshoots
+                    # into the zone (real violation); only harder braking complies.
+                    d_req = BRAKE_DIST_FACTOR * _braking_dist(
+                        v0, v_target_mps, brake_decel_mps2,
+                        brake_delay_s, brake_margin_m)
                     row = dict(base)
                     row["v_idx"] = v_idx
                     row["seed"] = vseed
@@ -223,10 +341,13 @@ def build_catalog(
                     row["brake_delay_s"] = brake_delay_s
                     row["brake_margin_m"] = brake_margin_m
                     row["braking_spawn"] = True
+                    row["spawn_mode"] = "brake"
                     rows.append(row)
 
     if dropped_high_limit:
         print(f"[build_catalog] dropped {dropped_high_limit} scenes (raw limit > 80 km/h)")
+    if dropped_slow_min:
+        print(f"[build_catalog] dropped {dropped_slow_min} 4.6 scenes (road too slow for a min)")
     if insufficient_v0:
         print(f"[build_catalog] dropped {insufficient_v0} braking rows "
               f"(v0 could not exceed limit; cap {SPAWN_VELOCITY_MAX_MPS} m/s)")
@@ -234,10 +355,20 @@ def build_catalog(
 
 
 def save_catalog(catalog: List[dict], path: str | Path) -> None:
+    """Write the catalog: JSONL (one line = one scene) for .jsonl, else a JSON array.
+
+    JSONL is the format eval reads (bench/manifest_io._load_jsonl_rows parses
+    line by line): a catalog in this form is passed to --manifest directly,
+    with no materialization step.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
-        json.dump(catalog, f, indent=None, separators=(",", ":"))
+        if path.suffix == ".jsonl":
+            for row in catalog:
+                f.write(json.dumps(row, separators=(",", ":")) + "\n")
+        else:
+            json.dump(catalog, f, indent=None, separators=(",", ":"))
 
 
 def load_catalog(path: str | Path) -> List[dict]:

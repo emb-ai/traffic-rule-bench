@@ -11,6 +11,7 @@ that's not needed when we already drive the actual agent through the scene.
 from __future__ import annotations
 
 import logging
+import os
 import random
 import sys
 from pathlib import Path
@@ -52,14 +53,18 @@ def _build_env(catalog_row: dict, profile: dict):
         manual_control=False,
         use_mesh_terrain=False,
         log_level=logging.CRITICAL,
-        map_name=str(SCENES_ROOT / catalog_row["net_path"]),
+        # net_path is relative to the scenes root the catalog was built from.
+        # Honor PER_SIGN_SCENES_ROOT (set by sumo_pipeline from --scenes-root) so a
+        # non-default scene set (e.g. scenes_uniq) resolves correctly; else default.
+        map_name=str(Path(os.environ.get("PER_SIGN_SCENES_ROOT") or SCENES_ROOT)
+                     / catalog_row["net_path"]),
         sign_type=catalog_row["sign_code"],
         sign_spawn_distance=sign_spawn_distance,
         traffic_density=float(profile["traffic_density"]),
         horizon=int(profile.get("horizon_steps", 600)),
         tl_speed_factor=float(catalog_row.get("tl_speed_factor", 20.0)),
-        min_route_hops_after_spawn=int(catalog_row.get("min_route_hops_after_spawn", 10)),
-        max_route_hops_after_spawn=int(catalog_row.get("max_route_hops_after_spawn", 10)),
+        min_route_hops_after_spawn=int(catalog_row.get("min_route_hops_after_spawn", 2)),
+        max_route_hops_after_spawn=int(catalog_row.get("max_route_hops_after_spawn", 4)),
         num_scenarios=100000,  # allow seeds in [0, 100000) for variation
         vehicle_config={"show_lidar": False},
     )
@@ -85,6 +90,7 @@ def _build_env(catalog_row: dict, profile: dict):
     # the sign (resolved up the road graph in sumo_env). Pass the spec through.
     if catalog_row.get("braking_spawn"):
         config["ego_braking_spawn"] = True
+        config["ego_spawn_mode"] = str(catalog_row.get("spawn_mode", "brake"))
         config["ego_spawn_v0_ms"] = float(catalog_row.get("spawn_velocity_ms", 0.0) or 0.0)
         config["ego_brake_d_required"] = float(catalog_row.get("d_required_m", 0.0) or 0.0)
         config["ego_v_target_kmh"] = float(catalog_row.get("v_target_kmh", 0.0) or 0.0)
@@ -353,6 +359,20 @@ def materialize_sumo_scene(
         try:
             drive_metrics = _drive_episode(env, agent_policy, max_steps, save_gif)
             result.update(drive_metrics)
+            # Drivability filter: a scene is only valid if the rule-aware REFERENCE
+            # driver completes it cleanly — reaches the destination, no crash, no
+            # off-road. Scenes where even the expert fails have bad geometry (sharp
+            # junctions / curves the ego can't hold) and are dropped from the bench.
+            drivable = (drive_metrics.get("arrived_dest")
+                        and not drive_metrics.get("crashed")
+                        and not drive_metrics.get("out_of_road"))
+            if not drivable:
+                result["valid"] = False
+                reasons = []
+                if not drive_metrics.get("arrived_dest"): reasons.append("no_dest")
+                if drive_metrics.get("crashed"): reasons.append("crash")
+                if drive_metrics.get("out_of_road"): reasons.append("off_road")
+                result["failure_reason"] = "undrivable:" + ",".join(reasons)
         except Exception as exc:
             result["drive_error"] = f"{type(exc).__name__}: {exc}"
         finally:
