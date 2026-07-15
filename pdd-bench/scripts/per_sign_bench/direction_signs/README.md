@@ -15,8 +15,11 @@ Family registry: `lib/direction_sign_spec.py`.
 | 4.1.5 | Straight or left     | `s`, `l`         |
 | 4.1.6 | Right or left        | `l`, `r`         |
 
-Default active member is **4.1.1**. Route filtering / direction-aware scene
-generation is not implemented yet — only shared structure is in place.
+Default active member is **4.1.1**. For 4.1.1, crop selects dual-path
+spawn/dest (shorter turn vs longer straight) and stores them in scene meta;
+manifest reuses those endpoints. At eval, baseline ``idm`` follows the short
+turn (violation); ``modified_idm`` / ``carl_rule`` / ``comprehensive_rule_expert``
+replan via ``SignComplianceMixin`` onto the straight first exit to the same dest.
 
 ## Setup
 
@@ -63,13 +66,19 @@ python tools/filter_scenes/crop_junction_scene.py --limit 5
 python tools/filter_scenes/crop_junction_scene.py sign_72915 --overwrite --min-gain 20 --margin 40
 ```
 
-3. Manifest (active sign from config):
+3. Manifest reuses crop-time spawn/dest from ``meta.json`` (no rediscovery):
 
 ```bash
 python generate_manifest.py
-# another family member:
+# another family member (not dual-path yet):
 python generate_manifest.py sign.pdd_code=4.1.2 paths.output_base=benchmark_output/4_1_2
 ```
+
+Crop writes ``road_id``, ``destination_*``, and ``dual_path`` (both edge lists);
+``custom_cropped.png`` overlays full spawn→dest routes (blue = straight / longer,
+orange = turn / shorter; laterally offset so the shared final edges stay
+visible). Manifest copies those endpoints into each row. Eval places
+``LaneAllowedDirectionSign4_1_1`` on the ego approach.
 
 4. Eval:
 
@@ -82,6 +91,5 @@ python eval_pipeline.py \
 
 ## Next
 
-- Manifest: force ego dest from cropped ``dual_path`` meta (already stored)
 - Extend dual-path selection to other 4.1.x ``allowed_dirs``
 - Split catalogs / seeds per code if needed

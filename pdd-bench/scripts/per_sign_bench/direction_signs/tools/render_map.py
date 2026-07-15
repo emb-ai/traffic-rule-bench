@@ -69,6 +69,151 @@ def parse_sumo_net(net_path: Path):
     return edges, junctions
 
 
+def edge_shapes_by_id(edges) -> dict[str, list[tuple[float, float]]]:
+    """Map SUMO edge id -> representative lane polyline (longest lane)."""
+    best: dict[str, list[tuple[float, float]]] = {}
+    for edge in edges:
+        eid = edge.get("id")
+        pts = edge.get("points") or []
+        if not eid or len(pts) < 2:
+            continue
+        prev = best.get(eid)
+        if prev is None or len(pts) > len(prev):
+            best[eid] = list(pts)
+    return best
+
+
+def polylines_for_edge_path(
+    edge_shapes: dict[str, list[tuple[float, float]]],
+    edge_ids: list[str] | tuple[str, ...],
+) -> list[list[tuple[float, float]]]:
+    """Collect polylines for a sequence of SUMO edge ids."""
+    out: list[list[tuple[float, float]]] = []
+    for eid in edge_ids:
+        pts = edge_shapes.get(eid)
+        if pts and len(pts) >= 2:
+            out.append(pts)
+    return out
+
+
+def offset_polyline(
+    pts: list[tuple[float, float]],
+    offset_m: float,
+) -> list[tuple[float, float]]:
+    """Shift a polyline left/right by ``offset_m`` (sign = side)."""
+    if len(pts) < 2 or abs(offset_m) < 1e-9:
+        return list(pts)
+    out: list[tuple[float, float]] = []
+    for i in range(len(pts)):
+        if i == 0:
+            x0, y0 = pts[0]
+            x1, y1 = pts[1]
+        elif i == len(pts) - 1:
+            x0, y0 = pts[-2]
+            x1, y1 = pts[-1]
+        else:
+            x0, y0 = pts[i - 1]
+            x1, y1 = pts[i + 1]
+        dx, dy = x1 - x0, y1 - y0
+        length = (dx * dx + dy * dy) ** 0.5
+        if length < 1e-9:
+            out.append(pts[i])
+            continue
+        nx, ny = -dy / length, dx / length
+        x, y = pts[i]
+        out.append((x + nx * offset_m, y + ny * offset_m))
+    return out
+
+
+def offset_polylines(
+    polylines: list[list[tuple[float, float]]],
+    offset_m: float,
+) -> list[list[tuple[float, float]]]:
+    return [offset_polyline(pts, offset_m) for pts in polylines]
+
+
+def continuous_route_polyline(
+    edge_shapes: dict[str, list[tuple[float, float]]],
+    edge_ids: list[str] | tuple[str, ...],
+    *,
+    gap_bridge: bool = True,
+) -> list[tuple[float, float]]:
+    """Stitch edge shapes into one polyline (bridge omitted junction internals)."""
+    route: list[tuple[float, float]] = []
+    prev_end: tuple[float, float] | None = None
+    for eid in edge_ids:
+        pts = edge_shapes.get(eid)
+        if not pts or len(pts) < 2:
+            continue
+        if prev_end is not None and gap_bridge:
+            gap = (
+                (pts[0][0] - prev_end[0]) ** 2 + (pts[0][1] - prev_end[1]) ** 2
+            ) ** 0.5
+            if gap > 0.5:
+                if not route or route[-1] != prev_end:
+                    route.append(prev_end)
+                route.append(pts[0])
+        if route and abs(route[-1][0] - pts[0][0]) < 1e-6 and abs(route[-1][1] - pts[0][1]) < 1e-6:
+            route.extend(pts[1:])
+        else:
+            route.extend(pts)
+        prev_end = pts[-1]
+    return route
+
+
+def dual_path_overlays(
+    ego_edge_id: str,
+    turn_path: list[str] | tuple[str, ...],
+    straight_path: list[str] | tuple[str, ...],
+    *,
+    turn_dir: str,
+    turn_length_m: float,
+    straight_length_m: float,
+) -> list[dict]:
+    """Build overlays for full spawn→dest routes (both include shared tail).
+
+    Continuous polylines bridge junction gaps; lateral offsets keep overlapping
+    final edges visible so both colors clearly arrive at destination.
+    """
+    turn_full = [ego_edge_id, *turn_path]
+    straight_full = [ego_edge_id, *straight_path]
+    return [
+        {
+            "label": f"straight ({straight_length_m:.0f}m) → dest",
+            "color": "#1f77b4",
+            "edge_ids": straight_full,
+            "continuous": True,
+            "linewidth": 4.5,
+            "zorder": 6,
+            "offset_m": 1.8,
+            "mark_end": True,
+        },
+        {
+            "label": f"turn/{turn_dir} ({turn_length_m:.0f}m) → dest",
+            "color": "#ff7f0e",
+            "edge_ids": turn_full,
+            "continuous": True,
+            "linewidth": 4.5,
+            "zorder": 7,
+            "offset_m": -1.8,
+            "mark_end": True,
+        },
+    ]
+
+
+def point_on_edge(
+    edge_shapes: dict[str, list[tuple[float, float]]],
+    edge_id: str,
+    *,
+    at: str = "start",
+) -> tuple[float, float] | None:
+    """Return start or end point of an edge polyline."""
+    pts = edge_shapes.get(edge_id)
+    if not pts:
+        return None
+    return pts[0] if at == "start" else pts[-1]
+
+
 def render_network(
     edges,
     junctions,
@@ -76,8 +221,17 @@ def render_network(
     figsize=(12, 12),
     dpi=150,
     marker_xy: tuple[float, float] | None = None,
+    path_overlays: list[dict] | None = None,
+    spawn_xy: tuple[float, float] | None = None,
+    dest_xy: tuple[float, float] | None = None,
+    legend: bool = False,
 ):
-    """Render the road network to an image."""
+    """Render the road network to an image.
+
+    ``path_overlays`` entries: ``{"label", "color", "edge_ids"}`` or
+    ``{"label", "color", "polylines"}``. Optional ``linewidth``, ``zorder``,
+    ``offset_m``, ``linestyle``.
+    """
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
     ax.set_facecolor("#f0f0f0")
     
@@ -104,6 +258,54 @@ def render_network(
                                    alpha=0.5, linestyles="dashed")
         ax.add_collection(lc_center)
 
+    edge_shapes = edge_shapes_by_id(edges)
+    legend_handles = []
+    if path_overlays:
+        for overlay in path_overlays:
+            color = overlay.get("color", "#1f77b4")
+            label = overlay.get("label")
+            polylines = overlay.get("polylines")
+            if polylines is None:
+                edge_ids = overlay.get("edge_ids") or ()
+                if overlay.get("continuous"):
+                    stitched = continuous_route_polyline(edge_shapes, edge_ids)
+                    polylines = [stitched] if len(stitched) >= 2 else []
+                else:
+                    polylines = polylines_for_edge_path(edge_shapes, edge_ids)
+            offset_m = float(overlay.get("offset_m") or 0.0)
+            if offset_m:
+                polylines = offset_polylines(polylines, offset_m)
+            if not polylines:
+                continue
+            lc_path = LineCollection(
+                polylines,
+                colors=color,
+                linewidths=float(overlay.get("linewidth") or 3.5),
+                alpha=0.95,
+                zorder=int(overlay.get("zorder") or 6),
+                linestyles=overlay.get("linestyle") or "solid",
+            )
+            ax.add_collection(lc_path)
+            if overlay.get("mark_end"):
+                end_pts = [pts[-1] for pts in polylines if pts]
+                if end_pts:
+                    xs = [p[0] for p in end_pts]
+                    ys = [p[1] for p in end_pts]
+                    ax.scatter(
+                        xs,
+                        ys,
+                        s=90,
+                        c=color,
+                        marker="^",
+                        edgecolors="black",
+                        linewidths=0.6,
+                        zorder=12,
+                    )
+            if label and legend:
+                legend_handles.append(
+                    mpatches.Patch(color=color, label=label)
+                )
+
     if marker_xy is not None:
         ax.plot(
             marker_xy[0],
@@ -114,7 +316,39 @@ def render_network(
             markeredgecolor="#8b0000",
             markeredgewidth=1.5,
             zorder=10,
+            label="junction" if legend else None,
         )
+
+    if spawn_xy is not None:
+        ax.plot(
+            spawn_xy[0],
+            spawn_xy[1],
+            "s",
+            color="#2ca02c",
+            markersize=12,
+            markeredgecolor="#145214",
+            markeredgewidth=1.2,
+            zorder=11,
+            label="spawn" if legend else None,
+        )
+    if dest_xy is not None:
+        ax.plot(
+            dest_xy[0],
+            dest_xy[1],
+            "*",
+            color="#d62728",
+            markersize=18,
+            markeredgecolor="#7f0000",
+            markeredgewidth=1.0,
+            zorder=11,
+            label="destination" if legend else None,
+        )
+
+    if legend:
+        handles, labels = ax.get_legend_handles_labels()
+        handles = legend_handles + handles
+        if handles:
+            ax.legend(handles=handles, loc="best", fontsize=9, framealpha=0.9)
     
     ax.autoscale()
     ax.set_aspect("equal")

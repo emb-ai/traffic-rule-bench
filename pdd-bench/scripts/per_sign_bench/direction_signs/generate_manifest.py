@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Generate evaluation manifest from scenes (direction signs 4.1.1–4.1.6).
 
-Scene / destination filtering by ``allowed_dirs`` is not implemented yet — this
-file wires the shared junction scaffold and stamps each row with the active
-sign code from Hydra ``sign.pdd_code`` (default 4.1.1).
+For 4.1.1 each row reuses crop-time spawn/dest from scene ``meta.json``:
+the same destination is reachable by a shorter left/right turn *and* a longer
+straight path through an X junction. ``run_benchmark.py`` places sign 4.1.1 on
+the ego approach.
 """
 from __future__ import annotations
 
@@ -30,6 +31,10 @@ from lib.auxiliary_agent import (
     right_lane_keys_for_aux,
     select_occupied_main_lanes,
 )
+from lib.direction_dual_path import (
+    DualPathScenario,
+    dual_path_scenario_from_meta,
+)
 from lib.direction_sign_spec import (
     DEFAULT_PDD_CODE,
     SIGN_FAMILY,
@@ -41,11 +46,27 @@ from lib.manifest_config import (
     DEFAULT_AUX_LANES_OCCUPIED_MAX,
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
 )
-from lib.scene_augmentation import SpawnScenario, augment_layout_for_scene
+from lib.metadrive_route_check import filter_dual_paths_metadrive
+from lib.scene_augmentation import SpawnScenario
+from lib.scene_selection import is_reserved_scene_dir, is_scene_rejected
+from lib.sumo_utils import CORE_SCENES_SUBDIR
 
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 RUN_BENCH_SCRIPT = SCRIPT_DIR / "run_benchmark.py"
+PDD_BENCH_DIR = SCRIPT_DIR.parents[2]
+DEFAULT_CARL_CKPT = (
+    PDD_BENCH_DIR / "checkpoints" / "carl" / "nuplan_51479_1B" / "model_best.pth"
+)
+DEFAULT_NN_CHECKPOINTS = {
+    "carl": DEFAULT_CARL_CKPT,
+    "carl_rule": DEFAULT_CARL_CKPT,
+    "plant2": PDD_BENCH_DIR / "checkpoints" / "plant2_finetuned" / "plant2_supervised_2nd_final.pt",
+    "plant2_rule": PDD_BENCH_DIR
+    / "checkpoints"
+    / "plant2_finetuned"
+    / "plant2_supervised_2nd_final.pt",
+}
 
 # Active sign for this process (set in ``main`` from Hydra). Module-level aliases
 # keep the rest of the file close to other junction benches.
@@ -62,18 +83,75 @@ def _set_active_sign(pdd_code: str | None) -> DirectionSignSpec:
     return _ACTIVE_SIGN
 
 
-def select_scenarios_for_direction_sign(
-    scenarios: List[SpawnScenario],
-    sign_spec: DirectionSignSpec,
-) -> List[SpawnScenario]:
-    """Hook for direction-aware scenario filtering (not implemented yet).
+def dual_path_to_spawn_scenario(dp: DualPathScenario) -> SpawnScenario:
+    """Adapt a dual-path pick to the junction SpawnScenario shape (aux unused)."""
+    dest_key = make_lane_key(dp.dest_edge_id, dp.dest_lane_num)
+    return SpawnScenario(
+        ego_edge_id=dp.ego_edge_id,
+        ego_lane_num=dp.ego_lane_num,
+        ego_destination_edge_id=dp.dest_edge_id,
+        ego_destination_lane_key=dest_key,
+        # Aux disabled for 4.1.1; keep fields populated for schema compatibility.
+        aux_edge_id=dp.ego_edge_id,
+        aux_lane_num=dp.ego_lane_num,
+        aux_destination_edge_id=dp.dest_edge_id,
+        aux_destination_lane_key=dest_key,
+        scenario_id=(
+            f"dual_{dp.junction_id}_{dp.ego_edge_id}_{dp.dest_edge_id}_{dp.turn_dir}"
+        ),
+    )
 
-    Eventually keep only ego destinations whose turn label is in
-    ``sign_spec.allowed_dirs`` (and handle left→U-turn per PDD). For now, return
-    the junction scaffold scenarios unchanged so the pipeline can be wired.
+
+def resolve_dual_path_scenarios_for_scene(
+    net_path: Path,
+    meta: Dict[str, Any],
+    *,
+    max_scenarios: Optional[int] = None,
+    min_gain_m: float = 20.0,
+    min_lane_length_m: float = 8.0,
+) -> List[DualPathScenario]:
+    """Load the crop-time dual-path endpoints from ``meta.json``.
+
+    Spawn/dest and both paths are fixed at crop time; manifest must not
+    rediscover alternate destinations. Unused kwargs kept for call-site compat.
     """
-    _ = sign_spec  # reserved for upcoming route/direction filtering
-    return scenarios
+    del net_path, max_scenarios, min_gain_m, min_lane_length_m  # meta is source of truth
+    scenario = dual_path_scenario_from_meta(meta)
+    if scenario is None:
+        return []
+    return [scenario]
+
+
+def filter_dual_paths_to_metadrive_routes(
+    scenarios: List[DualPathScenario],
+    scene_dir: Path,
+    scenes_root: Path,
+    meta: Dict[str, Any],
+    *,
+    max_keep: Optional[int] = None,
+) -> List[DualPathScenario]:
+    """Sanity-check crop-time dests are still MetaDrive-routable on the cropped net."""
+    if not scenarios:
+        return []
+    net_file = meta.get("net_file", "map.net.xml")
+    net_path = (scene_dir / net_file).resolve()
+    try:
+        filtered, dropped = filter_dual_paths_metadrive(
+            scenarios,
+            net_path,
+            one_per_ego=False,
+            max_keep=max_keep,
+            pdd_code=PDD_CODE,
+        )
+    except Exception as exc:
+        print(f"  [dual-path] MetaDrive route validation failed: {exc}")
+        return scenarios[: max_keep] if max_keep is not None else scenarios
+    if dropped:
+        print(
+            f"  [dual-path] MetaDrive check: kept {len(filtered)}, "
+            f"dropped {dropped} unroutable dest(s) from crop meta"
+        )
+    return filtered
 
 
 # -----------------------------------------------------------------------------
@@ -91,6 +169,10 @@ class ScenarioConfig:
     n_variants: int = 1
     augment: bool = True
     max_scenarios_per_scene: Optional[int] = None
+    respect_scene_selection: bool = True
+    min_dual_path_gain_m: float = 20.0
+    min_ego_lane_m: float = 8.0
+    validate_metadrive_routes: bool = True
 
 
 @dataclass
@@ -120,6 +202,7 @@ class GifConfig:
     hide_signs: bool = True
     dir: Optional[str] = None
     run_name: Optional[str] = None
+    model_path: Optional[str] = None  # Required for carl/plant2; default from checkpoints/
 
 
 @dataclass
@@ -300,11 +383,19 @@ def sizes_up_to(
 # -----------------------------------------------------------------------------
 # Scene discovery and metadata
 # -----------------------------------------------------------------------------
-def discover_scenes(scenes_dir: Path) -> List[Path]:
-    """Find all valid scene directories containing meta.json and map.net.xml."""
+def discover_scenes(
+    scenes_dir: Path,
+    *,
+    respect_scene_selection: bool = True,
+) -> List[Path]:
+    """Find cropped scene directories (skip core/ reserved dirs and rejected scenes)."""
     scenes = []
     for entry in sorted(scenes_dir.iterdir()):
         if not entry.is_dir():
+            continue
+        if is_reserved_scene_dir(entry.name) or entry.name == CORE_SCENES_SUBDIR:
+            continue
+        if respect_scene_selection and is_scene_rejected(scenes_dir, entry.name):
             continue
         meta_path = entry / "meta.json"
         if not meta_path.exists():
@@ -349,6 +440,7 @@ def build_manifest_entry(
     spawn_lanes_cache: Optional[List[SumoLaneInfo]] = None,
     junction_layout_cache: Optional[dict] = None,
     spawn_scenario: Optional[SpawnScenario] = None,
+    dual_path: Optional[DualPathScenario] = None,
 ) -> Dict:
     """Build a single manifest entry for a scene."""
     scene_name = meta.get("scene_name", scene_dir.name)
@@ -367,9 +459,9 @@ def build_manifest_entry(
     )
 
     if spawn_lanes_cache is None:
-        spawn_lanes_cache = parse_sumo_net_for_spawn_lanes(net_full_path)
-
-    spawn_candidates = spawn_lanes_cache
+        spawn_lanes_cache = parse_sumo_net_for_spawn_lanes(
+            net_full_path, min_length=min(8.0, sim_cfg.spawn_distance_before_end)
+        )
 
     selected_lane = None
     if spawn_scenario is not None:
@@ -380,8 +472,13 @@ def build_manifest_entry(
             ):
                 selected_lane = lane
                 break
+        if selected_lane is None:
+            for lane in spawn_lanes_cache:
+                if lane.edge_id == spawn_scenario.ego_edge_id:
+                    selected_lane = lane
+                    break
     else:
-        selected_lane = select_random_spawn_lane(spawn_candidates, seed)
+        selected_lane = select_random_spawn_lane(spawn_lanes_cache, seed)
     
     entry = {
         "scene_id": scene_name,
@@ -402,9 +499,10 @@ def build_manifest_entry(
         "valid": True,
         "latitude": meta.get("latitude"),
         "longitude": meta.get("longitude"),
-        "crop_radius_m": meta.get("crop_radius_m"),
+        "crop_radius_m": meta.get("crop_radius_m") or meta.get("crop_margin_m"),
         "source_osm": meta.get("source_osm"),
         "osm_file": meta.get("osm_file"),
+        "junction_id": meta.get("junction_id"),
         "auxiliary_agent": aux_cfg.enabled,
         "aux_distance_from_intersection": aux_cfg.distance_from_intersection,
         "aux_convoy_size": aux_convoy_size,
@@ -431,12 +529,12 @@ def build_manifest_entry(
         entry["road_id"] = meta["road_id"]
         if meta.get("spawn_lane_num") is not None:
             entry["spawn_lane_num"] = meta["spawn_lane_num"]
-    elif selected_lane is not None:
+    elif selected_lane is not None and spawn_scenario is None:
         entry["road_id"] = selected_lane.edge_id
         entry["spawn_lane_num"] = selected_lane.lane_num
         entry["spawn_lane_length"] = selected_lane.length
         entry["spawn_to_junction"] = selected_lane.to_junction
-    elif junction_layout_cache is not None:
+    elif spawn_scenario is None and junction_layout_cache is not None:
         entry["valid"] = False
         print(f"  [spawn] No incoming lanes available for {scene_name}")
     
@@ -446,6 +544,16 @@ def build_manifest_entry(
         entry["sign_spawn_distance"] = meta["sign_spawn_distance"]
     if spawn_scenario is None and meta.get("destination_lane_id"):
         entry["destination_lane_id"] = meta["destination_lane_id"]
+
+    if dual_path is not None:
+        entry["dual_path"] = dual_path.to_meta_fields()["dual_path"]
+        entry["baseline_turn_dir"] = dual_path.turn_dir
+        entry["turn_length_m"] = dual_path.turn_length_m
+        entry["straight_length_m"] = dual_path.straight_length_m
+        entry["dual_path_gain_m"] = dual_path.gain_m
+        # Sign 4.1.1: compliant route is straight; turn is the shorter baseline without the sign.
+        entry["compliant_first_exit"] = dual_path.straight_first_exit
+        entry["baseline_first_exit"] = dual_path.turn_first_exit
 
     if junction_layout_cache is not None:
         entry["junction_layout"] = junction_layout_cache
@@ -490,127 +598,157 @@ def generate_manifest(
     sim_cfg: SimulationConfig,
     aux_cfg: AuxiliaryConfig,
 ) -> List[Dict]:
-    """Generate real_manifest.jsonl from discovered scenes."""
-    scenes = discover_scenes(scenes_dir)
-    entries = []
-    
+    """Generate real_manifest.jsonl from dual-path direction-sign scenes."""
+    scenes = discover_scenes(
+        scenes_dir,
+        respect_scene_selection=scenario_cfg.respect_scene_selection,
+    )
+    entries: List[Dict] = []
+    print(
+        f"[direction_signs] Generating manifest for {PDD_CODE} "
+        f"({_ACTIVE_SIGN.title}); scenes={len(scenes)}"
+    )
+
     for scene_dir in scenes:
         meta = load_scene_metadata(scene_dir)
         scene_name = meta.get("scene_name", scene_dir.name)
         net_file = meta.get("net_file", "map.net.xml")
         net_full_path = scene_dir / net_file
-        
-        spawn_lanes = parse_sumo_net_for_spawn_lanes(net_full_path)
-        print(f"  Found {len(spawn_lanes)} intersection-approaching lane(s)")
+        print(f"\n=== {scene_name} ===")
+
+        spawn_lanes = parse_sumo_net_for_spawn_lanes(
+            net_full_path,
+            min_length=min(scenario_cfg.min_ego_lane_m, sim_cfg.spawn_distance_before_end),
+        )
+        print(f"  Found {len(spawn_lanes)} approach lane(s)")
 
         sign_lat = meta.get("latitude") or meta.get("center_lat")
         sign_lon = meta.get("longitude") or meta.get("center_lon")
-
         junction_layout = build_junction_layout_for_scene(
             net_full_path,
             sign_lat=float(sign_lat) if sign_lat is not None else None,
             sign_lon=float(sign_lon) if sign_lon is not None else None,
         )
-        if junction_layout is None:
-            print(f"  Skipping {scene_name}: no junction layout")
-            continue
-        print(
-            f"  Junction layout: {junction_layout['shape']} @ {junction_layout['junction_id']} "
-            f"(arms={len(junction_layout.get('arms', []))}, sign={PDD_CODE})"
-        )
-
-        available_right_lane_count = 0
-        if junction_layout.get("arms"):
-            from lib.junction_priority_layout import right_arm_edge_id
-
-            sample_ego = junction_layout["arms"][0].get("edge_id")
-            if sample_ego:
-                right_edge = right_arm_edge_id(junction_layout, sample_ego)
-                if right_edge:
-                    available_right_lane_count = sum(
-                        len(arm.get("lane_keys", []))
-                        for arm in junction_layout["arms"]
-                        if arm.get("edge_id") == right_edge
-                    )
-        print(f"  Right-arm lane slots for aux (example): {available_right_lane_count}")
-
-        scenarios: List[SpawnScenario] = []
-        if scenario_cfg.augment:
-            _, scenarios = augment_layout_for_scene(
-                net_full_path,
-                spawn_lanes,
-                sign_lat=float(sign_lat) if sign_lat is not None else None,
-                sign_lon=float(sign_lon) if sign_lon is not None else None,
-            )
-            # TODO: filter ego destinations by _ACTIVE_SIGN.allowed_dirs
-            scenarios = select_scenarios_for_direction_sign(scenarios, _ACTIVE_SIGN)
-            if not scenarios:
-                print(f"  [augment] No valid scenarios for {scene_name}; skipping scene")
-                continue
+        if junction_layout is not None:
             print(
-                f"  Augmented spawn scenarios: {len(scenarios)} "
-                f"(direction filter pending for {PDD_CODE} "
-                f"allowed={sorted(_ACTIVE_SIGN.allowed_dirs)})"
+                f"  Junction layout: {junction_layout['shape']} @ {junction_layout['junction_id']} "
+                f"(arms={len(junction_layout.get('arms', []))})"
+            )
+        else:
+            print("  Junction layout: unavailable (sign will use ego-lane placement)")
+
+        if PDD_CODE != "4.1.1":
+            print(
+                f"  [skip] dual-path manifest generation is implemented for 4.1.1 only "
+                f"(active={PDD_CODE})"
+            )
+            continue
+
+        dual_paths = resolve_dual_path_scenarios_for_scene(
+            net_full_path,
+            meta,
+            max_scenarios=scenario_cfg.max_scenarios_per_scene,
+            min_gain_m=scenario_cfg.min_dual_path_gain_m,
+            min_lane_length_m=scenario_cfg.min_ego_lane_m,
+        )
+        if scenario_cfg.validate_metadrive_routes and dual_paths:
+            dual_paths = filter_dual_paths_to_metadrive_routes(
+                dual_paths,
+                scene_dir=scene_dir,
+                scenes_root=scenes_dir,
+                meta=meta,
+                max_keep=scenario_cfg.max_scenarios_per_scene,
+            )
+        elif (
+            scenario_cfg.max_scenarios_per_scene is not None
+            and len(dual_paths) > scenario_cfg.max_scenarios_per_scene
+        ):
+            dual_paths = dual_paths[: scenario_cfg.max_scenarios_per_scene]
+        if not dual_paths:
+            print(
+                f"  [skip] no dual-path in meta for {scene_name} "
+                f"(re-run crop_junction_scene.py)"
+            )
+            continue
+
+        print(f"  Dual-path from meta: {len(dual_paths)}")
+        for dp in dual_paths:
+            print(
+                f"    ego={dp.ego_edge_id} dest={dp.dest_edge_id} turn={dp.turn_dir} "
+                f"Lt={dp.turn_length_m:.0f}m Ls={dp.straight_length_m:.0f}m gain={dp.gain_m:.0f}m"
             )
 
         convoy_sizes = sizes_up_to(aux_cfg.convoy_size, auxiliary_enabled=aux_cfg.enabled)
         scene_entries: List[Dict] = []
-        for variant, scenario in enumerate(scenarios):
-            ego_edge = scenario.ego_edge_id
-            scene_right_lanes = right_lane_keys_for_aux(junction_layout, ego_edge)
-            scene_lane_counts = sizes_up_to(
-                aux_cfg.lanes_occupied,
-                auxiliary_enabled=aux_cfg.enabled,
-                available=len(scene_right_lanes),
-            )
+        for variant, dual in enumerate(dual_paths):
+            spawn_scenario = dual_path_to_spawn_scenario(dual)
+            if aux_cfg.enabled and junction_layout is not None:
+                scene_right_lanes = right_lane_keys_for_aux(
+                    junction_layout, dual.ego_edge_id
+                )
+                scene_lane_counts = sizes_up_to(
+                    aux_cfg.lanes_occupied,
+                    auxiliary_enabled=True,
+                    available=len(scene_right_lanes),
+                )
+            else:
+                scene_lane_counts = [1]
             for lanes_n in scene_lane_counts:
                 for convoy_n in convoy_sizes:
-                    entry = build_manifest_entry(
-                        scene_dir=scene_dir,
-                        scenes_root=scenes_dir,
-                        meta=meta,
-                        variant=variant,
-                        sim_cfg=sim_cfg,
-                        aux_cfg=aux_cfg,
-                        aux_convoy_size=convoy_n,
-                        aux_lanes_occupied=lanes_n,
-                        spawn_lanes_cache=spawn_lanes,
-                        junction_layout_cache=junction_layout,
-                        spawn_scenario=scenario,
-                    )
-                    scene_entries.append(entry)
+                    for _rep in range(max(1, scenario_cfg.n_variants)):
+                        entry = build_manifest_entry(
+                            scene_dir=scene_dir,
+                            scenes_root=scenes_dir,
+                            meta=meta,
+                            variant=variant,
+                            sim_cfg=sim_cfg,
+                            aux_cfg=aux_cfg,
+                            aux_convoy_size=convoy_n,
+                            aux_lanes_occupied=lanes_n,
+                            spawn_lanes_cache=spawn_lanes,
+                            junction_layout_cache=junction_layout,
+                            spawn_scenario=spawn_scenario,
+                            dual_path=dual,
+                        )
+                        scene_entries.append(entry)
 
-        if scenario_cfg.max_scenarios_per_scene is not None and len(scene_entries) > scenario_cfg.max_scenarios_per_scene:
+        if (
+            scenario_cfg.max_scenarios_per_scene is not None
+            and len(scene_entries) > scenario_cfg.max_scenarios_per_scene
+        ):
             print(
                 f"  Retained {scenario_cfg.max_scenarios_per_scene} of "
                 f"{len(scene_entries)} manifest entries for {scene_name}"
             )
             random.shuffle(scene_entries)
-            scene_entries = scene_entries[:scenario_cfg.max_scenarios_per_scene]
+            scene_entries = scene_entries[: scenario_cfg.max_scenarios_per_scene]
         else:
             print(f"  Manifest entries for {scene_name}: {len(scene_entries)}")
 
         entries.extend(scene_entries)
-    
+
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "real_manifest.jsonl"
-    
+
     with open(manifest_path, "w", encoding="utf-8") as f:
         for entry in entries:
             f.write(json.dumps(entry, default=str) + "\n")
-    
+
     summary = {
         "pdd_code": PDD_CODE,
         "sign_type": SIGN_TYPE,
         "sign_family": SIGN_FAMILY,
         "sign_name": _ACTIVE_SIGN.title,
         "allowed_dirs": sorted(_ACTIVE_SIGN.allowed_dirs),
-        "direction_route_filter": "pending",
+        "direction_route_filter": "dual_path_turn_shorter_straight_longer",
+        "sign_placement": "LaneAllowedDirectionSign on ego approach (road_id)",
         "total_scenes": len(scenes),
         "total_entries": len(entries),
         "variants_per_scene": scenario_cfg.n_variants,
         "augment": scenario_cfg.augment,
         "max_scenarios_per_scene": scenario_cfg.max_scenarios_per_scene,
+        "min_dual_path_gain_m": scenario_cfg.min_dual_path_gain_m,
+        "validate_metadrive_routes": scenario_cfg.validate_metadrive_routes,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
         "traffic_density": sim_cfg.traffic_density,
         "horizon": sim_cfg.horizon,
@@ -624,7 +762,7 @@ def generate_manifest(
         "generated_at": datetime.now().isoformat(),
         "scenes": [s.name for s in scenes],
     }
-    
+
     summary_path = output_dir / "real_manifest_summary.json"
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
@@ -633,7 +771,8 @@ def generate_manifest(
     manifest_meta = {"entries_file": "real_manifest.jsonl", **summary}
     with open(manifest_meta_path, "w", encoding="utf-8") as f:
         json.dump(manifest_meta, f, indent=2, ensure_ascii=False)
-    
+
+    print(f"\n[direction_signs] Wrote {len(entries)} entries -> {manifest_path}")
     return entries
 
 # -----------------------------------------------------------------------------
@@ -697,6 +836,12 @@ def render_gifs_from_manifest(
         return 0, 0
     
     print(f"\n[GIF] Rendering {len(rows)} scene(s)...")
+
+    model_path = gif_cfg.model_path
+    if not model_path:
+        default_ckpt = DEFAULT_NN_CHECKPOINTS.get(gif_cfg.policy)
+        if default_ckpt is not None and Path(default_ckpt).is_file():
+            model_path = str(default_ckpt)
     
     rendered = 0
     failed = 0
@@ -714,6 +859,8 @@ def render_gifs_from_manifest(
             "--scenes-root", str(scenes_root),
             "--policy", gif_cfg.policy,
         ]
+        if model_path:
+            cmd.extend(["--model-path", model_path])
         if gif_cfg.hide_signs:
             cmd.append("--hide-signs")
         
@@ -727,13 +874,28 @@ def render_gifs_from_manifest(
         if gif_cfg.dry_run:
             rendered += 1
             continue
-        
+
+        seed_val = int(row.get("seed") or 0)
+        var_idx = int(row.get("var_idx", 0) or 0)
+        expected_gif = (
+            gif_dir
+            / f"{row['scene_id']}_v{var_idx}_s{seed_val}_{gif_cfg.policy}_default.gif"
+        )
+        if expected_gif.is_file():
+            expected_gif.unlink()
+
         res = subprocess.run(cmd, cwd=str(RUN_BENCH_SCRIPT.parent))
-        if res.returncode == 0:
+        if res.returncode == 0 and expected_gif.is_file():
             rendered += 1
         else:
             failed += 1
-            print(f"[GIF] Command failed with code {res.returncode}")
+            if res.returncode != 0:
+                print(f"[GIF] Command failed with code {res.returncode}")
+            else:
+                print(
+                    f"[GIF] Episode finished but GIF missing (likely bad route): "
+                    f"{expected_gif.name}"
+                )
     
     return rendered, failed
 
@@ -753,6 +915,8 @@ def main(cfg: DictConfig) -> None:
     )
 
     scenes_dir = Path(cfg.paths.scenes_dir)
+    if not scenes_dir.is_absolute():
+        scenes_dir = (SCRIPT_DIR / scenes_dir).resolve()
 
     experiment_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     experiment_dir.mkdir(parents=True, exist_ok=True)
@@ -764,6 +928,16 @@ def main(cfg: DictConfig) -> None:
         n_variants=cfg.scenario.n_variants,
         augment=cfg.scenario.augment,
         max_scenarios_per_scene=cfg.scenario.max_scenarios_per_scene,
+        respect_scene_selection=bool(
+            getattr(cfg.scenario, "respect_scene_selection", True)
+        ),
+        min_dual_path_gain_m=float(
+            getattr(cfg.scenario, "min_dual_path_gain_m", 20.0)
+        ),
+        min_ego_lane_m=float(getattr(cfg.scenario, "min_ego_lane_m", 8.0)),
+        validate_metadrive_routes=bool(
+            getattr(cfg.scenario, "validate_metadrive_routes", True)
+        ),
     )
     sim_cfg = SimulationConfig(
         spawn_velocity_ms=cfg.simulation.spawn_velocity_ms,
@@ -787,6 +961,7 @@ def main(cfg: DictConfig) -> None:
         hide_signs=cfg.gif.hide_signs,
         dir=cfg.gif.dir,
         run_name=cfg.gif.run_name,
+        model_path=getattr(cfg.gif, "model_path", None),
     )
     
     entries = generate_manifest(

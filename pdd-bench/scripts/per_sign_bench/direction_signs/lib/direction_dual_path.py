@@ -312,13 +312,16 @@ def find_dual_path_scenarios(
     max_turn_length_m: float = 350.0,
     max_straight_length_m: float = 700.0,
     max_scenarios: int = 20,
+    dests_per_arm: int = 1,
     junction_ids: Optional[Sequence[str]] = None,
 ) -> List[DualPathScenario]:
     """Find dual-path (turn shorter, straight longer) scenarios for 4.1.1.
 
     ``min_lane_length_m`` applies to the ego approach only (spawnable arm).
     Other X arms only need ``min_arm_lane_m`` so stubby OSM arms are allowed.
-    Preference order: larger length gain, then shorter turn path.
+    Preference order: shorter turn path (MetaDrive ``shortest_path`` is capped
+    at 10 hops and rejects far dual-path dests), then larger length gain.
+    ``dests_per_arm`` keeps multiple dests per ego for MetaDrive filtering.
     """
     net_path = Path(net_path)
     graph = build_edge_graph(net_path)
@@ -383,7 +386,9 @@ def find_dual_path_scenarios(
                     dest for dest in shared if graph.edge_to_node.get(dest) != jid
                 }
 
-                best_for_arm: Optional[DualPathScenario] = None
+                # Rank by short turn first so dests stay within MetaDrive's
+                # 10-hop navigation limit; secondary key is larger gain.
+                arm_cands: List[DualPathScenario] = []
                 for dest in shared:
                     lt = turn_dist[dest]
                     ls = straight_dist[dest]
@@ -395,47 +400,150 @@ def find_dual_path_scenarios(
                     s_path = _rebuild_path(straight_prev, s_exits, dest)
                     if not t_path or not s_path:
                         continue
-                    cand = DualPathScenario(
-                        junction_id=jid,
-                        junction_center_xy=center,
-                        ego_edge_id=ego,
-                        ego_lane_num=_default_lane_num(graph, ego),
-                        dest_edge_id=dest,
-                        dest_lane_num=_default_lane_num(graph, dest),
-                        turn_dir=turn_dir,
-                        turn_first_exit=t_path[0],
-                        straight_first_exit=s_path[0],
-                        turn_path=tuple(t_path),
-                        straight_path=tuple(s_path),
-                        turn_length_m=float(lt),
-                        straight_length_m=float(ls),
+                    arm_cands.append(
+                        DualPathScenario(
+                            junction_id=jid,
+                            junction_center_xy=center,
+                            ego_edge_id=ego,
+                            ego_lane_num=_default_lane_num(graph, ego),
+                            dest_edge_id=dest,
+                            dest_lane_num=_default_lane_num(graph, dest),
+                            turn_dir=turn_dir,
+                            turn_first_exit=t_path[0],
+                            straight_first_exit=s_path[0],
+                            turn_path=tuple(t_path),
+                            straight_path=tuple(s_path),
+                            turn_length_m=float(lt),
+                            straight_length_m=float(ls),
+                        )
                     )
-                    if best_for_arm is None or (
-                        cand.gain_m,
-                        -cand.turn_length_m,
-                    ) > (
-                        best_for_arm.gain_m,
-                        -best_for_arm.turn_length_m,
-                    ):
-                        best_for_arm = cand
-                if best_for_arm is not None:
-                    scenarios.append(best_for_arm)
+                arm_cands.sort(key=lambda s: (s.turn_length_m, -s.gain_m))
+                for cand in arm_cands[:max(1, dests_per_arm)]:
+                    scenarios.append(cand)
 
     scenarios.sort(
-        key=lambda s: (-s.gain_m, s.turn_length_m, s.junction_id, s.ego_edge_id)
+        key=lambda s: (s.turn_length_m, -s.gain_m, s.junction_id, s.ego_edge_id)
     )
-    # Deduplicate by (junction, ego) keeping best gain.
-    seen_arm: Set[Tuple[str, str]] = set()
+    # Deduplicate by (junction, ego, dest) keeping best ranking.
+    seen_dest: Set[Tuple[str, str, str]] = set()
+    # Cap distinct ego arms, but allow several dests per arm when requested.
+    seen_arm_count: Dict[Tuple[str, str], int] = defaultdict(int)
     unique: List[DualPathScenario] = []
     for sc in scenarios:
-        key = (sc.junction_id, sc.ego_edge_id)
-        if key in seen_arm:
+        dest_key = (sc.junction_id, sc.ego_edge_id, sc.dest_edge_id)
+        if dest_key in seen_dest:
             continue
-        seen_arm.add(key)
+        arm_key = (sc.junction_id, sc.ego_edge_id)
+        if seen_arm_count[arm_key] >= max(1, dests_per_arm):
+            continue
+        seen_dest.add(dest_key)
+        seen_arm_count[arm_key] += 1
         unique.append(sc)
         if len(unique) >= max_scenarios:
             break
     return unique
+
+
+def dual_path_scenario_from_meta(meta: dict) -> Optional[DualPathScenario]:
+    """Rebuild the crop-time dual-path pick from ``meta.json`` fields.
+
+    Returns None if required spawn/dest/path fields are missing. Manifest
+    generation should prefer this over rediscovering routes.
+    """
+    ego = meta.get("road_id")
+    dest = meta.get("destination_edge_id")
+    dp = meta.get("dual_path")
+    if not ego or not dest or not isinstance(dp, dict):
+        return None
+    turn_path = tuple(dp.get("turn_path") or ())
+    straight_path = tuple(dp.get("straight_path") or ())
+    if not turn_path or not straight_path:
+        return None
+    center = meta.get("junction_center_xy") or (0.0, 0.0)
+    try:
+        center_xy = (float(center[0]), float(center[1]))
+    except (TypeError, ValueError, IndexError):
+        center_xy = (0.0, 0.0)
+    dest_lane_id = meta.get("destination_lane_id")
+    try:
+        dest_lane_num = (
+            int(str(dest_lane_id).rsplit("_", 1)[-1]) if dest_lane_id else 0
+        )
+    except ValueError:
+        dest_lane_num = 0
+    return DualPathScenario(
+        junction_id=str(meta.get("junction_id") or ""),
+        junction_center_xy=center_xy,
+        ego_edge_id=str(ego),
+        ego_lane_num=int(meta.get("spawn_lane_num") or 0),
+        dest_edge_id=str(dest),
+        dest_lane_num=dest_lane_num,
+        turn_dir=str(dp.get("turn_dir") or "r"),
+        turn_first_exit=str(dp.get("turn_first_exit") or turn_path[0]),
+        straight_first_exit=str(dp.get("straight_first_exit") or straight_path[0]),
+        turn_path=turn_path,
+        straight_path=straight_path,
+        turn_length_m=float(dp.get("turn_length_m") or 0.0),
+        straight_length_m=float(dp.get("straight_length_m") or 0.0),
+    )
+
+
+def rebuild_dual_path_on_net(
+    net_path: Path | str,
+    scenario: DualPathScenario,
+    *,
+    max_turn_length_m: float = 350.0,
+    max_straight_length_m: float = 700.0,
+) -> Optional[DualPathScenario]:
+    """Recompute turn/straight paths for the same ego→dest on ``net_path``.
+
+    Preserves crop-time endpoints when only geometry/paths need refreshing after
+    a crop. Returns None if either path is missing on the net.
+    """
+    graph = build_edge_graph(net_path)
+    ego = scenario.ego_edge_id
+    dest = scenario.dest_edge_id
+    if ego not in graph.edge_length or dest not in graph.edge_length:
+        return None
+    exits = graph.first_exits.get(ego) or {}
+    s_exits = set(exits.get("s") or ())
+    turn_exits = set(exits.get(scenario.turn_dir) or ())
+    if not s_exits or not turn_exits:
+        return None
+    turn_starts = [(e, graph.edge_length[e]) for e in turn_exits]
+    straight_starts = [(e, graph.edge_length[e]) for e in s_exits]
+    turn_dist, turn_prev = _dijkstra_from(
+        graph, turn_starts, goal=dest, max_cost=max_turn_length_m
+    )
+    straight_dist, straight_prev = _dijkstra_from(
+        graph, straight_starts, goal=dest, max_cost=max_straight_length_m
+    )
+    if dest not in turn_dist or dest not in straight_dist:
+        return None
+    t_path = _rebuild_path(turn_prev, turn_exits, dest)
+    s_path = _rebuild_path(straight_prev, s_exits, dest)
+    if not t_path or not s_path:
+        return None
+    info = graph.junctions.get(scenario.junction_id)
+    if info and info.get("center") is not None:
+        center = (float(info["center"][0]), float(info["center"][1]))
+    else:
+        center = scenario.junction_center_xy
+    return DualPathScenario(
+        junction_id=scenario.junction_id,
+        junction_center_xy=center,
+        ego_edge_id=ego,
+        ego_lane_num=_default_lane_num(graph, ego),
+        dest_edge_id=dest,
+        dest_lane_num=_default_lane_num(graph, dest),
+        turn_dir=scenario.turn_dir,
+        turn_first_exit=t_path[0],
+        straight_first_exit=s_path[0],
+        turn_path=tuple(t_path),
+        straight_path=tuple(s_path),
+        turn_length_m=float(turn_dist[dest]),
+        straight_length_m=float(straight_dist[dest]),
+    )
 
 
 def pick_best_dual_path_scenario(
@@ -538,12 +646,21 @@ def crop_scene_to_dual_path_scenario(
             last_error = exc
             continue
 
+        rebuilt = rebuild_dual_path_on_net(out_net, scenario)
+        if rebuilt is not None and rebuilt.gain_m >= max(5.0, scenario.gain_m * 0.25):
+            cropped_scenario = rebuilt
+            used_margin = attempt_margin
+            used_bbox = attempt_bbox
+            last_error = None
+            break
+
         still = find_dual_path_scenarios(
             out_net,
             junction_ids=[scenario.junction_id],
             min_gain_m=max(5.0, scenario.gain_m * 0.25),
             min_lane_length_m=5.0,
-            max_scenarios=20,
+            max_scenarios=40,
+            dests_per_arm=8,
         )
         matching = [
             s
@@ -552,6 +669,7 @@ def crop_scene_to_dual_path_scenario(
             and s.dest_edge_id == scenario.dest_edge_id
         ]
         if not matching:
+            # Keep crop viable even if dest ids shifted slightly: same ego + turn.
             matching = [
                 s
                 for s in still

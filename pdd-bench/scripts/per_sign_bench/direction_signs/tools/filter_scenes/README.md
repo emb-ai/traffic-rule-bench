@@ -25,10 +25,12 @@ python tools/filter_scenes/crop_junction_scene.py --dry-run --limit 20
 python tools/filter_scenes/crop_junction_scene.py sign_72915 --overwrite --min-gain 20 --margin 40
 ```
 
-Each written scene stores ``road_id``, ``destination_edge_id``, and a
-``dual_path`` block in ``meta.json``.
+Each written scene stores canonical ``road_id`` (spawn), ``destination_edge_id``,
+and a ``dual_path`` block (straight + turn edge lists) in ``meta.json``. The
+preview ``custom_cropped.png`` overlays both paths (blue = straight / longer,
+orange = turn / shorter) plus spawn and destination markers.
 
-3. Manifest / eval:
+3. Manifest / eval (reuses crop-time spawn/dest — does not rediscover routes):
 
 ```
 python generate_manifest.py

@@ -36,6 +36,7 @@ from lib.junction_crop import (  # noqa: E402
     JunctionPick,
     resolve_full_source_net,
 )
+from lib.metadrive_route_check import filter_dual_paths_metadrive  # noqa: E402
 from lib.sumo_utils import (  # noqa: E402
     is_core_scene_name,
     junction_scene_name,
@@ -43,7 +44,13 @@ from lib.sumo_utils import (  # noqa: E402
     resolve_net_file,
     resolve_scene_dir,
 )
-from tools.render_map import parse_sumo_net, render_network  # noqa: E402
+from tools.render_map import (  # noqa: E402
+    dual_path_overlays,
+    parse_sumo_net,
+    point_on_edge,
+    edge_shapes_by_id,
+    render_network,
+)
 
 
 def discover_core_scene_dirs(core_root: Path) -> list[Path]:
@@ -63,15 +70,41 @@ def discover_core_scene_dirs(core_root: Path) -> list[Path]:
     return out
 
 
-def render_preview(scene_dir: Path, marker_xy: tuple[float, float], out_path: Path) -> None:
+def render_dual_path_preview(
+    scene_dir: Path,
+    scenario: DualPathScenario,
+    out_path: Path,
+    *,
+    junction_xy: tuple[float, float] | None = None,
+) -> None:
+    """Render cropped net with straight / turn / shared-to-dest overlays.
+
+    Both routes end at the same destination. Shared edges are drawn in their
+    own color so the turn overlay does not hide that the straight path arrives.
+    """
     meta = load_scene_meta(scene_dir)
     net_file = resolve_net_file(scene_dir, meta)
     edges, junctions = parse_sumo_net(scene_dir / net_file)
+    shapes = edge_shapes_by_id(edges)
+    # Spawn near end of ego approach (toward junction); dest at end of dest edge.
+    spawn_xy = point_on_edge(shapes, scenario.ego_edge_id, at="end")
+    dest_xy = point_on_edge(shapes, scenario.dest_edge_id, at="end")
     render_network(
         edges,
         junctions,
         out_path,
-        marker_xy=marker_xy,
+        marker_xy=junction_xy or scenario.junction_center_xy,
+        spawn_xy=spawn_xy,
+        dest_xy=dest_xy,
+        legend=True,
+        path_overlays=dual_path_overlays(
+            scenario.ego_edge_id,
+            scenario.turn_path,
+            scenario.straight_path,
+            turn_dir=scenario.turn_dir,
+            turn_length_m=scenario.turn_length_m,
+            straight_length_m=scenario.straight_length_m,
+        ),
     )
 
 
@@ -128,18 +161,25 @@ def process_core_scene(
     preview_name: str,
     dry_run: bool,
     overwrite: bool,
+    validate_metadrive: bool,
 ) -> int:
-    """Find dual-path scenarios and crop each to its path-union bbox."""
+    """Find dual-path scenarios and crop each to its path-union bbox.
+
+    Chosen spawn/dest + both paths are written into ``meta.json`` and become the
+    canonical endpoints for ``generate_manifest`` (no rediscovery).
+    """
     core_scene_name = core_scene_dir.name
     print(f"\n=== {core_scene_name} (core) ===")
     try:
         meta = load_scene_meta(core_scene_dir)
         source_net = resolve_full_source_net(core_scene_dir, meta)
+        # Several dests per arm so MetaDrive hop-cap can pick a routable one.
         ranked = find_ranked_dual_path_picks(
             source_net,
             min_lane_length_m=min_lane_length_m,
             min_gain_m=min_gain_m,
-            max_scenarios=max_scenarios,
+            max_scenarios=max(max_scenarios * 8, 40),
+            dests_per_arm=8,
         )
     except (FileNotFoundError, JunctionLayoutError) as exc:
         print(f"  [skip] {exc}")
@@ -150,8 +190,76 @@ def process_core_scene(
         write_junctions_index(core_scene_dir, core_scene_name, [])
         return 0
 
+    scenarios = [sc for sc, _pick in ranked]
+    if validate_metadrive:
+        try:
+            kept, dropped = filter_dual_paths_metadrive(
+                scenarios,
+                source_net,
+                one_per_ego=False,
+                max_keep=None,
+            )
+            print(
+                f"  MetaDrive filter on core net: kept {len(kept)}, dropped {dropped}"
+            )
+            if kept:
+                # Prefer larger length gain among MetaDrive-routable dests.
+                kept.sort(key=lambda s: (-s.gain_m, s.turn_length_m))
+                by_key = {
+                    (s.junction_id, s.ego_edge_id, s.dest_edge_id): (s, p)
+                    for s, p in ranked
+                }
+                seen_ego: set[str] = set()
+                ranked = []
+                for s in kept:
+                    if s.ego_edge_id in seen_ego:
+                        continue
+                    key = (s.junction_id, s.ego_edge_id, s.dest_edge_id)
+                    if key not in by_key:
+                        continue
+                    seen_ego.add(s.ego_edge_id)
+                    ranked.append(by_key[key])
+                    if len(ranked) >= max_scenarios:
+                        break
+            else:
+                print("  [warn] no MetaDrive-routable dual-path; keeping shortest SUMO picks")
+                # Fall back: first dest per ego from already short-preferring list.
+                seen_ego = set()
+                fallback = []
+                for sc, pick in ranked:
+                    if sc.ego_edge_id in seen_ego:
+                        continue
+                    seen_ego.add(sc.ego_edge_id)
+                    fallback.append((sc, pick))
+                    if len(fallback) >= max_scenarios:
+                        break
+                ranked = fallback
+        except Exception as exc:
+            print(f"  [warn] MetaDrive validation skipped: {exc}")
+            seen_ego = set()
+            fallback = []
+            for sc, pick in ranked:
+                if sc.ego_edge_id in seen_ego:
+                    continue
+                seen_ego.add(sc.ego_edge_id)
+                fallback.append((sc, pick))
+                if len(fallback) >= max_scenarios:
+                    break
+            ranked = fallback
+    else:
+        seen_ego = set()
+        trimmed = []
+        for sc, pick in ranked:
+            if sc.ego_edge_id in seen_ego:
+                continue
+            seen_ego.add(sc.ego_edge_id)
+            trimmed.append((sc, pick))
+            if len(trimmed) >= max_scenarios:
+                break
+        ranked = trimmed
+
     print(f"  source net: {source_net.name}")
-    print(f"  found {len(ranked)} dual-path scenario(s) (max {max_scenarios}):")
+    print(f"  selected {len(ranked)} dual-path scenario(s) (max {max_scenarios}):")
     for rank, (scenario, pick) in enumerate(ranked):
         scene_name = junction_scene_name(core_scene_name, rank)
         print(
@@ -208,8 +316,17 @@ def process_core_scene(
             continue
 
         preview_path = out_dir / preview_name
-        render_preview(out_dir, pick.center_xy, preview_path)
-        print(f"  wrote scenes/{scene_name}/ ({preview_name})")
+        render_dual_path_preview(
+            out_dir,
+            record["scenario"],
+            preview_path,
+            junction_xy=pick.center_xy,
+        )
+        print(
+            f"  wrote scenes/{scene_name}/ "
+            f"(spawn={record['scenario'].ego_edge_id} "
+            f"dest={record['scenario'].dest_edge_id}, {preview_name})"
+        )
         record["written"] = True
         created += 1
 
@@ -298,6 +415,11 @@ def main() -> None:
         help="Replace existing junction scene folders",
     )
     parser.add_argument("--dry-run", action="store_true", help="Only report dual-path picks")
+    parser.add_argument(
+        "--skip-metadrive-check",
+        action="store_true",
+        help="Do not require MetaDrive-routable spawn→dest when selecting endpoints",
+    )
     args = parser.parse_args()
 
     if args.max_scenarios < 1:
@@ -336,6 +458,7 @@ def main() -> None:
             preview_name=args.preview_name,
             dry_run=args.dry_run,
             overwrite=args.overwrite,
+            validate_metadrive=not args.skip_metadrive_check,
         )
         if created > 0 or args.dry_run:
             ok += 1
