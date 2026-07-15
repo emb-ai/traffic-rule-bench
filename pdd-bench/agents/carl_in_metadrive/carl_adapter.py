@@ -583,6 +583,18 @@ class CaRLMetaDriveAdapter:
         if self._lane_speed_limit_unit not in {"kmh", "mps"}:
             self._lane_speed_limit_unit = "kmh"
         self._min_speed_limit_kmh = float(min_speed_limit_kmh)
+
+        # Longitudinal mode: "tracking" (closed-loop acceleration tracking, matches
+        # CaRL's nuPlan action semantics) or "legacy" (old open-loop accel→throttle
+        # interp + zeroed acceleration measurements) for A/B and rollback.
+        self._longitudinal_mode = os.environ.get("CARL_LONGITUDINAL", "tracking").strip().lower()
+        if self._longitudinal_mode not in {"tracking", "legacy"}:
+            self._longitudinal_mode = "tracking"
+        # Controller state (reset per episode)
+        self._a_cmd = 0.0
+        self._prev_speed_mps = None
+        self._a_meas_ema = 0.0
+        self._i_term = 0.0
         
         if load_model:
             if not checkpoint_path:
@@ -649,10 +661,14 @@ class CaRLMetaDriveAdapter:
         self._last_action = np.array([0.0, 0.0], dtype=np.float32)
         self.measurements_builder.reset()
         self._extractor = None
-    
+
         self._obs_cache_step = None
         self._obs_cache = None
         self._prev_heading = None
+        self._a_cmd = 0.0
+        self._prev_speed_mps = None
+        self._a_meas_ema = 0.0
+        self._i_term = 0.0
         
     @staticmethod
     def _wrap_to_pi(angle: float) -> float:
@@ -730,11 +746,18 @@ class CaRLMetaDriveAdapter:
         vy = float(-velocity_world[0] * sin_h + velocity_world[1] * cos_h)
         velocity = np.array([vx, vy], dtype=np.float32)
 
-        # acceleration in ego frame
-        acceleration_world = np.array(getattr(vehicle, "acceleration", [0.0, 0.0]), dtype=np.float64)
-        ax = float(acceleration_world[0] * cos_h + acceleration_world[1] * sin_h)
-        ay = float(-acceleration_world[0] * sin_h + acceleration_world[1] * cos_h)
-        acceleration = np.array([ax, ay], dtype=np.float32)
+        # acceleration in ego frame. MetaDrive's BaseVehicle exposes no
+        # `acceleration` attribute, so the old getattr fallback fed constant
+        # zeros into measurements[4:5] every step (CaRL was trained with real
+        # rear-axle acceleration). Passing None lets the measurements builder
+        # derive ax/ay by finite difference of the ego-frame velocity.
+        if self._longitudinal_mode == "legacy":
+            acceleration_world = np.array(getattr(vehicle, "acceleration", [0.0, 0.0]), dtype=np.float64)
+            ax = float(acceleration_world[0] * cos_h + acceleration_world[1] * sin_h)
+            ay = float(-acceleration_world[0] * sin_h + acceleration_world[1] * cos_h)
+            acceleration = np.array([ax, ay], dtype=np.float32)
+        else:
+            acceleration = None
 
         max_steering_rad = self._get_vehicle_max_steering_rad(vehicle)
         steering_cmd = float(getattr(vehicle, "steering", 0.0))
@@ -766,9 +789,52 @@ class CaRLMetaDriveAdapter:
             self._obs_cache = obs
         return obs
 
+    # --- closed-loop longitudinal tracking (CARL_LONGITUDINAL=tracking) -------
+    # In nuPlan, CaRL's action[0] is a TARGET ACCELERATION (×2.4 m/s² gas /
+    # ×3.2 brake) realized EXACTLY by the kinematic bicycle model (low-pass
+    # tau=0.2 s, reverse driving disabled). MetaDrive's throttle is engine-force
+    # based, so the commanded acceleration is tracked with feedforward + PI.
+    FF_GAS_MPS2_PER_THROTTLE = 3.0   # ~full-throttle accel at urban speeds
+    FF_BRAKE_MPS2_PER_BRAKE = 6.0    # ~full-brake decel
+    ACCEL_LOWPASS_TAU_S = 0.2        # nuPlan accel_time_constant
+    KP_THROTTLE_PER_MPS2 = 0.25
+    KI_THROTTLE_PER_MPS2 = 0.08
+    I_TERM_CLAMP = 0.4               # anti-windup bound on the integral term
+
+    def _track_acceleration(self, vehicle, accel_normed: float) -> float:
+        """Return a MetaDrive throttle_brake that tracks CaRL's commanded accel."""
+        dt = float(self.config.dt_control)
+        scale = (self.config.scale_max_acceleration if accel_normed >= 0
+                 else self.config.scale_max_deceleration)
+        a_target = accel_normed * scale
+        alpha = dt / (dt + self.ACCEL_LOWPASS_TAU_S)
+        self._a_cmd += alpha * (a_target - self._a_cmd)
+
+        v = float(vehicle.speed_km_h) / 3.6
+        a_meas = 0.0 if self._prev_speed_mps is None else (v - self._prev_speed_mps) / dt
+        self._prev_speed_mps = v
+        # finite-difference accel at 10 Hz is noisy — smooth before feedback
+        self._a_meas_ema += 0.5 * (a_meas - self._a_meas_ema)
+
+        # disable_reverse_driving (as in nuPlan): a negative throttle at ~zero
+        # speed would put the MetaDrive vehicle into reverse — hold still instead.
+        if v < 0.15 and self._a_cmd < 0.0:
+            self._i_term = 0.0
+            return 0.0
+
+        err = self._a_cmd - self._a_meas_ema
+        ff = self._a_cmd / (self.FF_GAS_MPS2_PER_THROTTLE if self._a_cmd >= 0
+                            else self.FF_BRAKE_MPS2_PER_BRAKE)
+        self._i_term = float(np.clip(self._i_term + self.KI_THROTTLE_PER_MPS2 * err * dt,
+                                     -self.I_TERM_CLAMP, self.I_TERM_CLAMP))
+        return float(np.clip(ff + self.KP_THROTTLE_PER_MPS2 * err + self._i_term, -1.0, 1.0))
+
     def carl_action_to_metadrive(self, vehicle, carl_action: np.ndarray, engine=None) -> np.ndarray:
-        """
-        Convert a CaRL action to a MetaDrive action using an aggressive continuous mapping.
+        """Convert a CaRL action to a MetaDrive [steering, throttle] action.
+
+        Steering: target tire angle → normalized MetaDrive steering command.
+        Throttle: closed-loop acceleration tracking (default), or the legacy
+        open-loop interp when CARL_LONGITUDINAL=legacy.
         """
         max_steering_rad = self._get_vehicle_max_steering_rad(vehicle)
         accel_normed = float(np.clip(carl_action[0], -1.0, 1.0))
@@ -781,9 +847,12 @@ class CaRLMetaDriveAdapter:
             steering_cmd = steer_normed
         steering_cmd = np.clip(steering_cmd, -1.0, 1.0)
 
-        xp = [-1.0, -0.1, 0.0, 1.0]
-        fp = [-1.0, 0.0, 0.2, 1.0]
-        throttle = float(np.interp(accel_normed, xp, fp))
+        if self._longitudinal_mode == "legacy":
+            xp = [-1.0, -0.1, 0.0, 1.0]
+            fp = [-1.0, 0.0, 0.2, 1.0]
+            throttle = float(np.interp(accel_normed, xp, fp))
+        else:
+            throttle = self._track_acceleration(vehicle, accel_normed)
 
         return np.array([steering_cmd, throttle], dtype=np.float32)
     

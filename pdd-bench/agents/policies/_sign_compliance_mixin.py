@@ -67,7 +67,10 @@ STOP_PAST_THRESHOLD = 5.0          # metres past stop line before state resets
 BRAKE_PROP_GAIN = 0.05             # proportional gain for braking
 BRAKE_BIAS = 0.15                  # constant offset for braking
 FLOOR_PROP_GAIN = 0.08             # proportional gain for acceleration floor
-FLOOR_BIAS = 0.3                   # constant offset for acceleration floor
+FLOOR_BIAS = 0.4                   # constant offset for acceleration floor
+FLOOR_OVERSHOOT_KMH = 3.0          # aim this far ABOVE the min so a policy's
+                                   # pull-back (its own target is below the min)
+                                   # doesn't dip below min - tolerance
 
 STOP_SAFETY_CONFLICT_RADIUS = 25.0 # metres around intersection to check for conflicts
 STOP_SAFETY_MAX_WAIT = 200         # max extra steps to wait after stop (timeout)
@@ -597,14 +600,22 @@ class SignComplianceMixin:
         return None
 
     def _handle_speed_limit(self, sign):
+        limit = float(sign.speed_limit)
+        # In-zone check via the SIGN's own is_vehicle_in_zone (multi-edge aware,
+        # exactly what the verifier uses). The previous lane-local check
+        # (zone_start<=veh_long<=zone_end on sign.lane + on_same_road) lost the
+        # limit when the ego crossed into another edge of a multi-edge zone
+        # (5.21/5.31), so the ego sped up mid-zone. Asking the sign keeps the cap
+        # applied across the WHOLE zone, matching where violations are measured.
+        if sign.is_vehicle_in_zone(self.control_object):
+            self._cap_speed(limit)
+            return
+        # Approach phase (before entering the zone): brake early within lookahead.
         if not on_same_road(self.control_object.lane, sign.lane):
             if not self._is_sign_on_route(sign):
                 return
-        limit = float(sign.speed_limit)
         veh_long = self._veh_long(sign.lane)
-        if sign.zone_start <= veh_long <= sign.zone_end:
-            self._cap_speed(limit)
-        elif veh_long < sign.zone_start:
+        if veh_long < sign.zone_start:
             approach = max(self._approach_dist(limit), SPEED_SIGN_LOOKAHEAD)
             if 0 < (sign.zone_start - veh_long) < approach:
                 self._cap_speed(limit)
@@ -1383,8 +1394,13 @@ class SignComplianceMixin:
                 throttle = min(throttle, 0.0)
 
         if self._speed_floor is not None:
-            if speed_kmh < self._speed_floor:
-                deficit = self._speed_floor - speed_kmh
+            # Aim slightly ABOVE the minimum so a policy whose own desired speed
+            # is below the min doesn't keep dipping under min - tolerance. NN
+            # policies (carl/plant2) have no internal target to raise, so this
+            # firm throttle floor is their only lever to reach/hold the minimum.
+            floor_target = self._speed_floor + FLOOR_OVERSHOOT_KMH
+            if speed_kmh < floor_target:
+                deficit = floor_target - speed_kmh
                 accel = min(FLOOR_PROP_GAIN * deficit + FLOOR_BIAS, 1.0)
                 throttle = max(throttle, accel)
 
