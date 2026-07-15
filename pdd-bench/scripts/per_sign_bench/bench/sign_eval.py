@@ -59,10 +59,26 @@ def _ego_in_sign_zone(sign, vehicle) -> bool:
     signs (Stop/TrafficLight) within `_IN_ZONE_LOOKAHEAD_M` metres before the
     stop line. False for cross-edge cases (cheap heuristic; matches the
     same-road branch of SignComplianceMixin handlers).
+
+    Multi-edge zones (5.21/5.31 etc. configured with a `zone_edges` chain that
+    spans several connected edges) ADD coverage via the sign's canonical
+    `_in_multi_edge_zone`, so the metric counts the ego on downstream edges of
+    the zone instead of clipping to the sign's own edge. This is monotonic: a
+    True from the multi-edge check short-circuits to True, but a False/None
+    falls through to the single-lane heuristic below (which also handles the
+    approach lookahead on the sign's own edge) — so the multi-edge zone can only
+    add in-zone steps, never remove the single-edge ones.
     """
     lane = getattr(sign, "lane", None)
     if lane is None:
         return False
+    _multi = getattr(sign, "_in_multi_edge_zone", None)
+    if callable(_multi):
+        try:
+            if _multi(vehicle) is True:
+                return True
+        except Exception:
+            pass
     veh_lane = getattr(vehicle, "lane", None)
     if veh_lane is None:
         return False
