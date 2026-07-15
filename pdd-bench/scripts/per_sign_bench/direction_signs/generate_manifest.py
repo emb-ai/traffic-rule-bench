@@ -34,6 +34,7 @@ from lib.auxiliary_agent import (
 from lib.direction_dual_path import (
     DualPathScenario,
     dual_path_scenario_from_meta,
+    straight_path_has_dead_end_uturn,
 )
 from lib.direction_sign_spec import (
     DEFAULT_PDD_CODE,
@@ -115,9 +116,15 @@ def resolve_dual_path_scenarios_for_scene(
     Spawn/dest and both paths are fixed at crop time; manifest must not
     rediscover alternate destinations. Unused kwargs kept for call-site compat.
     """
-    del net_path, max_scenarios, min_gain_m, min_lane_length_m  # meta is source of truth
+    del max_scenarios, min_gain_m, min_lane_length_m  # meta is source of truth
     scenario = dual_path_scenario_from_meta(meta)
     if scenario is None:
+        return []
+    if straight_path_has_dead_end_uturn(net_path, scenario):
+        print(
+            f"    skip: straight path U-turns at a dead end "
+            f"(junction {scenario.junction_id}, dest {scenario.dest_edge_id})"
+        )
         return []
     return [scenario]
 

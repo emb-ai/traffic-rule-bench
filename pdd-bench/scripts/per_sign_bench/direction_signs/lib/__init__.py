@@ -48,4 +48,5 @@ from .direction_dual_path import (
     DualPathScenario,
     find_dual_path_scenarios,
     pick_best_dual_path_scenario,
+    straight_path_has_dead_end_uturn,
 )

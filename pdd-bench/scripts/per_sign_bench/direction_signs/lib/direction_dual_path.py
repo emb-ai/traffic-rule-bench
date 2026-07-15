@@ -303,6 +303,71 @@ def _find_x_junction_ids(
     return out
 
 
+def _junction_incident_edges(graph: _EdgeGraph) -> Dict[str, Set[str]]:
+    """Map junction node id -> real drivable edges touching it."""
+    incident: Dict[str, Set[str]] = defaultdict(set)
+    for eid, node in graph.edge_to_node.items():
+        if node:
+            incident[node].add(eid)
+    for eid, node in graph.edge_from_node.items():
+        if node:
+            incident[node].add(eid)
+    return incident
+
+
+def _path_uturn_junctions(
+    graph: _EdgeGraph,
+    edge_ids: Sequence[str],
+) -> List[Tuple[str, str, str]]:
+    """Return (junction_id, edge_in, edge_out) for each U-turn along the path.
+
+    A U-turn is a consecutive pair (a, b) where b runs back along a
+    (``to(a) == from(b)`` and ``from(a) == to(b)``).
+    """
+    out: List[Tuple[str, str, str]] = []
+    for a, b in zip(edge_ids[:-1], edge_ids[1:]):
+        to_a = graph.edge_to_node.get(a)
+        if not to_a:
+            continue
+        if graph.edge_from_node.get(b) == to_a and graph.edge_to_node.get(b) == graph.edge_from_node.get(a):
+            out.append((to_a, a, b))
+    return out
+
+
+def dead_end_uturn_junctions(
+    graph: _EdgeGraph,
+    ego_edge_id: str,
+    path: Sequence[str],
+    *,
+    incident: Optional[Dict[str, Set[str]]] = None,
+) -> List[str]:
+    """Junctions where the path U-turns and NO other road continues beyond.
+
+    Baseline planners handle dead-end U-turns poorly (no room to manoeuvre),
+    so scenes whose compliant path ends in such a turnaround should be dropped.
+    """
+    if incident is None:
+        incident = _junction_incident_edges(graph)
+    full = [ego_edge_id, *path]
+    bad: List[str] = []
+    for jid, a, b in _path_uturn_junctions(graph, full):
+        others = incident.get(jid, set()) - {a, b}
+        if not others:
+            bad.append(jid)
+    return bad
+
+
+def straight_path_has_dead_end_uturn(
+    net_path: Path | str,
+    scenario: DualPathScenario,
+) -> bool:
+    """True if the compliant (straight) route U-turns at a road end with no continuation."""
+    graph = build_edge_graph(net_path)
+    return bool(
+        dead_end_uturn_junctions(graph, scenario.ego_edge_id, scenario.straight_path)
+    )
+
+
 def find_dual_path_scenarios(
     net_path: Path | str,
     *,
@@ -314,6 +379,7 @@ def find_dual_path_scenarios(
     max_scenarios: int = 20,
     dests_per_arm: int = 1,
     junction_ids: Optional[Sequence[str]] = None,
+    require_uturn_continuation: bool = True,
 ) -> List[DualPathScenario]:
     """Find dual-path (turn shorter, straight longer) scenarios for 4.1.1.
 
@@ -322,9 +388,12 @@ def find_dual_path_scenarios(
     Preference order: shorter turn path (MetaDrive ``shortest_path`` is capped
     at 10 hops and rejects far dual-path dests), then larger length gain.
     ``dests_per_arm`` keeps multiple dests per ego for MetaDrive filtering.
+    ``require_uturn_continuation`` drops candidates whose straight path
+    U-turns at a dead end (baseline planners can't turn around there).
     """
     net_path = Path(net_path)
     graph = build_edge_graph(net_path)
+    incident = _junction_incident_edges(graph) if require_uturn_continuation else None
 
     if junction_ids is None:
         x_junctions = _find_x_junction_ids(
@@ -399,6 +468,10 @@ def find_dual_path_scenarios(
                     t_path = _rebuild_path(turn_prev, turn_exits, dest)
                     s_path = _rebuild_path(straight_prev, s_exits, dest)
                     if not t_path or not s_path:
+                        continue
+                    if require_uturn_continuation and dead_end_uturn_junctions(
+                        graph, ego, s_path, incident=incident
+                    ):
                         continue
                     arm_cands.append(
                         DualPathScenario(
@@ -648,6 +721,15 @@ def crop_scene_to_dual_path_scenario(
 
         rebuilt = rebuild_dual_path_on_net(out_net, scenario)
         if rebuilt is not None and rebuilt.gain_m >= max(5.0, scenario.gain_m * 0.25):
+            if straight_path_has_dead_end_uturn(out_net, rebuilt):
+                # Crop cut off the roads beyond the U-turn; retry with a
+                # larger margin so the continuation stays in the scene.
+                last_error = JunctionLayoutError(
+                    f"Crop left a dead-end U-turn on the straight path for "
+                    f"junction {scenario.junction_id} ego={scenario.ego_edge_id} "
+                    f"dest={scenario.dest_edge_id} (margin={attempt_margin})"
+                )
+                continue
             cropped_scenario = rebuilt
             used_margin = attempt_margin
             used_bbox = attempt_bbox
