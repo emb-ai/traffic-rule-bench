@@ -162,8 +162,10 @@ def build_records(rows: list[dict], signs: list[str] | None,
         if not skey:
             continue
 
-        target_viol = int((row.get("violations_by_class") or {})
-                          .get(target_class, 0) or 0)
+        vbc = row.get("violations_by_class_event")
+        if vbc is None:  # legacy rows: event counts under violations_by_class
+            vbc = row.get("violations_by_class") or {}
+        target_viol = int(vbc.get(target_class, 0) or 0)
         # min_final_step=0: anti-bug filter is for expert_selection, NOT metric compute.
         passed = passes_filter(row, sign, target_class, horizon, min_final_step=0)
         records.append({

@@ -103,8 +103,14 @@ def main() -> None:
     rule_df["_arrived"]   = _to_bool(rule_df["arrived_dest"])
     rule_df["_rc"]        = pd.to_numeric(rule_df["route_completion"],
                                            errors="coerce").fillna(0.0)
-    rule_df["_neg_viol"]  = -pd.to_numeric(rule_df["total_violations"],
-                                            errors="coerce").fillna(0.0)
+    # Rank by EVENT-counted violations (new schema: total_violations is
+    # per-step; the event count lives in violations_event_count). Fall back
+    # to total_violations for legacy CSVs without the column.
+    if "violations_event_count" in rule_df.columns:
+        _viol_src = rule_df["violations_event_count"]
+    else:
+        _viol_src = rule_df["total_violations"]
+    rule_df["_neg_viol"]  = -pd.to_numeric(_viol_src, errors="coerce").fillna(0.0)
 
     sort_keys = ["_compliant", "_arrived", "_rc", "_neg_viol"]
     rule_df = rule_df.sort_values(sort_keys, ascending=[False] * len(sort_keys))

@@ -113,7 +113,12 @@ def load_runs(run_dirs, jsonl_files):
 
 
 def is_compliant(r, target_class):
-    vbc = r.get("violations_by_class") or {}
+    # New recorder rows: per-class EVENT counts live in violations_by_class_event
+    # (violations_by_class there is the 3-bucket per-step dict). Legacy rows only
+    # have the event-counted violations_by_class.
+    vbc = r.get("violations_by_class_event")
+    if vbc is None:
+        vbc = r.get("violations_by_class") or {}
     return int(vbc.get(target_class, 0) or 0) == 0
 
 
@@ -461,6 +466,18 @@ def run_self_tests():
     r = {"arrived_dest": False, "final_step": 600, "violations_by_class": {}}
     assert recompute_dest(r, "2.5", "StopSign", horizon=600) is False  # horizon != success
     print("  recompute_dest:  ok")
+
+    # New-schema rows: per-class EVENT counts live in violations_by_class_event;
+    # violations_by_class there is the 3-bucket per-step dict and must NOT
+    # shadow them (a nonzero "sign" bucket ≠ a target-class violation).
+    r = {"arrived_dest": False,
+         "violations_by_class": {"sign": 7, "traffic_light": 0, "crosswalk": 0},
+         "violations_by_class_event": {"NoEntrySign": 0}}
+    assert is_compliant(r, "NoEntrySign") is True
+    assert recompute_dest(r, "3.1", "NoEntrySign", horizon=600) is True
+    r = dict(r); r["violations_by_class_event"] = {"NoEntrySign": 1}
+    assert is_compliant(r, "NoEntrySign") is False
+    print("  is_compliant (new schema): ok")
 
     # passes_filter
     base = {"valid": True, "crashed": False, "out_of_road": False,
