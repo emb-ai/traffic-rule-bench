@@ -11,6 +11,13 @@ recorder), then diffs the two replay.json sidecars:
 
 Exit code 0 = parity holds; 1 = mismatch (printed field by field).
 
+With --save-gifs it additionally:
+  * records a top-down GIF in BOTH runs (eval + recorder),
+  * replays the recorded pkl in-env (expert_replay_inenv.py) with its own GIF,
+  * compares the GIFs frame by frame (eval vs recorder must be near-identical;
+    pkl-replay is auto-aligned by frame offset and compared without the text
+    overlay), and writes side_by_side.gif for eyeballing.
+
 Usage (CPU policy — no checkpoint):
   python3 check_recorder_parity.py --manifest <m.jsonl> --scenes-root <scenes> \
       --policy comprehensive_rule_expert
@@ -20,7 +27,7 @@ NN policies (pin the GPU so both runs share one device):
       --scenes-root <scenes> --policy carl_rule --model-path $CARL_CKPT
   CUDA_VISIBLE_DEVICES=0 python3 check_recorder_parity.py --manifest <m.jsonl> \
       --scenes-root <scenes> --policy plant2_rule --model-path $PLANT2_CKPT \
-      --plant2-action-mode pid
+      --plant2-action-mode pid --save-gifs
 """
 from __future__ import annotations
 
@@ -74,6 +81,124 @@ def _run(cmd: list[str], log_path: Path) -> None:
         raise SystemExit(1)
 
 
+def _gif_frames(path: Path, crop_top: int = 0):
+    """Load GIF frames as int16 RGB arrays (optionally cropping the top strip
+    where the eval/recorder text overlay lives)."""
+    import numpy as np
+    from PIL import Image, ImageSequence
+    return [np.asarray(f.convert("RGB"), dtype=np.int16)[crop_top:]
+            for f in ImageSequence.Iterator(Image.open(path))]
+
+
+def _gif_diff(a_frames, b_frames, offsets=(0,)):
+    """Best (offset, mean_abs_diff, pct_pixels_gt30) over the given offsets."""
+    import numpy as np
+    best = None
+    for off in offsets:
+        means, pcts, n = [], [], 0
+        for i in range(len(a_frames)):
+            j = i + off
+            if 0 <= j < len(b_frames) and a_frames[i].shape == b_frames[j].shape:
+                d = np.abs(a_frames[i] - b_frames[j])
+                means.append(float(d.mean()))
+                pcts.append(float((d > 30).mean() * 100))
+                n += 1
+        if not n:
+            continue
+        cand = (off, sum(means) / n, sum(pcts) / n, n)
+        if best is None or cand[1] < best[1]:
+            best = cand
+    return best  # (offset, mean, pct>30, n_frames) or None
+
+
+def _side_by_side(a_path: Path, b_path: Path, out: Path, offset: int,
+                  label_a: str, label_b: str) -> None:
+    from PIL import Image, ImageDraw, ImageSequence
+    fa = [f.convert("RGB").copy() for f in ImageSequence.Iterator(Image.open(a_path))]
+    fb = [f.convert("RGB").copy() for f in ImageSequence.Iterator(Image.open(b_path))]
+    combo = []
+    for i in range(len(fa)):
+        j = i + offset
+        if not (0 <= j < len(fb)):
+            continue
+        aa = fa[i].resize((420, 420)); bb = fb[j].resize((420, 420))
+        c = Image.new("RGB", (852, 452), "white")
+        c.paste(aa, (2, 30)); c.paste(bb, (430, 30))
+        dr = ImageDraw.Draw(c)
+        dr.text((6, 8), f"{label_a}  frame {i}", fill="black")
+        dr.text((434, 8), f"{label_b}  frame {j}", fill="black")
+        combo.append(c)
+    if combo:
+        combo[0].save(out, save_all=True, append_images=combo[1:],
+                      duration=40, loop=0)
+
+
+def _gif_checks(work: Path, rec_sidecar: Path, py: str, max_steps: int) -> bool:
+    """GIF part of the round-trip: replay pkl in-env with a GIF, then compare
+    eval-vs-recorder GIFs and recorder-vs-pkl-replay GIFs. Returns ok flag."""
+    try:
+        import numpy  # noqa: F401
+        from PIL import Image  # noqa: F401
+    except ImportError as exc:
+        print(f"[gif] SKIP comparison (pip install pillow numpy): {exc}")
+        return True
+
+    eval_gif = next((work / "eval").rglob("*.gif"), None)
+    rec_gif = next((work / "rec").rglob("replay.gif"), None)
+    pkl = next((work / "rec").rglob("replay.pkl"), None)
+    if not (eval_gif and rec_gif and pkl):
+        print(f"[gif] FAIL: missing artifacts (eval_gif={eval_gif}, "
+              f"rec_gif={rec_gif}, pkl={pkl})")
+        return False
+
+    # Replay the recorded pkl in-env with its own GIF.
+    replay_gif = work / "replay_from_pkl.gif"
+    _run([py, "expert_replay_inenv.py", "--pkl", str(pkl),
+          "--sidecar", str(rec_sidecar), "--ego-mode", "recorded",
+          "--npc-mode", "recorded", "--save-gif", str(replay_gif),
+          "--max-steps", str(max_steps)], work / "inenv.log")
+    inenv_log = (work / "inenv.log").read_text()
+    violations_match = '"violations_match": true' in inenv_log
+    print(f"[gif] in-env replay violations_match: {violations_match}")
+
+    ok = violations_match
+
+    # 1) eval GIF vs recorder GIF: same rollout code, same overlay — must be
+    #    near-identical at offset 0 (residual = GIF palette noise).
+    d = _gif_diff(_gif_frames(eval_gif), _gif_frames(rec_gif), offsets=(0,))
+    if d:
+        off, mean, pct, n = d
+        verdict = "OK" if (mean < 1.0 and pct < 1.5) else "MISMATCH"
+        print(f"[gif] eval vs recorder: {n} frames, mean_diff={mean:.2f}/255, "
+              f">30px={pct:.2f}%  -> {verdict}")
+        ok = ok and verdict == "OK"
+    else:
+        print("[gif] eval vs recorder: no comparable frames -> MISMATCH")
+        ok = False
+
+    # 2) recorder GIF vs pkl-replay GIF: replay renders a couple of extra lead
+    #    frames and has no text overlay — crop the top strip, auto-align offset.
+    d = _gif_diff(_gif_frames(rec_gif, crop_top=140),
+                  _gif_frames(replay_gif, crop_top=140),
+                  offsets=range(-3, 4))
+    if d:
+        off, mean, pct, n = d
+        verdict = "OK" if (mean < 1.0 and pct < 1.5) else "MISMATCH"
+        print(f"[gif] recorder vs pkl-replay: offset={off:+d}, {n} frames, "
+              f"mean_diff={mean:.2f}/255, >30px={pct:.2f}%  -> {verdict}")
+        ok = ok and verdict == "OK"
+        _side_by_side(rec_gif, replay_gif, work / "side_by_side.gif", off,
+                      "RECORD (live)", "REPLAY (from pkl)")
+        print(f"[gif] side-by-side: {work / 'side_by_side.gif'}")
+    else:
+        print("[gif] recorder vs pkl-replay: no comparable frames -> MISMATCH")
+        ok = False
+
+    print(f"[gif] files: eval={eval_gif}\n            rec={rec_gif}\n"
+          f"            replay={replay_gif}")
+    return ok
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", required=True)
@@ -91,6 +216,9 @@ def main() -> None:
                     help="Pick the N-th valid row (default 0)")
     ap.add_argument("--workdir", default="/tmp/recorder_parity",
                     help="Scratch dir for the two runs (wiped per policy)")
+    ap.add_argument("--save-gifs", action="store_true",
+                    help="Record GIFs in both runs, replay the pkl in-env with "
+                         "a GIF, and compare the frames (needs pillow+numpy)")
     args = ap.parse_args()
 
     manifest = Path(args.manifest).resolve()
@@ -109,6 +237,7 @@ def main() -> None:
 
     py = sys.executable
     model_args = (["--model-path", args.model_path] if args.model_path else [])
+    gif_args = (["--save-gifs"] if args.save_gifs else [])
 
     # 1) corrected eval, sidecar on
     _run([py, "run_benchmark.py",
@@ -116,7 +245,8 @@ def main() -> None:
           "--manifest", str(one_row), "--backends", args.backend,
           "--scenes-root", str(scenes_root), "--max-steps", str(args.max_steps),
           "--benchmark-output", str(work / "eval"), "--emit-replay-sidecar",
-          "--plant2-action-mode", args.plant2_action_mode, *model_args],
+          "--plant2-action-mode", args.plant2_action_mode,
+          *gif_args, *model_args],
          work / "eval.log")
 
     # 2) recorder (no spawn-velocity sampling — must match the eval exactly)
@@ -126,7 +256,8 @@ def main() -> None:
           "--max-steps", str(args.max_steps),
           "--scenes-root", str(scenes_root),
           "--output-dir", str(work / "rec"),
-          "--plant2-action-mode", args.plant2_action_mode, *model_args],
+          "--plant2-action-mode", args.plant2_action_mode,
+          *gif_args, *model_args],
          work / "rec.log")
 
     ev_path = next((work / "eval").rglob("replay.json"), None)
@@ -159,6 +290,11 @@ def main() -> None:
           f"in_zone={me.get('in_zone_total_steps')}")
 
     ok = not bad and acts_ok and not ident_bad and pkl is not None
+
+    if args.save_gifs:
+        print()
+        ok = _gif_checks(work, rc_path, py, args.max_steps) and ok
+
     print("\nPARITY:", "OK" if ok else "FAILED")
     sys.exit(0 if ok else 1)
 

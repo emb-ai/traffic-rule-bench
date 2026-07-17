@@ -192,6 +192,7 @@ def replay_in_our_env(
 
         expert_actions = sidecar.get("expert_actions", [])
         violations_replay = []
+        prev_violating: set = set()
         n_replay_frames = len(npc_frames) if npc_frames else max_steps
 
         for step in range(min(max_steps, n_replay_frames)):
@@ -233,11 +234,18 @@ def replay_in_our_env(
                         pass
 
             if sign_mgr is not None:
+                # Edge-counted, mirroring the recorder's violations_timeline:
+                # one entry per not-violating -> violating transition per class.
+                current_violating = set()
                 for s_obj, v in sign_mgr.check_all_violations(env.vehicle):
                     if v:
-                        violations_replay.append({
-                            "step": step, "sign_class": type(s_obj).__name__,
-                        })
+                        cls = type(s_obj).__name__
+                        current_violating.add(cls)
+                        if cls not in prev_violating:
+                            violations_replay.append({
+                                "step": step, "sign_class": cls,
+                            })
+                prev_violating = current_violating
 
             if save_gif:
                 _render_top_down(env, window=False, screen_record=True)
@@ -258,10 +266,13 @@ def replay_in_our_env(
                 pass
 
         original_violations = sidecar.get("violations_timeline", [])
+        # Same events in the same order; the step may differ by one frame — the
+        # replay teleports recorded states BEFORE env.step, so violation
+        # detection can shift by a single step relative to the live run.
         match = (
             len(violations_replay) == len(original_violations)
             and all(a.get("sign_class") == b.get("sign_class")
-                    and a.get("step") == b.get("step")
+                    and abs(int(a.get("step", -99)) - int(b.get("step", 99))) <= 1
                     for a, b in zip(violations_replay, original_violations))
         )
         result = {
