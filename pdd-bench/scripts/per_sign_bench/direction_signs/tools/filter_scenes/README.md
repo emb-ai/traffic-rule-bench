@@ -15,7 +15,7 @@ python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.2 --limit 10
 # writes → scenes/4_1_2/core/
 ```
 
-### Dual-path crop (4.1.1–4.1.5)
+### Dual-path crop (4.1.1–4.1.6)
 
 1. Import cores (4-arm preferred):
 
@@ -25,6 +25,7 @@ python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.2 --arms 4 --
 python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.3 --arms 4 --limit 30
 python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.4 --arms 4 --limit 30
 python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.5 --arms 4 --limit 30
+python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.6 --arms 4 --limit 30
 ```
 
 2. Select + crop scenes where the **same destination** is reachable by a
@@ -36,6 +37,7 @@ python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.5 --arms 4 --
    * 4.1.3: baseline ``s``/``r``, compliant ``l`` → ``scenes/4_1_3/``
    * 4.1.4: baseline ``l``, compliant ``s``/``r`` → ``scenes/4_1_4/``
    * 4.1.5: baseline ``r``, compliant ``s``/``l`` → ``scenes/4_1_5/``
+   * 4.1.6: baseline ``s``, compliant ``r``/``l`` → ``scenes/4_1_6/``
 
 ```
 python tools/filter_scenes/crop_junction_scene.py --limit 10

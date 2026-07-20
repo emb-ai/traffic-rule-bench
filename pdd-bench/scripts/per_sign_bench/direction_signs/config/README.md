@@ -20,7 +20,7 @@ python generate_manifest.py gif.enabled=true
 ### `sign`
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `pdd_code` | `4.1.1` | Active member of 4.1.1–4.1.6 (`lib/direction_sign_spec.py`). Dual-path crop/manifest supported for `4.1.1`–`4.1.5`. |
+| `pdd_code` | `4.1.1` | Active member of 4.1.1–4.1.6 (`lib/direction_sign_spec.py`). Dual-path crop/manifest supported for all six codes. |
 
 ### `paths`
 | Parameter | Default | Description |

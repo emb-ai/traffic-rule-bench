@@ -10,6 +10,7 @@ Examples:
   * 4.1.3 (left only): baseline ``s``/``r``, compliant ``l``
   * 4.1.4 (straight or right): baseline ``l``, compliant ``s``/``r``
   * 4.1.5 (straight or left): baseline ``r``, compliant ``s``/``l``
+  * 4.1.6 (right or left): baseline ``s``, compliant ``r``/``l``
 
 Pipeline:
   1. On the full core net, find an X junction + ego approach with both a
