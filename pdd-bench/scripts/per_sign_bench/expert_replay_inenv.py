@@ -63,6 +63,7 @@ def replay_in_our_env(
     render_3d: bool = False,
     save_gif: Optional[Path] = None,
     max_steps: int = 500,
+    scenes_root: Optional[Path] = None,
 ) -> dict:
     sidecar = json.load(open(sidecar_path))
     scenario = pickle.load(open(pkl_path, "rb"))
@@ -78,7 +79,8 @@ def replay_in_our_env(
     env = _build_env(row, backend, max_steps=max_steps,
                       record_episode=False,
                       ego_policy_cls=None,
-                      render=bool(render_3d))
+                      render=bool(render_3d),
+                      scenes_root=scenes_root)
 
     # Extract per-step NPC states from pkl FrameInfo for manual replay.
     # pkl format: {frame: [[FrameInfo, ...], ...], ...}
@@ -309,6 +311,9 @@ def main():
     parser.add_argument("--render-3d", action="store_true")
     parser.add_argument("--save-gif", type=str, default=None)
     parser.add_argument("--max-steps", type=int, default=500)
+    parser.add_argument("--scenes-root", type=str, default=None,
+                        help="Root dir sidecar net_path entries resolve against "
+                             "(default: pdd-bench/scenes)")
     args = parser.parse_args()
 
     if args.scene_id and args.code:
@@ -336,6 +341,7 @@ def main():
         render_2d=args.render_2d, render_3d=args.render_3d,
         save_gif=Path(args.save_gif) if args.save_gif else None,
         max_steps=args.max_steps,
+        scenes_root=Path(args.scenes_root) if args.scenes_root else None,
     )
     print(json.dumps({k: v for k, v in result.items() if k != "violations_replay"
                        and k != "violations_original"}, indent=2, ensure_ascii=False))

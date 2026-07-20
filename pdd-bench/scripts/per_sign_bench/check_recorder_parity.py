@@ -133,7 +133,8 @@ def _side_by_side(a_path: Path, b_path: Path, out: Path, offset: int,
                       duration=40, loop=0)
 
 
-def _gif_checks(work: Path, rec_sidecar: Path, py: str, max_steps: int) -> bool:
+def _gif_checks(work: Path, rec_sidecar: Path, py: str, max_steps: int,
+                scenes_root: Path) -> bool:
     """GIF part of the round-trip: replay pkl in-env with a GIF, then compare
     eval-vs-recorder GIFs and recorder-vs-pkl-replay GIFs. Returns ok flag."""
     try:
@@ -156,6 +157,7 @@ def _gif_checks(work: Path, rec_sidecar: Path, py: str, max_steps: int) -> bool:
     _run([py, "expert_replay_inenv.py", "--pkl", str(pkl),
           "--sidecar", str(rec_sidecar), "--ego-mode", "recorded",
           "--npc-mode", "recorded", "--save-gif", str(replay_gif),
+          "--scenes-root", str(scenes_root),
           "--max-steps", str(max_steps)], work / "inenv.log")
     inenv_log = (work / "inenv.log").read_text()
     violations_match = '"violations_match": true' in inenv_log
@@ -268,7 +270,22 @@ def main() -> None:
 
     me, mr = ev["metrics"], rc["metrics"]
     shared = sorted(set(me) & set(mr))
-    bad = [k for k in shared if me[k] != mr[k]]
+
+    def _eq(a, b, rel: float) -> bool:
+        try:
+            fa, fb = float(a), float(b)
+        except (TypeError, ValueError):
+            return a == b
+        if fa == fb:
+            return True
+        return abs(fa - fb) / max(abs(fa), abs(fb), 1e-9) <= rel
+
+    # driving_efficiency усредняет скорость соседей из
+    # lidar.get_surrounding_objects — пограничный сосед может войти в выборку
+    # в одном процессе и не войти в другом (шум сенсорного запроса, не
+    # рассинхрон симуляции). Допускаем 0.5% относительной разницы только там.
+    _TOL = {"driving_efficiency": 5e-3}
+    bad = [k for k in shared if not _eq(me[k], mr[k], _TOL.get(k, 0.0))]
     acts_ok = ev.get("expert_actions") == rc.get("expert_actions")
     ident_bad = [k for k in ("scene_uid", "sign_slug", "policy", "variant")
                  if ev.get(k) != rc.get(k)]
@@ -293,7 +310,7 @@ def main() -> None:
 
     if args.save_gifs:
         print()
-        ok = _gif_checks(work, rc_path, py, args.max_steps) and ok
+        ok = _gif_checks(work, rc_path, py, args.max_steps, scenes_root) and ok
 
     print("\nPARITY:", "OK" if ok else "FAILED")
     sys.exit(0 if ok else 1)
