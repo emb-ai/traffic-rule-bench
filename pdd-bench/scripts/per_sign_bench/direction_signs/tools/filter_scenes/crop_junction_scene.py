@@ -8,6 +8,8 @@ destination is reachable via a *shorter* forbidden (baseline) first exit and a
   * 4.1.1: baseline l/r, compliant s
   * 4.1.2: baseline s/l, compliant r
   * 4.1.3: baseline s/r, compliant l
+  * 4.1.4: baseline l, compliant s/r
+  * 4.1.5: baseline r, compliant s/l
 
 Then crop to the XY bbox of both paths (+ margin).
 
@@ -67,6 +69,48 @@ from tools.render_map import (  # noqa: E402
     edge_shapes_by_id,
     render_network,
 )
+
+
+def _core_name_of_scene_dir(scene_dir: Path, meta: dict) -> str:
+    core = meta.get("core_scene_name")
+    if core:
+        return str(core)
+    name = scene_dir.name
+    return name.rsplit("_j", 1)[0] if "_j" in name else name
+
+
+def claimed_scenario_keys(
+    scenes_root: Path,
+    *,
+    exclude_cores: set[str] | None = None,
+) -> set[tuple[str, str]]:
+    """(junction_id, ego_edge_id) keys already used by existing cropped scenes.
+
+    Different catalog signs near the same junction produce identical dual-path
+    scenes; one (junction, approach) pair must yield at most one scene across
+    ALL core maps. ``exclude_cores`` skips scenes about to be re-cropped with
+    ``--overwrite`` so they can re-claim their own keys.
+    """
+    keys: set[tuple[str, str]] = set()
+    if not scenes_root.is_dir():
+        return keys
+    for entry in sorted(scenes_root.iterdir()):
+        if not entry.is_dir() or entry.name in ("core", "_rejected"):
+            continue
+        meta_path = entry / "meta.json"
+        if not meta_path.is_file():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if exclude_cores and _core_name_of_scene_dir(entry, meta) in exclude_cores:
+            continue
+        jid = meta.get("junction_id")
+        ego = meta.get("road_id")
+        if jid and ego:
+            keys.add((str(jid), str(ego)))
+    return keys
 
 
 def discover_core_scene_dirs(core_root: Path) -> list[Path]:
@@ -179,11 +223,16 @@ def process_core_scene(
     overwrite: bool,
     validate_metadrive: bool,
     pdd_code: str = DEFAULT_PDD_CODE,
+    claimed: set[tuple[str, str]] | None = None,
 ) -> int:
     """Find dual-path scenarios and crop each to its path-union bbox.
 
     Chosen spawn/dest + both paths are written into ``meta.json`` and become the
     canonical endpoints for ``generate_manifest`` (no rediscovery).
+
+    ``claimed`` deduplicates (junction, ego approach) pairs across core scenes:
+    picks colliding with an already-written scene are skipped, and written
+    scenes claim their key.
     """
     sign_spec = get_direction_sign_spec(pdd_code)
     pdd_code = sign_spec.pdd_code
@@ -209,6 +258,18 @@ def process_core_scene(
     except (FileNotFoundError, JunctionLayoutError) as exc:
         print(f"  [skip] {exc}")
         return 0
+
+    if claimed:
+        deduped = []
+        for sc, pick in ranked:
+            if (str(sc.junction_id), str(sc.ego_edge_id)) in claimed:
+                print(
+                    f"  [skip duplicate] junction {sc.junction_id} "
+                    f"ego {sc.ego_edge_id}: already covered by another scene"
+                )
+                continue
+            deduped.append((sc, pick))
+        ranked = deduped
 
     if not ranked:
         print(
@@ -358,6 +419,9 @@ def process_core_scene(
         )
         record["written"] = True
         created += 1
+        if claimed is not None:
+            written_sc = record["scenario"]
+            claimed.add((str(written_sc.junction_id), str(written_sc.ego_edge_id)))
 
     write_junctions_index(core_scene_dir, core_scene_name, pick_records)
     print(f"  wrote core/{core_scene_name}/junctions.json")
@@ -502,6 +566,15 @@ def main() -> None:
         f"compliant={dual_path_role_dirs(sign_spec.pdd_code)[1]}"
     )
 
+    # Cross-core dedup: one scene per (junction, ego approach). Scenes being
+    # re-cropped with --overwrite may re-claim their own keys.
+    exclude_cores = (
+        {d.name for d in core_scene_dirs} if args.overwrite else set()
+    )
+    claimed = claimed_scenario_keys(scenes_root, exclude_cores=exclude_cores)
+    if claimed:
+        print(f"Dedup: {len(claimed)} (junction, approach) key(s) already claimed")
+
     ok = 0
     created_total = 0
     for core_scene_dir in core_scene_dirs:
@@ -517,6 +590,7 @@ def main() -> None:
             overwrite=args.overwrite,
             validate_metadrive=not args.skip_metadrive_check,
             pdd_code=sign_spec.pdd_code,
+            claimed=claimed,
         )
         if created > 0 or args.dry_run:
             ok += 1

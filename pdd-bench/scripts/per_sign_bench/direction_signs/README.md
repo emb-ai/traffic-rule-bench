@@ -27,8 +27,8 @@ scenes/
     └── sign_*_j*/
 ```
 
-Default active member is **4.1.1**. Dual-path crop (4.1.1, 4.1.2 and 4.1.3)
-stores spawn/dest in scene meta: **baseline** = shorter forbidden first exit,
+Default active member is **4.1.1**. Dual-path crop (4.1.1–4.1.5) stores
+spawn/dest in scene meta: **baseline** = shorter forbidden first exit,
 **compliant** = longer allowed first exit. Manifest reuses those endpoints.
 
 | Sign  | Baseline (short) | Compliant (long) |
@@ -36,6 +36,8 @@ stores spawn/dest in scene meta: **baseline** = shorter forbidden first exit,
 | 4.1.1 | `l` or `r`       | `s`              |
 | 4.1.2 | `s` (prefer) / `l` | `r`            |
 | 4.1.3 | `s` (prefer) / `r` | `l`            |
+| 4.1.4 | `l`              | `s` (prefer) / `r` |
+| 4.1.5 | `r`              | `s` (prefer) / `l` |
 
 At eval, baseline ``idm`` tends to take the short forbidden exit (violation);
 ``modified_idm`` / ``carl_rule`` / ``comprehensive_rule_expert`` replan via
@@ -55,7 +57,7 @@ cd pdd-bench/scripts/per_sign_bench/direction_signs
 ```bash
 python tools/filter_scenes/import_catalog_scenes.py --arms 4 --limit 20
 python tools/filter_scenes/crop_junction_scene.py --limit 5
-python generate_manifest.py
+python generate_manifest.py sign.pdd_code=4.1.1 paths.output_base=benchmark_output/4_1_1
 # → scenes/4_1_1/, benchmark_output/4_1_1/<timestamp>/
 python eval_pipeline.py \
     --policies idm \
@@ -81,6 +83,24 @@ python generate_manifest.py sign.pdd_code=4.1.3
 # → scenes/4_1_3/, benchmark_output/4_1_3/<timestamp>/
 ```
 
+### 4.1.4 (straight or right)
+
+```bash
+python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.4 --arms 4 --limit 20
+python tools/filter_scenes/crop_junction_scene.py --pdd-code 4.1.4 --limit 5 --overwrite
+python generate_manifest.py sign.pdd_code=4.1.4
+# → scenes/4_1_4/, benchmark_output/4_1_4/<timestamp>/
+```
+
+### 4.1.5 (straight or left)
+
+```bash
+python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.5 --arms 4 --limit 20
+python tools/filter_scenes/crop_junction_scene.py --pdd-code 4.1.5 --limit 5 --overwrite
+python generate_manifest.py sign.pdd_code=4.1.5
+# → scenes/4_1_5/, benchmark_output/4_1_5/<timestamp>/
+```
+
 Crop writes ``road_id``, ``destination_*``, and ``dual_path`` (both edge lists);
 ``custom_cropped.png`` overlays full spawn→dest routes (blue = compliant / longer,
 orange = baseline / shorter). Manifest copies those endpoints into each row.
@@ -94,5 +114,5 @@ Check: ``ego_edge_id in straight_path`` via ``path_revisits_signed_approach``.
 
 ## Next
 
-- Extend dual-path selection to remaining 4.1.x members (4.1.4–4.1.6)
+- Extend dual-path selection to remaining 4.1.x members (4.1.6)
 - Split catalogs / seeds per code if needed

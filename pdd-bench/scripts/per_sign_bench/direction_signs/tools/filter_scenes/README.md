@@ -15,7 +15,7 @@ python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.2 --limit 10
 # writes → scenes/4_1_2/core/
 ```
 
-### Dual-path crop (4.1.1 / 4.1.2 / 4.1.3)
+### Dual-path crop (4.1.1–4.1.5)
 
 1. Import cores (4-arm preferred):
 
@@ -23,6 +23,8 @@ python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.2 --limit 10
 python tools/filter_scenes/import_catalog_scenes.py --arms 4 --limit 30
 python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.2 --arms 4 --limit 30
 python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.3 --arms 4 --limit 30
+python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.4 --arms 4 --limit 30
+python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.5 --arms 4 --limit 30
 ```
 
 2. Select + crop scenes where the **same destination** is reachable by a
@@ -32,6 +34,8 @@ python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.3 --arms 4 --
    * 4.1.1: baseline ``l``/``r``, compliant ``s`` → ``scenes/4_1_1/``
    * 4.1.2: baseline ``s``/``l``, compliant ``r`` → ``scenes/4_1_2/``
    * 4.1.3: baseline ``s``/``r``, compliant ``l`` → ``scenes/4_1_3/``
+   * 4.1.4: baseline ``l``, compliant ``s``/``r`` → ``scenes/4_1_4/``
+   * 4.1.5: baseline ``r``, compliant ``s``/``l`` → ``scenes/4_1_5/``
 
 ```
 python tools/filter_scenes/crop_junction_scene.py --limit 10
@@ -67,7 +71,7 @@ ls -1d sign*/ 2>/dev/null | wc -l
 
 4. Optionally move rejected scenes aside
 ```
-python tools/filter_scenes/review_junction_scenes.py --apply
+ python tools/filter_scenes/review_junction_scenes.py --pdd-code 4.1.2 --apply
 ```
 
 ### Notes

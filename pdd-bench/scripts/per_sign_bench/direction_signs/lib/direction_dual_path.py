@@ -8,6 +8,8 @@ Examples:
   * 4.1.1 (straight only): baseline ``l``/``r``, compliant ``s``
   * 4.1.2 (right only): baseline ``s``/``l``, compliant ``r``
   * 4.1.3 (left only): baseline ``s``/``r``, compliant ``l``
+  * 4.1.4 (straight or right): baseline ``l``, compliant ``s``/``r``
+  * 4.1.5 (straight or left): baseline ``r``, compliant ``s``/``l``
 
 Pipeline:
   1. On the full core net, find an X junction + ego approach with both a
@@ -527,87 +529,95 @@ def find_dual_path_scenarios(
                 continue
             exits = graph.first_exits.get(ego) or {}
 
-            compliant_options: List[Tuple[str, Set[str]]] = []
+            # Seed Dijkstra from the UNION of allowed (compliant) and the UNION
+            # of forbidden (baseline) first exits. With gain >= min_gain_m this
+            # guarantees the true unrestricted shortest route to the dest starts
+            # with a forbidden exit — a planner ignoring the sign violates
+            # naturally (no per-direction pair can hide a shorter allowed path).
+            exit_dir: Dict[str, str] = {}
+            compliant_exits: Set[str] = set()
             for d in compliant_dirs:
-                ex = set(exits.get(d) or ())
-                if ex:
-                    compliant_options.append((d, ex))
-            if not compliant_options:
-                continue
-
-            baseline_options: List[Tuple[TurnDir, Set[str]]] = []
+                for e in exits.get(d) or ():
+                    compliant_exits.add(e)
+                    exit_dir.setdefault(e, d)
+            baseline_exits: Set[str] = set()
             for d in baseline_dirs:
-                ex = set(exits.get(d) or ())
-                if ex:
-                    baseline_options.append((d, ex))
-            if not baseline_options:
+                for e in exits.get(d) or ():
+                    baseline_exits.add(e)
+                    exit_dir.setdefault(e, d)
+            if not compliant_exits or not baseline_exits:
                 continue
 
-            for compliant_dir, compliant_exits in compliant_options:
-                compliant_starts = [
-                    (e, graph.edge_length[e]) for e in compliant_exits
-                ]
-                compliant_dist, compliant_prev = _dijkstra_from(
-                    graph, compliant_starts, max_cost=max_compliant_length_m
-                )
+            compliant_starts = [
+                (e, graph.edge_length[e]) for e in compliant_exits
+            ]
+            compliant_dist, compliant_prev = _dijkstra_from(
+                graph, compliant_starts, max_cost=max_compliant_length_m
+            )
+            baseline_starts = [
+                (e, graph.edge_length[e]) for e in baseline_exits
+            ]
+            baseline_dist, baseline_prev = _dijkstra_from(
+                graph, baseline_starts, max_cost=max_baseline_length_m
+            )
 
-                for baseline_dir, baseline_exits in baseline_options:
-                    baseline_starts = [
-                        (e, graph.edge_length[e]) for e in baseline_exits
-                    ]
-                    baseline_dist, baseline_prev = _dijkstra_from(
-                        graph, baseline_starts, max_cost=max_baseline_length_m
+            shared = set(baseline_dist) & set(compliant_dist)
+            shared -= {ego} | baseline_exits | compliant_exits
+            # Drop other approaches into the same junction (not beyond it).
+            shared = {
+                dest for dest in shared if graph.edge_to_node.get(dest) != jid
+            }
+
+            # Rank by short baseline first so dests stay within MetaDrive's
+            # 10-hop navigation limit; secondary key is larger gain.
+            arm_cands: List[DualPathScenario] = []
+            for dest in shared:
+                lt = baseline_dist[dest]
+                ls = compliant_dist[dest]
+                if lt > max_baseline_length_m or ls > max_compliant_length_m:
+                    continue
+                if ls - lt < min_gain_m:
+                    continue
+                t_path = _rebuild_path(baseline_prev, baseline_exits, dest)
+                s_path = _rebuild_path(compliant_prev, compliant_exits, dest)
+                if not t_path or not s_path:
+                    continue
+                # The temptation must be a NATURAL route: a plain forbidden
+                # first exit followed by normal continuation. Baselines that
+                # U-turn mid-path or loop back over the signed approach are
+                # artificial — a real planner would not produce them.
+                if _path_uturn_junctions(graph, [ego, *t_path]):
+                    continue
+                if path_revisits_signed_approach(ego, t_path):
+                    continue
+                if require_uturn_continuation and dead_end_uturn_junctions(
+                    graph, ego, s_path, incident=incident
+                ):
+                    continue
+                if path_revisits_signed_approach(ego, s_path):
+                    continue
+                arm_cands.append(
+                    DualPathScenario(
+                        junction_id=jid,
+                        junction_center_xy=center,
+                        ego_edge_id=ego,
+                        ego_lane_num=_default_lane_num(graph, ego),
+                        dest_edge_id=dest,
+                        dest_lane_num=_default_lane_num(graph, dest),
+                        turn_dir=exit_dir.get(t_path[0], baseline_dirs[0]),
+                        turn_first_exit=t_path[0],
+                        straight_first_exit=s_path[0],
+                        turn_path=tuple(t_path),
+                        straight_path=tuple(s_path),
+                        turn_length_m=float(lt),
+                        straight_length_m=float(ls),
+                        compliant_dir=exit_dir.get(s_path[0], compliant_dirs[0]),
+                        pdd_code=pdd_code,
                     )
-
-                    shared = set(baseline_dist) & set(compliant_dist)
-                    shared -= {ego} | baseline_exits | compliant_exits
-                    # Drop other approaches into the same junction (not beyond it).
-                    shared = {
-                        dest for dest in shared if graph.edge_to_node.get(dest) != jid
-                    }
-
-                    # Rank by short baseline first so dests stay within MetaDrive's
-                    # 10-hop navigation limit; secondary key is larger gain.
-                    arm_cands: List[DualPathScenario] = []
-                    for dest in shared:
-                        lt = baseline_dist[dest]
-                        ls = compliant_dist[dest]
-                        if lt > max_baseline_length_m or ls > max_compliant_length_m:
-                            continue
-                        if ls - lt < min_gain_m:
-                            continue
-                        t_path = _rebuild_path(baseline_prev, baseline_exits, dest)
-                        s_path = _rebuild_path(compliant_prev, compliant_exits, dest)
-                        if not t_path or not s_path:
-                            continue
-                        if require_uturn_continuation and dead_end_uturn_junctions(
-                            graph, ego, s_path, incident=incident
-                        ):
-                            continue
-                        if path_revisits_signed_approach(ego, s_path):
-                            continue
-                        arm_cands.append(
-                            DualPathScenario(
-                                junction_id=jid,
-                                junction_center_xy=center,
-                                ego_edge_id=ego,
-                                ego_lane_num=_default_lane_num(graph, ego),
-                                dest_edge_id=dest,
-                                dest_lane_num=_default_lane_num(graph, dest),
-                                turn_dir=baseline_dir,
-                                turn_first_exit=t_path[0],
-                                straight_first_exit=s_path[0],
-                                turn_path=tuple(t_path),
-                                straight_path=tuple(s_path),
-                                turn_length_m=float(lt),
-                                straight_length_m=float(ls),
-                                compliant_dir=compliant_dir,
-                                pdd_code=pdd_code,
-                            )
-                        )
-                    arm_cands.sort(key=lambda s: (s.turn_length_m, -s.gain_m))
-                    for cand in arm_cands[:max(1, dests_per_arm)]:
-                        scenarios.append(cand)
+                )
+            arm_cands.sort(key=lambda s: (s.turn_length_m, -s.gain_m))
+            for cand in arm_cands[:max(1, dests_per_arm)]:
+                scenarios.append(cand)
 
     scenarios.sort(
         key=lambda s: (s.turn_length_m, -s.gain_m, s.junction_id, s.ego_edge_id)
@@ -705,9 +715,22 @@ def rebuild_dual_path_on_net(
     dest = scenario.dest_edge_id
     if ego not in graph.edge_length or dest not in graph.edge_length:
         return None
+    baseline_dirs, compliant_dirs = dual_path_role_dirs(scenario.pdd_code)
     exits = graph.first_exits.get(ego) or {}
-    baseline_exits = set(exits.get(scenario.turn_dir) or ())
-    compliant_exits = set(exits.get(scenario.compliant_dir) or ())
+    # Union over all allowed / all forbidden dirs — mirrors
+    # find_dual_path_scenarios so the crop cannot re-introduce a scene whose
+    # natural shortest route is compliant.
+    exit_dir: Dict[str, str] = {}
+    baseline_exits: Set[str] = set()
+    for d in baseline_dirs:
+        for e in exits.get(d) or ():
+            baseline_exits.add(e)
+            exit_dir.setdefault(e, d)
+    compliant_exits: Set[str] = set()
+    for d in compliant_dirs:
+        for e in exits.get(d) or ():
+            compliant_exits.add(e)
+            exit_dir.setdefault(e, d)
     if not baseline_exits or not compliant_exits:
         return None
     baseline_starts = [(e, graph.edge_length[e]) for e in baseline_exits]
@@ -724,6 +747,11 @@ def rebuild_dual_path_on_net(
     s_path = _rebuild_path(compliant_prev, compliant_exits, dest)
     if not t_path or not s_path:
         return None
+    # Same naturalness filters as initial selection.
+    if _path_uturn_junctions(graph, [ego, *t_path]):
+        return None
+    if path_revisits_signed_approach(ego, t_path):
+        return None
     info = graph.junctions.get(scenario.junction_id)
     if info and info.get("center") is not None:
         center = (float(info["center"][0]), float(info["center"][1]))
@@ -736,14 +764,14 @@ def rebuild_dual_path_on_net(
         ego_lane_num=_default_lane_num(graph, ego),
         dest_edge_id=dest,
         dest_lane_num=_default_lane_num(graph, dest),
-        turn_dir=scenario.turn_dir,
+        turn_dir=exit_dir.get(t_path[0], scenario.turn_dir),
         turn_first_exit=t_path[0],
         straight_first_exit=s_path[0],
         turn_path=tuple(t_path),
         straight_path=tuple(s_path),
         turn_length_m=float(baseline_dist[dest]),
         straight_length_m=float(compliant_dist[dest]),
-        compliant_dir=scenario.compliant_dir,
+        compliant_dir=exit_dir.get(s_path[0], scenario.compliant_dir),
         pdd_code=scenario.pdd_code,
     )
 
