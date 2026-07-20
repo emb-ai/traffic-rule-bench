@@ -69,11 +69,23 @@ def replay_in_our_env(
     scenario = pickle.load(open(pkl_path, "rb"))
 
     from expert_replay import _build_env    # re-use env-builder
+    from bench import env_builders as _env_builders
     from factorized_space.benchmark_runner import SIGN_CLASS_MAP
     from factorized_space.ego_defaults import apply_ego_defaults
 
     row = sidecar["source_row"]
     backend = sidecar["backend"]
+
+    # Mirror the RECORDING's relocate mode. NN policies are recorded with ego
+    # left on the manifest road (RELOCATE_EGO_TO_SIGN_LANE=False); IDM-family
+    # with True. The module default (True) would rebuild a DIFFERENT scene for
+    # NN recordings — ego spawn/route mismatch, instant termination in replay.
+    _idm_family = {"idm", "comprehensive_rule_expert", "rule_compliant"}
+    _rec_policy = str(sidecar.get("policy") or "")
+    _env_builders.RELOCATE_EGO_TO_SIGN_LANE = (
+        (_rec_policy in _idm_family) if _rec_policy else True)
+    print(f"[replay] relocate_ego_to_sign_lane="
+          f"{_env_builders.RELOCATE_EGO_TO_SIGN_LANE} (policy={_rec_policy or '?'})")
 
     # Build env WITHOUT auto-policy, WITHOUT recording.
     env = _build_env(row, backend, max_steps=max_steps,
