@@ -1386,6 +1386,18 @@ class SignComplianceMixin:
                              getattr(sign, "not_allowed_direction", None))
         if prohibited is None:
             return
+
+        # SUMO EdgeRoadNetwork: same dual-path replan as 4.1.x direction signs
+        # (No*TurnSign exposes ALLOWED_DIRS = complement of prohibited).
+        nav = getattr(self.control_object, "navigation", None)
+        if nav is not None and self._is_sumo_edge_nav(nav) and getattr(sign, "ALLOWED_DIRS", None):
+            blocked = self._direction_blocked_exits_from_source(sign, sign.lane)
+            for lid in blocked:
+                self._blocked_lanes.add(lid)
+            self._reroute_sumo_for_direction_sign(sign)
+            self._arm_direction_exit_from_sign(sign)
+            return
+
         turns = getattr(sign.lane, "turns", [])
         for turn in turns:
             if turn.get("direction") == prohibited:
@@ -1393,7 +1405,6 @@ class SignComplianceMixin:
                 if to_lane is not None:
                     self._blocked_lanes.add(to_lane)
         # If navigation next edge goes through a blocked lane, reroute
-        nav = getattr(self.control_object, "navigation", None)
         if nav is None:
             return
         checkpoints = getattr(nav, "checkpoints", None)
