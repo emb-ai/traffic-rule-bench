@@ -28,14 +28,14 @@ Registry: `lib/no_turn_sign_spec.py`. Sign classes live in
 cd pdd-bench/scripts/per_sign_bench/no_turn_signs
 conda activate zinkovich-plant2   # or your env
 
-# 3.18.1 (no right)
-python tools/filter_scenes/import_catalog_scenes.py --pdd-code 3.18.1 --arms 4 --limit 30 --no-simulation
-python tools/filter_scenes/crop_junction_scene.py --pdd-code 3.18.1 --limit 20 --overwrite
+# 3.18.1 (no right) — X and T junctions (T only if right exit exists)
+python tools/filter_scenes/import_catalog_scenes.py --pdd-code 3.18.1 --arms 4 3 --limit 50 --no-simulation
+python tools/filter_scenes/crop_junction_scene.py --pdd-code 3.18.1 --limit 40 --overwrite
 python generate_manifest.py sign.pdd_code=3.18.1
 
-# 3.18.2 (no left)
-python tools/filter_scenes/import_catalog_scenes.py --pdd-code 3.18.2 --arms 4 --limit 30 --no-simulation
-python tools/filter_scenes/crop_junction_scene.py --pdd-code 3.18.2 --limit 20 --overwrite
+# 3.18.2 (no left) — X and T junctions (T only if left exit exists)
+python tools/filter_scenes/import_catalog_scenes.py --pdd-code 3.18.2 --arms 4 3 --limit 50 --no-simulation
+python tools/filter_scenes/crop_junction_scene.py --pdd-code 3.18.2 --limit 40 --overwrite
 python generate_manifest.py sign.pdd_code=3.18.2
 ```
 

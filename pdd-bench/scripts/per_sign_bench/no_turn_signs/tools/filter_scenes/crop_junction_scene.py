@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Crop core maps into dual-path no-turn-sign scenes.
 
-Selection first: on the full core net find an X-junction approach where the same
-destination is reachable via a *shorter* forbidden (baseline) first exit and a
-*longer* allowed (compliant) path. Roles come from ``--pdd-code``:
+Selection first: on the full core net find an X- or T-junction approach where
+the same destination is reachable via a *shorter* forbidden (baseline) first
+exit and a *longer* allowed (compliant) path. Roles come from ``--pdd-code``:
 
   * 3.18.1: baseline r, compliant s/l
   * 3.18.2: baseline l, compliant s/r
 
-Then crop to the XY bbox of both paths (+ margin).
+Approaches without the forbidden exit (e.g. T-stem with no right turn for
+3.18.1) are skipped. Then crop to the XY bbox of both paths (+ margin).
 
 Examples:
     python tools/filter_scenes/crop_junction_scene.py --limit 5
@@ -231,14 +232,15 @@ def process_core_scene(
     picks colliding with an already-written scene are skipped, and written
     scenes claim their key.
     """
-    sign_spec = get_direction_sign_spec(pdd_code)
+    sign_spec = get_no_turn_sign_spec(pdd_code)
     pdd_code = sign_spec.pdd_code
     baseline_dirs, compliant_dirs = dual_path_role_dirs(pdd_code)
     core_scene_name = core_scene_dir.name
     print(
         f"\n=== {core_scene_name} (core) === "
         f"sign={pdd_code} ({sign_spec.title}); "
-        f"baseline={baseline_dirs} compliant={compliant_dirs}"
+        f"baseline={baseline_dirs} compliant={compliant_dirs} "
+        f"(X+T junctions; skip approaches missing forbidden exit)"
     )
     try:
         meta = load_scene_meta(core_scene_dir)
@@ -460,7 +462,7 @@ def main() -> None:
     parser.add_argument(
         "--pdd-code",
         default=DEFAULT_PDD_CODE,
-        choices=list(DIRECTION_SIGN_CODES),
+        choices=list(NO_TURN_SIGN_CODES),
         help=f"Direction-sign member for dual-path roles (default: {DEFAULT_PDD_CODE})",
     )
     parser.add_argument(
@@ -527,7 +529,7 @@ def main() -> None:
     if args.max_scenarios < 1:
         sys.exit("--max-scenarios must be at least 1")
 
-    sign_spec = get_direction_sign_spec(args.pdd_code)
+    sign_spec = get_no_turn_sign_spec(args.pdd_code)
     scenes_base = args.scenes_base.expanduser().resolve()
     core_root = (
         args.core_dir.expanduser().resolve()
@@ -544,7 +546,7 @@ def main() -> None:
     if not core_root.is_dir():
         sys.exit(
             f"Core scenes directory not found: {core_root}\n"
-            "Run import_catalog_scenes.py --arms 4 first."
+            "Run import_catalog_scenes.py --arms 4 3 first."
         )
 
     if args.scenes:

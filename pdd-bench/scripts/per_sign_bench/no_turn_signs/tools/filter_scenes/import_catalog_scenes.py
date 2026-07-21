@@ -455,9 +455,9 @@ def main() -> None:
         "--arms",
         type=int,
         nargs="+",
-        default=[4],
+        default=[4, 3],
         metavar="N",
-        help="Junction arm count(s) to require: 3, 4, or both (default: 4)",
+        help="Junction arm count(s) to require: 3 (T), 4 (X), or both (default: 4 3)",
     )
     parser.add_argument(
         "--min-lane-length",

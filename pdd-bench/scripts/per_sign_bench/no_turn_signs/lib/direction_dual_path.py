@@ -9,8 +9,9 @@ Examples:
   * 3.18.2 (no left): baseline ``l``, compliant ``s``/``r``
 
 Pipeline:
-  1. On the full core net, find an X junction + ego approach with both a
-     baseline and a compliant first exit.
+  1. On the full core net, find an X or T junction + ego approach with both a
+     baseline and a compliant first exit (so the forbidden maneuver exists in
+     the geometry — e.g. 3.18.1 needs a real right exit on that approach).
   2. Pick a destination reachable after *either* first exit, with
      ``len(baseline) + min_gain < len(compliant)``.
   3. Crop later by the XY bounding box of the two edge paths (+ margin).
@@ -336,13 +337,20 @@ def path_union_bbox(
     )
 
 
-def _find_x_junction_ids(
+def _find_intersection_junction_ids(
     net_path: Path,
     graph: _EdgeGraph,
     *,
     min_arm_lane_m: float = 3.0,
+    arm_counts: Sequence[int] = (4, 3),
 ) -> List[Tuple[str, Tuple[float, float]]]:
-    """Return (junction_id, center) for 4-arm intersection junctions."""
+    """Return (junction_id, center) for intersection junctions with N arms.
+
+    ``arm_counts`` defaults to X (4) and T (3). Prefer listing 4 before 3 so
+    callers that iterate in order see X junctions first when ties are broken
+    elsewhere by path length.
+    """
+    allowed = {int(n) for n in arm_counts}
     out: List[Tuple[str, Tuple[float, float]]] = []
     for jid, info in graph.junctions.items():
         if info.get("type") not in INTERSECTION_JUNCTION_TYPES:
@@ -352,14 +360,31 @@ def _find_x_junction_ids(
             for eid, to_node in graph.edge_to_node.items()
             if to_node == jid
         ]
-        if len(incoming) != 4:
+        if len(incoming) not in allowed:
             continue
         if not all(graph.edge_length.get(eid, 0.0) > min_arm_lane_m for eid in incoming):
             continue
         center = info["center"]
         out.append((jid, (float(center[0]), float(center[1]))))
-    out.sort(key=lambda item: item[0])
+    # X before T, then stable id order.
+    out.sort(key=lambda item: (-_arm_count_for_junction(graph, item[0]), item[0]))
     return out
+
+
+def _arm_count_for_junction(graph: _EdgeGraph, junction_id: str) -> int:
+    return sum(1 for _eid, to_node in graph.edge_to_node.items() if to_node == junction_id)
+
+
+def _find_x_junction_ids(
+    net_path: Path,
+    graph: _EdgeGraph,
+    *,
+    min_arm_lane_m: float = 3.0,
+) -> List[Tuple[str, Tuple[float, float]]]:
+    """Backward-compatible alias: 4-arm junctions only."""
+    return _find_intersection_junction_ids(
+        net_path, graph, min_arm_lane_m=min_arm_lane_m, arm_counts=(4,)
+    )
 
 
 def _junction_incident_edges(graph: _EdgeGraph) -> Dict[str, Set[str]]:
@@ -482,6 +507,7 @@ def find_dual_path_scenarios(
     dests_per_arm: int = 1,
     junction_ids: Optional[Sequence[str]] = None,
     require_uturn_continuation: bool = True,
+    arm_counts: Sequence[int] = (4, 3),
 ) -> List[DualPathScenario]:
     """Find dual-path scenarios: baseline shorter, compliant longer.
 
@@ -489,10 +515,15 @@ def find_dual_path_scenarios(
       * baseline → stored as ``turn_*`` (short forbidden first exit)
       * compliant → stored as ``straight_*`` (long allowed first exit)
 
+    ``arm_counts`` selects X (4) and/or T (3) junctions. An ego approach is
+    kept only when SUMO first-exits include both a forbidden and an allowed
+    direction — so e.g. 3.18.1 ("no right") is never placed on a T-stem that
+    has no right turn.
+
     ``min_lane_length_m`` applies to the ego approach only (spawnable arm).
-    Other X arms only need ``min_arm_lane_m`` so stubby OSM arms are allowed.
-    Preference order: shorter baseline path (MetaDrive ``shortest_path`` is
-    capped at 10 hops), then larger length gain.
+    Other junction arms only need ``min_arm_lane_m`` so stubby OSM arms are
+    allowed. Preference order: shorter baseline path (MetaDrive
+    ``shortest_path`` is capped at 10 hops), then larger length gain.
     ``require_uturn_continuation`` drops candidates whose *compliant* path
     U-turns at a dead end. Compliant paths that revisit the signed approach
     edge after the first exit (loop onto the same arm under the sign) are
@@ -503,6 +534,10 @@ def find_dual_path_scenarios(
     if not baseline_dirs or not compliant_dirs:
         return []
 
+    allowed_arms = {int(n) for n in arm_counts}
+    if not allowed_arms:
+        return []
+
     max_baseline_length_m = max_turn_length_m
     max_compliant_length_m = max_straight_length_m
 
@@ -511,20 +546,23 @@ def find_dual_path_scenarios(
     incident = _junction_incident_edges(graph) if require_uturn_continuation else None
 
     if junction_ids is None:
-        x_junctions = _find_x_junction_ids(
-            net_path, graph, min_arm_lane_m=min_arm_lane_m
+        candidate_junctions = _find_intersection_junction_ids(
+            net_path,
+            graph,
+            min_arm_lane_m=min_arm_lane_m,
+            arm_counts=tuple(sorted(allowed_arms, reverse=True)),
         )
     else:
-        x_junctions = []
+        candidate_junctions = []
         for jid in junction_ids:
             info = graph.junctions.get(jid)
             if not info:
                 continue
             center = info["center"]
-            x_junctions.append((jid, (float(center[0]), float(center[1]))))
+            candidate_junctions.append((jid, (float(center[0]), float(center[1]))))
 
     scenarios: List[DualPathScenario] = []
-    for jid, center in x_junctions:
+    for jid, center in candidate_junctions:
         info = graph.junctions.get(jid)
         if info is None:
             continue
@@ -535,7 +573,7 @@ def find_dual_path_scenarios(
             for eid, to_node in graph.edge_to_node.items()
             if to_node == jid
         ]
-        if len(incoming) < 4:
+        if len(incoming) not in allowed_arms:
             continue
 
         for ego in sorted(incoming):
@@ -543,11 +581,9 @@ def find_dual_path_scenarios(
                 continue
             exits = graph.first_exits.get(ego) or {}
 
-            # Seed Dijkstra from the UNION of allowed (compliant) and the UNION
-            # of forbidden (baseline) first exits. With gain >= min_gain_m this
-            # guarantees the true unrestricted shortest route to the dest starts
-            # with a forbidden exit — a planner ignoring the sign violates
-            # naturally (no per-direction pair can hide a shorter allowed path).
+            # Geometry gate for the sign: forbidden first exit must exist, and
+            # at least one allowed first exit must exist (T-junctions often
+            # lack r or l on some approaches).
             exit_dir: Dict[str, str] = {}
             compliant_exits: Set[str] = set()
             for d in compliant_dirs:
@@ -634,7 +670,13 @@ def find_dual_path_scenarios(
                 scenarios.append(cand)
 
     scenarios.sort(
-        key=lambda s: (s.turn_length_m, -s.gain_m, s.junction_id, s.ego_edge_id)
+        key=lambda s: (
+            -_arm_count_for_junction(graph, s.junction_id),
+            s.turn_length_m,
+            -s.gain_m,
+            s.junction_id,
+            s.ego_edge_id,
+        )
     )
     # Deduplicate by (junction, ego, dest) keeping best ranking.
     seen_dest: Set[Tuple[str, str, str]] = set()
@@ -806,6 +848,7 @@ def find_ranked_dual_path_picks(
     min_lane_length_m: float = 10.0,
     min_gain_m: float = 20.0,
     max_scenarios: int = 5,
+    arm_counts: Sequence[int] = (4, 3),
     **kwargs,
 ) -> List[Tuple[DualPathScenario, JunctionPick]]:
     """Rank dual-path scenarios with a matching ``JunctionPick`` for crop tooling."""
@@ -816,24 +859,27 @@ def find_ranked_dual_path_picks(
         min_lane_length_m=min_lane_length_m,
         min_gain_m=min_gain_m,
         max_scenarios=max_scenarios,
+        arm_counts=arm_counts,
         **kwargs,
     )
     picks = collect_intersection_junction_candidates(
         net_path,
         min_lane_length_m=min_lane_length_m,
-        arm_counts=(4,),
+        arm_counts=tuple(int(n) for n in arm_counts),
     )
     by_id = {p.junction_id: p for p in picks}
+    graph = build_edge_graph(net_path)
     out: List[Tuple[DualPathScenario, JunctionPick]] = []
     for sc in scenarios:
         pick = by_id.get(sc.junction_id)
         if pick is None:
+            n_arms = _arm_count_for_junction(graph, sc.junction_id)
             pick = JunctionPick(
                 junction_id=sc.junction_id,
                 center_xy=sc.junction_center_xy,
                 total_lanes=0,
                 incoming_edge_ids=(sc.ego_edge_id,),
-                arm_count=4,
+                arm_count=n_arms,
             )
         out.append((sc, pick))
     return out
