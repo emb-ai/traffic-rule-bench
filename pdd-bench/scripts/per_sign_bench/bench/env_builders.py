@@ -244,16 +244,16 @@ RELOCATE_EGO_TO_SIGN_LANE = True
 
 
 def _sample_profile_for_catalog_row(row: dict, max_steps: int) -> None:
-    """Каталог-прямой режим (без материализации): у строки нет profile_*.
+    """Catalog-direct mode (no materialization): the row has no profile_*.
 
-    Материализация сэмплировала NPC-профиль из сида строки и писала его в
-    манифест; при прогоне прямо по catalog.jsonl делаем то же самое на лету —
-    та же функция sample_one_profile и тот же сид → тот же профиль, что был бы
-    в манифесте. horizon_steps поднимаем до max_steps (в каталоге его нет,
-    дефолт сэмплера 600 обрезал бы эпизод).
+    Materialization sampled the NPC profile from the row seed and wrote it to
+    the manifest; when running straight off catalog.jsonl, do the same on the
+    fly — same sample_one_profile function and same seed → the same profile the
+    manifest would have had. horizon_steps is raised to max_steps (absent from
+    the catalog; the sampler default of 600 would truncate the episode).
     """
     if _manifest_profile(row):
-        return  # манифест-строка — профиль уже зашит
+        return  # manifest row — profile already baked in
     import os
 
     from factorized_space.agent_profile_bank import sample_one_profile
@@ -261,9 +261,9 @@ def _sample_profile_for_catalog_row(row: dict, max_steps: int) -> None:
     prof = sample_one_profile(_row_seed(row), horizon_steps=max_steps)
     for key, value in prof.items():
         row[f"profile_{key}"] = value
-    # NPC-кап под лимит знака: для манифеста источником истины была
-    # материализация (PER_SIGN_COMPLIANT_NPC=1 → npc_compliant в строке);
-    # для каталог-строки воспроизводим то же правило от env-переменной.
+    # NPC cap at the sign limit: for manifest rows the source of truth was
+    # materialization (PER_SIGN_COMPLIANT_NPC=1 → npc_compliant in the row);
+    # for a catalog row, reproduce the same rule from the env var.
     if (os.environ.get("PER_SIGN_COMPLIANT_NPC") == "1"
             and "npc_compliant" not in row):
         cap = float(row.get("v_target_kmh") or 0.0)

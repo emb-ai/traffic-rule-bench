@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Проверка разнообразия сэмплов ego-IDM (s1–s4) на одном наборе сцен.
+"""Check ego-IDM sample diversity (s1–s4) on one scene set.
 
-Использование:
+Usage:
   python3 pilot_idm_sampling_check.py --runs <dir1> <dir2> ...
 
-Каждый dir — --benchmark-output одного запуска run_benchmark.py с --ego-variant
-(default/s1/s2/s3/s4); episodes_*.jsonl ищутся рекурсивно. Скрипт показывает:
-  1) сводку по вариантам: сэмплированный NORMAL_SPEED, фактическая скорость,
-     dest/compliance — насколько варианты различаются в среднем;
-  2) матрицу «сцена × вариант» (NORMAL_SPEED → фактическая скорость):
-     на ОДНОЙ сцене разные варианты = разные водители;
-  3) corr(сэмпл, поведение) — транслируются ли параметры в стиль.
+Each dir is the --benchmark-output of one run_benchmark.py run with --ego-variant
+(default/s1/s2/s3/s4); episodes_*.jsonl are found recursively. The script shows:
+  1) per-variant summary: sampled NORMAL_SPEED, actual speed,
+     dest/compliance — how much the variants differ on average;
+  2) "scene × variant" matrix (NORMAL_SPEED → actual speed):
+     on ONE scene, different variants = different drivers;
+  3) corr(sample, behavior) — whether the params translate into driving style.
 """
 from __future__ import annotations
 
@@ -47,21 +47,21 @@ def main() -> None:
             eps.append({
                 "variant": r.get("variant", "?"),
                 "scene": r.get("scene_id", "?"),
-                "ns": p.get("NORMAL_SPEED"),          # м/с (None у default)
+                "ns": p.get("NORMAL_SPEED"),          # m/s (None for default)
                 "acc": p.get("ACC_FACTOR"),
                 "dw": p.get("DISTANCE_WANTED"),
-                "v": r["distance_travelled_m"] / (r["steps"] * 0.1) * 3.6,  # км/ч
+                "v": r["distance_travelled_m"] / (r["steps"] * 0.1) * 3.6,  # km/h
                 "dest": bool(r.get("reached_dest")),
                 "comp": r.get("sign_violations", 0) == 0,
             })
     if not eps:
-        raise SystemExit("эпизоды не найдены")
+        raise SystemExit("no episodes found")
 
     variants = sorted({e["variant"] for e in eps})
     scenes = sorted({e["scene"] for e in eps})
 
-    print("=== 1. Сводка по вариантам ===")
-    print(f"{'variant':<9} {'NS м/с (min–max)':>20} {'v факт км/ч':>12} "
+    print("=== 1. Per-variant summary ===")
+    print(f"{'variant':<9} {'NS m/s (min–max)':>20} {'v act km/h':>12} "
           f"{'dest':>6} {'compl':>6}")
     for v in variants:
         g = [e for e in eps if e["variant"] == v]
@@ -72,7 +72,7 @@ def main() -> None:
               f"{st.mean([e['dest'] for e in g]):>6.2f} "
               f"{st.mean([e['comp'] for e in g]):>6.2f}")
 
-    print("\n=== 2. Сцена × вариант: сэмпл NORMAL_SPEED м/с → факт км/ч ===")
+    print("\n=== 2. Scene × variant: sampled NORMAL_SPEED m/s → actual km/h ===")
     hdr = f"{'scene':<22}" + "".join(f"{v:>16}" for v in variants)
     print(hdr)
     for s in scenes:
@@ -98,10 +98,10 @@ def main() -> None:
         spread = st.mean([st.pstdev([e["ns"] for e in withp if e["scene"] == s])
                           for s in scenes
                           if len([e for e in withp if e["scene"] == s]) > 1])
-        print(f"\n=== 3. corr(сэмпл NORMAL_SPEED, факт. скорость) = {corr:.2f} "
-              f"(параметры управляют поведением, ожидаем >0.6)")
-        print(f"средний разброс NS между вариантами на одной сцене: {spread:.1f} м/с "
-              f"(разнообразие водителей на сцене)")
+        print(f"\n=== 3. corr(sampled NORMAL_SPEED, actual speed) = {corr:.2f} "
+              f"(params drive behavior, expect >0.6)")
+        print(f"mean NS spread across variants on one scene: {spread:.1f} m/s "
+              f"(driver diversity within a scene)")
 
 
 if __name__ == "__main__":

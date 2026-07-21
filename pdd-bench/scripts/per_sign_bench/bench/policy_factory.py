@@ -97,10 +97,10 @@ def make_ego_policy(policy_type, models, base_env, seed,
     from factorized_space.ego_defaults import (apply_ego_defaults, apply_ego_sampled,
                                                sample_ego_params)
 
-    # Base idm получает тот же оборонительный слой, что rule-эксперт/NPC
-    # (кривизна-кап, lookahead руления, торможение перед пересекающим
-    # трафиком) — пара idm/idm_rule различается только знанием знаков.
-    # EGO_CURVE_AWARE=0 возвращает сырой MetaDrive IDMPolicy.
+    # Base idm gets the same defensive layer as the rule-expert/NPCs
+    # (curvature cap, steering lookahead, braking for crossing traffic) —
+    # the idm/idm_rule pair then differs only in sign knowledge.
+    # EGO_CURVE_AWARE=0 falls back to the raw MetaDrive IDMPolicy.
     ego_idm_cls = (IDMPolicy if os.environ.get("EGO_CURVE_AWARE", "1") == "0"
                    else CurveAwareIDMPolicy)
 
@@ -124,19 +124,19 @@ def make_ego_policy(policy_type, models, base_env, seed,
         if ego_variant.startswith("s") and ego_variant[1:].isdigit():
             k = int(ego_variant[1:])
             sample_seed = int(ego_sample_seed_base) + int(seed) + k * 1000003
-            # variant_k задаёт квантильную полосу стиля в EGO_SAMPLER=styles
-            # (s1 медленный … s4 быстрый); в legacy-режиме игнорируется.
+            # variant_k selects the style quantile band under EGO_SAMPLER=styles
+            # (s1 slow ... s4 fast); ignored in legacy mode.
             sampled_ego_params = sample_ego_params(sample_seed, variant_k=k)
             apply_ego_sampled(policy_obj, sampled_ego_params)
         else:
             apply_ego_defaults(policy_obj)
-            # «Ego держит v0» (braking-спавн, только default-вариант): желаемая
-            # скорость поднимается до скорости спавна, чтобы незнающий IDM въехал
-            # в зону выше лимита (иначе затухает к 36 км/ч ровно к знаку — вакуум
-            # на v40). Rule-эксперт получает то же — его капит знак (mixin), так
-            # что зазор пары = чистое знание знака. s1–s4 не трогаем (стили).
-            # Кап по кривизне (CurveAwareIDMPolicy/эксперт) остаётся поверх.
-            # Откат: EGO_HOLD_V0=0.
+            # "Ego holds v0" (braking-spawn, default variant only): raise the
+            # desired speed to the spawn speed so the sign-unaware IDM enters
+            # the zone above the limit (otherwise it decays to 36 km/h right at
+            # the sign — vacuous compliance on v40). The rule-expert gets the
+            # same — the sign caps it (mixin), so the pair gap = pure sign
+            # knowledge. s1-s4 are left alone (styles). The curvature cap
+            # (CurveAwareIDMPolicy/expert) stays on top. Rollback: EGO_HOLD_V0=0.
             if ego_hold_speed_ms and os.environ.get("EGO_HOLD_V0", "1") != "0":
                 v_kmh = float(ego_hold_speed_ms) * 3.6
                 policy_obj.NORMAL_SPEED = max(float(policy_obj.NORMAL_SPEED), v_kmh)

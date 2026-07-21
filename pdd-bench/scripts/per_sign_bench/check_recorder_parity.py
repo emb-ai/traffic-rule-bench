@@ -280,10 +280,10 @@ def main() -> None:
             return True
         return abs(fa - fb) / max(abs(fa), abs(fb), 1e-9) <= rel
 
-    # driving_efficiency усредняет скорость соседей из
-    # lidar.get_surrounding_objects — пограничный сосед может войти в выборку
-    # в одном процессе и не войти в другом (шум сенсорного запроса, не
-    # рассинхрон симуляции). Допускаем 0.5% относительной разницы только там.
+    # driving_efficiency averages neighbor speeds from
+    # lidar.get_surrounding_objects — a boundary neighbor may enter the sample
+    # in one process but not the other (sensor-query noise, not a sim
+    # divergence). Allow 0.5% relative difference for that key only.
     _TOL = {"driving_efficiency": 5e-3}
     bad = [k for k in shared if not _eq(me[k], mr[k], _TOL.get(k, 0.0))]
     acts_ok = ev.get("expert_actions") == rc.get("expert_actions")

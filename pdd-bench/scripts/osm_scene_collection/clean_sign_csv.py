@@ -31,7 +31,7 @@ KEEP_COLS = [
 
 
 def sign_code(sign_type: str) -> str:
-    """First whitespace-delimited token of SignType, e.g. '5.21 Жилая зона' -> '5.21'.
+    """First whitespace-delimited token of SignType, e.g. '5.21 Residential zone' -> '5.21'.
 
     Exact-token split (not a regex prefix) so '5.31' never matches '5.310'.
     """

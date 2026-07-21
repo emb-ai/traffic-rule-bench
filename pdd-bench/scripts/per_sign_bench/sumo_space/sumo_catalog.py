@@ -49,24 +49,24 @@ MIN_SPEED_FLOOR_KMH = 35.0      # drop 4.6 scenes whose realistic min (road-10, 
 # Enforced limits a braking scene (3.24 / 5.31) may use.
 ALLOWED_LIMITS_KMH = (20, 30, 40)
 
-# Равномерное распределение целевых лимитов (стратегия A6 по анализу
-# run_v60_x10, см. reports/filtration_scenarios.md того прогона):
-# 3.24/5.31 — nearest-снап давал 85% сцен на v40 ≈ крейсер base-политик →
-# вакуумное соблюдение (idm_default 0.99); round-robin даёт точный сплит 1/3.
+# Uniform distribution of target limits (strategy A6 from the run_v60_x10
+# analysis, see that run's reports/filtration_scenarios.md):
+# 3.24/5.31 — nearest-snap put 85% of scenes at v40 ≈ base policies' cruise →
+# vacuous compliance (idm_default 0.99); round-robin gives an exact 1/3 split.
 SPEED_LIMIT_TARGETS_KMH = (20, 30, 40)
-# 4.6 — cap {40,60} давал 61% сцен на min=40 ≈ крейсер plant2 (~41 км/ч,
-# вакуум, gap пары 0.09); round-robin {40,50,60} чинит пару plant2
-# (min gap 0.159→0.234 пост-хок; при {50,60} было бы 0.311, но 40 оставляем
-# ради объёма доноров).
+# 4.6 — cap {40,60} put 61% of scenes at min=40 ≈ plant2 cruise (~41 km/h,
+# vacuous, pair gap 0.09); round-robin {40,50,60} fixes the plant2 pair
+# (min gap 0.159→0.234 post-hoc; {50,60} would give 0.311, but 40 is kept
+# for donor volume).
 MIN_SPEED_TARGETS_KMH = (40, 50, 60)
 
 
 def bucket_limit_kmh(raw_kmh: float, selector: Optional[int] = None):
     """Snap a raw OSM speed limit to the NEAREST of {20, 30, 40} km/h.
 
-    DEPRECATED в энумерации 3.24/5.31 (там round-robin по
-    SPEED_LIMIT_TARGETS_KMH в build_catalog); оставлена для тестов и внешних
-    вызовов. >80 km/h → None (dropped).
+    DEPRECATED in the 3.24/5.31 enumeration (build_catalog round-robins over
+    SPEED_LIMIT_TARGETS_KMH there); kept for tests and external callers.
+    >80 km/h → None (dropped).
     """
     if raw_kmh > 80:
         return None
@@ -182,8 +182,8 @@ def build_catalog(
     insufficient_v0 = 0
     dropped_high_limit = 0
     dropped_slow_min = 0   # 4.6 scenes whose road is too slow for a meaningful min
-    # Round-robin счётчики целевых лимитов, отдельный на каждый sign_code —
-    # детерминированы порядком stratified_sample → точный сплит внутри кода.
+    # Round-robin counters for target limits, one per sign_code —
+    # deterministic in stratified_sample order → exact split within each code.
     limit_rr: dict = {}
     for scene in sampled:
         n_lanes = count_lanes_on_road(scene.net_path, scene.road_id)
@@ -215,12 +215,12 @@ def build_catalog(
             # 30 km/h road isn't discriminative — base already complies).
             net_abs = str(scenes_root / scene.net_path)
             v_target_raw_kmh = round(edge_speed_mps(net_abs, scene.road_id) * 3.6)
-            # Балансировка минимума по {40,50,60}: сцене назначается НАИМЕНЕЕ
-            # заполненный из ДОСТИЖИМЫХ бакетов (v_target ≤ road−10). Слепой
-            # round-robin давал перекос (50/60 достижимы лишь на дорогах
-            # ≥60/≥70, а быстрым дорогам выпадало «40»); greedy тратит быстрые
-            # дороги на дефицитные бакеты → равномерность ограничена только
-            # парком дорог. Детерминировано порядком stratified_sample.
+            # Balance the minimum over {40,50,60}: a scene gets the LEAST
+            # filled of the ACHIEVABLE buckets (v_target ≤ road−10). Blind
+            # round-robin skewed the split (50/60 are only achievable on roads
+            # ≥60/≥70, while fast roads could draw "40"); greedy spends fast
+            # roads on deficit buckets → uniformity is limited only by the
+            # road pool. Deterministic in stratified_sample order.
             achievable = [t for t in MIN_SPEED_TARGETS_KMH
                           if t <= v_target_raw_kmh - 10]
             if achievable:
@@ -230,7 +230,7 @@ def build_catalog(
                 v_target_kmh = min(achievable, key=lambda t: (counts[t], t))
                 counts[v_target_kmh] += 1
             else:
-                # дорога 45–49 км/ч: единственный осмысленный минимум road−10
+                # 45–49 km/h road: the only meaningful minimum is road−10
                 v_target_kmh = v_target_raw_kmh - 10
             if v_target_kmh < MIN_SPEED_FLOOR_KMH:
                 dropped_slow_min += 1
@@ -242,12 +242,12 @@ def build_catalog(
             else:
                 net_abs = str(scenes_root / scene.net_path)
                 v_target_raw_kmh = round(edge_speed_mps(net_abs, scene.road_id) * 3.6)
-                if v_target_raw_kmh > 80:   # автомагистрали — геометрия не для 20/30
+                if v_target_raw_kmh > 80:   # motorways — geometry unsuited to 20/30
                     dropped_high_limit += 1
                     continue
-                # 3.24 И 5.31: равномерный round-robin лимита по {20,30,40}
-                # (точный сплит 1/3 внутри кода) вместо nearest-снапа, который
-                # давал 85% сцен на недискриминативном v40.
+                # 3.24 AND 5.31: uniform round-robin of the limit over {20,30,40}
+                # (exact 1/3 split within each code) instead of the nearest-snap
+                # that put 85% of scenes at the non-discriminative v40.
                 idx = limit_rr.get(scene.sign_code, 0)
                 limit_rr[scene.sign_code] = idx + 1
                 v_target_kmh = SPEED_LIMIT_TARGETS_KMH[idx % len(SPEED_LIMIT_TARGETS_KMH)]
@@ -367,11 +367,11 @@ def build_catalog(
 
 
 def save_catalog(catalog: List[dict], path: str | Path) -> None:
-    """Write the catalog: JSONL (строка = сцена) для .jsonl, иначе JSON-массив.
+    """Write the catalog: JSONL (line = scene) for .jsonl, else a JSON array.
 
-    JSONL — формат, который читает eval (bench/manifest_io._load_jsonl_rows
-    парсит построчно): каталог в этом виде подставляется в --manifest напрямую,
-    без материализации.
+    JSONL is the format eval reads (bench/manifest_io._load_jsonl_rows parses
+    line by line): a catalog in this form is passed to --manifest directly,
+    without materialization.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

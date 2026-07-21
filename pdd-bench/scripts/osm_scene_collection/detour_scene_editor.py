@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
-"""Просмотр и корректная постановка знаков 4.2.1/4.2.2/4.2.3 на SUMO-сценах.
+"""Review and correctly place 4.2.1/4.2.2/4.2.3 signs on SUMO scenes.
 
-Знак 4.2.x задаёт ПОЛОСУ ПРЕПЯТСТВИЯ: конусы ставятся на неё, эго обязан
-перестроиться в предписанную сторону. Исходный пайплайн extraction снапил
-знак на ближайший highway-way без учёта типа знака, поэтому полоса не
-записана, а само ребро часто непригодно (однополосное / без passenger).
+A 4.2.x sign defines the OBSTACLE LANE: cones are placed on it, the ego must
+change lanes to the prescribed side. The original extraction pipeline snapped
+the sign to the nearest highway-way ignoring the sign type, so the lane is
+not recorded and the edge itself is often unusable (single-lane / no passenger).
 
-Конвенция SUMO: lane 0 — самая правая; физически правее = МЕНЬШИЙ индекс.
-  4.2.1 (объезд справа)  -> у полосы препятствия должен быть сосед с меньшим индексом;
-  4.2.2 (объезд слева)   -> сосед с большим индексом;
-  4.2.3 (любая сторона)  -> любой сосед.
+SUMO convention: lane 0 is the rightmost; physically further right = SMALLER index.
+  4.2.1 (detour on the right)  -> obstacle lane must have a neighbor with a smaller index;
+  4.2.2 (detour on the left)   -> neighbor with a larger index;
+  4.2.3 (either side)  -> any neighbor.
 
-Инструмент пишет в meta.json (см. _resolve_detour_lane_and_s в envs/sumo_env.py):
+The tool writes to meta.json (see _resolve_detour_lane_and_s in envs/sumo_env.py):
   sign_lane_index, sign_s, detour_placed_by, detour_tool_version,
   excluded/excluded_reason, resnapped/road_id_orig/distance_from_start_orig.
-При пере-снапе road_id/distance_from_start ПЕРЕЗАПИСЫВАЮТСЯ (легаси-потребители
-продолжают работать), оригиналы сохраняются в *_orig.
+On re-snap, road_id/distance_from_start are OVERWRITTEN (legacy consumers
+keep working), originals are preserved in *_orig.
 
-Интерактив (по умолчанию):
-  клик по полосе — переставить знак;  n/p — следующая/предыдущая сцена;
-  a — авто-подсказка;  x — toggle excluded;  w — сохранить meta.json;
-  r — перечитать с диска;  q — выход.
+Interactive (default):
+  click a lane — move the sign;  n/p — next/previous scene;
+  a — auto-suggest;  x — toggle excluded;  w — save meta.json;
+  r — reload from disk;  q — quit.
 
 Batch:
   python3 detour_scene_editor.py --scenes-root ../../scenes \
@@ -39,15 +39,15 @@ from sumolib import geomhelper
 
 DETOUR_CODES = ("4.2.1", "4.2.2", "4.2.3")
 TOOL_VERSION = 1
-SIGN_TO_OBSTACLE = 3.5          # detour_sign.py: конусы в 3.5 м за знаком
-ZONE_BEFORE = 30.0              # зона нарушения начинается за 30 м до конусов
-EDGE_TAIL_MARGIN = 12.0         # не ставить знак ближе 12 м к концу ребра
-SHORT_RUNWAY_S = 40.0           # sign_s ниже этого — мало разгона до зоны
+SIGN_TO_OBSTACLE = 3.5          # detour_sign.py: cones 3.5 m past the sign
+ZONE_BEFORE = 30.0              # violation zone starts 30 m before the cones
+EDGE_TAIL_MARGIN = 12.0         # do not place the sign within 12 m of the edge end
+SHORT_RUNWAY_S = 40.0           # sign_s below this — little run-up before the zone
 CLICK_TOLERANCE_M = 4.0
 
 
 # ---------------------------------------------------------------------------
-# Геометрия
+# Geometry
 # ---------------------------------------------------------------------------
 
 def polyline_length(shape):
@@ -55,7 +55,7 @@ def polyline_length(shape):
 
 
 def point_at(shape, s):
-    """Точка и heading (рад) на полилинии в продольной позиции s."""
+    """Point and heading (rad) on the polyline at longitudinal position s."""
     if len(shape) < 2:
         x, y = shape[0]
         return x, y, 0.0
@@ -74,10 +74,10 @@ def point_at(shape, s):
 
 
 def project_on_edge(edge, x, y):
-    """(s, dist): продольная позиция проекции точки на ось ребра и расстояние.
+    """(s, dist): longitudinal position of the point's projection onto the edge axis, and distance.
 
-    s масштабируется из длины полилинии в edge.getLength() (они могут слегка
-    расходиться из-за спрямления)."""
+    s is rescaled from the polyline length to edge.getLength() (they may
+    differ slightly due to straightening)."""
     shape = edge.getShape()
     off = geomhelper.polygonOffsetWithMinimumDistanceToPoint((x, y), shape)
     dist = geomhelper.distancePointToPolygon((x, y), shape)
@@ -92,9 +92,9 @@ def heading_diff_deg(a, b):
 
 
 def lane_polygon(shape, width):
-    """Полигон полосы: осевая, сдвинутая перпендикулярно на ±width/2.
+    """Lane polygon: centerline offset perpendicularly by ±width/2.
 
-    Приближение по сегментам (без честных стыков) — для ревью достаточно."""
+    Per-segment approximation (no proper joints) — good enough for review."""
     left, right = [], []
     for i in range(len(shape) - 1):
         (x0, y0), (x1, y1) = shape[i], shape[i + 1]
@@ -109,7 +109,7 @@ def lane_polygon(shape, width):
 
 
 # ---------------------------------------------------------------------------
-# Ядро feasibility (чистые функции — используются и в batch, и в интерактиве)
+# Feasibility core (pure functions — used by both batch and interactive modes)
 # ---------------------------------------------------------------------------
 
 def drivable_lane_indices(edge):
@@ -117,8 +117,8 @@ def drivable_lane_indices(edge):
 
 
 def valid_obstacle_lane_indices(edge, code):
-    """Индексы полос, на которые можно ставить препятствие для данного кода:
-    среди passenger-полос должен существовать сосед с предписанной стороны."""
+    """Lane indices where the obstacle may be placed for the given code:
+    among passenger lanes there must be a neighbor on the prescribed side."""
     drivable = drivable_lane_indices(edge)
     n = len(edge.getLanes())
     out = []
@@ -135,7 +135,7 @@ def valid_obstacle_lane_indices(edge, code):
 
 
 def allowed_target_lane_indices(edge, code, obstacle_idx):
-    """Полосы, на которые разрешён объезд с полосы препятствия."""
+    """Lanes onto which detour from the obstacle lane is allowed."""
     drivable = drivable_lane_indices(edge)
     n = len(edge.getLanes())
     out = set()
@@ -151,10 +151,10 @@ def preferred_obstacle_lane(edge, code):
     if not valid:
         return None
     if code in ("4.2.1", "4.2.2"):
-        # 4.2.1: минимальный валидный (обычно 1 — объезд в правую крайнюю);
-        # 4.2.2: 0 если валиден (препятствие справа, объезд влево), иначе мин.
+        # 4.2.1: smallest valid (usually 1 — detour into the rightmost lane);
+        # 4.2.2: 0 if valid (obstacle on the right, detour to the left), else min.
         return valid[0]
-    # 4.2.3: средняя полоса, если есть; иначе минимальный i >= 1; иначе первый.
+    # 4.2.3: middle lane if present; else smallest i >= 1; else first.
     n = len(edge.getLanes())
     if n >= 3 and (n // 2) in valid:
         return n // 2
@@ -163,8 +163,8 @@ def preferred_obstacle_lane(edge, code):
 
 
 def clamp_sign_s(s_proj, edge_len, target_sign_s):
-    """Знак не ближе EDGE_TAIL_MARGIN к концу ребра; пол — target_sign_s от
-    начала (запас на перестроение: zone_start = sign_s + 3.5 - 30)."""
+    """Sign no closer than EDGE_TAIL_MARGIN to the edge end; floor is target_sign_s
+    from the start (room for the lane change: zone_start = sign_s + 3.5 - 30)."""
     upper = max(0.5, edge_len - EDGE_TAIL_MARGIN)
     lower = min(float(target_sign_s), upper)
     return max(min(s_proj, upper), lower)
@@ -180,7 +180,7 @@ def _same_direction(edge_id_a, edge_id_b):
 
 
 # ---------------------------------------------------------------------------
-# Авто-подсказка
+# Auto-suggest
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -191,7 +191,7 @@ class Params:
 
 
 def suggest_placement(net, meta, code, params):
-    """Подобрать (road_id, sign_lane_index, sign_s) либо причину исключения."""
+    """Pick (road_id, sign_lane_index, sign_s) or a reason for exclusion."""
     x, y = net.convertLonLat2XY(float(meta["longitude"]), float(meta["latitude"]))
     orig_id = str(meta.get("road_id", ""))
     orig_edge = net.getEdge(orig_id) if net.hasEdge(orig_id) else None
@@ -228,9 +228,9 @@ def suggest_placement(net, meta, code, params):
             cls = 2 if heading_diff_deg(h, orig_heading) <= 60.0 else 3
         else:
             cls = 2
-        # Рёбра без продолжения (обрезаны границей OSM-фрагмента) — в конец:
-        # после объезда маршрут должен продолжаться, иначе эго упирается в
-        # конец ребра и сцена бракуется как undrivable.
+        # Edges with no continuation (clipped by the OSM fragment boundary) go last:
+        # after the detour the route must continue, otherwise the ego hits the
+        # edge end and the scene is rejected as undrivable.
         dead_end = not any(not o.getFunction() and drivable_lane_indices(o)
                            for o in e.getOutgoing())
         return (dead_end, cls, d)
@@ -248,7 +248,7 @@ def suggest_placement(net, meta, code, params):
 
 
 def apply_placement(meta, placement):
-    """Вписать результат в meta (словарь правится на месте)."""
+    """Write the result into meta (dict is modified in place)."""
     if "excluded_reason" in placement:
         meta["excluded"] = True
         meta["excluded_reason"] = placement["excluded_reason"]
@@ -270,14 +270,14 @@ def apply_placement(meta, placement):
 
 
 # ---------------------------------------------------------------------------
-# Сцены на диске
+# Scenes on disk
 # ---------------------------------------------------------------------------
 
 def iter_scenes(scenes_root, codes, only_scene=None, only_unplaced=False):
     for code in codes:
         code_dir = os.path.join(scenes_root, code)
         if not os.path.isdir(code_dir):
-            print(f"[warn] нет каталога {code_dir}", file=sys.stderr)
+            print(f"[warn] no directory {code_dir}", file=sys.stderr)
             continue
         for name in sorted(os.listdir(code_dir)):
             scene_dir = os.path.join(code_dir, name)
@@ -338,14 +338,14 @@ def run_batch(args, params):
     if args.report:
         with open(args.report, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
-        print(f"отчёт: {args.report}")
+        print(f"report: {args.report}")
     if args.dry_run:
-        print("[dry-run] meta.json не изменялись")
+        print("[dry-run] meta.json files not modified")
     return report
 
 
 # ---------------------------------------------------------------------------
-# Интерактив
+# Interactive
 # ---------------------------------------------------------------------------
 
 class InteractiveEditor:
@@ -361,7 +361,7 @@ class InteractiveEditor:
         self.fig.canvas.mpl_connect("button_press_event", self.on_click)
         self.fig.canvas.mpl_connect("key_press_event", self.on_key)
 
-    # -- состояние текущей сцены -------------------------------------------
+    # -- current scene state -----------------------------------------------
     @property
     def current(self):
         return self.scenes[self.idx]
@@ -370,7 +370,7 @@ class InteractiveEditor:
         code, scene_dir, meta = self.current
         return sumolib.net.readNet(net_path_for(scene_dir, meta))
 
-    # -- отрисовка ----------------------------------------------------------
+    # -- drawing ------------------------------------------------------------
     def redraw(self):
         from matplotlib.patches import Polygon as MplPolygon, Circle
         code, scene_dir, meta = self.current
@@ -401,7 +401,7 @@ class InteractiveEditor:
                 if is_sign_edge and drivable:
                     color, alpha, z = "#a8c8f0", 0.6, 2
                 if is_sign_edge and lane.getIndex() in targets:
-                    color, alpha, z = "#2b6cd4", 0.55, 3   # разрешённый объезд
+                    color, alpha, z = "#2b6cd4", 0.55, 3   # allowed detour lane
                 if is_sign_edge and obstacle_idx is not None \
                         and lane.getIndex() == int(obstacle_idx):
                     color = "#2ca02c" if feasible_now else "#d62728"
@@ -411,7 +411,7 @@ class InteractiveEditor:
                     ax.add_patch(MplPolygon(
                         poly, closed=True, facecolor=color, alpha=alpha,
                         edgecolor="0.4", linewidth=0.3, zorder=z))
-            # стрелка направления по оси ребра
+            # direction arrow along the edge axis
             shape = edge.getShape()
             mid = polyline_length(shape) / 2
             x0, y0, h = point_at(shape, max(0.0, mid - 2))
@@ -421,7 +421,7 @@ class InteractiveEditor:
                 arrowprops=dict(arrowstyle="->", color="0.25", lw=0.8))
 
         ax.plot(gps_x, gps_y, "+", color="magenta", ms=14, mew=2.5, zorder=8,
-                label="GPS знака")
+                label="sign GPS")
         ax.add_patch(Circle((gps_x, gps_y), self.params.radius, fill=False,
                             linestyle="--", edgecolor="orange", zorder=7))
         if sign_edge is not None:
@@ -436,7 +436,7 @@ class InteractiveEditor:
                      else sign_edge.getShape())
             frac = sign_s / max(sign_edge.getLength(), 1e-6)
             sx, sy, _ = point_at(shape, frac * polyline_length(shape))
-            ax.plot(sx, sy, "*", color="black", ms=16, zorder=9, label=f"знак {code}")
+            ax.plot(sx, sy, "*", color="black", ms=16, zorder=9, label=f"sign {code}")
 
         ax.set_xlim(gps_x - self.params.radius * 1.6, gps_x + self.params.radius * 1.6)
         ax.set_ylim(gps_y - self.params.radius * 1.6, gps_y + self.params.radius * 1.6)
@@ -446,23 +446,23 @@ class InteractiveEditor:
         feas_txt = ("feasible" if feasible_now else "INFEASIBLE")
         excl = " [EXCLUDED: %s]" % meta.get("excluded_reason") \
             if meta.get("excluded") else ""
-        dirty = " *несохранено*" if self.dirty else ""
+        dirty = " *unsaved*" if self.dirty else ""
         ax.set_title(
             f"[{self.idx + 1}/{len(self.scenes)}] {code} / "
             f"{os.path.basename(scene_dir)}  edge={sign_edge_id} "
             f"lane={obstacle_idx} s={meta.get('sign_s')} "
             f"({feas_txt}, {meta.get('detour_placed_by', '—')}){excl}{dirty}\n"
-            f"{self.status}  |  клик: полоса препятствия; a=авто x=excl "
-            f"w=сохранить r=reload n/p=сцена q=выход",
+            f"{self.status}  |  click: obstacle lane; a=auto x=excl "
+            f"w=save r=reload n/p=scene q=quit",
             fontsize=9)
         self.fig.canvas.draw_idle()
 
-    # -- события ------------------------------------------------------------
+    # -- events -------------------------------------------------------------
     def on_click(self, event):
         if event.inaxes != self.ax or event.xdata is None:
             return
         if self.fig.canvas.toolbar and self.fig.canvas.toolbar.mode:
-            return  # активен zoom/pan
+            return  # zoom/pan active
         code, scene_dir, meta = self.current
         x, y = float(event.xdata), float(event.ydata)
         best = None  # (dist, edge, lane)
@@ -477,7 +477,7 @@ class InteractiveEditor:
                 if best is None or d < best[0]:
                     best = (d, edge, lane)
         if best is None or best[0] > CLICK_TOLERANCE_M:
-            self.status = "рядом с кликом нет drivable-полосы"
+            self.status = "no drivable lane near the click"
             self.redraw()
             return
         _, edge, lane = best
@@ -493,8 +493,8 @@ class InteractiveEditor:
             "placed_by": "manual",
         })
         ok = lane.getIndex() in valid_obstacle_lane_indices(edge, code)
-        self.status = ("поставлено вручную"
-                       if ok else "ВНИМАНИЕ: полоса непригодна для " + code)
+        self.status = ("placed manually"
+                       if ok else "WARNING: lane unsuitable for " + code)
         self.dirty = True
         self.redraw()
 
@@ -511,8 +511,8 @@ class InteractiveEditor:
         elif event.key == "a":
             placement = suggest_placement(self.net, meta, code, self.params)
             apply_placement(meta, placement)
-            self.status = ("авто: excluded %s" % placement["excluded_reason"]
-                           if "excluded_reason" in placement else "авто-подсказка")
+            self.status = ("auto: excluded %s" % placement["excluded_reason"]
+                           if "excluded_reason" in placement else "auto-suggested")
             self.dirty = True
             self.redraw()
         elif event.key == "x":
@@ -527,13 +527,13 @@ class InteractiveEditor:
         elif event.key == "w":
             save_meta(scene_dir, meta)
             self.dirty = False
-            self.status = "сохранено"
+            self.status = "saved"
             self.redraw()
         elif event.key == "r":
             with open(os.path.join(scene_dir, "meta.json"), encoding="utf-8") as f:
                 self.scenes[self.idx] = (code, scene_dir, json.load(f))
             self.dirty = False
-            self.status = "перечитано с диска"
+            self.status = "reloaded from disk"
             self.redraw()
         elif event.key == "q":
             self.plt.close(self.fig)
@@ -551,20 +551,20 @@ def main():
     p.add_argument("--codes", default="4.2.1,4.2.2,4.2.3",
                    type=lambda s: [c.strip() for c in s.split(",") if c.strip()])
     p.add_argument("--scene", default=None,
-                   help="одна сцена: sign_100019 или 100019")
-    p.add_argument("--batch", action="store_true", help="авто-расстановка без GUI")
-    p.add_argument("--report", default=None, help="путь JSON-отчёта batch-режима")
+                   help="single scene: sign_100019 or 100019")
+    p.add_argument("--batch", action="store_true", help="auto placement without GUI")
+    p.add_argument("--report", default=None, help="batch-mode JSON report path")
     p.add_argument("--radius", type=float, default=75.0)
     p.add_argument("--min-edge-len", type=float, default=45.0)
     p.add_argument("--target-sign-s", type=float, default=60.0)
     p.add_argument("--only-unplaced", action="store_true",
-                   help="пропускать сцены, уже обработанные инструментом")
+                   help="skip scenes already processed by this tool")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
 
     for code in args.codes:
         if code not in DETOUR_CODES:
-            p.error(f"код {code} не детурный (ожидаются {DETOUR_CODES})")
+            p.error(f"code {code} is not a detour code (expected {DETOUR_CODES})")
 
     params = Params(radius=args.radius, min_edge_len=args.min_edge_len,
                     target_sign_s=args.target_sign_s)
@@ -578,7 +578,7 @@ def main():
     scenes = list(iter_scenes(args.scenes_root, args.codes,
                               args.scene, args.only_unplaced))
     if not scenes:
-        print("нет сцен по заданным фильтрам", file=sys.stderr)
+        print("no scenes match the given filters", file=sys.stderr)
         sys.exit(1)
     InteractiveEditor(scenes, params).run()
 

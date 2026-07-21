@@ -14,19 +14,19 @@
 #
 # ---- config (EDIT for the server) -------------------------------------------
 REPO=/home/jovyan/shares/SR006.nfs2/smirnova/traffic-rule-bench/pdd-bench
-# v61: каталог-прямой прогон (без материализации) — каталог и есть манифест
+# v61: catalog-direct run (no materialization) — the catalog IS the manifest
 MANIFEST=$REPO/benchmark_output_speed/balanced/run_v61_a6/catalog.jsonl
 SCENES=$REPO/scenes_balanced
 OUT=$REPO/benchmark_output_speed/balanced/run_v61_a6/eval_fast
 
-# 2-GPU схема: симуляция CPU-bound (на 8 GPU утилизация ~5%), поэтому все NN
-# консолидированы на GPU 0/1 с ~10 процессами на карту (см. policy_gpus ниже).
-GPUS="0 1 2 3 4 5 6 7"      # fallback для policy_gpus(*); NN живут на "0 1"
+# 2-GPU scheme: the simulation is CPU-bound (~5% utilization on 8 GPUs), so all NN
+# are consolidated on GPU 0/1 with ~10 processes per card (see policy_gpus below).
+GPUS="0 1 2 3 4 5 6 7"      # fallback for policy_gpus(*); NN live on "0 1"
 NSHARDS=16                  # scene shards per baseline (more = finer balance, more ckpt loads)
-CONCURRENCY=20              # NN-процессов суммарно на GPU 0+1 (~10/карту, CaRL-1B ~4-5 ГБ GPU
-                            # каждый). 32 на 2 картах = OOM (rc=137); поднимать шагами по free -g
-CONCURRENCY_CPU=24          # CPU-baseline workers; помнить: NN-джобы тоже жрут CPU (сим),
-                            # суммарно CONCURRENCY+CONCURRENCY_CPU процессов симуляции
+CONCURRENCY=20              # NN processes total on GPU 0+1 (~10/card, CaRL-1B ~4-5 GB GPU
+                            # each). 32 on 2 cards = OOM (rc=137); raise in steps, watch free -g
+CONCURRENCY_CPU=24          # CPU-baseline workers; note: NN jobs also eat CPU (sim),
+                            # CONCURRENCY+CONCURRENCY_CPU simulation processes in total
 MAX_STEPS=1500
 PROGRESS_INTERVAL=30        # seconds between progress lines in the eval log
 
@@ -50,8 +50,8 @@ PLANT_CKPT=/home/jovyan/shares/SR006.nfs2/smirnova/sdc/pdd-bench/checkpoints/epo
 # -----------------------------------------------------------------------------
 
 export PER_SIGN_COMPLIANT_NPC=1
-# Правки v61 (переопределяемы из окружения): styles-сэмплер ego s1-s4,
-# curve-aware база idm, «ego держит v0» для default-пары, carl-трекинг.
+# v61 tweaks (overridable via env): styles sampler for ego s1-s4,
+# curve-aware idm base, "ego holds v0" for the default pair, carl tracking.
 export EGO_SAMPLER="${EGO_SAMPLER:-styles}"
 export EGO_CURVE_AWARE="${EGO_CURVE_AWARE:-1}"
 export EGO_HOLD_V0="${EGO_HOLD_V0:-1}"
@@ -90,9 +90,9 @@ echo "shards: $(ls "$SHARD_DIR"/shard_*.jsonl | wc -l) x ~$(( $(wc -l < "$SRC_MA
 # CPU spec =     "policy|variant|model|shardfile|tag|runname"
 gpu_jobs=(); cpu_jobs=()
 
-# 2-GPU схема: ВСЕ NN-политики на GPU 0 и 1 (шарды round-robin между ними).
-# Симуляция CPU-bound — карты легко тянут по ~10 процессов; больше карт не
-# ускоряет, а размазывает. Старая схема (по паре карт на политику) — в git.
+# 2-GPU scheme: ALL NN policies on GPU 0 and 1 (shards round-robin between them).
+# Simulation is CPU-bound — a card easily carries ~10 processes; more cards
+# don't speed it up, just spread it out. Old scheme (a card pair per policy) is in git.
 policy_gpus () {  # -> GPU list for a policy
   echo "0 1"
 }

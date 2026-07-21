@@ -34,13 +34,13 @@ DEFAULT_NONRULE = ["idm_default", "carl_default", "plant2_default", "ppo_lidar_d
 USECOLS = [
     "scene_uid", "scene_id", "baseline", "pdd_code", "arrived_dest",
     "target_in_zone", "target_compliant_event", "crashed", "out_of_road",
-    # для cumulative-style таблиц (формат report_cumulative.md)
+    # for cumulative-style tables (report_cumulative.md format)
     "success", "tl_compliant", "cw_compliant", "sign_compliant_high",
     "driving_score", "driving_efficiency", "smoothness_ratio",
     "route_length_m", "distance_travelled_m",
 ]
 
-# Отображаемые имена политик — как в generate_cumulative_markdown_report.py
+# Policy display names — same as in generate_cumulative_markdown_report.py
 POLICY_DISPLAY_NAME = {
     "comprehensive_rule_expert_default": "idm_rule_default",
     "comprehensive_rule_expert_s1": "idm_rule_s1",
@@ -135,11 +135,11 @@ PAIRS = [
 
 
 def strategy_comparison(df: pd.DataFrame) -> dict[float, pd.DataFrame]:
-    """Качество бенчмарка = парный зазор compliance (rule − base) по PAIRS.
+    """Benchmark quality = paired compliance gap (rule − base) over PAIRS.
 
-    Стратегии: A0 без фильтров; A1 F1+F2; для UNIFORM_SIGNS — A2 unif,
-    A3 жёсткий сабсет v∈{20,30}, A4 v=20; A5 = F3 (сцена решаема: >=1 rule-эксперт
-    доехал И соблюдал) + F2 (+ v∈{20,30} для UNIFORM_SIGNS).
+    Strategies: A0 no filters; A1 F1+F2; for UNIFORM_SIGNS also A2 unif,
+    A3 hard subset v∈{20,30}, A4 v=20; A5 = F3 (scene solvable: >=1 rule expert
+    arrived AND compliant) + F2 (+ v∈{20,30} for UNIFORM_SIGNS).
     """
     f1 = set(df.loc[df.is_rule & df.arrived_dest, "scene_uid"])
     f2 = set(df.loc[df.target_in_zone, "scene_uid"])
@@ -165,7 +165,7 @@ def strategy_comparison(df: pd.DataFrame) -> dict[float, pd.DataFrame]:
             "base": np.mean(bases), "rule": np.mean(rules),
             "mean_gap": np.mean(list(gaps.values())),
             "min_gap": min(gaps.values()),
-            "слабейшая пара": min(gaps, key=gaps.get),
+            "weakest pair": min(gaps, key=gaps.get),
             "uid": sub.scene_uid.nunique(),
         }
 
@@ -173,7 +173,7 @@ def strategy_comparison(df: pd.DataFrame) -> dict[float, pd.DataFrame]:
     for code in sorted(df.pdd_code.unique()):
         d = df[df.pdd_code == code]
         d12 = d[d.scene_uid.isin(f1 & f2)]
-        strats = {"A0 без фильтров": (d, False), "A1 F1+F2": (d12, False)}
+        strats = {"A0 no filters": (d, False), "A1 F1+F2": (d12, False)}
         if float(code) in UNIFORM_SIGNS:
             strats["A2 F1+F2+unif"] = (d12, True)
             strats["A3 F1+F2, v∈{20,30}"] = (d12[d12.v_target_kmh.isin([20, 30])], False)
@@ -213,7 +213,7 @@ def _cum_rates(g: pd.DataFrame) -> pd.Series:
 
 
 def cum_table(sub: pd.DataFrame, uniform: bool) -> pd.DataFrame:
-    """Таблица в формате report_cumulative для одного знака (или Overall)."""
+    """report_cumulative-style table for a single sign (or Overall)."""
     rows = {}
     for bl, g in sub.groupby("baseline"):
         code = float(g.pdd_code.iloc[0])
@@ -229,7 +229,7 @@ def cum_table(sub: pd.DataFrame, uniform: bool) -> pd.DataFrame:
 
 
 def overall_from_signs(per_sign: dict[float, pd.DataFrame]) -> pd.DataFrame:
-    """Overall = средневзвешенное per-sign таблиц (веса — Runs; in-zone колонка — In-zone runs)."""
+    """Overall = weighted mean of per-sign tables (weights: Runs; in-zone column: In-zone runs)."""
     policies = sorted({p for t in per_sign.values() for p in t.index})
     rows = {}
     for p in policies:
@@ -271,31 +271,31 @@ def cum_md(t: pd.DataFrame) -> str:
 
 
 def cumulative_by_strategy(df: pd.DataFrame) -> str:
-    """report_cumulative-style таблицы для каждой стратегии фильтрации."""
+    """report_cumulative-style tables for each filtering strategy."""
     f1 = set(df.loc[df.is_rule & df.arrived_dest, "scene_uid"])
     f2 = set(df.loc[df.target_in_zone, "scene_uid"])
     f3 = set(df.loc[df.is_rule & df.arrived_dest
                     & df.target_compliant_event.fillna(False), "scene_uid"])
     v_uni = sorted(UNIFORM_SIGNS)
 
-    # (подпись, uid-фильтр, uniform, v-сабсет для UNIFORM_SIGNS)
+    # (label, uid filter, uniform, v-subset for UNIFORM_SIGNS)
     strategies = [
-        ("A0 — без фильтров", None, False, None),
-        ("A1 — F1+F2 (≥1 rule-эксперт доехал; есть in-zone шаги)", f1 & f2, False, None),
-        (f"A2 — F1+F2 + равные веса v_target 20/30/40 (знаки {v_uni})", f1 & f2, True, None),
-        (f"A3 — F1+F2 + только v∈{{20,30}} (знаки {v_uni})", f1 & f2, False, [20, 30]),
-        (f"A4 — F1+F2 + только v=20 (знаки {v_uni})", f1 & f2, False, [20]),
-        (f"A5 — F3+F2 (сцена решаема rule-экспертом) + v∈{{20,30}} (знаки {v_uni})",
+        ("A0 — no filters", None, False, None),
+        ("A1 — F1+F2 (≥1 rule expert arrived; has in-zone steps)", f1 & f2, False, None),
+        (f"A2 — F1+F2 + equal v_target weights 20/30/40 (signs {v_uni})", f1 & f2, True, None),
+        (f"A3 — F1+F2 + only v∈{{20,30}} (signs {v_uni})", f1 & f2, False, [20, 30]),
+        (f"A4 — F1+F2 + only v=20 (signs {v_uni})", f1 & f2, False, [20]),
+        (f"A5 — F3+F2 (scene solvable by rule expert) + v∈{{20,30}} (signs {v_uni})",
          f3 & f2, False, [20, 30]),
-        (f"A6 — F3+F2 + равные веса v_target 20/30/40 (знаки {v_uni}) — РЕКОМЕНДУЕМАЯ",
+        (f"A6 — F3+F2 + equal v_target weights 20/30/40 (signs {v_uni}) — RECOMMENDED",
          f3 & f2, True, None),
     ]
 
-    lines = ["# Cumulative Benchmark Results — по стратегиям фильтрации\n",
-             "Формат таблиц идентичен report_cumulative.md. Фильтры: F1 — ≥1 rule-эксперт "
-             "доехал; F2 — есть in-zone шаги хоть у одного бейзлайна; F3 — ≥1 rule-эксперт "
-             "доехал И был compliant («сцена решаема»). v-сабсеты/веса применяются только к "
-             f"знакам {v_uni}; остальные знаки получают те же uid-фильтры.\n"]
+    lines = ["# Cumulative Benchmark Results — by filtering strategy\n",
+             "Table format identical to report_cumulative.md. Filters: F1 — ≥1 rule expert "
+             "arrived; F2 — at least one baseline has in-zone steps; F3 — ≥1 rule expert "
+             "arrived AND was compliant (\"scene solvable\"). v-subsets/weights apply only to "
+             f"signs {v_uni}; other signs get the same uid filters.\n"]
     for label, uids, uniform, vsub in strategies:
         d = df if uids is None else df[df.scene_uid.isin(uids)]
         per_sign: dict[float, pd.DataFrame] = {}
@@ -304,7 +304,7 @@ def cumulative_by_strategy(df: pd.DataFrame) -> str:
             if vsub is not None and float(code) in UNIFORM_SIGNS:
                 ds = ds[ds.v_target_kmh.isin(vsub)]
             per_sign[float(code)] = cum_table(ds, uniform)
-        lines.append(f"\n---\n\n## Стратегия {label}\n")
+        lines.append(f"\n---\n\n## Strategy {label}\n")
         lines.append("### Overall (weighted by runs)\n")
         lines.append(cum_md(overall_from_signs(per_sign)) + "\n")
         for code, t in per_sign.items():
@@ -317,20 +317,20 @@ def drop_stats(df: pd.DataFrame) -> pd.DataFrame:
     total = df.groupby("pdd_code").scene_uid.nunique()
     rows = {}
     for name, (f1, f2) in {
-        "F1 (>=1 rule-эксперт доехал)": (True, False),
-        "F2 (есть in-zone шаги)": (False, True),
+        "F1 (>=1 rule expert arrived)": (True, False),
+        "F2 (has in-zone steps)": (False, True),
         "F1+F2": (True, True),
     }.items():
         kept = df[scenario_mask(df, f1, f2)].groupby("pdd_code").scene_uid.nunique()
         kept = kept.reindex(total.index, fill_value=0)
         rows[name] = pd.Series(
-            {c: f"{total[c] - kept[c]} из {total[c]} ({(total[c]-kept[c])/total[c]*100:.1f}%)"
+            {c: f"{total[c] - kept[c]} of {total[c]} ({(total[c]-kept[c])/total[c]*100:.1f}%)"
              for c in total.index})
     return pd.DataFrame(rows)
 
 
 def md_table(t: pd.DataFrame) -> str:
-    """GitHub-markdown таблица без зависимости от tabulate."""
+    """GitHub-markdown table without a tabulate dependency."""
     t = t.copy()
     for c in t.columns:
         if t[c].dtype.kind == "f":
@@ -340,8 +340,8 @@ def md_table(t: pd.DataFrame) -> str:
     header = [str(t.index.name or "")] + [str(c) for c in t.columns]
 
     def _cell(v) -> str:
-        # пер-ячеечная защита: NaN/None → «—», прочее → str (не зависит от
-        # версии pandas и dtype-сюрпризов на частичных данных)
+        # per-cell guard: NaN/None -> "—", everything else -> str (robust to
+        # pandas version and dtype surprises on partial data)
         if v is None or (isinstance(v, float) and pd.isna(v)):
             return "—"
         return str(v)
@@ -364,20 +364,20 @@ def main() -> None:
     ap.add_argument("--out-md", required=True, help="markdown report path")
     ap.add_argument("--out-csv-dir", default=None, help="dir for per-scenario CSVs")
     ap.add_argument("--cumulative-md", default=None,
-                    help="доп. отчёт: report_cumulative-style таблицы для каждой стратегии")
+                    help="extra report: report_cumulative-style tables per strategy")
     args = ap.parse_args()
 
     df = load(Path(args.csv), Path(args.manifest))
     signs = sorted(float(c) for c in df.pdd_code.unique())
     lines: list[str] = []
-    lines.append("# Recount: сценарии фильтрации сцен (пост-хок по сыгранным данным)\n")
-    lines.append(f"Источник: `{args.csv}`; эпизодов {len(df)}, "
-                 f"scene_uid {df.scene_uid.nunique()}, знаки {signs}.\n")
-    lines.append("Фильтры: **F1** — scene_uid с >=1 доехавшим rule-экспертом; "
-                 "**F2** — scene_uid, где хоть у одного бейзлайна есть in-zone шаги; "
-                 f"**unif** — равные веса v_target-страт (только знаки {list(UNIFORM_SIGNS)}).\n")
+    lines.append("# Recount: scene-filtering scenarios (post-hoc on played data)\n")
+    lines.append(f"Source: `{args.csv}`; episodes {len(df)}, "
+                 f"scene_uid {df.scene_uid.nunique()}, signs {signs}.\n")
+    lines.append("Filters: **F1** — scene_uids with >=1 arrived rule expert; "
+                 "**F2** — scene_uids where at least one baseline has in-zone steps; "
+                 f"**unif** — equal weights over v_target strata (signs {list(UNIFORM_SIGNS)} only).\n")
 
-    lines.append("## Отбрасывание сцен (scene_uid)\n")
+    lines.append("## Dropped scenes (scene_uid)\n")
     lines.append(md_table(drop_stats(df)) + "\n")
 
     csv_dir = Path(args.out_csv_dir) if args.out_csv_dir else None
@@ -387,14 +387,14 @@ def main() -> None:
     group_summary: dict[str, dict[str, float]] = {}
     for code in signs:
         d_sign = df[df.pdd_code == code]
-        lines.append(f"\n## Знак {code}\n")
+        lines.append(f"\n## Sign {code}\n")
 
-        # v_target распределение
+        # v_target distribution
         vt = (d_sign.drop_duplicates("scene_uid").v_target_kmh
               .value_counts().sort_index())
         if float(code) in UNIFORM_SIGNS:
-            lines.append("Распределение v_target по сценам: "
-                         + ", ".join(f"{int(k)} км/ч — {v}" for k, v in vt.items()) + "\n")
+            lines.append("v_target distribution over scenes: "
+                         + ", ".join(f"{int(k)} km/h — {v}" for k, v in vt.items()) + "\n")
 
         comp_matrix = {}
         for sname, (f1, f2, uni) in SCENARIOS.items():
@@ -416,30 +416,30 @@ def main() -> None:
         m = pd.DataFrame(comp_matrix)
         m["rule"] = m.index.str.contains("rule")
         m = m.sort_values(["rule", m.columns[0]])
-        lines.append("### Target compliance по сценариям\n")
+        lines.append("### Target compliance by scenario\n")
         lines.append(fmt_table(m.drop(columns="rule")) + "\n")
 
-        # Полные метрики: базовый и максимально фильтрованный сценарии
+        # Full metrics: base and most-filtered scenarios
         for sname in ("S0 base",
                       "S7 F1+F2+unif" if float(code) in UNIFORM_SIGNS else "S3 F1+F2"):
             f1, f2, uni = SCENARIOS[sname]
             t = per_baseline(d_sign[scenario_mask(d_sign, f1, f2)], uni)
             t = t.sort_values("compliance")
-            lines.append(f"### Полные метрики — {sname}\n")
+            lines.append(f"### Full metrics — {sname}\n")
             lines.append(fmt_table(t) + "\n")
 
-    lines.append("\n## Выбор стратегии: качество бенчмарка = парный зазор (rule − base)\n")
-    lines.append("Пары: idm/idm_rule, carl/carl_rule, plant2/plant2_rule, ppo/ppo_rule. "
-                 "F3 — «сцена решаема»: ≥1 rule-эксперт доехал И соблюдал.\n")
+    lines.append("\n## Strategy selection: benchmark quality = paired gap (rule − base)\n")
+    lines.append("Pairs: idm/idm_rule, carl/carl_rule, plant2/plant2_rule, ppo/ppo_rule. "
+                 "F3 — \"scene solvable\": ≥1 rule expert arrived AND was compliant.\n")
     for code, tbl in strategy_comparison(df).items():
-        lines.append(f"\n### Знак {code}\n")
+        lines.append(f"\n### Sign {code}\n")
         t = tbl.copy()
         for c in ("base", "rule", "mean_gap", "min_gap"):
             t[c] = pd.to_numeric(t[c]).round(3)
         t["uid"] = t.uid.astype(int)
         lines.append(md_table(t) + "\n")
 
-    lines.append("\n## Сводка: групповое среднее compliance (default non-rule / rule)\n")
+    lines.append("\n## Summary: group-mean compliance (default non-rule / rule)\n")
     rows = {}
     for key, vals in group_summary.items():
         code, sname = key.split("|")

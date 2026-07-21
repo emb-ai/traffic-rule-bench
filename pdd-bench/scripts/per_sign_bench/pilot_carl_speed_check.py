@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""A/B-сравнение carl legacy vs tracking по episodes_*.jsonl двух пилотных прогонов.
+"""A/B comparison of carl legacy vs tracking over episodes_*.jsonl of two pilot runs.
 
-Использование:
+Usage:
   python3 pilot_carl_speed_check.py --legacy <out_dir_legacy> --tracking <out_dir_tracking>
 
-Каждый out_dir — --benchmark-output соответствующего запуска run_benchmark.py
-(скрипт сам найдёт episodes_*.jsonl рекурсивно). Печатает таблицу метрик и вердикт
-по стоп-критериям из плана: dest_rate не ниже −5 пп, OOR ≤ 1.5×, steer_delta без роста.
+Each out_dir is the --benchmark-output of the corresponding run_benchmark.py run
+(the script finds episodes_*.jsonl recursively). Prints a metric table and a verdict
+on the plan's stop criteria: dest_rate no lower than −5 pp, OOR ≤ 1.5×, no steer_delta growth.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def load_episodes(root: str) -> list[dict]:
                 except json.JSONDecodeError:
                     pass
     if not rows:
-        raise SystemExit(f"нет episodes_*.jsonl под {root}")
+        raise SystemExit(f"no episodes_*.jsonl under {root}")
     return rows
 
 
@@ -59,28 +59,28 @@ def main() -> None:
     b = summarize(load_episodes(args.tracking))
 
     w = max(len(k) for k in a)
-    print(f"{'метрика':<{w}}  {'legacy':>10}  {'tracking':>10}  {'Δ':>8}")
+    print(f"{'metric':<{w}}  {'legacy':>10}  {'tracking':>10}  {'Δ':>8}")
     for k in a:
         va, vb = a[k], b[k]
         d = vb - va
         print(f"{k:<{w}}  {va:>10.3f}  {vb:>10.3f}  {d:>+8.3f}")
 
-    print("\n--- вердикт ---")
+    print("\n--- verdict ---")
     faster = b["median_speed_kmh"] > a["median_speed_kmh"] + 3
-    print(f"ускорился:            {'ДА' if faster else 'НЕТ'} "
-          f"({a['median_speed_kmh']:.1f} → {b['median_speed_kmh']:.1f} км/ч)")
+    print(f"got faster:           {'YES' if faster else 'NO'} "
+          f"({a['median_speed_kmh']:.1f} → {b['median_speed_kmh']:.1f} km/h)")
     checks = [
-        ("dest_rate не упал (>5пп — стоп)", b["dest_rate"] >= a["dest_rate"] - 0.05),
+        ("dest_rate did not drop (>5 pp — stop)", b["dest_rate"] >= a["dest_rate"] - 0.05),
         ("OOR ≤ 1.5×", b["oor_rate"] <= max(a["oor_rate"], 0.02) * 1.5),
-        ("латераль не задета (steer_delta)", b["steer_delta"] <= a["steer_delta"] * 1.3 + 0.005),
-        ("перестал ехать на тормозе", b["hard_brake/ep"] < a["hard_brake/ep"]),
+        ("lateral unaffected (steer_delta)", b["steer_delta"] <= a["steer_delta"] * 1.3 + 0.005),
+        ("stopped riding the brake", b["hard_brake/ep"] < a["hard_brake/ep"]),
     ]
     ok_all = True
     for name, ok in checks:
         ok_all &= ok
         print(f"{'✓' if ok else '✗'} {name}")
-    print("\nИТОГ:", "фикс принят — можно гнать полный пилот/eval"
-          if (faster and ok_all) else "есть красные флаги — см. таблицу")
+    print("\nVERDICT:", "fix accepted — go run the full pilot/eval"
+          if (faster and ok_all) else "red flags present — see table")
 
 
 if __name__ == "__main__":

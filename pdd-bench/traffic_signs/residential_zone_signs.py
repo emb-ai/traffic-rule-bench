@@ -1,6 +1,6 @@
-"""Residential-zone signs 5.21 (Жилая зона) / 5.22 (Конец жилой зоны).
+"""Residential-zone signs 5.21 (residential zone) / 5.22 (end of residential zone).
 
-Modeled as a fixed 20 km/h speed-limit ZONE (per RF ПДД §17 a residential zone
+Modeled as a fixed 20 km/h speed-limit ZONE (per RF traffic code §17 a residential zone
 caps speed at 20 km/h). 5.21 opens the zone, 5.22 closes it — exactly the
 start/end-of-zone pattern of 5.31/5.32, but the limit is ALWAYS 20 (we do NOT
 read it from the road's `lane.speed`).

@@ -44,11 +44,11 @@ def apply_ego_defaults(ego_policy: Any) -> None:
             setattr(ego_policy, key, value)
 
 
-EGO_SPEED_RANK_BANDS = {  # variant_k -> перцентильная полоса движущихся скоростей
-    1: (0.10, 0.35),   # медленный
-    2: (0.35, 0.60),   # средний
-    3: (0.60, 0.85),   # бодрый
-    4: (0.85, 0.99),   # быстрый
+EGO_SPEED_RANK_BANDS = {  # variant_k -> percentile band of moving speeds
+    1: (0.10, 0.35),   # slow
+    2: (0.35, 0.60),   # medium
+    3: (0.60, 0.85),   # brisk
+    4: (0.85, 0.99),   # fast
 }
 
 
@@ -56,29 +56,30 @@ def sample_ego_params(seed: int, mode: str | None = None,
                       variant_k: int | None = None) -> dict:
     """Sample ego IDM params from nuPlan statistics.
 
-    Два режима (env `EGO_SAMPLER`, default "legacy"):
+    Two modes (env `EGO_SAMPLER`, default "legacy"):
 
-    "legacy" — исторический сэмплер: KDE по мгновенным величинам ВСЕХ кадров
-    nuPlan. Верен CSV, но кадровые состояния ≠ стили вождения: 60% ego получают
-    крейсер < 30 км/ч (стояние на светофорах попадает в желаемую скорость),
-    DISTANCE_WANTED берётся из дистанций следования на ходу (а s0 в IDM — зазор
-    в остановке), 21% агентов получают ACC < 0.3 м/с² и не могут тронуться.
+    "legacy" — historical sampler: KDE over instantaneous values of ALL nuPlan
+    frames. Faithful to the CSV, but per-frame states ≠ driving styles: 60% of
+    egos get a cruise < 30 km/h (traffic-light standstills leak into the
+    desired speed), DISTANCE_WANTED comes from in-motion following distances
+    (while IDM's s0 is the standstill gap), 21% of agents get ACC < 0.3 m/s²
+    and cannot pull away.
 
-    "styles" — семантические фиксы (reports/idm_sampling_research.md, рек. 2;
-    полноценные per-track персоны — отдельный этап, план 2c):
-      NORMAL_SPEED    — перцентиль движущихся кадров (>2 м/с); при заданном
-                        variant_k — из квантильной ПОЛОСЫ варианта, чтобы на
-                        каждой сцене были и медленные, и быстрые стили:
-                          s1 [10,35]% ≈ 11–22 км/ч   s2 [35,60]% ≈ 22–32 км/ч
-                          s3 [60,85]% ≈ 32–44 км/ч   s4 [85,99]% ≈ 44–62 км/ч
-                        без variant_k — полный диапазон [10,99]% (11–62 км/ч);
-      MAX_SPEED       — max(глобальный p95, 1.2×NORMAL_SPEED), не константа;
-      ACC/DEACC       — floor 0.5 м/с² (убирает полумёртвых), кап 4/5;
-      DISTANCE_WANTED — ранг nuPlan-дистанции через эмпирическую CDF → s0 ∈ [2,10] м;
-      TIME_WANTED     — тот же ранг «осторожности» → headway ∈ [0.8,2.5] с
-                        (коррелирован с s0 и не зависит от медленности агента);
-      LANE_CHANGE_FREQ— дефолт MetaDrive 200 (оценка 62 смены/км из
-                        lane_changes.csv — артефакт детектора).
+    "styles" — semantic fixes (reports/idm_sampling_research.md, rec. 2;
+    full per-track personas are a separate stage, plan 2c):
+      NORMAL_SPEED    — percentile of moving frames (>2 m/s); with variant_k
+                        given — drawn from the variant's quantile BAND so each
+                        scene gets both slow and fast styles:
+                          s1 [10,35]% ≈ 11–22 km/h   s2 [35,60]% ≈ 22–32 km/h
+                          s3 [60,85]% ≈ 32–44 km/h   s4 [85,99]% ≈ 44–62 km/h
+                        without variant_k — full range [10,99]% (11–62 km/h);
+      MAX_SPEED       — max(global p95, 1.2×NORMAL_SPEED), not a constant;
+      ACC/DEACC       — floor 0.5 m/s² (removes half-dead agents), cap 4/5;
+      DISTANCE_WANTED — rank of nuPlan distance via empirical CDF → s0 ∈ [2,10] m;
+      TIME_WANTED     — same "caution" rank → headway ∈ [0.8,2.5] s
+                        (correlated with s0, independent of agent slowness);
+      LANE_CHANGE_FREQ— MetaDrive default 200 (the 62 changes/km estimate from
+                        lane_changes.csv is a detector artifact).
 
     Reproducible via the seed argument. Returns the DEFAULT_EGO_PARAMS shape
     for apply_ego_sampled().
@@ -118,8 +119,8 @@ def sample_ego_params(seed: int, mode: str | None = None,
         lo, hi = EGO_SPEED_RANK_BANDS.get(variant_k, (0.10, 0.99))
         speed_rank = float(np.random.uniform(lo, hi))
         normal_speed = float(np.percentile(moving, speed_rank * 100.0))
-        # Ранг «осторожности» из nuPlan-дистанции следования: сохраняем форму
-        # распределения через эмпирическую CDF, но целимся в IDM-семантику s0/headway.
+        # "Caution" rank from the nuPlan following distance: keep the shape of
+        # the distribution via the empirical CDF, but target IDM s0/headway semantics.
         dw_raw = float(sampler.distance_wanted())
         caution_rank = float((sampler.following < dw_raw).mean())
         return {

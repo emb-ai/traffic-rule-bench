@@ -207,7 +207,7 @@ class DetourSign(BaseTrafficSign):
         return state["entered_zone"] and not state["changed_correctly"]
     
     def get_rule_description(self) -> str:
-        return "Знак 4.2.x «Объезд препятствия» — объезд в предписанном направлении"
+        return "Sign 4.2.x 'Obstacle detour' — detour in the prescribed direction"
 
     @property
     def violation_events(self) -> int:
@@ -233,8 +233,8 @@ class DetourRightSign(DetourSign):
 
     def get_rule_description(self) -> str:
         return (
-            "Знак 4.2.1 «Объезд препятствия справа» — "
-            "объезд разрешается только справа"
+            "Sign 4.2.1 'Obstacle detour on the right' — "
+            "detour allowed only on the right"
         )
 
 
@@ -250,8 +250,8 @@ class DetourLeftSign(DetourSign):
 
     def get_rule_description(self) -> str:
         return (
-            "Знак 4.2.2 «Объезд препятствия слева» — "
-            "объезд разрешается только слева"
+            "Sign 4.2.2 'Obstacle detour on the left' — "
+            "detour allowed only on the left"
         )
 
 
@@ -266,8 +266,8 @@ class DetourEitherSign(DetourSign):
 
     def get_rule_description(self) -> str:
         return (
-            "Знак 4.2.3 «Объезд препятствия справа или слева» — "
-            "объезд разрешается с любой стороны"
+            "Sign 4.2.3 'Obstacle detour on the right or left' — "
+            "detour allowed on either side"
         )
 
 

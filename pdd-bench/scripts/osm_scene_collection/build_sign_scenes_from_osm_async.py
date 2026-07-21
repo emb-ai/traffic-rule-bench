@@ -36,7 +36,7 @@ OVERPASS_URLS = [u.strip() for u in os.environ.get("OVERPASS_URLS", "").split(",
                  if u.strip()] or _DEFAULT_OVERPASS
 
 # Per-sign-code highway-type filter for road matching. A residential/living zone
-# (5.21 Жилая зона / 5.22 Конец жилой зоны) is NEVER on a through-road, so
+# (5.21 Residential zone / 5.22 End of residential zone) is NEVER on a through-road, so
 # restrict matching to courtyard/residential ways and PREFER an actual
 # `living_street` when one is reasonably close. Codes not listed here keep the
 # legacy behavior: nearest car-accessible way regardless of highway type.
@@ -188,7 +188,7 @@ class BatchSignProcessor:
                                 if sign_id:
                                     existing_ids.add(sign_id)
                                     count += 1
-                                # Seed per-road dedup set so "докачать" never re-uses
+                                # Seed per-road dedup set so a resume run never re-uses
                                 # a road already collected for this code.
                                 way = meta.get("osm_way_id")
                                 if way is not None:

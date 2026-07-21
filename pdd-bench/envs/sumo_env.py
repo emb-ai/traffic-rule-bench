@@ -114,7 +114,7 @@ SIGN_TYPE_TO_CLASS = {
 # Parameterized so 5.31 (zone speed limit, same entry semantics) can be added.
 ZONE_ENTRY_SIGN_CODES = {"5.21"}
 
-# Detour signs (обязательный объезд препятствия): the sign lane is the
+# Detour signs (mandatory obstacle detour): the sign lane is the
 # OBSTACLE lane (meta sign_lane_index), cones are spawned on it, and ego is
 # pinned to that lane so the prescribed lane change is actually exercised.
 DETOUR_SIGN_CODES = ("4.2.1", "4.2.2", "4.2.3")

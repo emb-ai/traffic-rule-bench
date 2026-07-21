@@ -452,9 +452,9 @@ def run_one_episode(
             return _error_result(row, setup_error, backend=backend)
 
         # Resolve + instantiate the ego BasePolicy and apply the IDM ego variant.
-        # Braking-спавн: default ego-IDM «держит v0» (желаемая скорость ≥ спавна),
-        # чтобы незнающий агент въезжал в зону выше лимита, а не затухал к 36 км/ч
-        # ровно к знаку (вакуумное соблюдение v40). Rule-эксперт капится знаком.
+        # Braking-spawn: default ego-IDM "holds v0" (desired speed >= spawn speed)
+        # so a sign-unaware agent enters the zone above the limit instead of decaying
+        # to 36 km/h right at the sign (vacuous v40 compliance). Rule-expert: sign-capped.
         ego_hold_speed_ms = None
         if row.get("braking_spawn"):
             try:
