@@ -252,7 +252,7 @@ def main():
     parser.add_argument(
         "--pdd-code",
         default="3.18.1",
-        help="No-turn sign code 3.18.1 / 3.18.2 / 3.19 (default: 3.18.1)",
+        help="No-turn sign code 3.18.1 / 3.18.2 (default: 3.18.1)",
     )
     args = parser.parse_args()
 

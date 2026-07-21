@@ -24,12 +24,7 @@ from scripts.per_sign_bench.factorized_space.ego_defaults import (
     apply_ego_sampled,
     sample_ego_params,
 )
-from traffic_signs.no_turn_allowed import (
-    NoLeftTurnSign,
-    NoRightTurnSign,
-    NoUTurnSign,
-    _BaseNoTurnSign,
-)
+from traffic_signs.no_turn_allowed import _BaseNoTurnSign
 from lib.lane_keys import make_lane_key
 from lib.no_turn_sign_spec import (
     DEFAULT_PDD_CODE,
@@ -912,7 +907,7 @@ def _place_direction_signs(
 ) -> bool:
     """Place No*TurnSign on the ego approach (fallback: ego lane).
 
-    Shared for 3.18.1 / 3.18.2 / 3.19; class chosen from row ``pdd_code``.
+    Shared for 3.18.1 / 3.18.2; class chosen from row ``pdd_code``.
     """
     pdd_code = _resolve_row_pdd_code(row)
     layout = _get_junction_layout(row, scenes_root)
@@ -1634,7 +1629,7 @@ import time
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run policies on real SUMO maps (no-turn signs 3.18.1 / 3.18.2 / 3.19)"
+        description="Run policies on real SUMO maps (no-turn signs 3.18.1 / 3.18.2)"
     )
     parser.add_argument("--policy", required=True,
                         choices=["idm", "modified_idm", "comprehensive_rule_expert",

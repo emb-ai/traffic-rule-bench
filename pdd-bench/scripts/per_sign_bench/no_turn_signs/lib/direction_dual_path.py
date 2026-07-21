@@ -7,7 +7,6 @@ Benchmark incentive (same as 4.1.x, but signs list the *prohibited* maneuver):
 Examples:
   * 3.18.1 (no right): baseline ``r``, compliant ``s``/``l``
   * 3.18.2 (no left): baseline ``l``, compliant ``s``/``r``
-  * 3.19 (no U-turn): baseline ``t``, compliant ``s``/``r``/``l``
 
 Pipeline:
   1. On the full core net, find an X junction + ego approach with both a
@@ -59,11 +58,6 @@ def dual_path_role_dirs(pdd_code: str) -> Tuple[List[str], List[str]]:
     return baseline, compliant
 
 
-def _baseline_allows_first_exit_uturn(baseline_dirs: Sequence[str]) -> bool:
-    """True when the forbidden maneuver *is* a U-turn (sign 3.19)."""
-    return "t" in baseline_dirs
-
-
 def _baseline_path_is_artificial(
     graph: "_EdgeGraph",
     ego: str,
@@ -72,13 +66,11 @@ def _baseline_path_is_artificial(
 ) -> bool:
     """Reject artificial mid-path U-turns on the baseline temptation.
 
-    For 3.18.x the first exit must not be a U-turn loop. For 3.19 the first
-    exit *is* the forbidden U-turn — only reject extra U-turns after that hop.
+    For 3.18.x the first exit must not be a U-turn loop — a real planner would
+    not produce that as the short forbidden temptation.
     """
-    if _baseline_allows_first_exit_uturn(baseline_dirs):
-        return bool(_path_uturn_junctions(graph, list(t_path)))
+    del baseline_dirs  # kept for call-site compatibility
     return bool(_path_uturn_junctions(graph, [ego, *t_path]))
-
 
 @dataclass(frozen=True)
 class DualPathScenario:
@@ -608,7 +600,6 @@ def find_dual_path_scenarios(
                 # first exit followed by normal continuation. Baselines that
                 # U-turn mid-path or loop back over the signed approach are
                 # artificial — a real planner would not produce them.
-                # (3.19: first-exit U-turn is the forbidden maneuver itself.)
                 if _baseline_path_is_artificial(graph, ego, t_path, baseline_dirs):
                     continue
                 if path_revisits_signed_approach(ego, t_path):

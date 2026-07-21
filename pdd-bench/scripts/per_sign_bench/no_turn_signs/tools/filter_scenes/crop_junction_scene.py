@@ -7,7 +7,6 @@ destination is reachable via a *shorter* forbidden (baseline) first exit and a
 
   * 3.18.1: baseline r, compliant s/l
   * 3.18.2: baseline l, compliant s/r
-  * 3.19:   baseline t, compliant s/r/l
 
 Then crop to the XY bbox of both paths (+ margin).
 

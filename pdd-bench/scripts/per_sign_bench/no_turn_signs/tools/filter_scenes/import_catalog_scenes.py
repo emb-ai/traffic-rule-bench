@@ -422,7 +422,7 @@ def main() -> None:
         "--pdd-code",
         type=str,
         default=DEFAULT_PDD_CODE,
-        help="No-turn sign (3.18.1 / 3.18.2 / 3.19); sets default --source catalog",
+        help="No-turn sign (3.18.1 / 3.18.2); sets default --source catalog",
     )
     parser.add_argument(
         "--dest",

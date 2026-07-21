@@ -1,4 +1,4 @@
-# No-Turn Signs (3.18.1 / 3.18.2 / 3.19) Benchmark Configuration
+# No-Turn Signs (3.18.1 / 3.18.2) Benchmark Configuration
 # Family of turn-prohibition signs. Default member: 3.18.1.
 # See README.md and lib/no_turn_sign_spec.py.
 
@@ -19,7 +19,7 @@ hydra:
 # Switch member without code changes, e.g.:
 #   python generate_manifest.py sign.pdd_code=3.18.2
 sign:
-  pdd_code: "3.18.1"             # One of: 3.18.1, 3.18.2, 3.19
+  pdd_code: "3.18.1"             # One of: 3.18.1, 3.18.2
   # Manifest uses dual-path spawn/dest (forbidden shorter, allowed longer).
 
 # =============================================================================

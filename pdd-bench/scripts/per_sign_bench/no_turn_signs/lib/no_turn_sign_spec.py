@@ -1,4 +1,4 @@
-"""Shared registry for PDD 3.18.1 / 3.18.2 / 3.19 (turn-prohibition signs).
+"""Shared registry for PDD 3.18.1 / 3.18.2 (turn-prohibition signs).
 
 Same dual-path incentive as direction signs 4.1.x:
   * baseline = shorter *forbidden* first exit
@@ -6,7 +6,7 @@ Same dual-path incentive as direction signs 4.1.x:
 
 Difference vs 4.1.x: these signs list the *prohibited* maneuver, so
 ``allowed_dirs`` is the complement of ``forbidden_dir`` among cardinal
-directions (and U-turn for 3.19).
+directions.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from typing import FrozenSet
 NO_TURN_SIGN_CODES: tuple[str, ...] = (
     "3.18.1",
     "3.18.2",
-    "3.19",
 )
 
 DEFAULT_PDD_CODE = "3.18.1"
@@ -32,7 +31,7 @@ class NoTurnSignSpec:
 
     pdd_code: str
     title: str
-    forbidden_dir: str  # "r" | "l" | "t"
+    forbidden_dir: str  # "r" | "l"
     allowed_dirs: FrozenSet[str]
     class_name: str
 
@@ -60,13 +59,6 @@ NO_TURN_SIGN_SPECS: dict[str, NoTurnSignSpec] = {
         forbidden_dir="l",
         allowed_dirs=frozenset({"s", "r"}),
         class_name="NoLeftTurnSign",
-    ),
-    "3.19": NoTurnSignSpec(
-        pdd_code="3.19",
-        title="No U-turn",
-        forbidden_dir="t",
-        allowed_dirs=frozenset({"s", "r", "l"}),
-        class_name="NoUTurnSign",
     ),
 }
 
@@ -119,13 +111,11 @@ def resolve_sign_class(pdd_code: str | None = None):
     from traffic_signs.no_turn_allowed import (
         NoLeftTurnSign,
         NoRightTurnSign,
-        NoUTurnSign,
     )
 
     mapping = {
         "3.18.1": NoRightTurnSign,
         "3.18.2": NoLeftTurnSign,
-        "3.19": NoUTurnSign,
     }
     spec = get_no_turn_sign_spec(pdd_code)
     return mapping[spec.pdd_code]

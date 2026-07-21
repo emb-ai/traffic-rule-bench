@@ -1,4 +1,4 @@
-"""Core library modules for no-turn signs 3.18.1 / 3.18.2 / 3.19."""
+"""Core library modules for no-turn signs 3.18.1 / 3.18.2."""
 
 from .sumo_utils import (
     resolve_net_file,

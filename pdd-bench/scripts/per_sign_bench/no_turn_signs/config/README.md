@@ -1,11 +1,10 @@
-Hydra config for the **3.18.1 / 3.18.2 / 3.19** no-turn family.
+Hydra config for the **3.18.1 / 3.18.2** no-turn family.
 
 ```bash
 # Default: 3.18.1
 python generate_manifest.py
 
 python generate_manifest.py sign.pdd_code=3.18.2
-python generate_manifest.py sign.pdd_code=3.19
 ```
 
 | Key | Default | Notes |

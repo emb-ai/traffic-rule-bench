@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""Generate evaluation manifest from scenes (no-turn signs 3.18.1 / 3.18.2 / 3.19).
+"""Generate evaluation manifest from scenes (no-turn signs 3.18.1 / 3.18.2).
 
 Dual-path rows reuse crop-time spawn/dest from scene ``meta.json``: the same
 destination is reachable by a shorter *forbidden* (baseline) first exit and a
 longer *allowed* (compliant) path. Roles depend on ``sign.pdd_code``
-(e.g. 3.18.1: baseline r + compliant s/l; 3.18.2: baseline l + compliant s/r;
-3.19: baseline t + compliant s/r/l).
-``run_benchmark.py`` places the matching ``NoRightTurnSign`` / ``NoLeftTurnSign`` /
-``NoUTurnSign``.
+(e.g. 3.18.1: baseline r + compliant s/l; 3.18.2: baseline l + compliant s/r).
+``run_benchmark.py`` places the matching ``NoRightTurnSign`` / ``NoLeftTurnSign``.
 """
 from __future__ import annotations
 
