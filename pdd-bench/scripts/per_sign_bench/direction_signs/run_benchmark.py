@@ -813,22 +813,34 @@ def _reposition_ego_before_lane_end(env, distance_before_end: float) -> bool:
 
 
 def _get_junction_layout(row: dict, scenes_root: Path) -> dict | None:
-    """Load junction layout from manifest row or build from scene net.xml."""
-    if row.get("junction_layout"):
-        return row["junction_layout"]
+    """Load junction layout from manifest row or build from scene net.xml.
+
+    Prefer the dual-path ``junction_id`` from the row. Older manifests may store
+    a layout discovered via catalog lat/lon (wrong X in multi-junction crops);
+    rebuild when that happens.
+    """
+    preferred_jid = str(row.get("junction_id") or "").strip() or None
+    layout = row.get("junction_layout")
+    if isinstance(layout, dict) and layout.get("junction_id"):
+        if not preferred_jid or str(layout.get("junction_id")) == preferred_jid:
+            return layout
 
     net_path = row.get("net_path")
     if not net_path:
-        return None
+        return layout if isinstance(layout, dict) else None
 
     net_file = Path(str(net_path))
     full_path = net_file if net_file.is_absolute() else scenes_root / net_file
     try:
-        layout = build_junction_priority_layout(full_path, mode="main_main")
+        rebuilt = build_junction_priority_layout(
+            full_path,
+            mode="main_main",
+            preferred_junction_id=preferred_jid,
+        )
     except JunctionLayoutError as exc:
         print(f"[JunctionLayout] Failed to build layout: {exc}")
-        return None
-    return layout.to_dict()
+        return layout if isinstance(layout, dict) else None
+    return rebuilt.to_dict()
 
 
 def _clear_sign_manager(sign_mgr) -> None:

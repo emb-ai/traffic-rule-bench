@@ -310,14 +310,20 @@ def build_junction_layout_for_scene(
     *,
     sign_lat: Optional[float] = None,
     sign_lon: Optional[float] = None,
+    preferred_junction_id: Optional[str] = None,
 ) -> Optional[dict]:
-    """Build junction layout from a scene net.xml (shared scaffold for 4.1.x)."""
+    """Build junction layout from a scene net.xml (shared scaffold for 4.1.x).
+
+    Prefer ``preferred_junction_id`` from dual-path crop meta — catalog lat/lon
+    often points at a *different* OSM junction in the same crop.
+    """
     try:
         layout = build_junction_priority_layout(
             net_path,
             mode="main_main",
             sign_lat=sign_lat,
             sign_lon=sign_lon,
+            preferred_junction_id=preferred_junction_id,
         )
     except JunctionLayoutError as exc:
         print(f"  [junction_layout] {net_path.parent.name}: {exc}")
@@ -590,16 +596,25 @@ def generate_manifest(
 
         sign_lat = meta.get("latitude") or meta.get("center_lat")
         sign_lon = meta.get("longitude") or meta.get("center_lon")
+        preferred_jid = meta.get("junction_id")
         junction_layout = build_junction_layout_for_scene(
             net_full_path,
             sign_lat=float(sign_lat) if sign_lat is not None else None,
             sign_lon=float(sign_lon) if sign_lon is not None else None,
+            preferred_junction_id=str(preferred_jid) if preferred_jid else None,
         )
         if junction_layout is not None:
             print(
                 f"  Junction layout: {junction_layout['shape']} @ {junction_layout['junction_id']} "
                 f"(arms={len(junction_layout.get('arms', []))})"
             )
+            ego_road = meta.get("road_id")
+            arm_ids = {a.get("edge_id") for a in junction_layout.get("arms", [])}
+            if ego_road and ego_road not in arm_ids:
+                print(
+                    f"  [warn] meta.road_id={ego_road!r} is not an arm of "
+                    f"junction {junction_layout['junction_id']} — check dual-path crop"
+                )
         else:
             print("  Junction layout: unavailable (sign will use ego-lane placement)")
 

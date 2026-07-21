@@ -605,6 +605,7 @@ def build_junction_priority_layout(
     sign_lat: Optional[float] = None,
     sign_lon: Optional[float] = None,
     secondary_edge_id: Optional[str] = None,
+    preferred_junction_id: Optional[str] = None,
 ) -> JunctionPriorityLayout:
     """
     Build main/secondary layout for the single intersection in a SUMO net.
@@ -618,6 +619,8 @@ def build_junction_priority_layout(
         sign_lat: Optional WGS84 latitude of the stop sign (used for 2-arm junctions).
         sign_lon: Optional WGS84 longitude of the stop sign (used for 2-arm junctions).
         secondary_edge_id: Optional explicit secondary incoming edge id.
+        preferred_junction_id: If set, build layout for this junction instead of
+            auto-discovering (needed for dual-path crops with several X's).
 
     Returns:
         JunctionPriorityLayout with arms sorted CCW by entry angle.
@@ -637,7 +640,22 @@ def build_junction_priority_layout(
         sign_xy = _latlon_to_net_xy(float(sign_lat), float(sign_lon), location)
 
     junctions, edges, edge_types, connections = _load_net(net_path)
-    junction_id = _discover_primary_junction(junctions, edges, edge_types, sign_xy=sign_xy)
+    if preferred_junction_id is not None:
+        jid = str(preferred_junction_id)
+        if jid not in junctions:
+            raise JunctionLayoutError(
+                f"preferred_junction_id {jid!r} not found in {net_path}"
+            )
+        if junctions[jid]["type"] not in INTERSECTION_JUNCTION_TYPES:
+            raise JunctionLayoutError(
+                f"preferred_junction_id {jid!r} has type "
+                f"{junctions[jid]['type']!r}, not an intersection"
+            )
+        junction_id = jid
+    else:
+        junction_id = _discover_primary_junction(
+            junctions, edges, edge_types, sign_xy=sign_xy
+        )
     incoming = _incoming_edges_for_junction(junction_id, edges)
     shape = _infer_shape(len(incoming))
 
