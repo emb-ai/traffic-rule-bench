@@ -308,6 +308,14 @@ class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
             else:
                 self.target_speed = min(self.target_speed, self._speed_cap)
 
+        # Minimum-speed sign (4.6): raise the IDM target UP to the floor so the
+        # controller actively cruises at the minimum and HOLDS it (symmetric to
+        # the cap-lowering above). Without this IDM keeps aiming for NORMAL_SPEED
+        # (~30) below the min, and the reactive throttle floor only nudges it,
+        # so the ego hovers below the min - tolerance and violates.
+        if self._speed_floor is not None:
+            self.target_speed = max(self.target_speed, self._speed_floor)
+
         # Apply final speed constraints (braking / acceleration floor)
         throttle = self._apply_speed_constraints(
             throttle, self.control_object.speed_km_h

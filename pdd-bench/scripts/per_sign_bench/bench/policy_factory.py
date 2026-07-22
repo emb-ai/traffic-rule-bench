@@ -73,7 +73,8 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
 
 
 def make_ego_policy(policy_type, models, base_env, seed,
-                    ego_variant="default", ego_sample_seed_base=42):
+                    ego_variant="default", ego_sample_seed_base=42,
+                    ego_hold_speed_ms=None):
     """Resolve + instantiate the ego BasePolicy and apply its IDM ego variant.
 
     All policies implement the uniform BasePolicy.act(name) interface — built-in
@@ -86,15 +87,25 @@ def make_ego_policy(policy_type, models, base_env, seed,
     Returns (policy_obj, sampled_ego_params); sampled_ego_params is None unless an
     `s*` variant was applied.
     """
+    import os
+
     from metadrive.policy.idm_policy import IDMPolicy
     from metadrive.policy.expert_policy import ExpertPolicy
     from agents.policies.comprehensive_rule_expert import ComprehensiveRuleExpertPolicy
+    from agents.policies.curve_aware_idm import CurveAwareIDMPolicy
     from agents.policies.rule_compliant_expert import RuleCompliantExpertPolicy
     from factorized_space.ego_defaults import (apply_ego_defaults, apply_ego_sampled,
                                                sample_ego_params)
 
+    # Base idm gets the same defensive layer as the rule expert/NPC
+    # (curvature cap, steering lookahead, braking for crossing traffic) —
+    # the idm/idm_rule pair then differs only in sign knowledge.
+    # EGO_CURVE_AWARE=0 restores the raw MetaDrive IDMPolicy.
+    ego_idm_cls = (IDMPolicy if os.environ.get("EGO_CURVE_AWARE", "1") == "0"
+                   else CurveAwareIDMPolicy)
+
     builtin = {
-        "idm": IDMPolicy,
+        "idm": ego_idm_cls,
         "comprehensive_rule_expert": ComprehensiveRuleExpertPolicy,
         "rule_compliant": RuleCompliantExpertPolicy,
         "ppo_lidar": ExpertPolicy,
@@ -113,9 +124,23 @@ def make_ego_policy(policy_type, models, base_env, seed,
         if ego_variant.startswith("s") and ego_variant[1:].isdigit():
             k = int(ego_variant[1:])
             sample_seed = int(ego_sample_seed_base) + int(seed) + k * 1000003
-            sampled_ego_params = sample_ego_params(sample_seed)
+            # variant_k selects the style quantile band in EGO_SAMPLER=styles
+            # (s1 slow … s4 fast); ignored in legacy mode.
+            sampled_ego_params = sample_ego_params(sample_seed, variant_k=k)
             apply_ego_sampled(policy_obj, sampled_ego_params)
         else:
             apply_ego_defaults(policy_obj)
+            # "Ego holds v0" (braking spawn, default variant only): the desired
+            # speed is raised to the spawn speed so a sign-unaware IDM enters
+            # the zone above the limit (otherwise it decays to 36 km/h right at
+            # the sign — vacuous on v40). The rule expert gets the same — the
+            # sign caps it (mixin), so the pair gap = pure sign knowledge.
+            # s1–s4 are left alone (styles). The curvature cap
+            # (CurveAwareIDMPolicy/expert) still applies on top.
+            # Rollback: EGO_HOLD_V0=0.
+            if ego_hold_speed_ms and os.environ.get("EGO_HOLD_V0", "1") != "0":
+                v_kmh = float(ego_hold_speed_ms) * 3.6
+                policy_obj.NORMAL_SPEED = max(float(policy_obj.NORMAL_SPEED), v_kmh)
+                policy_obj.MAX_SPEED = max(float(policy_obj.MAX_SPEED), 1.15 * v_kmh)
 
     return policy_obj, sampled_ego_params

@@ -45,7 +45,8 @@ def _wps_to_action(pred_plan, current_speed: float, target_speed_mps: float) -> 
     Mirrors eval_plant2_wps_steer.py:_wps_to_action — bypasses LateralPID/PCHIP
     used by plant2_predictions_to_action. Steering from pred_wps[lookahead_idx]
     via pure-pursuit; throttle from softmax(pred_speed) capped by target_speed.
-    Ego frame: x=forward, y=left. MetaDrive action[0]: +1=left, -1=right.
+    Ego frame: x=forward, y=right (CARLA / metadrive_obs_to_plant2 convention).
+    MetaDrive action[0]: +1=left, -1=right.
     """
     pred_path, pred_wps, pred_speed = pred_plan
 
@@ -63,6 +64,8 @@ def _wps_to_action(pred_plan, current_speed: float, target_speed_mps: float) -> 
             alpha = np.arctan2(ty, max(tx, 1e-3))
             delta = np.arctan2(2.0 * _WHEELBASE_M * np.sin(alpha), dist)
             steer = float(np.clip(delta / (np.pi / 4.0), -1.0, 1.0))
+            # pred_wps use CARLA y=right; MetaDrive steer +1=left (mirrors plant2_control.py:198)
+            steer = -steer
 
     if pred_speed is not None:
         logits = pred_speed.detach().float()
@@ -100,6 +103,7 @@ class PlanT2MetaDriveAdapter:
         action_mode: str = "wps_pure_pursuit",
         max_speed_kmh: Optional[int] = 50,
         route_step_m: float = 1.0,
+        lateral_lookahead_scale: float = 2.0,
     ):
         if action_mode not in ("pid", "wps_pure_pursuit"):
             raise ValueError(
@@ -117,8 +121,20 @@ class PlanT2MetaDriveAdapter:
         # pg_direction maps have turns 37m+ ahead → step_m=4.0 gives 80m lookahead so
         # the model can see and react to intersection turns.
         self.route_step_m: float = route_step_m
+        # Lateral PID lookahead multiplier. CARLA tuned the lookahead for 20 Hz;
+        # MetaDrive runs the ego at ~10 Hz (decision_repeat=5), so the native
+        # ~4.5 m lookahead is too short -> lateral weave and missed turns at
+        # junctions. 2.0 compensates (3.24: route tracking settles ~±0.5 m vs
+        # ±5 m and divergence at 1.0). Env PLANT2_LOOKAHEAD_MULT overrides.
+        self._lateral_lookahead_scale: float = float(lateral_lookahead_scale)
         self._model = None
         self._config = None
+        # Persistent controllers for action_mode="pid". Created once (lazy) and
+        # reused across steps so the lateral PID's error-history window survives
+        # between frames (restores the derivative-damping term). Mirrors the
+        # canonical CARLA PlanT agent, which holds lat_pid/lon_pid as members.
+        self._lat_pid = None
+        self._lon_pid = None
 
     def _ensure_loaded(self) -> None:
         if self._model is not None:
@@ -222,19 +238,20 @@ class PlanT2MetaDriveAdapter:
         self._config = config_all
 
     def reset(self) -> None:
-        """No-op: PlanT2 has no per-episode state. Provided for parity with
-        CaRLMetaDriveAdapter.reset() so the policy can call either uniformly."""
-        return
+        """Clear the persistent lateral PID error-history window between episodes.
+
+        The controllers persist across episodes (created once); only the sliding
+        window must be cleared so a new episode doesn't inherit stale heading
+        errors. (_lon_pid is a stateless linear-regression controller — no reset.)"""
+        if self._lat_pid is not None:
+            self._lat_pid.error_history = []
 
     def get_action(self, vehicle, engine) -> np.ndarray:
         """Run one PlanT2 inference step → MetaDrive `[steering, throttle]` in [-1, 1]."""
         self._ensure_loaded()
 
         from metadrive.policy.metadrive_obs_to_plant2 import metadrive_obs_to_plant2_batch
-        from carla_garage.plant2_control import (
-            plant2_predictions_to_action,
-            get_target_speed_from_limit,
-        )
+        from carla_garage.plant2_control import get_target_speed_from_limit
 
         # input_ego_speed is detected from the checkpoint in _ensure_loaded()
         # and stored in self._input_ego_speed — do NOT re-read from PlanT.yaml
@@ -242,13 +259,23 @@ class PlanT2MetaDriveAdapter:
         input_ego_speed = getattr(self, "_input_ego_speed", False)
 
         # Pre-compute route with configurable step_m.
-        # get_route_points_ego_frame returns y = -local_y (CARLA y=right convention),
-        # but PlanT2 was trained with y = local_y (MetaDrive y=left convention).
-        # Fix: flip the y sign so the model receives the correct lateral direction.
+        # get_route_points_ego_frame already returns CARLA convention (y=right),
+        # matching collect_objects_ego_frame — do NOT flip y here.
         from metadrive.policy.plant_policy import get_route_points_ego_frame
         route_ego, _ = get_route_points_ego_frame(vehicle, num_points=20, step_m=self.route_step_m)
-        route_ego = route_ego.copy()
-        route_ego[:, 1] = -route_ego[:, 1]   # y=right → y=left (training convention)
+
+        import os as _os
+        if _os.environ.get("PLANT2_ROUTE_YFLIP"):
+            # A/B test: re-apply the pre-1300c1e route y-flip (route -> MetaDrive
+            # y=left). If this stops the pred_path oscillation, the checkpoint was
+            # trained expecting the route in y=left, and 1300c1e's route change is
+            # wrong for it. Temporary diagnostic toggle.
+            route_ego = route_ego.copy()
+            route_ego[:, 1] = -route_ego[:, 1]
+        if _os.environ.get("PLANT2_DEBUG_STEER"):
+            _r = route_ego[:, 1]
+            print(f"[routedbg] route_y[min/max/last]="
+                  f"{_r.min():+.2f}/{_r.max():+.2f}/{_r[-1]:+.2f}", flush=True)
 
         # Mirrors the reference inference path in eval_plant2_rule_sign_speed_probs.py:736-748.
         # max_objects=30 — PlanT2 must see surrounding NPCs and sign tokens via x_objs;
@@ -288,14 +315,129 @@ class PlanT2MetaDriveAdapter:
         if self.action_mode == "wps_pure_pursuit":
             action = _wps_to_action(pred_plan, ego_speed, target_speed_mps)
         else:
-            action = plant2_predictions_to_action(
-                pred_plan,
-                current_speed=ego_speed,
-                target_speed_mps=target_speed_mps,
-                speed_limit_idx=speed_limit_idx,
-                speed_limits_kmh=(50, 80, 100, 120),
-                device=self.device,
-                return_waypoints=False,
-            )
+            action = self._pid_action_persistent(pred_plan, ego_speed, target_speed_mps)
 
         return np.clip(np.asarray(action, dtype=np.float32), -1.0, 1.0)
+
+    def _ensure_controllers(self) -> None:
+        """Lazily create the persistent lateral/longitudinal controllers.
+
+        Imported the same way carla_garage.plant2_control imports them internally
+        (carla_garage is already on sys.path once the model is loaded)."""
+        if self._lat_pid is not None:
+            return
+        import os as _os
+        from config import GlobalConfig
+        from lateral_controller import LateralPIDController
+        from longitudinal_controller import LongitudinalLinearRegressionController
+        cfg = GlobalConfig()
+        # Scale the lateral PID lookahead to compensate MetaDrive's ~10 Hz control
+        # (CARLA tuned it for 20 Hz). Default = self._lateral_lookahead_scale (2.0);
+        # a larger lookahead lowers the effective gain -> stable tracking + makes
+        # junction turns. Env PLANT2_LOOKAHEAD_MULT overrides for experiments.
+        _m = float(_os.environ.get("PLANT2_LOOKAHEAD_MULT", str(self._lateral_lookahead_scale)))
+        if _m != 1.0:
+            cfg.lateral_pid_speed_scale *= _m
+            cfg.lateral_pid_speed_offset *= _m
+            cfg.lateral_pid_minimum_lookahead_distance *= _m
+            cfg.lateral_pid_maximum_lookahead_distance *= _m
+        self._lat_pid = LateralPIDController(cfg)
+        self._lon_pid = LongitudinalLinearRegressionController(cfg)
+
+    def _pid_action_persistent(self, pred_plan, current_speed, target_speed_mps) -> np.ndarray:
+        """Mirror of carla_garage.plant2_control.plant2_predictions_to_action, with
+        two faithfulness fixes vs that per-step function:
+
+          1. Reuses PERSISTENT controllers (self._lat_pid/_lon_pid) instead of
+             re-instantiating each step, so the lateral PID's error_history
+             accumulates across frames and its derivative (damping) term works —
+             this is what kills the lane-change wobble. Matches the canonical
+             CARLA PlanT agent (PlanT_agent.py:_get_control).
+          2. Applies FULL brake (-1.0 == CARLA control.brake=1.0) instead of the
+             half-brake (-0.5) the per-step function used.
+
+        Helpers (interpolate_waypoints, SPEED_BINS) are reused from the submodule —
+        plant2 is NOT modified."""
+        from carla_garage.plant2_control import interpolate_waypoints, SPEED_BINS
+
+        self._ensure_controllers()
+        pred_path, pred_wps, pred_speed = pred_plan
+
+        # 1. Desired speed (softmax over 8 speed bins, else waypoint-spacing heuristic)
+        if pred_speed is not None:
+            logits = pred_speed.detach().float()
+            if logits.dim() > 1:
+                logits = logits.squeeze(0)
+            probs = torch.softmax(logits, dim=0).cpu().numpy()
+            desired_speed = float((probs * SPEED_BINS).sum())
+        else:
+            _wp = pred_wps if pred_wps is not None else pred_path
+            if _wp is not None:
+                wp_arr = _wp.detach().cpu().numpy()
+                if wp_arr.ndim > 2:
+                    wp_arr = wp_arr.squeeze(0)
+                if len(wp_arr) >= 4:
+                    desired_speed = float(np.linalg.norm(wp_arr[2] - wp_arr[3]) * 4.0)
+                    mean_speed = float(np.linalg.norm(wp_arr[:-1] - wp_arr[1:], axis=-1).mean() * 4.0)
+                    if current_speed < 0.01:
+                        desired_speed = min(mean_speed, 0.1)
+                else:
+                    desired_speed = target_speed_mps
+            else:
+                desired_speed = target_speed_mps
+        desired_speed = min(desired_speed, target_speed_mps)
+
+        # 2. Longitudinal control (persistent, stateless linear-regression controller)
+        hazard_brake = desired_speed < 0.05
+        throttle, brake = self._lon_pid.get_throttle_and_brake(
+            hazard_brake, desired_speed, current_speed
+        )
+
+        # 3. Select steering waypoints — prefer pred_path, fallback pred_wps
+        steer_tensor = pred_path if pred_path is not None else pred_wps
+        if steer_tensor is None:
+            return np.array([0.0, 0.5], dtype=np.float32)
+        steer_np = steer_tensor.detach().cpu().numpy()
+        if steer_np.ndim > 2:
+            steer_np = steer_np.squeeze(0)
+        if steer_np.shape[0] == 0:
+            return np.array([0.0, 0.5], dtype=np.float32)
+
+        # 4. Interpolate steering path at 0.1 m (PCHIP) — reused from submodule
+        interp_wp = interpolate_waypoints(steer_np)
+
+        # 5. Lateral control (persistent PID; creep dummy path when stopped + braking)
+        if current_speed < 0.05 and brake:
+            steer_input = np.array([[1.0, 0.0], [2.0, 0.0], [3.0, 0.0], [4.0, 0.0]],
+                                   dtype=np.float32)
+        else:
+            steer_input = interp_wp
+        steer = self._lat_pid.step(
+            steer_input, current_speed, np.array([0.0, 0.0]), 0.0, False
+        )
+
+        # 6. Assemble MetaDrive action
+        steer = np.clip(float(steer), -1.0, 1.0)
+        steer = -steer                       # PID positive=right; MetaDrive action[0] positive=left
+        if brake:
+            throttle_brake = -1.0            # full brake (= CARLA control.brake=1.0); was -0.5 half-brake
+        else:
+            throttle_brake = float(np.clip(throttle, 0.0, 1.0))
+        throttle_brake = float(np.clip(throttle_brake, -1.0, 1.0))
+
+        # Temporary diagnostic (env-gated): distinguish controller-wobble from
+        # pred_path-wobble. path_y = lateral spread of the model's raw pred_path
+        # (CARLA y=right). If path_y swings sign step-to-step → the MODEL's path
+        # oscillates (input/convention/model issue). If path_y is smooth but
+        # steer swings → controller. deriv = lateral PID derivative term.
+        import os as _os
+        if _os.environ.get("PLANT2_DEBUG_STEER"):
+            _lat = steer_np[:, 1]
+            _hist = self._lat_pid.error_history
+            _deriv = 0.0 if len(_hist) < 2 else (_hist[-1] - _hist[-2])
+            print(f"[steerdbg] v={current_speed:5.1f} steer={steer:+.3f} "
+                  f"deriv={_deriv:+.4f} path_y[min/max/last]="
+                  f"{_lat.min():+.2f}/{_lat.max():+.2f}/{_lat[-1]:+.2f} "
+                  f"npts={steer_np.shape[0]} brake={int(bool(brake))}", flush=True)
+
+        return np.array([steer, throttle_brake], dtype=np.float32)
