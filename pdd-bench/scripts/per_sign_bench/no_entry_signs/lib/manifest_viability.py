@@ -12,6 +12,7 @@ from lib.junction_priority_layout import (
     build_junction_priority_layout,
 )
 from lib.manifest_config import DEFAULT_SPAWN_DISTANCE_BEFORE_END
+from lib.no_entry_route import forbidden_edge_long_enough, min_forbidden_lane_length_m
 from lib.scene_augmentation import (
     _ego_destination_edges,
     _is_valid_departure,
@@ -22,6 +23,10 @@ from lib.scene_augmentation import (
     parse_intersection_approach_lanes,
 )
 from lib.sumo_utils import load_vehicle_route_index, load_scene_meta, resolve_net_file
+
+# Defaults aligned with config/config.yaml simulation section.
+DEFAULT_SIGN_DISTANCE_FROM_START_M = 10.0
+DEFAULT_DESTINATION_PAST_SIGN_M = 8.0
 
 
 @dataclass
@@ -55,11 +60,16 @@ def _explain_no_scenarios(
     net_path: Path,
     *,
     min_ego_lane_m: float,
+    sign_distance_from_start: float = DEFAULT_SIGN_DISTANCE_FROM_START_M,
+    destination_past_sign_m: float = DEFAULT_DESTINATION_PAST_SIGN_M,
 ) -> Tuple[str, str]:
     spawn_by_edge = build_spawn_lanes_by_edge(spawn_lanes)
     lengths = lane_lengths_from_spawn_lanes(spawn_lanes)
     route_index = load_vehicle_route_index(net_path)
     lane_keys_by_edge = {arm.edge_id: list(arm.lane_keys) for arm in layout.arms}
+    need = min_forbidden_lane_length_m(
+        sign_distance_from_start, destination_past_sign_m
+    )
 
     ego_edges = sorted({arm.edge_id for arm in layout.arms})
     ego_edges_with_spawn = [e for e in ego_edges if spawn_by_edge.get(e)]
@@ -72,6 +82,7 @@ def _explain_no_scenarios(
     ego_no_dest: list[str] = []
     ego_no_route = 0
     ego_no_valid_departure = 0
+    ego_short_forbidden = 0
 
     for ego_edge in ego_edges_with_spawn:
         ego_dest_edges = _ego_destination_edges(layout, ego_edge)
@@ -104,6 +115,15 @@ def _explain_no_scenarios(
                 ):
                     ego_no_route += 1
                     continue
+                ok, _ = forbidden_edge_long_enough(
+                    net_path,
+                    ego_dest_edge,
+                    sign_distance_from_start=sign_distance_from_start,
+                    destination_past_sign_m=destination_past_sign_m,
+                )
+                if not ok:
+                    ego_short_forbidden += 1
+                    continue
 
     if ego_no_dest and len(ego_no_dest) == len(ego_edges_with_spawn):
         return (
@@ -123,10 +143,17 @@ def _explain_no_scenarios(
             f"ego destination equals spawn lane/edge ({ego_no_valid_departure} checks)",
         )
 
+    if ego_short_forbidden > 0:
+        return (
+            "forbidden_edge_too_short",
+            f"destination edge must be > {need:.1f}m "
+            f"(sign+past); {ego_short_forbidden} checks failed",
+        )
+
     return (
         "no_valid_scenario_combo",
         f"ego_arms={ego_edges_with_spawn}, ego_no_dest={ego_no_dest}, "
-        f"ego_no_route={ego_no_route}",
+        f"ego_no_route={ego_no_route}, ego_short_forbidden={ego_short_forbidden}",
     )
 
 
@@ -135,6 +162,8 @@ def check_manifest_viability(
     *,
     meta: Optional[dict[str, Any]] = None,
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+    sign_distance_from_start: float = DEFAULT_SIGN_DISTANCE_FROM_START_M,
+    destination_past_sign_m: float = DEFAULT_DESTINATION_PAST_SIGN_M,
 ) -> ManifestViabilityResult:
     """Return whether a cropped scene would survive generate_manifest filters."""
     result = ManifestViabilityResult(viable=True, reason="", detail="")
@@ -160,8 +189,18 @@ def check_manifest_viability(
         sign_lat=float(sign_lat) if sign_lat is not None else None,
         sign_lon=float(sign_lon) if sign_lon is not None else None,
     )
-    result.scenario_count = len(scenarios)
-    if scenarios:
+    long_enough = [
+        sc
+        for sc in scenarios
+        if forbidden_edge_long_enough(
+            net_path,
+            str(sc.ego_destination_edge_id or ""),
+            sign_distance_from_start=sign_distance_from_start,
+            destination_past_sign_m=destination_past_sign_m,
+        )[0]
+    ]
+    result.scenario_count = len(long_enough)
+    if long_enough:
         return result
 
     reason, detail = _explain_no_scenarios(
@@ -169,6 +208,8 @@ def check_manifest_viability(
         spawn_lanes,
         net_path,
         min_ego_lane_m=min_ego_lane_m,
+        sign_distance_from_start=sign_distance_from_start,
+        destination_past_sign_m=destination_past_sign_m,
     )
     return ManifestViabilityResult(
         viable=False,
@@ -183,6 +224,8 @@ def check_scene_dir_viability(
     scene_dir: Path,
     *,
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+    sign_distance_from_start: float = DEFAULT_SIGN_DISTANCE_FROM_START_M,
+    destination_past_sign_m: float = DEFAULT_DESTINATION_PAST_SIGN_M,
 ) -> ManifestViabilityResult:
     """Check viability for a scene folder (meta.json + net.xml)."""
     meta_path = scene_dir / "meta.json"
@@ -198,11 +241,13 @@ def check_scene_dir_viability(
         return ManifestViabilityResult(
             viable=False,
             reason="missing_net",
-            detail=f"{scene_dir.name}: {net_file} not found",
+            detail=f"net not found: {net_path}",
         )
 
     return check_manifest_viability(
         net_path,
         meta=meta,
         min_ego_lane_m=min_ego_lane_m,
+        sign_distance_from_start=sign_distance_from_start,
+        destination_past_sign_m=destination_past_sign_m,
     )

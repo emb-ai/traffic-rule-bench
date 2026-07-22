@@ -299,7 +299,18 @@ class SignComplianceMixin:
         if not checkpoints or len(checkpoints) < 2:
             return False
         sign_idx = getattr(sign.lane, "index", None)
-        if sign_idx is None or not isinstance(sign_idx, tuple) or len(sign_idx) < 2:
+        if sign_idx is None:
+            return False
+        # SUMO EdgeRoadNetwork: checkpoints are lane-id strings.
+        if isinstance(sign_idx, str):
+            if sign_idx in checkpoints:
+                return True
+            sign_edge = sign_idx.rsplit("_", 1)[0]
+            return any(
+                isinstance(cp, str) and cp.rsplit("_", 1)[0] == sign_edge
+                for cp in checkpoints
+            )
+        if not isinstance(sign_idx, tuple) or len(sign_idx) < 2:
             return False
         for i in range(len(checkpoints) - 1):
             if sign_idx[0] == checkpoints[i] and sign_idx[1] == checkpoints[i + 1]:
@@ -568,6 +579,74 @@ class SignComplianceMixin:
             blocked_from if isinstance(blocked_from, str) else start,
             {blocked_to} if isinstance(blocked_to, str) else set(),
         )
+        return bool(path) and self._apply_sumo_nav_path(nav, path)
+
+    def _sumo_peer_lane_ids(self, lane_id: str) -> set:
+        """All graph lane ids that share the SUMO edge with ``lane_id``."""
+        road_network = self.engine.current_map.road_network
+        try:
+            peers = road_network.get_peer_lanes_from_index(lane_id) or []
+            out = {getattr(p, "index", None) for p in peers}
+            out.discard(None)
+            if out:
+                return out
+        except Exception:
+            pass
+        # Fallback: same ``lane_<edge>_`` prefix.
+        prefix = lane_id.rsplit("_", 1)[0] + "_"
+        graph = getattr(road_network, "graph", None) or {}
+        return {lid for lid in graph if isinstance(lid, str) and lid.startswith(prefix)}
+
+    def _find_sumo_path_avoiding_lanes(
+        self,
+        start_lane_id: str,
+        goal_lane_id: str,
+        blocked_lanes,
+        *,
+        max_len: int = 40,
+    ):
+        """BFS on EdgeRoadNetwork that never enters ``blocked_lanes``."""
+        road_network = self.engine.current_map.road_network
+        graph = getattr(road_network, "graph", None)
+        if graph is None or start_lane_id not in graph:
+            return None
+        blocked = set(blocked_lanes or ())
+        if start_lane_id in blocked:
+            return None
+        from collections import deque
+
+        queue = deque([(start_lane_id, [start_lane_id])])
+        seen = {start_lane_id}
+        while queue:
+            lane_id, path = queue.popleft()
+            if lane_id == goal_lane_id:
+                return path
+            lane_data = graph.get(lane_id)
+            if lane_data is None:
+                continue
+            for nxt in sorted(set(getattr(lane_data, "exit_lanes", None) or [])):
+                if nxt in seen or nxt in blocked or nxt not in graph:
+                    continue
+                new_path = path + [nxt]
+                if len(new_path) > max_len:
+                    continue
+                seen.add(nxt)
+                queue.append((nxt, new_path))
+        return None
+
+    def _reroute_sumo_avoiding_lanes(self, blocked_lanes) -> bool:
+        """Replan to the current destination while avoiding ``blocked_lanes``."""
+        nav = getattr(self.control_object, "navigation", None)
+        if nav is None or not self._is_sumo_edge_nav(nav):
+            return False
+        checkpoints = list(getattr(nav, "checkpoints", None) or [])
+        if len(checkpoints) < 2:
+            return False
+        destination = checkpoints[-1]
+        start = getattr(self.control_object.lane, "index", None) or checkpoints[0]
+        if not isinstance(start, str) or not isinstance(destination, str):
+            return False
+        path = self._find_sumo_path_avoiding_lanes(start, destination, blocked_lanes)
         return bool(path) and self._apply_sumo_nav_path(nav, path)
 
     def _direction_blocked_exits_from_source(self, sign, source_lane) -> set:
@@ -1180,6 +1259,21 @@ class SignComplianceMixin:
     # physics deceleration does not overshoot past it.
     NO_ENTRY_STOP_MARGIN = 3.0
 
+    def _try_reroute_around_no_entry(self, sign) -> bool:
+        """Attempt a detour that never uses the signed SUMO edge / PG road."""
+        sign_idx = getattr(sign.lane, "index", None)
+        if sign_idx is None:
+            return False
+        # SUMO: lane indices are strings — never treat them as (from, to) tuples.
+        nav = getattr(self.control_object, "navigation", None)
+        if isinstance(sign_idx, str) and nav is not None and self._is_sumo_edge_nav(nav):
+            blocked = self._sumo_peer_lane_ids(sign_idx)
+            blocked.add(sign_idx)
+            return self._reroute_sumo_avoiding_lanes(blocked)
+        if isinstance(sign_idx, tuple) and len(sign_idx) >= 2:
+            return bool(self._reroute_around(sign_idx[0], sign_idx[1]))
+        return False
+
     def _handle_no_entry_or_no_traffic(self, sign):
         sign_idx = getattr(sign.lane, "index", None)
         self._blocked_lanes.add(sign_idx)
@@ -1191,19 +1285,25 @@ class SignComplianceMixin:
         # Try reroute proactively; if we can't avoid it, brake cross-edge
         # so we don't blow through the entry point.
         if on_route and not same:
-            if sign_idx and len(sign_idx) >= 2:
-                rerouted = self._reroute_around(sign_idx[0], sign_idx[1])
-            else:
-                rerouted = False
-            if not rerouted:
-                self._cross_edge_brake_for(sign, stop_long=sign.lane.length)
+            if not self._try_reroute_around_no_entry(sign):
+                stop_long = getattr(
+                    sign,
+                    "sign_line_position",
+                    getattr(sign, "placement_long", sign.lane.length),
+                )
+                self._cross_edge_brake_for(sign, stop_long=stop_long)
             return
 
         if not same:
             # Still catch the case where the sign isn't marked "on route"
             # but ego actually feeds into sign.lane via exit_lanes (SUMO
             # topology). If close — slow down; detector handles the rest.
-            self._cross_edge_brake_for(sign, stop_long=sign.lane.length)
+            stop_long = getattr(
+                sign,
+                "sign_line_position",
+                getattr(sign, "placement_long", sign.lane.length),
+            )
+            self._cross_edge_brake_for(sign, stop_long=stop_long)
             return
 
         # --- We are on the same road segment as the sign (ANY lane) ---
@@ -1212,10 +1312,7 @@ class SignComplianceMixin:
         # lane, not just the sign's lane.
 
         # Try reroute first — the only real escape.
-        rerouted = False
-        if sign_idx and len(sign_idx) >= 2:
-            rerouted = self._reroute_around(sign_idx[0], sign_idx[1])
-        if rerouted:
+        if self._try_reroute_around_no_entry(sign):
             return
 
         # No escape — stop before the sign line.

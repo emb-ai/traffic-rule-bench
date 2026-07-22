@@ -40,7 +40,7 @@ DEFAULT_MODEL_PATHS = {
 
 
 def build_catalog_row(scene_dir: Path, meta: dict, var_idx: int = 0, pdd_code: str = "3.1") -> dict:
-    """Build a catalog row from scene meta.json."""
+    """Build a manifest-like row from junction crop meta.json."""
     scene_name = meta.get("scene_name", scene_dir.name)
 
     net_file = resolve_net_file(scene_dir, meta)
@@ -56,13 +56,11 @@ def build_catalog_row(scene_dir: Path, meta: dict, var_idx: int = 0, pdd_code: s
         if road_id:
             print(f"  auto-selected road_id: {road_id}")
 
-    # Exact catalog placement — no 30 m floor.
-    if meta.get("distance_from_start") is not None:
-        distance = float(meta["distance_from_start"])
-    elif meta.get("sign_spawn_distance") is not None:
-        distance = float(meta["sign_spawn_distance"])
+    # Soft env hint only; artificial placement uses before_end offsets.
+    if meta.get("sign_spawn_distance") is not None:
+        sign_spawn_distance = max(float(meta["sign_spawn_distance"]), 30.0)
     else:
-        distance = 0.0
+        sign_spawn_distance = 30.0
 
     # Deterministic seed
     seed = (hash(scene_name) + var_idx) % (2**32)
@@ -74,11 +72,12 @@ def build_catalog_row(scene_dir: Path, meta: dict, var_idx: int = 0, pdd_code: s
         "sign_id": 0,
         "road_id": road_id,
         "net_path": net_path,
-        "sign_spawn_distance": distance,
-        "distance_from_start": distance,
-        "destination_lane_id": None,
+        "sign_spawn_distance": sign_spawn_distance,
+        "sign_distance_before_end": float(meta.get("sign_distance_before_end", 0.0) or 0.0),
+        "spawn_distance_before_end": float(meta.get("spawn_distance_before_end", 20.0) or 20.0),
+        "destination_lane_id": meta.get("destination_lane_id"),
         "n_lanes": 1,
-        "spawn_lane_num": 0,
+        "spawn_lane_num": int(meta.get("spawn_lane_num", 0) or 0),
         "var_idx": var_idx,
         "seed": seed,
         "spawn_velocity_ms": 0.0,
@@ -93,10 +92,9 @@ def build_env(catalog_row: dict, scenes_root: Path, traffic_density: float, max_
 
     SumoTrafficManager.EGO_SAFE_RADIUS = 30
 
-    if catalog_row.get("distance_from_start") is not None:
-        sign_spawn_distance = float(catalog_row["distance_from_start"])
-    else:
-        sign_spawn_distance = float(catalog_row.get("sign_spawn_distance", 0.0))
+    # Soft floor for env map config; artificial before_end placement is preferred
+    # when the caller places signs explicitly (see run_benchmark._place_no_entry_sign).
+    sign_spawn_distance = max(float(catalog_row.get("sign_spawn_distance", 30.0)), 30.0)
     map_path = str(scenes_root / catalog_row["net_path"])
     sign_type = str(catalog_row.get("pdd_code") or catalog_row.get("sign_code") or "3.1")
 

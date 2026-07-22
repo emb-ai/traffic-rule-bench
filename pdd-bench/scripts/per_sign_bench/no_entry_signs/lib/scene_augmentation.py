@@ -61,17 +61,33 @@ def _pick_outgoing_lane_key(
     return keys[min(lane_num, len(keys) - 1)]
 
 
+def _is_real_edge_id(edge_id: str) -> bool:
+    """True for normal road edges (exclude SUMO internal ``:`` edges / walking areas)."""
+    return bool(edge_id) and not str(edge_id).startswith(":")
+
+
+def _filter_real_destination_edges(edge_ids) -> List[str]:
+    return [edge_id for edge_id in edge_ids if _is_real_edge_id(edge_id)]
+
+
 def _ego_destination_edges(layout: JunctionPriorityLayout, ego_edge_id: str) -> List[str]:
+    """Ego destination edges by junction shape: X → straight, T → left turn.
+
+    Excludes internal/walking edges and the ego spawn edge so the route
+    actually crosses the junction onto a real outgoing road.
+    """
     arm = layout.arm_for_edge(ego_edge_id)
     if arm is None:
         return []
     if layout.shape == "T":
-        return list(arm.left_to)
-    if layout.shape == "X":
-        return list(arm.straight_to)
-    if layout.shape == "2":
-        return list(arm.straight_to) or list(arm.outgoing_to)
-    return list(arm.straight_to) or list(arm.left_to)
+        candidates = _filter_real_destination_edges(arm.left_to)
+    elif layout.shape == "X":
+        candidates = _filter_real_destination_edges(arm.straight_to)
+    elif layout.shape == "2":
+        candidates = _filter_real_destination_edges(arm.straight_to or arm.outgoing_to)
+    else:
+        candidates = _filter_real_destination_edges(arm.straight_to or arm.left_to)
+    return [edge_id for edge_id in candidates if edge_id != ego_edge_id]
 
 
 def _is_valid_departure(
@@ -80,6 +96,8 @@ def _is_valid_departure(
     dest_edge: str,
     dest_lane_key: str,
 ) -> bool:
+    if not _is_real_edge_id(dest_edge):
+        return False
     if spawn_edge == dest_edge:
         return False
     if _lane_key(spawn_edge, spawn_lane) == dest_lane_key:

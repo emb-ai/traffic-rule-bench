@@ -35,11 +35,20 @@ from lib.no_entry_sign_spec import (
 from lib.junction_sign_placement import (
     lateral_offset_beside_lane,
     resolve_sign_lane_for_edge,
+    sign_longitudinal_offset_from_start,
+    sign_placement_long_from_start,
 )
 from lib.manifest_config import (
     enrich_manifest_row,
     load_manifest_config,
 )
+
+# Defaults for compliant-stop early success (overridable via manifest / config).
+DEFAULT_COMPLIANT_STOP_SUCCESS_SECONDS = 3.0
+DEFAULT_COMPLIANT_STOP_MAX_DIST_M = 12.0
+DEFAULT_COMPLIANT_STOP_SPEED_MPS = 0.5
+DEFAULT_DESTINATION_PAST_SIGN_M = 8.0
+DEFAULT_SIGN_DISTANCE_FROM_START_M = 10.0
 
 BENCH_DIR = Path(__file__).resolve().parent
 PER_SIGN_BENCH_DIR = BENCH_DIR.parent
@@ -248,40 +257,40 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
 
 
 def _resolve_sign_spawn_distance(row: dict, scenes_root: Path) -> float:
-    """Return exact catalog sign distance from lane start (no minimum floor)."""
-    direct = row.get("distance_from_start")
-    if direct is not None:
-        return float(direct)
-
+    """Soft env hint for MetaDrive map config (placement uses before_end offset)."""
     direct = row.get("sign_spawn_distance")
     if direct is not None:
-        return float(direct)
+        return max(float(direct), 30.0)
+
+    direct = row.get("distance_from_start")
+    if direct is not None:
+        return max(float(direct), 30.0)
 
     net_path = row.get("net_path")
     if not net_path:
-        return 0.0
+        return 30.0
 
     net_file = Path(str(net_path))
     scene_dir = (scenes_root / net_file).parent if not net_file.is_absolute() else net_file.parent
     meta_path = scene_dir / "meta.json"
 
     if meta_path in _SUMO_SIGN_DISTANCE_CACHE:
-        return _SUMO_SIGN_DISTANCE_CACHE[meta_path]
+        return max(_SUMO_SIGN_DISTANCE_CACHE[meta_path], 30.0)
 
     distance = 0.0
     if meta_path.exists():
         try:
             with open(meta_path, "r", encoding="utf-8") as f:
                 meta = json.load(f)
-            if meta.get("distance_from_start") is not None:
-                distance = float(meta["distance_from_start"])
-            elif meta.get("sign_spawn_distance") is not None:
+            if meta.get("sign_spawn_distance") is not None:
                 distance = float(meta["sign_spawn_distance"])
+            elif meta.get("distance_from_start") is not None:
+                distance = float(meta["distance_from_start"])
         except Exception:
             distance = 0.0
 
     _SUMO_SIGN_DISTANCE_CACHE[meta_path] = distance
-    return distance
+    return max(distance, 30.0)
 
 
 def _wrap_for_policy(env, policy_type: str):
@@ -780,7 +789,7 @@ def _reposition_ego_before_lane_end(env, distance_before_end: float) -> bool:
             return False
         
         lane_length = lane.length
-        # spawn_longitude is from lane START, so: lane_length - distance_before_end
+        # Longitudinal from lane START: lane_length - distance_before_end
         spawn_long = max(1.0, min(lane_length - distance_before_end, lane_length - 0.1))
         
         pos = lane.position(spawn_long, 0.0)
@@ -810,43 +819,6 @@ def _reposition_ego_before_lane_end(env, distance_before_end: float) -> bool:
         return False
 
 
-def _reposition_ego_at_longitude(env, spawn_longitude: float) -> bool:
-    """Reposition ego to ``spawn_longitude`` meters from the current lane start."""
-    try:
-        vehicle = env.agent
-        if vehicle is None:
-            return False
-
-        lane = vehicle.lane
-        if lane is None:
-            return False
-
-        spawn_long = max(1.0, min(float(spawn_longitude), lane.length - 0.1))
-        pos = lane.position(spawn_long, 0.0)
-        heading = lane.heading_theta_at(spawn_long)
-
-        vehicle.set_position(pos)
-        vehicle.set_heading_theta(heading)
-
-        try:
-            vehicle.spawn_place = pos.copy()
-        except Exception:
-            pass
-
-        if hasattr(env, "_refresh_navigation_after_spawn"):
-            env._refresh_navigation_after_spawn(lane)
-        else:
-            try:
-                vehicle.reset_navigation(lane)
-            except Exception:
-                pass
-
-        return True
-    except Exception as e:
-        print(f"[EgoReposition] Failed to reposition ego at longitude: {e}")
-        return False
-
-
 def _clear_sign_manager(sign_mgr) -> None:
     sign_mgr.signs.clear()
     sign_mgr.rules.clear()
@@ -873,35 +845,63 @@ def _place_no_entry_sign(
     scenes_root: Path,
     show_model: bool = True,
 ) -> bool:
-    """Place NoEntrySign / NoTrafficSign at exact catalog distance on the signed edge."""
+    """Place NoEntrySign / NoTrafficSign at the start of the forbidden lane.
+
+    The forbidden lane is the destination edge (the road ego must not enter).
+    The sign sits a few metres after that lane's start so baselines that enter
+    it accumulate a violation, while experts stop before entering.
+    """
+    del scenes_root  # kept for call-site parity with other benches
     try:
         sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
         if sign_mgr is None:
             return False
 
-        road_id = row.get("road_id")
-        if not road_id:
-            print("[NoEntrySign] Missing road_id")
+        sign_road_id = row.get("sign_road_id") or row.get("destination_edge_id")
+        if not sign_road_id and row.get("destination_lane_id"):
+            from lib.lane_keys import lane_edge_id
+
+            sign_road_id = lane_edge_id(str(row["destination_lane_id"]))
+        if not sign_road_id:
+            print("[NoEntrySign] Missing sign_road_id / destination edge")
             return False
 
-        lane = resolve_sign_lane_for_edge(env, str(road_id), [])
+        lane_keys: list = []
+        layout = row.get("junction_layout") or {}
+        for arm in layout.get("arms", []) or []:
+            if arm.get("edge_id") == sign_road_id:
+                lane_keys = list(arm.get("lane_keys") or [])
+                break
+
+        lane = resolve_sign_lane_for_edge(env, str(sign_road_id), lane_keys)
         if lane is None:
-            print(f"[NoEntrySign] Lane not found for edge {road_id}")
+            print(f"[NoEntrySign] Lane not found for forbidden edge {sign_road_id}")
             return False
 
-        if row.get("distance_from_start") is not None:
-            distance = float(row["distance_from_start"])
-        elif row.get("sign_spawn_distance") is not None:
-            distance = float(row["sign_spawn_distance"])
-        else:
-            distance = float(_resolve_sign_spawn_distance(row, scenes_root))
+        distance_from_start = float(
+            row.get("sign_distance_from_start", DEFAULT_SIGN_DISTANCE_FROM_START_M)
+            or DEFAULT_SIGN_DISTANCE_FROM_START_M
+        )
+        past_sign_m = float(
+            row.get("destination_past_sign_m", DEFAULT_DESTINATION_PAST_SIGN_M)
+            or DEFAULT_DESTINATION_PAST_SIGN_M
+        )
+        # Sign + short dest past it must both fit on the forbidden lane;
+        # otherwise dest coincides with the sign and violations never occur.
+        need_len = distance_from_start + past_sign_m
+        if float(lane.length) <= need_len:
+            print(
+                f"[NoEntrySign] Forbidden lane too short "
+                f"({float(lane.length):.2f}m <= sign+past {need_len:.2f}m) "
+                f"on edge {sign_road_id}; skip placement"
+            )
+            return False
+        placement_long = sign_placement_long_from_start(lane, distance_from_start)
+        longitudinal_offset = sign_longitudinal_offset_from_start(lane, distance_from_start)
+        lateral = lateral_offset_beside_lane(lane, placement_long)
 
         pdd_code = _resolve_row_pdd_code(row)
         sign_cls = resolve_sign_class(pdd_code)
-        longitudinal_offset = -lane.length + distance
-        # Clamp only the lateral width sample to the lane extent.
-        placement_long = max(0.0, min(distance, max(lane.length - 0.1, 0.0)))
-        lateral = lateral_offset_beside_lane(lane, placement_long)
 
         _clear_sign_manager(sign_mgr)
         sign = sign_mgr.add_sign(
@@ -915,13 +915,98 @@ def _place_no_entry_sign(
         spec = get_no_entry_sign_spec(pdd_code)
         print(
             f"[NoEntrySign] Placed {pdd_code} ({spec.title}/{spec.class_name}) on "
-            f"{road_id} at distance_from_start={distance:.2f}m "
+            f"forbidden edge {sign_road_id} at {distance_from_start:.2f}m from lane start "
             f"(long_offset={longitudinal_offset:.2f})"
         )
         return sign is not None
     except Exception as e:
         print(f"[NoEntrySign] Failed to place: {e}")
         return False
+
+
+def _ego_compliant_stop_before_no_entry(
+    env,
+    vehicle,
+    *,
+    max_dist_before_sign_m: float = DEFAULT_COMPLIANT_STOP_MAX_DIST_M,
+    speed_max_mps: float = DEFAULT_COMPLIANT_STOP_SPEED_MPS,
+) -> bool:
+    """True when ego is nearly stopped just before a 3.1/3.2 sign line.
+
+    Used ONLY for the compliant-stop early success path (sign-compliant agents
+    that cannot reach the literal destination past the forbidden road).
+    """
+    if vehicle is None:
+        return False
+    try:
+        speed = float(getattr(vehicle, "speed", 0.0) or 0.0)
+    except Exception:
+        return False
+    if speed > float(speed_max_mps):
+        return False
+
+    sign_mgr = getattr(getattr(env, "engine", None), "traffic_sign_manager", None)
+    if sign_mgr is None:
+        return False
+
+    max_dist = float(max_dist_before_sign_m)
+    for sign in list(getattr(sign_mgr, "signs", None) or []):
+        if not isinstance(sign, (NoEntrySign, NoTrafficSign)):
+            continue
+        sign_lane = getattr(sign, "lane", None)
+        if sign_lane is None:
+            continue
+        sign_long = float(
+            getattr(sign, "sign_line_position", getattr(sign, "placement_long", 0.0))
+            or 0.0
+        )
+        try:
+            veh_long = float(sign_lane.local_coordinates(vehicle.position)[0])
+        except Exception:
+            continue
+        dist_to_line = sign_long - veh_long
+        # Still before the violation threshold past the line, and close enough
+        # that the stop is at the sign (not stuck back in the junction).
+        if -0.25 < dist_to_line <= max_dist:
+            return True
+    return False
+
+
+def _ego_past_sign_route_end(
+    env,
+    vehicle,
+    *,
+    past_sign_m: float = DEFAULT_DESTINATION_PAST_SIGN_M,
+) -> bool:
+    """True when ego has driven past the no-entry sign by ``past_sign_m``.
+
+    This is the short route endpoint on the forbidden lane (so non-compliant
+    policies do not keep driving to the far end of a long edge). Independent
+    of the compliant-stop arrive override.
+    """
+    if vehicle is None:
+        return False
+    sign_mgr = getattr(getattr(env, "engine", None), "traffic_sign_manager", None)
+    if sign_mgr is None:
+        return False
+    past = float(past_sign_m)
+    for sign in list(getattr(sign_mgr, "signs", None) or []):
+        if not isinstance(sign, (NoEntrySign, NoTrafficSign)):
+            continue
+        sign_lane = getattr(sign, "lane", None)
+        if sign_lane is None:
+            continue
+        sign_long = float(
+            getattr(sign, "sign_line_position", getattr(sign, "placement_long", 0.0))
+            or 0.0
+        )
+        try:
+            veh_long = float(sign_lane.local_coordinates(vehicle.position)[0])
+        except Exception:
+            continue
+        if veh_long >= sign_long + past:
+            return True
+    return False
 
 
 def run_one_episode(
@@ -981,14 +1066,11 @@ def run_one_episode(
         except Exception:
             pass
 
-        # Manifest spawn lane + longitudinal position
+        # Manifest spawn lane + position before lane end (approach to junction)
         _apply_manifest_ego_spawn_lane(base_env, row)
-        if row.get("spawn_longitude") is not None:
-            _reposition_ego_at_longitude(base_env, float(row["spawn_longitude"]))
-        else:
-            spawn_distance = float(row.get("spawn_distance_before_end", 0) or 0)
-            if spawn_distance > 0:
-                _reposition_ego_before_lane_end(base_env, spawn_distance)
+        spawn_distance = float(row.get("spawn_distance_before_end", 0) or 0)
+        if spawn_distance > 0:
+            _reposition_ego_before_lane_end(base_env, spawn_distance)
 
         # Validate route: check that destination is different from spawn
         nav = getattr(base_env.vehicle, "navigation", None)
@@ -1007,7 +1089,7 @@ def run_one_episode(
                         "scene_id": scene_id,
                     }
 
-        # Place NoEntrySign / NoTrafficSign at catalog distance_from_start
+        # Place NoEntrySign / NoTrafficSign near approach lane end
         _place_no_entry_sign(
             base_env,
             row,
@@ -1071,6 +1153,30 @@ def run_one_episode(
         expert_actions: list[list[float]] = []
         sign_info_snapshot = _extract_sign_info(base_env)
         last_info: dict = {}
+
+        stop_success_s = float(
+            row.get(
+                "compliant_stop_success_seconds",
+                DEFAULT_COMPLIANT_STOP_SUCCESS_SECONDS,
+            )
+            or DEFAULT_COMPLIANT_STOP_SUCCESS_SECONDS
+        )
+        stop_max_dist_m = float(
+            row.get("compliant_stop_max_dist_m", DEFAULT_COMPLIANT_STOP_MAX_DIST_M)
+            or DEFAULT_COMPLIANT_STOP_MAX_DIST_M
+        )
+        stop_speed_max = float(
+            row.get("compliant_stop_speed_mps", DEFAULT_COMPLIANT_STOP_SPEED_MPS)
+            or DEFAULT_COMPLIANT_STOP_SPEED_MPS
+        )
+        past_sign_m = float(
+            row.get("destination_past_sign_m", DEFAULT_DESTINATION_PAST_SIGN_M)
+            or DEFAULT_DESTINATION_PAST_SIGN_M
+        )
+        stop_success_steps = max(1, int(round(stop_success_s / dt)))
+        compliant_stop_steps = 0
+        compliant_stop_success = False
+        past_sign_arrive = False
 
         for step in range(max_steps):
             if policy_obj is not None:
@@ -1216,9 +1322,47 @@ def run_one_episode(
                 prev_heading = heading
 
             if terminated or truncated:
+                # Natural MetaDrive terminate only — do NOT invent arrive_dest here.
                 reached_dest = bool(info.get("arrive_dest", False))
                 out_of_road = bool(info.get("out_of_road", False))
                 crashed = bool(info.get("crash", False) or out_of_road)
+                break
+
+            # (1) ONLY override of arrive_dest without reaching the route end:
+            #     sign-compliant stop before the line (0 violations, nearly stopped
+            #     within compliant_stop_max_dist_m). Timeout / crash / other stops
+            #     do not get this override.
+            if sign_violations == 0 and _ego_compliant_stop_before_no_entry(
+                base_env,
+                vehicle,
+                max_dist_before_sign_m=stop_max_dist_m,
+                speed_max_mps=stop_speed_max,
+            ):
+                compliant_stop_steps += 1
+                if compliant_stop_steps >= stop_success_steps:
+                    reached_dest = True
+                    compliant_stop_success = True
+                    print(
+                        f"[NoEntrySign] Compliant stop for {stop_success_s:.1f}s "
+                        f"before sign → arrive_dest (step={steps})"
+                    )
+                    break
+            else:
+                compliant_stop_steps = 0
+
+            # (2) Short route endpoint just past the sign (same for all policies).
+            #     Independent of (1); lets non-compliant agents finish quickly.
+            if _ego_past_sign_route_end(
+                base_env,
+                vehicle,
+                past_sign_m=past_sign_m,
+            ):
+                reached_dest = True
+                past_sign_arrive = True
+                print(
+                    f"[NoEntrySign] Past sign by {past_sign_m:.1f}m "
+                    f"→ destination (step={steps})"
+                )
                 break
 
             text_dict: dict = {}
@@ -1305,6 +1449,8 @@ def run_one_episode(
 
                 sidecar_metrics = {
                     "arrived_dest": bool(reached_dest),
+                    "compliant_stop_success": bool(compliant_stop_success),
+                    "past_sign_arrive": bool(past_sign_arrive),
                     "crashed": crashed_flag_raw,
                     "crash_attribution": crash_attribution,
                     "crashed_ego_fault": bool(crashed_flag_raw and crash_attribution == "ego"),
@@ -1393,6 +1539,8 @@ def run_one_episode(
             "crashed": crashed,
             "out_of_road": out_of_road,
             "reached_dest": reached_dest,
+            "compliant_stop_success": bool(compliant_stop_success),
+            "past_sign_arrive": bool(past_sign_arrive),
             "success": reached_dest and not crashed,
             "route_completion_pct": route_completion_pct,
             "infraction_penalty": infraction_penalty,
@@ -1557,7 +1705,10 @@ import time
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run policies on real SUMO maps (no-entry signs 3.1 / 3.2)"
+        description=(
+            "Run policies on junction crops (no-entry 3.1 / 3.2); "
+            "signs placed near approach lane end"
+        )
     )
     parser.add_argument("--policy", required=True,
                         choices=["idm", "modified_idm", "comprehensive_rule_expert",

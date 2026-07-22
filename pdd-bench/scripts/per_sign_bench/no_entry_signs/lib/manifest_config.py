@@ -12,7 +12,12 @@ DEFAULT_SPAWN_DISTANCE_BEFORE_END = 20.0
 # Row fields that may be filled from manifest.json / real_manifest_summary.json.
 EXPERIMENT_DEFAULT_KEYS = (
     "spawn_distance_before_end",
+    "sign_distance_from_start",
+    "destination_past_sign_m",
     "sign_distance_before_end",
+    "compliant_stop_success_seconds",
+    "compliant_stop_max_dist_m",
+    "compliant_stop_speed_mps",
     "spawn_velocity_ms",
     "traffic_density",
     "horizon",

@@ -1,8 +1,9 @@
 """Route helpers for no-entry benches (3.1 / 3.2).
 
-Ego spawns on the signed road *before* the catalog sign position and is
-routed a few edges past the sign so baselines drive through the forbidden
-segment. Compliant experts stop before the sign when no legal detour exists.
+Catalog-era helpers used by ``import_catalog_scenes`` (geometry filters /
+forward destination walk). Manifest generation and sign placement now use
+artificial junction offsets (``sign_distance_before_end`` /
+``spawn_distance_before_end``) instead of catalog ``distance_from_start``.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from .sumo_utils import is_real_sumo_edge_id, is_vehicle_drivable_lane
 
 # Minimum clearance (m) between ego spawn and the sign line.
 DEFAULT_SPAWN_MARGIN_BEFORE_SIGN_M = 15.0
-# Minimum catalog distance_from_start to keep a scene.
+# Minimum catalog distance_from_start to keep a scene (import filter).
 MIN_SIGN_DISTANCE_FROM_START_M = 8.0
 # Minimum remaining length past the sign on the signed edge.
 MIN_LENGTH_PAST_SIGN_M = 3.0
@@ -40,6 +41,43 @@ def edge_length_m(net_path: Path | str, edge_id: str) -> Optional[float]:
             except (TypeError, ValueError):
                 return None
     return None
+
+
+def min_forbidden_lane_length_m(
+    sign_distance_from_start: float,
+    destination_past_sign_m: float,
+) -> float:
+    """Minimum length so sign and short dest past it do not coincide."""
+    return float(sign_distance_from_start) + float(destination_past_sign_m)
+
+
+def forbidden_edge_long_enough(
+    net_path: Path | str,
+    edge_id: str,
+    *,
+    sign_distance_from_start: float,
+    destination_past_sign_m: float,
+) -> tuple[bool, str]:
+    """Require forbidden edge length > sign offset + past-sign destination.
+
+    Otherwise the short route end lands on (or before) the sign line and a
+    baseline that reaches dest never accumulates a no-entry violation.
+    """
+    if not edge_id:
+        return False, "missing forbidden edge id"
+    length = edge_length_m(net_path, edge_id)
+    need = min_forbidden_lane_length_m(
+        sign_distance_from_start, destination_past_sign_m
+    )
+    if length is None or length <= 0:
+        return False, f"forbidden edge {edge_id!r} missing or empty"
+    if length <= need:
+        return (
+            False,
+            f"forbidden edge {edge_id} length {length:.2f}m "
+            f"<= sign+past ({need:.2f}m)",
+        )
+    return True, "ok"
 
 
 def count_drivable_lanes(net_path: Path | str, edge_id: str) -> int:
@@ -123,7 +161,7 @@ def scene_geometry_ok(
     min_sign_dist: float = MIN_SIGN_DISTANCE_FROM_START_M,
     min_past: float = MIN_LENGTH_PAST_SIGN_M,
 ) -> tuple[bool, str]:
-    """Validate that the signed edge can host spawn-before / drive-past."""
+    """Validate that the signed edge can host spawn-before / drive-past (import)."""
     if not road_id:
         return False, "missing road_id"
     length = edge_length_m(net_path, road_id)
