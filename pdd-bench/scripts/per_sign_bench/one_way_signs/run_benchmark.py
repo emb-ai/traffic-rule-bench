@@ -25,7 +25,7 @@ from scripts.per_sign_bench.factorized_space.ego_defaults import (
     sample_ego_params,
 )
 from traffic_signs.one_way_entry_sign import OneWayEntrySign
-from lib.lane_keys import make_lane_key
+from lib.lane_keys import lane_edge_id, make_lane_key
 from lib.one_way_sign_spec import (
     DEFAULT_PDD_CODE,
     get_one_way_sign_spec,
@@ -67,8 +67,60 @@ _PROFILE_KEYS = (
 )
 
 
+class OneWaySumoTrafficManager(SumoTrafficManager):
+    """Background traffic that respects the one-way crossing road.
+
+    The signed crossing road is one-way: its wrong-way carriageway is kept in
+    the net only so the ego *can* illegally enter it (and be flagged), but no
+    surrounding vehicle may spawn on it or route through it. This keeps the
+    crossing road visibly one-directional (no oncoming lane).
+    """
+
+    def _excluded_edges(self) -> set:
+        raw = self.engine.global_config.get("background_excluded_edges") or ()
+        return {str(e) for e in raw}
+
+    def _get_spawnable_lanes(self):
+        lanes = super()._get_spawnable_lanes()
+        excluded = self._excluded_edges()
+        if not excluded:
+            return lanes
+        return [ln for ln in lanes if lane_edge_id(str(ln.index)) not in excluded]
+
+    def _build_forward_route(self, spawn_lane_index):
+        route = super()._build_forward_route(spawn_lane_index)
+        excluded = self._excluded_edges()
+        if not excluded:
+            return route
+        # Truncate at the first wrong-way edge so no NPC ever drives it. A route
+        # that becomes too short is rejected downstream (that lane just stays
+        # empty), which is exactly what we want on a one-way road.
+        trimmed = []
+        for lane_idx in route:
+            if lane_edge_id(str(lane_idx)) in excluded:
+                break
+            trimmed.append(lane_idx)
+        return trimmed or route
+
+
 def _slug_to_code(slug: str) -> str:
     return slug.replace("_", ".")
+
+
+def _scene_background_excluded_edges(net_path: Path) -> list:
+    """Wrong-way carriageway edges recorded in the scene meta.json (if any)."""
+    meta_path = Path(net_path).resolve().parent / "meta.json"
+    if not meta_path.is_file():
+        return []
+    try:
+        meta = json.loads(meta_path.read_text())
+    except Exception:
+        return []
+    edges = meta.get("background_excluded_edges")
+    if not edges:
+        dp = meta.get("dual_path")
+        edges = (dp or {}).get("wrong_dir_edges") if isinstance(dp, dict) else None
+    return [str(e) for e in (edges or [])]
 
 
 def _manifest_profile(row: dict) -> dict:
@@ -182,6 +234,10 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
     horizon = _manifest_horizon(row, fallback=max_steps)
     net_path = str(scenes_root / row["net_path"]) if not str(row["net_path"]).startswith("/") else str(row["net_path"])
     sign_spawn_distance = _resolve_sign_spawn_distance(row, scenes_root)
+    background_excluded_edges = (
+        row.get("background_excluded_edges")
+        or _scene_background_excluded_edges(Path(net_path))
+    )
 
     vehicle_config: dict = {"show_lidar": False}
     spawn_vel = float(row.get("spawn_velocity_ms", 0.0) or 0.0)
@@ -208,6 +264,7 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         show_lane_arrows=row.get("show_lane_arrows", False),
         show_traffic_lights=row.get("show_traffic_lights", False),
         show_npc_vehicles=row.get("show_npc_vehicles", False),
+        background_excluded_edges=list(background_excluded_edges),
         skip_auto_signs=True,
         use_pedestrian_manager=False,
         use_pedestrian_yield_rule=False,
@@ -231,14 +288,16 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
             cfg["show_traffic_lights"] = True
             cfg["show_npc_vehicles"] = True
             cfg["skip_auto_signs"] = False
+            cfg["background_excluded_edges"] = []
             return cfg
 
         def setup_engine(self):
             super().setup_engine()
-            # Only add SumoTrafficManager if traffic_density > 0
-            # Otherwise keep the default SimpleTrafficManager (no NPC spawning)
+            # Only add a traffic manager if traffic_density > 0. Use the
+            # one-way-aware manager so background vehicles never spawn on or
+            # route through the signed crossing road's wrong-way carriageway.
             if self.config.get("traffic_density", 0.0) > 0:
-                self.engine.update_manager("traffic_manager", SumoTrafficManager())
+                self.engine.update_manager("traffic_manager", OneWaySumoTrafficManager())
 
         def reset(self, *, seed=None):
             # Skip TrafficSignSumoEnv.reset() sign creation by calling grandparent directly
@@ -905,7 +964,7 @@ def _place_direction_signs(
     distance_before_end: float = 20.0,
     show_model: bool = True,
 ) -> bool:
-    """Place No*TurnSign on the ego approach (fallback: ego lane).
+    """Place OneWayEntrySign on the ego approach (fallback: ego lane).
 
     Shared for 5.7.1 / 5.7.2; class chosen from row ``pdd_code``.
     """
@@ -966,6 +1025,19 @@ def _place_direction_signs(
             ),
         )
         spec = get_one_way_sign_spec(pdd_code)
+        # Tell sign-compliant planners which edges form the one-way road's
+        # wrong-way carriageway so they replan a detour that fully avoids it
+        # (never a U-turn back against the one-way flow).
+        forbidden_edges = list(row.get("background_excluded_edges") or [])
+        if not forbidden_edges:
+            map_name = env.config.get("map_name")
+            if map_name:
+                forbidden_edges = _scene_background_excluded_edges(Path(map_name))
+        if sign is not None and forbidden_edges:
+            try:
+                sign.one_way_forbidden_edges = frozenset(str(e) for e in forbidden_edges)
+            except Exception:
+                pass
         print(
             f"[OneWaySign] Placed {pdd_code} ({spec.title}) on {ego_edge}, "
             f"junction={row.get('junction_id') or layout.get('junction_id')}, "
@@ -1075,7 +1147,7 @@ def run_one_episode(
                         "scene_id": scene_id,
                     }
 
-        # Place active No*TurnSign on the ego approach
+        # Place active OneWayEntrySign on the ego approach
         sign_distance = float(row.get("sign_distance_before_end", 20.0))
         _place_junction_direction_signs(
             base_env,

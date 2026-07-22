@@ -667,7 +667,7 @@ def main() -> None:
         "--pdd-code",
         default=DEFAULT_PDD_CODE,
         choices=list(ONE_WAY_SIGN_CODES),
-        help=f"No-turn sign member; default scenes dir (default: {DEFAULT_PDD_CODE})",
+        help=f"One-way sign member; default scenes dir (default: {DEFAULT_PDD_CODE})",
     )
     parser.add_argument(
         "--scenes-dir",

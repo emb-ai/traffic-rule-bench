@@ -253,6 +253,8 @@ def process_core_scene(
             min_gain_m=min_gain_m,
             max_scenarios=max(max_scenarios * 8, 40),
             dests_per_arm=8,
+            # Explicit: X (4) and T (3) — same as no-left-turn 3.18.2.
+            arm_counts=(4, 3),
         )
     except (FileNotFoundError, JunctionLayoutError) as exc:
         print(f"  [skip] {exc}")

@@ -544,6 +544,10 @@ def build_manifest_entry(
         entry["baseline_dir"] = dual_path.turn_dir
         entry["compliant_first_exit"] = dual_path.straight_first_exit
         entry["baseline_first_exit"] = dual_path.turn_first_exit
+        # Wrong-way carriageway of the signed one-way road: background traffic
+        # must not spawn on / route through it (kept in net only so ego can
+        # illegally enter it and be flagged).
+        entry["background_excluded_edges"] = list(dual_path.wrong_dir_edges)
 
     if junction_layout_cache is not None:
         entry["junction_layout"] = junction_layout_cache
@@ -719,7 +723,7 @@ def generate_manifest(
             f"(baseline={_ACTIVE_SIGN.forbidden_dir}, "
             f"compliant={sorted(_ACTIVE_SIGN.allowed_dirs)})"
         ),
-        "sign_placement": "No*TurnSign on ego approach (road_id)",
+        "sign_placement": "OneWayEntrySign on ego approach (road_id)",
         "total_scenes": len(scenes),
         "total_entries": len(entries),
         "variants_per_scene": scenario_cfg.n_variants,

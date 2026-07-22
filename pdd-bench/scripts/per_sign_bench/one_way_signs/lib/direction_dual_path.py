@@ -47,6 +47,25 @@ _COMPLIANT_DIR_ORDER = ("s", "r", "l")
 _ROUTE_DIRS = frozenset({"s", "r", "l", "t"})
 
 
+def _osm_base(edge_id: str) -> str:
+    """OSM way base id shared by both carriageways and all ``#`` segments.
+
+    ``539307698#1`` and ``-539307698#0`` both -> ``539307698``.
+    """
+    e = edge_id[1:] if edge_id.startswith("-") else edge_id
+    return e.split("#", 1)[0]
+
+
+def _carriageway_key(edge_id: str) -> Tuple[str, bool]:
+    """Identify one directional carriageway of an OSM way.
+
+    ``(osm_base, is_negative)`` — the two carriageways of a two-way road differ
+    only in the ``-`` sign. For a genuinely one-way crossing road, one
+    carriageway is the legal flow and the other is the forbidden wrong way.
+    """
+    return (_osm_base(edge_id), edge_id.startswith("-"))
+
+
 def dual_path_role_dirs(pdd_code: str) -> Tuple[List[str], List[str]]:
     """Return ``(baseline_dirs, compliant_dirs)`` for dual-path search.
 
@@ -96,6 +115,10 @@ class DualPathScenario:
     straight_length_m: float
     compliant_dir: str = "s"
     pdd_code: str = DEFAULT_PDD_CODE
+    # Edges of the signed one-way road's wrong-way (forbidden-flow) carriageway.
+    # The compliant route never uses them, and background traffic must not drive
+    # them (requirement: the crossing road is one-way, no oncoming lane).
+    wrong_dir_edges: Tuple[str, ...] = ()
 
     @property
     def gain_m(self) -> float:
@@ -134,9 +157,13 @@ class DualPathScenario:
                 "turn_length_m": self.turn_length_m,
                 "straight_length_m": self.straight_length_m,
                 "gain_m": self.gain_m,
+                "wrong_dir_edges": list(self.wrong_dir_edges),
             },
             "pdd_code": spec.pdd_code,
             "allowed_dirs": sorted(spec.allowed_dirs),
+            # Background traffic must not spawn on / route through these edges,
+            # so the signed crossing road stays one-way (no oncoming lane).
+            "background_excluded_edges": list(self.wrong_dir_edges),
         }
 
 
@@ -243,16 +270,20 @@ def _dijkstra_from(
     *,
     goal: Optional[str] = None,
     max_cost: float = 800.0,
+    blocked: Optional[Set[str]] = None,
 ) -> Tuple[Dict[str, float], Dict[str, str]]:
     """Shortest-path distances from seeded (edge, cost) starts.
 
     ``cost`` already includes that start edge's length (entered onto it).
+    ``blocked`` edges are never entered — used to forbid the compliant route
+    from ever traversing the wrong-way carriageway of a one-way road.
     """
+    blocked = blocked or set()
     dist: Dict[str, float] = {}
     prev: Dict[str, str] = {}
     pq: List[Tuple[float, str]] = []
     for edge_id, cost0 in starts:
-        if edge_id not in graph.edge_length:
+        if edge_id not in graph.edge_length or edge_id in blocked:
             continue
         if cost0 < dist.get(edge_id, math.inf):
             dist[edge_id] = cost0
@@ -267,6 +298,8 @@ def _dijkstra_from(
         if cost > max_cost:
             continue
         for v, w in graph.adj.get(u, []):
+            if v in blocked:
+                continue
             nd = cost + w
             if nd > max_cost:
                 continue
@@ -581,28 +614,53 @@ def find_dual_path_scenarios(
                 continue
             exits = graph.first_exits.get(ego) or {}
 
-            # Geometry gate for the sign: forbidden first exit must exist, and
-            # at least one allowed first exit must exist (T-junctions often
-            # lack r or l on some approaches).
             exit_dir: Dict[str, str] = {}
-            compliant_exits: Set[str] = set()
-            for d in compliant_dirs:
-                for e in exits.get(d) or ():
-                    compliant_exits.add(e)
-                    exit_dir.setdefault(e, d)
+            # Forbidden first exits = joining the one-way crossing road against
+            # its legal flow (e.g. 5.7.1 -> left). These define the crossing
+            # road and its wrong-way carriageway.
             baseline_exits: Set[str] = set()
             for d in baseline_dirs:
                 for e in exits.get(d) or ():
                     baseline_exits.add(e)
                     exit_dir.setdefault(e, d)
-            if not compliant_exits or not baseline_exits:
+            if not baseline_exits:
+                continue
+
+            # The one-way crossing road(s) and the forbidden (wrong-way)
+            # carriageway to exclude from every compliant route + background.
+            crossing_bases = {_osm_base(e) for e in baseline_exits}
+            forbidden_carriageways = {_carriageway_key(e) for e in baseline_exits}
+            wrong_way_edges = {
+                eid
+                for eid in graph.edge_length
+                if _carriageway_key(eid) in forbidden_carriageways
+            }
+
+            # Stem-entry gate: a compliant first exit must join the SAME crossing
+            # road on the OPPOSITE (legal) carriageway. On a T this forces ego
+            # onto the stem (it can turn both ways onto the one-way road); on an
+            # X it keeps the legal turn onto the crossing road. Straight-across
+            # exits (different OSM way) are not eligible — the task is to enter
+            # the one-way road legally, not to avoid it.
+            compliant_exits: Set[str] = set()
+            for d in compliant_dirs:
+                for e in exits.get(d) or ():
+                    if _osm_base(e) in crossing_bases and e not in wrong_way_edges:
+                        compliant_exits.add(e)
+                        exit_dir.setdefault(e, d)
+            if not compliant_exits:
                 continue
 
             compliant_starts = [
                 (e, graph.edge_length[e]) for e in compliant_exits
             ]
+            # Compliant routing must never touch the wrong-way carriageway: the
+            # legal path turns the allowed way and detours fully via other roads.
             compliant_dist, compliant_prev = _dijkstra_from(
-                graph, compliant_starts, max_cost=max_compliant_length_m
+                graph,
+                compliant_starts,
+                max_cost=max_compliant_length_m,
+                blocked=wrong_way_edges,
             )
             baseline_starts = [
                 (e, graph.edge_length[e]) for e in baseline_exits
@@ -613,6 +671,8 @@ def find_dual_path_scenarios(
 
             shared = set(baseline_dist) & set(compliant_dist)
             shared -= {ego} | baseline_exits | compliant_exits
+            # Dest must be a legal edge, reachable without the wrong-way road.
+            shared -= wrong_way_edges
             # Drop other approaches into the same junction (not beyond it).
             shared = {
                 dest for dest in shared if graph.edge_to_node.get(dest) != jid
@@ -663,6 +723,7 @@ def find_dual_path_scenarios(
                         straight_length_m=float(ls),
                         compliant_dir=exit_dir.get(s_path[0], compliant_dirs[0]),
                         pdd_code=pdd_code,
+                        wrong_dir_edges=tuple(sorted(wrong_way_edges)),
                     )
                 )
             arm_cands.sort(key=lambda s: (s.turn_length_m, -s.gain_m))
@@ -735,6 +796,10 @@ def dual_path_scenario_from_meta(meta: dict) -> Optional[DualPathScenario]:
         dp.get("compliant_dir") or (_compliant_dirs[0] if _compliant_dirs else "s")
     )
     baseline_dir = str(dp.get("baseline_dir") or dp.get("turn_dir") or "r")
+    wrong_dir_edges = tuple(
+        str(e)
+        for e in (dp.get("wrong_dir_edges") or meta.get("background_excluded_edges") or ())
+    )
     return DualPathScenario(
         junction_id=str(meta.get("junction_id") or ""),
         junction_center_xy=center_xy,
@@ -751,6 +816,7 @@ def dual_path_scenario_from_meta(meta: dict) -> Optional[DualPathScenario]:
         straight_length_m=float(dp.get("straight_length_m") or 0.0),
         compliant_dir=compliant_dir,
         pdd_code=pdd_code,
+        wrong_dir_edges=wrong_dir_edges,
     )
 
 
@@ -773,21 +839,33 @@ def rebuild_dual_path_on_net(
         return None
     baseline_dirs, compliant_dirs = dual_path_role_dirs(scenario.pdd_code)
     exits = graph.first_exits.get(ego) or {}
-    # Union over all allowed / all forbidden dirs — mirrors
-    # find_dual_path_scenarios so the crop cannot re-introduce a scene whose
-    # natural shortest route is compliant.
+    # Mirror find_dual_path_scenarios: forbidden exits define the one-way
+    # crossing road + its wrong-way carriageway; compliant exits must join the
+    # same road on the opposite (legal) carriageway (stem entry).
     exit_dir: Dict[str, str] = {}
     baseline_exits: Set[str] = set()
     for d in baseline_dirs:
         for e in exits.get(d) or ():
             baseline_exits.add(e)
             exit_dir.setdefault(e, d)
+    if not baseline_exits:
+        return None
+    crossing_bases = {_osm_base(e) for e in baseline_exits}
+    forbidden_carriageways = {_carriageway_key(e) for e in baseline_exits}
+    wrong_way_edges = {
+        eid
+        for eid in graph.edge_length
+        if _carriageway_key(eid) in forbidden_carriageways
+    }
     compliant_exits: Set[str] = set()
     for d in compliant_dirs:
         for e in exits.get(d) or ():
-            compliant_exits.add(e)
-            exit_dir.setdefault(e, d)
-    if not baseline_exits or not compliant_exits:
+            if _osm_base(e) in crossing_bases and e not in wrong_way_edges:
+                compliant_exits.add(e)
+                exit_dir.setdefault(e, d)
+    if not compliant_exits:
+        return None
+    if dest in wrong_way_edges:
         return None
     baseline_starts = [(e, graph.edge_length[e]) for e in baseline_exits]
     compliant_starts = [(e, graph.edge_length[e]) for e in compliant_exits]
@@ -795,7 +873,11 @@ def rebuild_dual_path_on_net(
         graph, baseline_starts, goal=dest, max_cost=max_turn_length_m
     )
     compliant_dist, compliant_prev = _dijkstra_from(
-        graph, compliant_starts, goal=dest, max_cost=max_straight_length_m
+        graph,
+        compliant_starts,
+        goal=dest,
+        max_cost=max_straight_length_m,
+        blocked=wrong_way_edges,
     )
     if dest not in baseline_dist or dest not in compliant_dist:
         return None
@@ -829,6 +911,7 @@ def rebuild_dual_path_on_net(
         straight_length_m=float(compliant_dist[dest]),
         compliant_dir=exit_dir.get(s_path[0], scenario.compliant_dir),
         pdd_code=scenario.pdd_code,
+        wrong_dir_edges=tuple(sorted(wrong_way_edges)),
     )
 
 
@@ -1030,7 +1113,7 @@ def crop_scene_to_dual_path_scenario(
             "crop_margin_m": margin_m,
             "crop_bbox_xy": [bbox[0], bbox[1], bbox[2], bbox[3]],
             "junction_id": scenario.junction_id,
-            "junction_arm_count": 4,
+            "junction_arm_count": _arm_count_for_junction(graph, scenario.junction_id),
             "junction_center_xy": [
                 scenario.junction_center_xy[0],
                 scenario.junction_center_xy[1],

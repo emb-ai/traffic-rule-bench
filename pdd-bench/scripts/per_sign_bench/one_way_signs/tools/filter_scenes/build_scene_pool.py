@@ -412,7 +412,7 @@ def main() -> None:
         "--pdd-code",
         default=DEFAULT_PDD_CODE,
         choices=list(ONE_WAY_SIGN_CODES),
-        help=f"No-turn sign member; sets default scene paths (default: {DEFAULT_PDD_CODE})",
+        help=f"One-way sign member; sets default scene paths (default: {DEFAULT_PDD_CODE})",
     )
     common.add_argument(
         "--scenes-base",
