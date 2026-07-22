@@ -18,6 +18,7 @@ apply_sumo_lane_node_patch()
 from traffic_signs.traffic_sign_manager import TrafficSignManager
 from traffic_signs.stop_sign import StopSign
 from traffic_signs.direction_sign import DirectionSign
+from traffic_signs.lane_directions_sign import LaneDirectionsSign
 from traffic_signs.no_entry_sign import NoEntrySign
 from traffic_signs.min_speed_limit_sign import MinimumSpeedLimitSign
 from traffic_signs.no_traffic_sign import NoTrafficSign
@@ -66,6 +67,7 @@ SIGN_TYPE_TO_CLASS = {
     "3.25": EndOfSpeedLimitSign,
     "3.27": NoStoppingAllowedSign,
     "3.31": EndOfAllRestrictionsSign,
+    "5.15.1": LaneDirectionsSign,
     "5.15.2": DirectionSign,
     "5.31": ZoneSpeedLimitSign,
     "5.32": EndOfZoneSpeedLimitSign,

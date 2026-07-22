@@ -22,17 +22,20 @@ paths:
 
 scenario:
   n_variants: 1
-  augment: true
+  augment: false
   max_scenarios_per_scene: 5
   respect_scene_selection: true
   min_dual_path_gain_m: 0.0     # lane-change scenarios; gain optional
-  min_ego_lane_m: 8.0
+  min_ego_lane_m: 21.0
   # Validate MetaDrive route from *target* (correct) lane → dest.
   validate_metadrive_routes: true
 
 simulation:
   spawn_velocity_ms: 2.5
   traffic_density: 0.0
+  # false → one row per dual-path with traffic_density above;
+  # true  → expand into nuPlan p25/p50/p75 density levels (_td1/_td2/_td3).
+  traffic_density_augment: false
   horizon: 600
   sign_distance_before_end: 0.0
   spawn_distance_before_end: 20.0

@@ -731,7 +731,9 @@ def _analyze_junction_lanes(env) -> dict:
     return result.get("incoming", []), result.get("outgoing", [])
 
 
-def _apply_manifest_ego_spawn_lane(env, row: dict) -> bool:
+def _apply_manifest_ego_spawn_lane(
+    env, row: dict, *, refresh_navigation: bool = True
+) -> bool:
     """Teleport ego onto the manifest parallel lane (needed when skip_auto_signs=True)."""
     road_id = row.get("road_id")
     if not road_id:
@@ -753,113 +755,123 @@ def _apply_manifest_ego_spawn_lane(env, row: dict) -> bool:
             vehicle.spawn_place = pos.copy()
         except Exception:
             pass
-        if hasattr(env, "_refresh_navigation_after_spawn"):
-            env._refresh_navigation_after_spawn(target_lane)
-        else:
-            vehicle.reset_navigation(target_lane)
+        if refresh_navigation:
+            if hasattr(env, "_refresh_navigation_after_spawn"):
+                env._refresh_navigation_after_spawn(target_lane)
+            else:
+                vehicle.reset_navigation(target_lane)
         return True
     except Exception as exc:
         print(f"[EgoSpawn] Could not teleport to {target_key}: {exc}")
         return False
 
 
-def _install_lane_change_navigation(env, row: dict) -> bool:
-    """For 5.15.1: set nav checkpoints from *target* lane → dest.
+def _install_lane_change_nav_route(env, row: dict) -> bool:
+    """Build the MetaDrive route from the *actual new spawn lane* → dest.
 
-    Ego physically stays on the wrong spawn lane (must lane-change), but
-    MetaDrive ``shortest_path`` from that lane cannot reach dest. Routing is
-    therefore seeded from ``target_lane_num`` on the same approach edge.
+    Ego spawns on the wrong lane (its sign-allowed direction can't reach dest
+    without a peer lane-change). The route is produced by MetaDrive's own
+    planner (``nav.set_route`` via ``_refresh_navigation_after_spawn``) starting
+    from *this* spawn lane — not from the meta-default lane and not from the
+    target lane. So baseline and sign-compliant policies share one route + one
+    destination marker; the expert additionally lane-changes onto the target
+    lane to stay compliant, while plain IDM follows the same route and reaches
+    dest by cutting across from the forbidden lane (a violation).
     """
-    road_id = row.get("road_id")
     dest = row.get("destination_lane_id")
-    if not road_id or not dest:
+    if not dest:
         return False
-    if row.get("target_lane_num") is None:
-        return False
-    target_ln = int(row["target_lane_num"])
-    start_key = make_lane_key(str(road_id), target_ln)
+    dest = str(dest)
+    if not dest.startswith("lane_"):
+        dest = f"lane_{dest}"
     try:
         vehicle = env.agent
         nav = getattr(vehicle, "navigation", None)
+        if nav is None:
+            return False
+        spawn_lane = vehicle.lane
+        spawn_key = getattr(spawn_lane, "index", None)
         road_network = env.engine.current_map.road_network
-        if nav is None or start_key not in road_network.graph or dest not in road_network.graph:
+        graph = getattr(road_network, "graph", None) or {}
+        if spawn_key not in graph or dest not in graph:
+            print(f"[LaneChangeNav] missing lanes spawn={spawn_key} dest={dest}")
             return False
-        path = road_network.shortest_path(start_key, dest)
-        if not path or len(path) < 2 or path[-1] != dest:
-            print(
-                f"[LaneChangeNav] No MetaDrive path {start_key} → {dest} "
-                f"(got {path[:5] if path else None})"
-            )
-            return False
-        nav.checkpoints = list(path)
-        nav._target_checkpoints_index = [0, 1]
-        nav.final_lane = road_network.get_lane(path[-1])
-        if getattr(nav, "_navi_info", None) is not None:
-            nav._navi_info.fill(0.0)
-        nav.current_ref_lanes = road_network.get_peer_lanes_from_index(path[0])
-        nav.next_ref_lanes = road_network.get_peer_lanes_from_index(path[1])
+        # Route from the actual spawn lane using MetaDrive's native planner.
         try:
             vehicle.config["destination"] = dest
         except Exception:
             pass
-        try:
+        if hasattr(env, "_refresh_navigation_after_spawn"):
+            env._refresh_navigation_after_spawn(spawn_lane)
+        else:
+            nav.set_route(spawn_key, dest)
             nav.update_localization(vehicle)
-        except Exception:
-            pass
+        checkpoints = list(getattr(nav, "checkpoints", []) or [])
+        if (
+            len(checkpoints) <= 1
+            or checkpoints[-1] != dest
+            or checkpoints[0] == checkpoints[-1]
+        ):
+            print(
+                f"[LaneChangeNav] no spawn-lane route {spawn_key} → {dest}: "
+                f"{checkpoints[:3]}"
+            )
+            return False
         print(
-            f"[LaneChangeNav] Installed route from target L{target_ln}: "
-            f"{path[0]} → {path[-1]} ({len(path)} hops); "
-            f"ego still on spawn L{row.get('spawn_lane_num')}"
+            f"[LaneChangeNav] installed {len(checkpoints)}-hop route from NEW spawn "
+            f"L{row.get('spawn_lane_num')} ({spawn_key}) → {dest} "
+            f"(target L{row.get('target_lane_num')} for expert lane-change)"
         )
         return True
     except Exception as exc:
-        print(f"[LaneChangeNav] Failed: {exc}")
+        print(f"[LaneChangeNav] failed: {exc}")
         return False
 
 
-def _reposition_ego_before_lane_end(env, distance_before_end: float) -> bool:
-    """Reposition the ego vehicle to a specific distance before the lane end.
-    
-    Args:
-        env: The environment instance.
-        distance_before_end: Distance in meters before lane end to place the vehicle.
-        
-    Returns True if repositioning succeeded, False otherwise.
-    """
+def _reposition_ego_before_lane_end(
+    env, distance_before_end: float, *, refresh_navigation: bool = True
+) -> bool:
+    """Reposition the ego vehicle ``distance_before_end`` meters before lane end."""
     try:
         vehicle = env.agent
         if vehicle is None:
             return False
-        
+
         lane = vehicle.lane
         if lane is None:
             return False
-        
-        lane_length = lane.length
-        # spawn_longitude is from lane START, so: lane_length - distance_before_end
-        spawn_long = max(1.0, min(lane_length - distance_before_end, lane_length - 0.1))
-        
+
+        lane_length = float(lane.length)
+        if lane_length < float(distance_before_end) + 1.0:
+            print(
+                f"[EgoReposition] lane too short ({lane_length:.1f}m) for "
+                f"spawn_distance_before_end={distance_before_end}"
+            )
+            return False
+
+        spawn_long = lane_length - float(distance_before_end)
+        spawn_long = max(1.0, min(spawn_long, lane_length - 0.1))
+
         pos = lane.position(spawn_long, 0.0)
         heading = lane.heading_theta_at(spawn_long)
-        
+
         vehicle.set_position(pos)
         vehicle.set_heading_theta(heading)
-        
-        # Update spawn_place so navigation uses the new position
+
         try:
             vehicle.spawn_place = pos.copy()
         except Exception:
             pass
-        
-        # Rebuild navigation from new position
-        if hasattr(env, "_refresh_navigation_after_spawn"):
-            env._refresh_navigation_after_spawn(lane)
-        else:
-            try:
-                vehicle.reset_navigation(lane)
-            except Exception:
-                pass
-        
+
+        if refresh_navigation:
+            if hasattr(env, "_refresh_navigation_after_spawn"):
+                env._refresh_navigation_after_spawn(lane)
+            else:
+                try:
+                    vehicle.reset_navigation(lane)
+                except Exception:
+                    pass
+
         return True
     except Exception as e:
         print(f"[EgoReposition] Failed to reposition ego: {e}")
@@ -1025,6 +1037,10 @@ def _place_direction_signs(
                 sign_kwargs["applicable_lane_indices"] = peer_ids
         except Exception:
             pass
+        # Pass original allowed exits (pre-connector-injection) for violation check.
+        original_exits = row.get("original_allowed_exits_by_lane")
+        if original_exits:
+            sign_kwargs["original_allowed_exits_by_lane"] = original_exits
         sign = sign_mgr.add_sign(sign_cls, **sign_kwargs)
         if sign is not None and row.get("target_lane_num") is not None:
             try:
@@ -1117,65 +1133,36 @@ def run_one_episode(
         except Exception:
             pass
 
-        # Manifest spawn lane + distance before intersection
-        _apply_manifest_ego_spawn_lane(base_env, row)
+        # 5.15.1: ego spawns on the WRONG lane (its sign-allowed direction cannot
+        # reach dest without a peer lane-change). Teleport to that manifest spawn
+        # lane, reposition ≥20 m before the junction, THEN build the planner route
+        # from this NEW spawn lane via MetaDrive's native set_route. Both baseline
+        # and expert then share one route + destination marker; the expert also
+        # lane-changes to comply while plain IDM violates.
         spawn_distance = float(row.get("spawn_distance_before_end", 0) or 0)
+        _apply_manifest_ego_spawn_lane(base_env, row, refresh_navigation=False)
         if spawn_distance > 0:
-            _reposition_ego_before_lane_end(base_env, spawn_distance)
-
-        # 5.15.1: spawn lane cannot reach dest — route from target peer lane.
-        if row.get("target_lane_num") is not None:
-            if not _install_lane_change_navigation(base_env, row):
+            ok_pos = _reposition_ego_before_lane_end(
+                base_env, spawn_distance, refresh_navigation=False
+            )
+            if not ok_pos:
                 scene_id = row.get("scene_id", "unknown")
-                print(
-                    f"[RouteValidation] INVALID: {scene_id} - no path from "
-                    f"target_lane={row.get('target_lane_num')} to "
-                    f"{row.get('destination_lane_id')}"
-                )
                 return {
                     "ok": False,
-                    "error": "Invalid route: target lane cannot reach destination",
+                    "error": f"Spawn lane shorter than spawn_distance_before_end={spawn_distance}",
                     "scene_id": scene_id,
                 }
 
-        # Validate route: check that destination is different from spawn
-        nav = getattr(base_env.vehicle, "navigation", None)
-        if nav is not None:
-            checkpoints = getattr(nav, "checkpoints", [])
-            spawn_lane_idx = getattr(base_env.vehicle.lane, "index", None)
-            dest = row.get("destination_lane_id")
-            if checkpoints and spawn_lane_idx:
-                route_ok = (
-                    len(checkpoints) > 1
-                    and checkpoints[-1] != checkpoints[0]
-                    and (dest is None or checkpoints[-1] == dest)
-                )
-                # Lane-change scenes: spawn lane is intentionally not on the route.
-                if row.get("target_lane_num") is not None:
-                    route_ok = (
-                        len(checkpoints) > 1
-                        and checkpoints[-1] != checkpoints[0]
-                        and (dest is None or checkpoints[-1] == dest)
-                    )
-                elif (
-                    len(checkpoints) <= 1
-                    or checkpoints[-1] == spawn_lane_idx
-                    or checkpoints[0] == checkpoints[-1]
-                ):
-                    route_ok = False
-                if not route_ok:
-                    scene_id = row.get("scene_id", "unknown")
-                    print(
-                        f"[RouteValidation] INVALID: {scene_id} - route loops back to spawn. "
-                        f"spawn={spawn_lane_idx}, dest={dest}, checkpoints={checkpoints[:3]}..."
-                    )
-                    return {
-                        "ok": False,
-                        "error": "Invalid route: spawn and destination are the same or unreachable",
-                        "scene_id": scene_id,
-                    }
+        ok_nav = _install_lane_change_nav_route(base_env, row)
+        if not ok_nav:
+            scene_id = row.get("scene_id", "unknown")
+            return {
+                "ok": False,
+                "error": "Invalid route: spawn-lane path to destination unreachable",
+                "scene_id": scene_id,
+            }
 
-        # Place active 4.1.x LaneAllowedDirectionSign on the ego approach
+        # Place 5.15.1 LaneDirectionsSign on the ego approach
         sign_distance = float(row.get("sign_distance_before_end", 20.0))
         _place_junction_direction_signs(
             base_env,

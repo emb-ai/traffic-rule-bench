@@ -351,7 +351,7 @@ def add_crop_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--min-lane-length",
         type=float,
-        default=8.0,
+        default=21.0,
         help="Min ego approach lane length (m) (default: 8)",
     )
     parser.add_argument(

@@ -178,6 +178,118 @@ def continuous_route_polyline(
     return route
 
 
+def _polyline_fraction(
+    pts: list[tuple[float, float]],
+    *,
+    start_frac: float = 0.0,
+    end_frac: float = 1.0,
+) -> list[tuple[float, float]]:
+    """Keep the portion of a polyline between cumulative-length fractions."""
+    if len(pts) < 2:
+        return list(pts)
+    start_frac = max(0.0, min(1.0, float(start_frac)))
+    end_frac = max(0.0, min(1.0, float(end_frac)))
+    if end_frac <= start_frac:
+        return [pts[0]]
+    segs: list[float] = []
+    total = 0.0
+    for i in range(len(pts) - 1):
+        d = (
+            (pts[i + 1][0] - pts[i][0]) ** 2 + (pts[i + 1][1] - pts[i][1]) ** 2
+        ) ** 0.5
+        segs.append(d)
+        total += d
+    if total < 1e-9:
+        return list(pts)
+    t0, t1 = start_frac * total, end_frac * total
+
+    def _at(dist: float) -> tuple[float, float]:
+        acc = 0.0
+        for i, seg in enumerate(segs):
+            if acc + seg >= dist - 1e-9 or i == len(segs) - 1:
+                if seg < 1e-9:
+                    return pts[i]
+                u = max(0.0, min(1.0, (dist - acc) / seg))
+                x0, y0 = pts[i]
+                x1, y1 = pts[i + 1]
+                return (x0 + (x1 - x0) * u, y0 + (y1 - y0) * u)
+            acc += seg
+        return pts[-1]
+
+    out: list[tuple[float, float]] = [_at(t0)]
+    acc = 0.0
+    for i, seg in enumerate(segs):
+        next_acc = acc + seg
+        if next_acc <= t0 + 1e-9:
+            acc = next_acc
+            continue
+        if acc >= t1 - 1e-9:
+            break
+        if next_acc < t1 - 1e-9:
+            out.append(pts[i + 1])
+        acc = next_acc
+    end_pt = _at(t1)
+    if abs(out[-1][0] - end_pt[0]) > 1e-6 or abs(out[-1][1] - end_pt[1]) > 1e-6:
+        out.append(end_pt)
+    return out
+
+
+def _stitch_polylines(
+    parts: list[list[tuple[float, float]]],
+) -> list[tuple[float, float]]:
+    route: list[tuple[float, float]] = []
+    for pts in parts:
+        if not pts or len(pts) < 2:
+            if pts and (not route or route[-1] != pts[0]):
+                route.extend(pts)
+            continue
+        if not route:
+            route.extend(pts)
+            continue
+        # Bridge gap between consecutive parts (lane-change / junction).
+        gap = (
+            (pts[0][0] - route[-1][0]) ** 2 + (pts[0][1] - route[-1][1]) ** 2
+        ) ** 0.5
+        if gap > 0.5:
+            route.append(pts[0])
+        if abs(route[-1][0] - pts[0][0]) < 1e-6 and abs(route[-1][1] - pts[0][1]) < 1e-6:
+            route.extend(pts[1:])
+        else:
+            route.extend(pts)
+    return route
+
+
+def point_on_lane(
+    lane_shapes: dict[tuple[str, int], list[tuple[float, float]]],
+    edge_id: str,
+    lane_num: int,
+    *,
+    distance_before_end_m: float = 20.0,
+) -> tuple[float, float] | None:
+    """Point on a lane ~``distance_before_end_m`` before the lane end."""
+    pts = lane_shapes.get((edge_id, int(lane_num)))
+    if not pts or len(pts) < 2:
+        return None
+    # Walk back from the end.
+    remain = float(distance_before_end_m)
+    if remain <= 0:
+        return pts[-1]
+    acc = 0.0
+    for i in range(len(pts) - 1, 0, -1):
+        x0, y0 = pts[i - 1]
+        x1, y1 = pts[i]
+        seg = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
+        if acc + seg >= remain:
+            # interpolate from end backward
+            need = remain - acc
+            if seg < 1e-9:
+                return pts[i]
+            u = need / seg  # from end toward start
+            return (x1 - (x1 - x0) * u, y1 - (y1 - y0) * u)
+        acc += seg
+    return pts[0]
+
+
 def dual_path_overlays(
     ego_edge_id: str,
     turn_path: list[str] | tuple[str, ...],
@@ -186,10 +298,135 @@ def dual_path_overlays(
     turn_dir: str,
     turn_length_m: float,
     straight_length_m: float,
+    lane_shapes: dict[tuple[str, int], list[tuple[float, float]]] | None = None,
+    spawn_lane_num: int | None = None,
+    target_lane_num: int | None = None,
+    show_illegal_to_dest: bool = True,
+    spawn_distance_before_end_m: float = 20.0,
 ) -> list[dict]:
-    """Overlays for 5.15.1: blue = correct (lane-change), orange = wrong (no change)."""
+    """Overlays for 5.15.1.
+
+    Blue = compliant: spawn lane → lane-change onto target → dest.
+    Orange = baseline: spawn lane → forbidden first exit → dest (when
+    ``show_illegal_to_dest``, post connector-injection), else wrong spur.
+    """
+    spawn_ln = 0 if spawn_lane_num is None else int(spawn_lane_num)
+    target_ln = spawn_ln if target_lane_num is None else int(target_lane_num)
+    dest_edges = list(straight_path)
+
+    # Prefer lane-level approach geometry when available.
+    spawn_lane_pts = (
+        (lane_shapes or {}).get((ego_edge_id, spawn_ln)) if lane_shapes else None
+    )
+    target_lane_pts = (
+        (lane_shapes or {}).get((ego_edge_id, target_ln)) if lane_shapes else None
+    )
+    use_lanes = bool(
+        spawn_lane_pts
+        and target_lane_pts
+        and len(spawn_lane_pts) >= 2
+        and len(target_lane_pts) >= 2
+    )
+
+    if use_lanes:
+        # Fraction along approach where ego spawns (distance before lane end).
+        total_len = 0.0
+        for i in range(len(spawn_lane_pts) - 1):
+            total_len += (
+                (spawn_lane_pts[i + 1][0] - spawn_lane_pts[i][0]) ** 2
+                + (spawn_lane_pts[i + 1][1] - spawn_lane_pts[i][1]) ** 2
+            ) ** 0.5
+        if total_len < 1e-6:
+            spawn_frac = 0.0
+        else:
+            spawn_frac = max(
+                0.0,
+                min(0.85, 1.0 - float(spawn_distance_before_end_m) / total_len),
+            )
+        # Lane-change happens AFTER spawn, finishing before the junction.
+        lc_start = min(spawn_frac + 0.05, 0.80)
+        lc_end = min(max(lc_start + 0.25, 0.90), 0.98)
+
+        blue_approach = _stitch_polylines(
+            [
+                _polyline_fraction(spawn_lane_pts, start_frac=0.0, end_frac=lc_start),
+                _polyline_fraction(target_lane_pts, start_frac=lc_end, end_frac=1.0),
+            ]
+        )
+        orange_approach = list(spawn_lane_pts)
+
+        if show_illegal_to_dest and dest_edges:
+            orange_overlay = {
+                "label": (
+                    f"wrong / illegal from L{spawn_ln} "
+                    f"→ dest ({straight_length_m:.0f}m)"
+                ),
+                "color": "#ff7f0e",
+                "route_parts": {
+                    "approach": orange_approach,
+                    "edge_ids": dest_edges,
+                },
+                "linewidth": 4.5,
+                "zorder": 7,
+                "offset_m": -1.2,
+                "mark_end": True,
+                "linestyle": "dashed",
+            }
+        else:
+            orange_overlay = {
+                "label": f"wrong / no change (L{spawn_ln}, {turn_dir}, {turn_length_m:.0f}m)",
+                "color": "#ff7f0e",
+                "route_parts": {
+                    "approach": orange_approach,
+                    "edge_ids": list(turn_path),
+                },
+                "linewidth": 4.5,
+                "zorder": 7,
+                "offset_m": -1.2,
+                "mark_end": True,
+                "linestyle": "dashed",
+            }
+
+        blue_overlay = {
+            "label": (
+                f"correct / L{spawn_ln}→L{target_ln} "
+                f"({straight_length_m:.0f}m) → dest"
+            ),
+            "color": "#1f77b4",
+            "route_parts": {
+                "approach": blue_approach,
+                "edge_ids": dest_edges,
+            },
+            "linewidth": 4.5,
+            "zorder": 6,
+            "offset_m": 1.2,
+            "mark_end": True,
+        }
+        lc_seg = _stitch_polylines(
+            [
+                _polyline_fraction(spawn_lane_pts, start_frac=lc_start, end_frac=min(lc_start + 0.08, lc_end)),
+                _polyline_fraction(target_lane_pts, start_frac=max(lc_end - 0.08, lc_start), end_frac=lc_end),
+            ]
+        )
+        lc_overlay = {
+            "label": f"lane-change L{spawn_ln}→L{target_ln}",
+            "color": "#2ca02c",
+            "polylines": [lc_seg] if len(lc_seg) >= 2 else [],
+            "linewidth": 5.5,
+            "zorder": 8,
+            "linestyle": "solid",
+        }
+        return [blue_overlay, orange_overlay, lc_overlay]
+
+    # Fallback: edge-centerline overlays (legacy).
     turn_full = [ego_edge_id, *turn_path]
     straight_full = [ego_edge_id, *straight_path]
+    if show_illegal_to_dest and dest_edges:
+        orange_edges = [ego_edge_id, *dest_edges]
+        orange_label = f"wrong / illegal ({turn_dir}→dest, {straight_length_m:.0f}m)"
+    else:
+        orange_edges = turn_full
+        orange_label = f"wrong / no change ({turn_dir}, {turn_length_m:.0f}m)"
     return [
         {
             "label": f"correct / lane-change ({straight_length_m:.0f}m) → dest",
@@ -202,9 +439,9 @@ def dual_path_overlays(
             "mark_end": True,
         },
         {
-            "label": f"wrong / no change ({turn_dir}, {turn_length_m:.0f}m)",
+            "label": orange_label,
             "color": "#ff7f0e",
-            "edge_ids": turn_full,
+            "edge_ids": orange_edges,
             "continuous": True,
             "linewidth": 4.5,
             "zorder": 7,
@@ -356,6 +593,24 @@ def render_network(
             color = overlay.get("color", "#1f77b4")
             label = overlay.get("label")
             polylines = overlay.get("polylines")
+            if polylines is None and overlay.get("route_parts"):
+                parts = overlay["route_parts"]
+                approach = list(parts.get("approach") or [])
+                dest_poly = continuous_route_polyline(
+                    edge_shapes, parts.get("edge_ids") or ()
+                )
+                # Lateral offset only on post-junction edges so approach stays
+                # on true lane geometry (spawn vs target).
+                offset_m = float(overlay.get("offset_m") or 0.0)
+                if offset_m and dest_poly:
+                    dest_poly = offset_polyline(dest_poly, offset_m)
+                stitched = _stitch_polylines(
+                    [p for p in (approach, dest_poly) if p and len(p) >= 1]
+                )
+                polylines = [stitched] if len(stitched) >= 2 else []
+                # Prevent a second full-route offset below.
+                overlay = dict(overlay)
+                overlay["offset_m"] = 0.0
             if polylines is None:
                 edge_ids = overlay.get("edge_ids") or ()
                 if overlay.get("continuous"):

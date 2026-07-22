@@ -58,6 +58,7 @@ from tools.render_map import (  # noqa: E402
     lane_shapes_by_id,
     parse_sumo_net,
     point_on_edge,
+    point_on_lane,
     edge_shapes_by_id,
     render_network,
 )
@@ -128,6 +129,7 @@ def render_dual_path_preview(
     out_path: Path,
     *,
     junction_xy: tuple[float, float] | None = None,
+    spawn_distance_before_end_m: float = 20.0,
 ) -> None:
     """Render crop with lane-direction arrows + wrong/correct paths."""
     meta = load_scene_meta(scene_dir)
@@ -135,11 +137,25 @@ def render_dual_path_preview(
     edges, junctions = parse_sumo_net(scene_dir / net_file)
     shapes = edge_shapes_by_id(edges)
     lane_shapes = lane_shapes_by_id(edges)
-    spawn_xy = point_on_edge(shapes, scenario.ego_edge_id, at="end")
+    # Spawn on the actual spawn lane, ~20m before the junction.
+    spawn_xy = point_on_lane(
+        lane_shapes,
+        scenario.ego_edge_id,
+        scenario.ego_lane_num,
+        distance_before_end_m=spawn_distance_before_end_m,
+    )
+    if spawn_xy is None:
+        spawn_xy = point_on_edge(shapes, scenario.ego_edge_id, at="start")
     dest_xy = point_on_edge(shapes, scenario.dest_edge_id, at="end")
     approach_dirs = {
         str(ln): list(dirs) for ln, dirs in (scenario.approach_lane_dirs or ())
     }
+    # Prefer ORIGINAL allowed dirs for arrows (pre-injection truth).
+    orig = meta.get("original_allowed_exits_by_lane") or {}
+    if orig:
+        approach_dirs = {
+            str(ln): list(exits.keys()) for ln, exits in orig.items()
+        }
     overlays = []
     overlays.extend(
         lane_direction_arrow_overlays(
@@ -156,6 +172,11 @@ def render_dual_path_preview(
             turn_dir=scenario.turn_dir,
             turn_length_m=scenario.turn_length_m,
             straight_length_m=scenario.straight_length_m,
+            lane_shapes=lane_shapes,
+            spawn_lane_num=scenario.ego_lane_num,
+            target_lane_num=scenario.target_lane_num,
+            show_illegal_to_dest=bool(meta.get("original_allowed_exits_by_lane")),
+            spawn_distance_before_end_m=spawn_distance_before_end_m,
         )
     )
     render_network(
@@ -496,14 +517,14 @@ def main() -> None:
     parser.add_argument(
         "--min-lane-length",
         type=float,
-        default=8.0,
-        help="Min ego approach lane length (m) for dual-path selection (default: 8)",
+        default=21.0,
+        help="Min ego approach lane length (m); must fit spawn ≥20 m before junction (default: 21)",
     )
     parser.add_argument(
         "--min-gain",
         type=float,
-        default=20.0,
-        help="Min compliant_length - baseline_length (m) (default: 20)",
+        default=0.0,
+        help="Min wrong_spur_length - correct_path_length (m) (default: 0)",
     )
     parser.add_argument(
         "--max-scenarios",

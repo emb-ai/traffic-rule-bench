@@ -42,15 +42,24 @@ class OneWayEntrySign(BaseTrafficSign):
     Sign 5.7.1 / 5.7.2: entry to a one-way road from a multi-direction approach.
 
     ``not_allowed_direction`` is the blocked exit direction at the approach:
-    ``'r'`` (right blocked, 5.7.1) or ``'l'`` (left blocked, 5.7.2).
+    ``'l'`` (left blocked → one-way to the right, 5.7.1) or
+    ``'r'`` (right blocked → one-way to the left, 5.7.2).
     A violation is recorded if the vehicle leaves the approach lane by a turn
     whose direction matches the blocked direction.
+
+    Exposes ``ALLOWED_DIRS`` / ``prohibited_maneuver`` so SignComplianceMixin
+    can reuse the same SUMO dual-path replan path as NoLeftTurn / NoRightTurn.
     """
 
-    def __init__(self, lane, not_allowed_direction='r', icon_path="5.7.1.png", **kwargs):
+    # Overridden on subclasses; base defaults match 5.7.1 (left forbidden).
+    ALLOWED_DIRS = frozenset({"r", "s", "t"})
+
+    def __init__(self, lane, not_allowed_direction='l', icon_path="5.7.1.png", **kwargs):
         self._preset_applicable_lane_indices = kwargs.pop("applicable_lane_indices", None)
         super().__init__(lane=lane, icon_path=icon_path, **kwargs)
-        self.not_allowed_direction = not_allowed_direction  # 'r' or 'l'
+        self.not_allowed_direction = _normalize_turn_direction(not_allowed_direction)
+        # Alias used by SignComplianceMixin / GIF overlays (same as No*TurnSign).
+        self.prohibited_maneuver = self.not_allowed_direction
         self.active_agents = {}
         self.applicable_lanes = self._collect_applicable_lanes()
         self.applicable_lane_ids = {getattr(l, "index", None) for l in self.applicable_lanes}
@@ -64,7 +73,9 @@ class OneWayEntrySign(BaseTrafficSign):
         base_lane = self.lane
         base_idx = getattr(base_lane, "index", None)
         base_edge = _edge_id_from_lane_index(base_idx)
-        allowed_dirs = _allowed_turn_dirs_for_sign(self.not_allowed_direction)
+        allowed_dirs = set(self.ALLOWED_DIRS) or _allowed_turn_dirs_for_sign(
+            self.not_allowed_direction
+        )
 
         lanes = [base_lane]
         try:
@@ -214,13 +225,27 @@ class OneWayEntrySign(BaseTrafficSign):
         return f"Exit onto a one-way road, turn {side}."
     
 class OneWayEntrySignL(OneWayEntrySign):
+    """5.7.2 — exit onto one-way road to the left (right turn blocked)."""
+
+    ALLOWED_DIRS = frozenset({"l", "s", "t"})
+
     def __init__(self, lane, **kwargs):
         super().__init__(lane, not_allowed_direction='r', icon_path="5.7.2.png", **kwargs)
-        
+
+
 class OneWayEntrySignR(OneWayEntrySign):
+    """5.7.1 — exit onto one-way road to the right (left turn blocked)."""
+
+    ALLOWED_DIRS = frozenset({"r", "s", "t"})
+
     def __init__(self, lane, **kwargs):
         super().__init__(lane, not_allowed_direction='l', icon_path="5.7.1.png", **kwargs)
-        
+
+
 class OneWayEntrySignS(OneWayEntrySign):
+    """5.5 — one-way road ahead (U-turn blocked); kept for catalog compatibility."""
+
+    ALLOWED_DIRS = frozenset({"l", "r", "s"})
+
     def __init__(self, lane, **kwargs):
         super().__init__(lane, not_allowed_direction='t', icon_path="5.5.png", **kwargs)

@@ -21,6 +21,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+import shutil
+import subprocess
+import tempfile
+
 from .direction_sign_spec import DEFAULT_PDD_CODE, get_direction_sign_spec
 from .junction_crop import JunctionPick, collect_intersection_junction_candidates
 from .junction_priority_layout import INTERSECTION_JUNCTION_TYPES, JunctionLayoutError, _load_net
@@ -29,6 +33,136 @@ from .sumo_utils import is_real_sumo_edge_id, is_vehicle_drivable_lane
 
 
 TurnDir = str
+
+
+# ---------------------------------------------------------------------------
+# Forbidden-connector injection (baseline can physically reach dest)
+# ---------------------------------------------------------------------------
+
+def _find_netconvert() -> str:
+    for path in (
+        shutil.which("netconvert"),
+        "/home/jovyan/.local/bin/netconvert",
+        "/usr/bin/netconvert",
+    ):
+        if path and Path(path).exists():
+            return path
+    raise FileNotFoundError("netconvert not found on PATH")
+
+
+def _parse_connections_from_edge(net_path: Path, from_edge: str) -> Dict[int, List[Tuple[str, int, str]]]:
+    """Parse connections from ``from_edge`` → {fromLane: [(toEdge, toLane, dir), ...]}."""
+    root = ET.parse(net_path).getroot()
+    result: Dict[int, List[Tuple[str, int, str]]] = defaultdict(list)
+    for conn in root.iter("connection"):
+        if conn.get("from") != from_edge:
+            continue
+        try:
+            from_lane = int(conn.get("fromLane", -1))
+            to_edge = conn.get("to", "")
+            to_lane = int(conn.get("toLane", 0))
+            direction = conn.get("dir", "s")
+            if from_lane >= 0 and to_edge:
+                result[from_lane].append((to_edge, to_lane, direction))
+        except (TypeError, ValueError):
+            continue
+    return dict(result)
+
+
+def _extract_original_allowed_exits(
+    net_path: Path,
+    ego_edge: str,
+) -> Dict[int, Dict[str, List[str]]]:
+    """Extract original allowed exits per lane: {lane_num: {dir: [to_edge, ...]}}."""
+    conns = _parse_connections_from_edge(net_path, ego_edge)
+    result: Dict[int, Dict[str, List[str]]] = {}
+    for lane_num, targets in conns.items():
+        by_dir: Dict[str, List[str]] = defaultdict(list)
+        for to_edge, _, direction in targets:
+            # Skip internal edges
+            if not to_edge.startswith(":"):
+                by_dir[direction].append(to_edge)
+        result[lane_num] = dict(by_dir)
+    return result
+
+
+def inject_forbidden_connector(
+    net_path: Path,
+    scenario: "DualPathScenario",
+    *,
+    output_path: Optional[Path] = None,
+) -> Tuple[Path, Dict[int, Dict[str, List[str]]]]:
+    """Add a physical connector from spawn lane to the correct-path first exit.
+
+    The baseline (sign-blind IDM) needs to physically reach dest. SUMO only
+    builds connectors for allowed turns, so spawn_lane has no connector to the
+    exclusive first exit. We inject one via netconvert, then the sign detects
+    the violation using the *original* allowed exits saved in meta.
+
+    Returns (modified_net_path, original_allowed_exits_by_lane).
+    """
+    net_path = Path(net_path).resolve()
+    output_path = (output_path or net_path).resolve()
+
+    ego_edge = scenario.ego_edge_id
+    spawn_lane = scenario.ego_lane_num
+    target_lane = scenario.target_lane_num
+    first_exit_edge = scenario.straight_first_exit  # the exclusive exit
+
+    # 1) Extract original allowed exits BEFORE injection (for sign violation check)
+    original_exits = _extract_original_allowed_exits(net_path, ego_edge)
+
+    # 2) Check if spawn lane already has a connection to first_exit_edge
+    spawn_exits = original_exits.get(spawn_lane, {})
+    spawn_exit_edges = {e for edges in spawn_exits.values() for e in edges}
+    if first_exit_edge in spawn_exit_edges:
+        # Already connected — no injection needed (rare but possible)
+        if output_path != net_path:
+            shutil.copy2(net_path, output_path)
+        return output_path, original_exits
+
+    # 3) Find target lane's connection to first_exit_edge to get toLane
+    target_exits = original_exits.get(target_lane, {})
+    to_lane = 0
+    for direction, edges in target_exits.items():
+        if first_exit_edge in edges:
+            # Get the actual toLane from the connection
+            conns = _parse_connections_from_edge(net_path, ego_edge)
+            for to_edge, tl, _ in conns.get(target_lane, []):
+                if to_edge == first_exit_edge:
+                    to_lane = tl
+                    break
+            break
+
+    # 4) Create a temporary connection file
+    conn_xml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<connections>
+  <connection from="{ego_edge}" to="{first_exit_edge}" fromLane="{spawn_lane}" toLane="{to_lane}"/>
+</connections>
+'''
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".con.xml", delete=False) as f:
+        f.write(conn_xml)
+        conn_file = Path(f.name)
+
+    # 5) Run netconvert to add the connection
+    try:
+        cmd = [
+            _find_netconvert(),
+            "--sumo-net-file", str(net_path),
+            "--connection-files", str(conn_file),
+            "-o", str(output_path),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise JunctionLayoutError(
+                f"netconvert injection failed: {result.stderr or result.stdout}"
+            )
+        if not output_path.is_file():
+            raise JunctionLayoutError(f"netconvert did not write {output_path}")
+    finally:
+        conn_file.unlink(missing_ok=True)
+
+    return output_path, original_exits
 _CARDINAL = frozenset({"s", "l", "r"})
 
 
@@ -440,9 +574,10 @@ def find_dual_path_scenarios(
     net_path: Path | str,
     *,
     pdd_code: str = DEFAULT_PDD_CODE,
-    min_lane_length_m: float = 8.0,
+    min_lane_length_m: float = 21.0,
     min_arm_lane_m: float = 0.5,
     min_gain_m: float = 0.0,
+    min_dest_after_exit_m: float = 30.0,
     max_turn_length_m: float = 350.0,
     max_straight_length_m: float = 700.0,
     max_scenarios: int = 20,
@@ -451,7 +586,13 @@ def find_dual_path_scenarios(
     require_uturn_continuation: bool = True,
     min_arms: int = 3,
 ) -> List[DualPathScenario]:
-    """Find spawn-on-wrong-lane / dest-via-peer-lane scenarios."""
+    """Find spawn-on-wrong-lane / dest-via-peer-lane scenarios.
+
+    ``min_lane_length_m`` filters the *spawn approach* (must fit spawn ≥20 m
+    before the junction). ``min_dest_after_exit_m`` skips stub destinations on
+    the exclusive first-exit edge so rule-based and baseline share one dest
+    marker past the turn.
+    """
     del require_uturn_continuation
     pdd_code = get_direction_sign_spec(pdd_code).pdd_code
     net_path = Path(net_path)
@@ -481,7 +622,8 @@ def find_dual_path_scenarios(
         for ego in incoming:
             if len(graph.lane_nums.get(ego) or []) < 2:
                 continue
-            if graph.edge_length.get(ego, 0.0) <= min_lane_length_m:
+            # Spawn must sit ≥20 m before junction → approach longer than min.
+            if graph.edge_length.get(ego, 0.0) < float(min_lane_length_m):
                 continue
 
             lane_nums = list(graph.lane_nums.get(ego) or [])
@@ -524,7 +666,11 @@ def find_dual_path_scenarios(
                         max_cost=max_straight_length_m,
                     )
                     dest_candidates = sorted(
-                        ((cost, edge) for edge, cost in dist_from_excl.items() if edge != ego),
+                        (
+                            (cost, edge)
+                            for edge, cost in dist_from_excl.items()
+                            if edge != ego and cost >= float(min_dest_after_exit_m)
+                        ),
                         key=lambda x: x[0],
                     )
                     kept = 0
@@ -538,6 +684,9 @@ def find_dual_path_scenarios(
                             continue
                         compliant_first = correct_path[0]
                         if compliant_first not in exclusive:
+                            continue
+                        # Dest must be past the exclusive first exit (not the stub itself).
+                        if len(correct_path) < 2 and dest in exclusive:
                             continue
                         # Lane-level: spawn has no first-hop onto the compliant exit.
                         if compliant_first in spawn_exit_edges:
@@ -646,17 +795,30 @@ def dual_path_scenario_from_meta(meta: dict) -> Optional[DualPathScenario]:
                 continue
     approach_dirs.sort(key=lambda x: x[0])
 
-    target_lane_num = int(
-        meta.get("target_lane_num")
-        or dp.get("target_lane_num")
-        or meta.get("spawn_lane_num")
-        or 0
+    # Lane index 0 is valid — do not use `or` (would fall through to spawn).
+    def _lane_num(*candidates, default: int = 0) -> int:
+        for c in candidates:
+            if c is None:
+                continue
+            try:
+                return int(c)
+            except (TypeError, ValueError):
+                continue
+        return default
+
+    target_lane_num = _lane_num(
+        meta.get("target_lane_num"),
+        dp.get("target_lane_num"),
+        meta.get("spawn_lane_num"),
+        default=0,
     )
     return DualPathScenario(
         junction_id=str(meta.get("junction_id") or ""),
         junction_center_xy=center_xy,
         ego_edge_id=str(ego),
-        ego_lane_num=int(meta.get("spawn_lane_num") or dp.get("spawn_lane_num") or 0),
+        ego_lane_num=_lane_num(
+            meta.get("spawn_lane_num"), dp.get("spawn_lane_num"), default=0
+        ),
         dest_edge_id=str(dest),
         dest_lane_num=dest_lane_num,
         turn_dir=str(dp.get("baseline_dir") or dp.get("turn_dir") or "r"),
@@ -771,7 +933,7 @@ def find_ranked_dual_path_picks(
     net_path: Path | str,
     *,
     pdd_code: str = DEFAULT_PDD_CODE,
-    min_lane_length_m: float = 10.0,
+    min_lane_length_m: float = 21.0,
     min_gain_m: float = 0.0,
     max_scenarios: int = 5,
     **kwargs,
@@ -785,9 +947,10 @@ def find_ranked_dual_path_picks(
         max_scenarios=max_scenarios,
         **kwargs,
     )
+    # Junction catalog: only spawn approach needs ≥20 m; other arms may be short.
     picks = collect_intersection_junction_candidates(
         net_path,
-        min_lane_length_m=min_lane_length_m,
+        min_lane_length_m=0.5,
         arm_counts=(3, 4),
     )
     by_id = {p.junction_id: p for p in picks}
@@ -882,6 +1045,17 @@ def crop_scene_to_dual_path_scenario(
     bbox = used_bbox
     margin_m = used_margin
 
+    # Inject forbidden connector so baseline can physically reach dest.
+    # This must happen BEFORE we read allowed exits for meta.
+    original_allowed_exits: Dict[int, Dict[str, List[str]]] = {}
+    try:
+        _, original_allowed_exits = inject_forbidden_connector(
+            out_net, scenario, output_path=out_net
+        )
+    except Exception as exc:
+        # Non-fatal: scene still usable, but baseline may not reach dest.
+        print(f"  [connector-injection] warning: {exc}")
+
     conv, orig = parse_net_location(out_net if out_net.is_file() else source_net)
     try:
         center_lat, center_lon = net_xy_to_latlon(
@@ -915,6 +1089,11 @@ def crop_scene_to_dual_path_scenario(
             **scenario.to_meta_fields(),
         }
     )
+    # Save ORIGINAL allowed exits per lane (before injection) for sign violation check.
+    if original_allowed_exits:
+        meta["original_allowed_exits_by_lane"] = {
+            str(ln): exits for ln, exits in original_allowed_exits.items()
+        }
     if junction_rank is not None:
         meta["junction_rank"] = junction_rank
     meta.pop("distance_from_start", None)

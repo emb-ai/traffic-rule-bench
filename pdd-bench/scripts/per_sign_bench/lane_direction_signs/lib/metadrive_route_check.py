@@ -13,13 +13,22 @@ from .lane_keys import make_lane_key
 METADRIVE_MAX_ROUTE_HOPS = 10
 
 
+def _edge_of_lane_key(lane_key: str) -> str:
+    """``lane_<edge>_<num>`` → ``<edge>`` (edge ids may contain underscores)."""
+    body = lane_key[len("lane_"):] if lane_key.startswith("lane_") else lane_key
+    return body.rsplit("_", 1)[0]
+
+
 def is_metadrive_path_ok(path: Sequence[str] | None, *, spawn: str, dest: str) -> bool:
+    # MetaDrive's shortest_path returns the edge-canonical lane (lane 0) as the
+    # route start even when queried from a peer lane, so match on the spawn EDGE
+    # rather than the exact lane key.
     return bool(
         path
         and len(path) > 1
         and path[0] != path[-1]
         and path[-1] == dest
-        and spawn in path[:1]
+        and _edge_of_lane_key(path[0]) == _edge_of_lane_key(spawn)
     )
 
 
@@ -30,19 +39,19 @@ def filter_dual_paths_with_road_network(
     one_per_ego: bool = True,
     max_keep: Optional[int] = None,
 ) -> Tuple[List[Any], int]:
-    """Keep scenarios whose *target* (correct) lane→dest is MetaDrive-reachable.
+    """Keep scenarios whose *spawn* (wrong) lane→dest is MetaDrive-reachable.
 
-    Spawn lane is intentionally unable to reach dest without a peer lane-change,
-    so we validate from ``target_lane_num`` (fallback: spawn lane).
+    The planner route is built from the actual spawn lane so the baseline can
+    physically reach dest (by cutting across from the forbidden lane). We
+    therefore validate reachability from ``ego_lane_num`` (the spawn lane); the
+    sign-compliant expert reroutes independently via SUMO BFS after its
+    peer lane-change, so target reachability is not required here.
     """
     filtered: List[Any] = []
     seen_arm: set[str] = set()
     dropped = 0
     for scenario in scenarios:
-        target_ln = getattr(scenario, "target_lane_num", None)
-        if target_ln is None:
-            target_ln = scenario.ego_lane_num
-        start_lane = make_lane_key(scenario.ego_edge_id, int(target_ln))
+        start_lane = make_lane_key(scenario.ego_edge_id, int(scenario.ego_lane_num))
         dest_lane = make_lane_key(scenario.dest_edge_id, scenario.dest_lane_num)
         if start_lane not in road_network.graph or dest_lane not in road_network.graph:
             dropped += 1

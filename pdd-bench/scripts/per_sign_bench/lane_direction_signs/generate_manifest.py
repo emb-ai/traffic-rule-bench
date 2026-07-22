@@ -113,7 +113,7 @@ def resolve_dual_path_scenarios_for_scene(
     *,
     max_scenarios: Optional[int] = None,
     min_gain_m: float = 20.0,
-    min_lane_length_m: float = 8.0,
+    min_lane_length_m: float = 21.0,
 ) -> List[DualPathScenario]:
     """Load the crop-time dual-path endpoints from ``meta.json``.
 
@@ -190,7 +190,7 @@ class ScenarioConfig:
     max_scenarios_per_scene: Optional[int] = None
     respect_scene_selection: bool = True
     min_dual_path_gain_m: float = 20.0
-    min_ego_lane_m: float = 8.0
+    min_ego_lane_m: float = 21.0
     validate_metadrive_routes: bool = True
 
 
@@ -548,6 +548,10 @@ def build_manifest_entry(
 
     if junction_layout_cache is not None:
         entry["junction_layout"] = junction_layout_cache
+
+    # Pass original allowed exits (pre-connector-injection) for sign violation check.
+    if meta.get("original_allowed_exits_by_lane"):
+        entry["original_allowed_exits_by_lane"] = meta["original_allowed_exits_by_lane"]
     
     entry = {k: v for k, v in entry.items() if v is not None}
     
@@ -921,7 +925,7 @@ def main(cfg: DictConfig) -> None:
         min_dual_path_gain_m=float(
             getattr(cfg.scenario, "min_dual_path_gain_m", 20.0)
         ),
-        min_ego_lane_m=float(getattr(cfg.scenario, "min_ego_lane_m", 8.0)),
+        min_ego_lane_m=float(getattr(cfg.scenario, "min_ego_lane_m", 21.0)),
         validate_metadrive_routes=bool(
             getattr(cfg.scenario, "validate_metadrive_routes", True)
         ),

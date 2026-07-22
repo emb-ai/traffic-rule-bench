@@ -18,6 +18,7 @@ from metadrive.utils.math import wrap_to_pi
 from traffic_signs.bus_station_sign import BusStationSign
 from traffic_signs.detour_sign import DetourSign
 from traffic_signs.direction_sign import DirectionSign
+from traffic_signs.lane_directions_sign import LaneDirectionsSign
 from traffic_signs.min_speed_limit_sign import MinimumSpeedLimitSign
 from traffic_signs.no_entry_sign import NoEntrySign
 from traffic_signs.no_stopping_allowed_sign import NoStoppingAllowedSign
@@ -357,6 +358,47 @@ class SignComplianceMixin:
             self._get_heading_pid().reset()
             self._get_lateral_pid().reset()
 
+    def _begin_lane_change_by_sumo_num(self, sumo_lane_num: int) -> bool:
+        """Lane-change to the peer whose SUMO lane number equals ``sumo_lane_num``."""
+        if self._lc_target_lane is not None:
+            return True
+        cur = self._cur_lane_num()
+        if cur is not None and int(cur) == int(sumo_lane_num):
+            return True
+        # Try ref lanes first (adjacent lanes from navigation).
+        ref = self._get_ref_lanes() or []
+        for lane in ref:
+            if lane_index_num(lane) == int(sumo_lane_num):
+                self._lc_target_lane = lane
+                self._get_heading_pid().reset()
+                self._get_lateral_pid().reset()
+                return True
+        # Fallback: search ALL lanes on the same edge (for multi-lane-change).
+        try:
+            cur_lane = self.control_object.lane
+            if cur_lane is not None:
+                cur_idx = getattr(cur_lane, "index", None)
+                # Extract edge ID from lane index: "lane_<edge>_<num>" -> "<edge>"
+                if isinstance(cur_idx, str) and cur_idx.startswith("lane_"):
+                    parts = cur_idx[5:].rsplit("_", 1)
+                    if len(parts) == 2:
+                        edge_id = parts[0]
+                        road_network = self.control_object.navigation.map.road_network
+                        # Try to find target lane directly: "lane_<edge>_<target_num>"
+                        target_lid = f"lane_{edge_id}_{sumo_lane_num}"
+                        try:
+                            target_lane = road_network.get_lane(target_lid)
+                            if target_lane is not None:
+                                self._lc_target_lane = target_lane
+                                self._get_heading_pid().reset()
+                                self._get_lateral_pid().reset()
+                                return True
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        return False
+
     def _update_lane_change(self):
         if self._lc_target_lane is None:
             return
@@ -634,6 +676,27 @@ class SignComplianceMixin:
                 queue.append((nxt, new_path))
         return None
 
+    def _lanes_on_edges(self, edges) -> set:
+        """All EdgeRoadNetwork lane ids that belong to the given SUMO edges.
+
+        Lane ids look like ``lane_<edge>_<num>`` or ``<edge>_<num>``; strip the
+        optional prefix and the trailing lane number to recover the raw SUMO
+        edge id (e.g. ``539307698#1``).
+        """
+        want = {str(e) for e in (edges or ())}
+        if not want:
+            return set()
+        graph = getattr(self.engine.current_map.road_network, "graph", None) or {}
+        out = set()
+        for lid in graph:
+            if not isinstance(lid, str):
+                continue
+            raw = lid[5:] if lid.startswith("lane_") else lid
+            edge = raw.rsplit("_", 1)[0] if "_" in raw else raw
+            if edge in want:
+                out.add(lid)
+        return out
+
     def _reroute_sumo_avoiding_lanes(self, blocked_lanes) -> bool:
         """Replan to the current destination while avoiding ``blocked_lanes``."""
         nav = getattr(self.control_object, "navigation", None)
@@ -647,6 +710,21 @@ class SignComplianceMixin:
         if not isinstance(start, str) or not isinstance(destination, str):
             return False
         path = self._find_sumo_path_avoiding_lanes(start, destination, blocked_lanes)
+        return bool(path) and self._apply_sumo_nav_path(nav, path)
+
+    def _reroute_sumo_from_current_lane(self) -> bool:
+        """Replan spawn→dest starting from the vehicle's current lane (no blocks)."""
+        nav = getattr(self.control_object, "navigation", None)
+        if nav is None or not self._is_sumo_edge_nav(nav):
+            return False
+        checkpoints = list(getattr(nav, "checkpoints", None) or [])
+        if len(checkpoints) < 2:
+            return False
+        destination = checkpoints[-1]
+        start = getattr(self.control_object.lane, "index", None)
+        if not isinstance(start, str) or not isinstance(destination, str):
+            return False
+        path = self._find_sumo_path_avoiding_lanes(start, destination, blocked_lanes=())
         return bool(path) and self._apply_sumo_nav_path(nav, path)
 
     def _direction_blocked_exits_from_source(self, sign, source_lane) -> set:
@@ -1491,6 +1569,18 @@ class SignComplianceMixin:
             blocked = self._direction_blocked_exits_from_source(sign, sign.lane)
             for lid in blocked:
                 self._blocked_lanes.add(lid)
+            # One-way entry (5.7.x): the crossing road is one-way. Unlike a
+            # no-turn sign — where the dual-path detour may legally loop back and
+            # take the once-forbidden turn on a second pass — here the wrong-way
+            # carriageway must NEVER be driven (no oncoming lane exists). Block
+            # the whole carriageway and replan a detour that fully avoids it.
+            forbidden_edges = getattr(sign, "one_way_forbidden_edges", None)
+            if forbidden_edges:
+                wrong_lanes = self._lanes_on_edges(forbidden_edges)
+                if wrong_lanes:
+                    self._reroute_sumo_avoiding_lanes(wrong_lanes)
+                    self._arm_direction_exit_from_sign(sign)
+                    return
             self._reroute_sumo_for_direction_sign(sign)
             self._arm_direction_exit_from_sign(sign)
             return
@@ -1540,16 +1630,33 @@ class SignComplianceMixin:
     # ------------------------------------------------------------------
 
     def _handle_direction_compliance(self, sign):
-        """Handle DirectionSign, PGDirectionSign, LaneAllowedDirectionSign.
+        """Handle DirectionSign, PGDirectionSign, LaneAllowedDirectionSign, LaneDirectionsSign.
 
         On SUMO EdgeRoadNetwork: if the planned route leaves the signed approach
         via a forbidden turn, BFS-replan to the same destination while only
         blocking those first-hop exits (downstream rejoins remain allowed).
 
+        For 5.15.1 (``LaneDirectionsSign``) with ``target_lane_num``: first
+        peer-lane-change onto the lane that can reach the destination, then
+        replan from that lane.
+
         On PG NodeRoadNetwork: keep the existing lane-change pre-positioning.
         """
         if not on_same_road(self.control_object.lane, sign.lane):
             return
+
+        # 5.15.1: force peer lane-change onto the crop-time target lane.
+        if isinstance(sign, LaneDirectionsSign):
+            target_ln = getattr(sign, "target_lane_num", None)
+            if target_ln is not None:
+                cur = self._cur_lane_num()
+                if cur is not None and int(cur) != int(target_ln):
+                    self._begin_lane_change_by_sumo_num(int(target_ln))
+                    return
+                # Already on target lane — install a route from here to dest.
+                self._reroute_sumo_from_current_lane()
+                self._arm_direction_exit_from_sign(sign)
+                return
 
         nav = getattr(self.control_object, "navigation", None)
         if nav is not None and self._is_sumo_edge_nav(nav):
@@ -1919,7 +2026,7 @@ class SignComplianceMixin:
                     self._handle_no_turn(sign)
                 elif isinstance(sign, NoOvertakingSign):
                     self._handle_no_overtaking(sign)
-                elif isinstance(sign, (DirectionSign, PGDirectionSign, LaneAllowedDirectionSign)):
+                elif isinstance(sign, (DirectionSign, PGDirectionSign, LaneAllowedDirectionSign, LaneDirectionsSign)):
                     self._handle_direction_compliance(sign)
                 elif isinstance(sign, MainRoadSign):
                     self._handle_main_road(sign)
