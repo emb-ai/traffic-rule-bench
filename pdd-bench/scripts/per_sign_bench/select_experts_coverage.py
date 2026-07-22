@@ -365,6 +365,10 @@ def main() -> None:
     dump("experts_scene_uid_top1.jsonl", rank1)
     dump("experts_scene_uid_top2.jsonl", picks)
     dump("experts_map.jsonl", map_picks)
+    # Merged deduped source rows — the input downstream metric tables
+    # (make_oracle_metrics_table.py) should consume instead of the raw
+    # per-node all_runs files, which contain resume duplicates.
+    dump("all_runs_dedup.jsonl", rows)
     json.dump({"load": lstats, "join_rate": rate,
                "n_top1": len(rank1), "n_top2": len(picks),
                "n_map": len(map_picks),
