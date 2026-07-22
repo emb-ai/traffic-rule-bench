@@ -47,6 +47,11 @@ from lib.scene_augmentation import (
 )
 from lib.scene_selection import is_reserved_scene_dir, is_scene_rejected
 from lib.sumo_utils import CORE_SCENES_SUBDIR, is_vehicle_drivable_lane
+from lib.traffic_density_levels import (
+    MAX_TRAFFIC_DENSITY_LEVELS,
+    TrafficDensityLevel,
+    list_traffic_density_levels,
+)
 
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -116,6 +121,7 @@ class ScenarioConfig:
 class SimulationConfig:
     spawn_velocity_ms: float = 2.5
     traffic_density: float = 0.0
+    traffic_density_augment: bool = True
     horizon: int = 600
     sign_distance_from_start: float = DEFAULT_SIGN_DISTANCE_FROM_START
     destination_past_sign_m: float = DEFAULT_DESTINATION_PAST_SIGN_M
@@ -490,6 +496,7 @@ def build_manifest_entry(
     spawn_scenario: SpawnScenario,
     spawn_lanes_cache: Optional[List[SumoLaneInfo]] = None,
     junction_layout_cache: Optional[dict] = None,
+    density_level: Optional[TrafficDensityLevel] = None,
 ) -> Dict[str, Any]:
     """Build one manifest row for a junction through-path scenario."""
     scene_name = str(meta.get("scene_name") or scene_dir.name)
@@ -497,8 +504,18 @@ def build_manifest_entry(
     net_rel = scene_dir.relative_to(scenes_root) / net_file
 
     scenario_id = spawn_scenario.scenario_id
-    seed = _stable_seed(scene_name, variant, scenario_id=scenario_id)
-    scene_id = _scene_id_from_meta(meta, scene_dir)
+    traffic_density = (
+        float(density_level.traffic_density)
+        if density_level is not None
+        else float(sim_cfg.traffic_density)
+    )
+    if density_level is not None:
+        seed_key = f"{scenario_id}_td{density_level.id}"
+        scene_id = f"{scene_name}_td{density_level.id}"
+    else:
+        seed_key = scenario_id
+        scene_id = _scene_id_from_meta(meta, scene_dir)
+    seed = _stable_seed(scene_name, variant, scenario_id=seed_key)
 
     selected_lane = None
     if spawn_lanes_cache:
@@ -544,7 +561,18 @@ def build_manifest_entry(
         "sign_title": _ACTIVE_SIGN.title,
         "sign_class": _ACTIVE_SIGN.class_name,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
-        "traffic_density": sim_cfg.traffic_density,
+        "traffic_density": traffic_density,
+        "traffic_density_level_id": (
+            density_level.id if density_level is not None else None
+        ),
+        "traffic_density_level_name": (
+            density_level.name if density_level is not None else None
+        ),
+        "nuplan_vehicles_per_frame": (
+            density_level.nuplan_vehicles_per_frame
+            if density_level is not None
+            else None
+        ),
         "horizon": sim_cfg.horizon,
         "sign_road_id": sign_road_id,
         "sign_distance_from_start": sim_cfg.sign_distance_from_start,
@@ -602,11 +630,27 @@ def generate_manifest(
     if max_total is not None:
         max_total = max(1, int(max_total))
 
+    density_levels: List[Optional[TrafficDensityLevel]]
+    if sim_cfg.traffic_density_augment:
+        density_levels = list(list_traffic_density_levels(MAX_TRAFFIC_DENSITY_LEVELS))
+        print("[no_entry_signs] Traffic density levels (nuPlan):")
+        for level in density_levels:
+            print(f"  td{level.id} {level.describe()}")
+    else:
+        density_levels = [None]
+
+    # max_scenarios caps through-path geometry picks; density multiplies rows.
+    n_density = max(1, len(density_levels))
+    max_total_rows = (
+        None if max_total is None else max_total * n_density
+    )
+    base_scenarios_kept = 0
+
     for scene_dir in scenes:
-        if max_total is not None and len(entries) >= max_total:
+        if max_total is not None and base_scenarios_kept >= max_total:
             print(
-                f"\n[cap] reached max_scenarios={max_total}; "
-                f"stopping after {len(entries)} row(s)"
+                f"\n[cap] reached max_scenarios={max_total} "
+                f"({len(entries)} row(s) with density×{n_density}); stopping"
             )
             break
 
@@ -660,6 +704,9 @@ def generate_manifest(
         print(f"  Through-path scenarios: {len(scenarios)}")
         scene_entries: List[Dict[str, Any]] = []
         for variant, scenario in enumerate(scenarios):
+            if max_total is not None and base_scenarios_kept >= max_total:
+                break
+
             geom_ok, geom_reason = forbidden_edge_geometry_ok(
                 net_full_path,
                 scenario.ego_destination_edge_id,
@@ -690,37 +737,36 @@ def generate_manifest(
                 if md_reason != "ok":
                     print(f"  [metadrive] {scene_name}: {md_reason}")
 
-            for _rep in range(n_variants):
-                if (
-                    max_total is not None
-                    and len(entries) + len(scene_entries) >= max_total
-                ):
-                    break
-                entry = build_manifest_entry(
-                    scene_dir=scene_dir,
-                    scenes_root=scenes_dir,
-                    meta=meta,
-                    variant=variant,
-                    sim_cfg=sim_cfg,
-                    spawn_scenario=scenario,
-                    spawn_lanes_cache=spawn_lanes,
-                    junction_layout_cache=junction_layout,
-                )
-                scene_entries.append(entry)
-            if (
-                max_total is not None
-                and len(entries) + len(scene_entries) >= max_total
-            ):
-                break
+            scenario_rows: List[Dict[str, Any]] = []
+            for density_level in density_levels:
+                for _rep in range(n_variants):
+                    entry = build_manifest_entry(
+                        scene_dir=scene_dir,
+                        scenes_root=scenes_dir,
+                        meta=meta,
+                        variant=variant,
+                        sim_cfg=sim_cfg,
+                        spawn_scenario=scenario,
+                        spawn_lanes_cache=spawn_lanes,
+                        junction_layout_cache=junction_layout,
+                        density_level=density_level,
+                    )
+                    scenario_rows.append(entry)
+
+            scene_entries.extend(scenario_rows)
+            base_scenarios_kept += 1
 
         if not scene_entries:
             continue
 
-        if max_total is not None and len(entries) + len(scene_entries) > max_total:
-            keep = max_total - len(entries)
+        if (
+            max_total_rows is not None
+            and len(entries) + len(scene_entries) > max_total_rows
+        ):
+            keep = max_total_rows - len(entries)
             print(
                 f"  [cap] retaining {keep}/{len(scene_entries)} row(s) "
-                f"for max_scenarios={max_total}"
+                f"for max_scenarios={max_total} × density"
             )
             scene_entries = scene_entries[:keep]
 
@@ -731,7 +777,8 @@ def generate_manifest(
             f"sign_road={sample.get('sign_road_id')} "
             f"sign_from_start={sample.get('sign_distance_from_start')}m "
             f"spawn_before_end={sample['spawn_distance_before_end']}m "
-            f"rows={len(scene_entries)}"
+            f"rows={len(scene_entries)} "
+            f"(density×{n_density})"
         )
         entries.extend(scene_entries)
 
@@ -762,6 +809,18 @@ def generate_manifest(
         "validate_metadrive_routes": scenario_cfg.validate_metadrive_routes,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
         "traffic_density": sim_cfg.traffic_density,
+        "traffic_density_augment": sim_cfg.traffic_density_augment,
+        "traffic_density_levels": [
+            {
+                "id": level.id,
+                "name": level.name,
+                "percentile": level.percentile,
+                "nuplan_vehicles_per_frame": level.nuplan_vehicles_per_frame,
+                "traffic_density": level.traffic_density,
+            }
+            for level in density_levels
+            if level is not None
+        ],
         "horizon": sim_cfg.horizon,
         "sign_distance_from_start": sim_cfg.sign_distance_from_start,
         "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
@@ -966,6 +1025,9 @@ def main(cfg: DictConfig) -> None:
     sim_cfg = SimulationConfig(
         spawn_velocity_ms=float(cfg.simulation.spawn_velocity_ms),
         traffic_density=float(cfg.simulation.traffic_density),
+        traffic_density_augment=bool(
+            getattr(cfg.simulation, "traffic_density_augment", True)
+        ),
         horizon=int(cfg.simulation.horizon),
         sign_distance_from_start=float(
             getattr(

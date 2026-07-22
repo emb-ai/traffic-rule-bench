@@ -38,7 +38,7 @@ scenario:
   n_variants: 1                   # Extra repeats per through-path scenario
   augment: true                   # Enumerate through-path spawn/dest variants
   max_scenarios: null                # Cap total manifest rows (null = all)
-  max_scenarios_per_scene: 1      # Cap through-path variants per crop (null = all)
+  max_scenarios_per_scene: 2      # Cap through-path variants per crop (null = all)
   respect_scene_selection: true  # Skip scenes marked reject in scene_selection.json
   min_ego_lane_m: 8.0            # Min ego approach lane length
   validate_metadrive_routes: true
@@ -48,22 +48,14 @@ scenario:
 # =============================================================================
 simulation:
   spawn_velocity_ms: 2.5          # Ego initial velocity (m/s)
-  traffic_density: 0.0            # Background traffic [0.0 - 1.0]
+  traffic_density: 0.0            # Used only if traffic_density_augment=false
+  # Expand each through-path scenario into 3 nuPlan density tiers (p25/p50/p75).
+  traffic_density_augment: true
   horizon: 600                    # Max simulation steps
-  # Sign on the forbidden (destination) lane, past the junction so a
-  # compliant stop is not right in the intersection.
   sign_distance_from_start: 10.0
-  # Route endpoint is this far *past* the sign on the forbidden lane.
-  # Non-compliant agents that cross the sign end here (no long drive beyond).
-  # Forbidden lane must be longer than sign_distance_from_start + this value,
-  # otherwise the route end collapses onto the sign and violations never fire.
   destination_past_sign_m: 8.0
-  # Ego still spawns on the approach arm, before the junction.
   spawn_distance_before_end: 25.0 # Ego spawn offset from approach lane end (m)
-  # Legacy field kept for Hydra/tool compatibility; placement ignores it.
   sign_distance_before_end: 0.0
-  # ONLY for sign-compliant stop before the line: treat as arrive_dest / end.
-  # Does not change arrive_dest for any other case (timeout, out-of-road, etc.).
   compliant_stop_success_seconds: 3.0
   compliant_stop_max_dist_m: 12.0   # Must be within this distance before the sign line
   compliant_stop_speed_mps: 0.5     # Max speed to count as "stopped"
