@@ -86,8 +86,9 @@ def scene_key(row: dict) -> str | None:
 def policy_label(policy: str | None, variant: str | None) -> str:
     policy = policy or "unknown"
     variant = variant or "default"
-    if policy == "comprehensive":
-        return f"comp_{variant}"
+    # The IDM-family expert is reported as "idm" in the tables.
+    if policy in {"comprehensive", "comprehensive_rule_expert"}:
+        return f"idm_{variant}"
     if policy in {"ppo_signs", "carl_signs", "plant2_signs"}:
         return policy
     if policy in POLICY_ALIASES:
@@ -106,10 +107,10 @@ def pick_policy_label(pick: dict) -> str:
 
 
 def column_sort_key(label: str) -> tuple:
-    if label == "comp_default":
+    if label == "idm_default":
         return (0, 0, "")
-    if label.startswith("comp_s"):
-        suffix = label[6:]
+    if label.startswith("idm_s"):
+        suffix = label[5:]
         if suffix.isdigit():
             return (0, int(suffix), "")
         return (0, 1000, suffix)
