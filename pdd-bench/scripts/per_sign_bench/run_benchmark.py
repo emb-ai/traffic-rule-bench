@@ -69,6 +69,7 @@ from bench.episode_metrics import (_safe_float, _route_completion_percent,
                                    _nearby_speed_percentage, _min_ttc_seconds,
                                    _compute_smoothness)
 from bench.env_builders import build_env_for_row
+from bench import env_builders as _env_builders
 from bench.policy_factory import _load_policy_models, make_ego_policy
 
 _PHYSICS_DT = 0.1   # MetaDrive physics step (s); used for accel/jerk derivation.
@@ -397,9 +398,20 @@ def run_one_episode(
             return _error_result(row, setup_error, backend=backend)
 
         # Resolve + instantiate the ego BasePolicy and apply the IDM ego variant.
+        # Braking spawn: the default ego-IDM "holds v0" (desired speed ≥ spawn
+        # speed) so a sign-unaware agent enters the zone above the limit instead
+        # of decaying to 36 km/h right at the sign (vacuous v40 compliance).
+        # The rule expert is capped by the sign itself.
+        ego_hold_speed_ms = None
+        if row.get("braking_spawn"):
+            try:
+                ego_hold_speed_ms = float(row.get("spawn_velocity_ms") or 0.0) or None
+            except (TypeError, ValueError):
+                ego_hold_speed_ms = None
         policy_obj, sampled_ego_params = make_ego_policy(
             policy_type, models, base_env, seed,
-            ego_variant=ego_variant, ego_sample_seed_base=ego_sample_seed_base)
+            ego_variant=ego_variant, ego_sample_seed_base=ego_sample_seed_base,
+            ego_hold_speed_ms=ego_hold_speed_ms)
 
         r = _run_rollout(env, base_env, policy_obj,
                          max_steps=max_steps, save_gif=save_gif)
@@ -627,6 +639,14 @@ def build_parser() -> argparse.ArgumentParser:
                              "pure-pursuit on pred_wps[1] + softmax(pred_speed) "
                              "throttle (matches eval_plant2_wps_steer.py). "
                              "Applies to --policy plant2 and plant2_rule.")
+    parser.add_argument("--relocate-ego-to-sign-lane", type=str, default="auto",
+                        choices=["auto", "true", "false"],
+                        help="After sign placement, teleport ego onto the "
+                             "sign-topology lane. 'auto' (default) = True for "
+                             "idm/comprehensive_rule_expert/rule_compliant, False "
+                             "for NN policies (plant2/carl/ppo_lidar) — matches "
+                             "1300c1e (NN policies fail when relocated off the "
+                             "manifest road_id). 'true'/'false' force the value.")
     return parser
 
 
@@ -638,6 +658,15 @@ def main():
 
     assert args.ego_variant in ("default", "s1", "s2", "s3", "s4"), \
         f"--ego-variant must be one of default/s1/s2/s3/s4, got {args.ego_variant!r}"
+
+    # relocate_ego_to_sign_lane: NN policies (plant2/carl/ppo_lidar) need ego left
+    # on the manifest road_id, not teleported onto the sign lane (cf 1300c1e).
+    _idm_family = {"idm", "comprehensive_rule_expert", "rule_compliant"}
+    if args.relocate_ego_to_sign_lane == "auto":
+        _env_builders.RELOCATE_EGO_TO_SIGN_LANE = args.policy in _idm_family
+    else:
+        _env_builders.RELOCATE_EGO_TO_SIGN_LANE = (args.relocate_ego_to_sign_lane == "true")
+    print(f"relocate_ego_to_sign_lane: {_env_builders.RELOCATE_EGO_TO_SIGN_LANE}")
 
     logging.getLogger().setLevel(getattr(logging, "CRITICAL"))
 
