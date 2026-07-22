@@ -12,6 +12,8 @@ python generate_manifest.py sign.pdd_code=3.2
 | `pdd_code` | `3.1` | Active member (`lib/no_entry_sign_spec.py`). |
 | `paths.scenes_dir` | auto `scenes/<slug>` | Per-member scene root. |
 | `paths.output_base` | `benchmark_output/<slug>` | Per-member outputs. |
+| `scenario.max_scenarios` | `5` | Cap total manifest rows (`null` = all). |
+| `scenario.max_scenarios_per_scene` | `1` | Cap through-path variants per crop (`null` = all). |
 | `simulation.sign_distance_from_start` | `10` | Sign offset from start of forbidden (destination) lane (m). |
 | `simulation.destination_past_sign_m` | `8` | Route end this far past the sign (short finish for non-compliant). Forbidden lane must be longer than `sign_distance_from_start + destination_past_sign_m`. |
 | `simulation.spawn_distance_before_end` | `25` | Ego spawn offset from approach lane end (m). |

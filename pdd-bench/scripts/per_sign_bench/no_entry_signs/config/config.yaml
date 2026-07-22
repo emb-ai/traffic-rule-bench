@@ -37,7 +37,8 @@ paths:
 scenario:
   n_variants: 1                   # Extra repeats per through-path scenario
   augment: true                   # Enumerate through-path spawn/dest variants
-  max_scenarios_per_scene: 5      # Cap augmented scenarios (null = all)
+  max_scenarios: null                # Cap total manifest rows (null = all)
+  max_scenarios_per_scene: 1      # Cap through-path variants per crop (null = all)
   respect_scene_selection: true  # Skip scenes marked reject in scene_selection.json
   min_ego_lane_m: 8.0            # Min ego approach lane length
   validate_metadrive_routes: true

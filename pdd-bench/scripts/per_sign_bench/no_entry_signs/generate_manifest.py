@@ -105,6 +105,7 @@ class PathsConfig:
 class ScenarioConfig:
     n_variants: int = 1
     augment: bool = True
+    max_scenarios: Optional[int] = None
     max_scenarios_per_scene: Optional[int] = None
     respect_scene_selection: bool = True
     min_ego_lane_m: float = 8.0
@@ -597,7 +598,18 @@ def generate_manifest(
     )
 
     n_variants = max(1, int(scenario_cfg.n_variants))
+    max_total = scenario_cfg.max_scenarios
+    if max_total is not None:
+        max_total = max(1, int(max_total))
+
     for scene_dir in scenes:
+        if max_total is not None and len(entries) >= max_total:
+            print(
+                f"\n[cap] reached max_scenarios={max_total}; "
+                f"stopping after {len(entries)} row(s)"
+            )
+            break
+
         meta = load_scene_metadata(scene_dir)
         scene_name = str(meta.get("scene_name") or scene_dir.name)
         net_file = meta.get("net_file", "map.net.xml")
@@ -679,6 +691,11 @@ def generate_manifest(
                     print(f"  [metadrive] {scene_name}: {md_reason}")
 
             for _rep in range(n_variants):
+                if (
+                    max_total is not None
+                    and len(entries) + len(scene_entries) >= max_total
+                ):
+                    break
                 entry = build_manifest_entry(
                     scene_dir=scene_dir,
                     scenes_root=scenes_dir,
@@ -690,9 +707,22 @@ def generate_manifest(
                     junction_layout_cache=junction_layout,
                 )
                 scene_entries.append(entry)
+            if (
+                max_total is not None
+                and len(entries) + len(scene_entries) >= max_total
+            ):
+                break
 
         if not scene_entries:
             continue
+
+        if max_total is not None and len(entries) + len(scene_entries) > max_total:
+            keep = max_total - len(entries)
+            print(
+                f"  [cap] retaining {keep}/{len(scene_entries)} row(s) "
+                f"for max_scenarios={max_total}"
+            )
+            scene_entries = scene_entries[:keep]
 
         sample = scene_entries[0]
         print(
@@ -726,6 +756,7 @@ def generate_manifest(
         "total_entries": len(entries),
         "variants_per_scene": n_variants,
         "augment": scenario_cfg.augment,
+        "max_scenarios": scenario_cfg.max_scenarios,
         "max_scenarios_per_scene": scenario_cfg.max_scenarios_per_scene,
         "min_ego_lane_m": scenario_cfg.min_ego_lane_m,
         "validate_metadrive_routes": scenario_cfg.validate_metadrive_routes,
@@ -907,10 +938,23 @@ def main(cfg: DictConfig) -> None:
     with open(config_path, "w", encoding="utf-8") as f:
         f.write(OmegaConf.to_yaml(cfg))
 
+    max_scenarios_raw = getattr(cfg.scenario, "max_scenarios", None)
+    max_scenarios_per_scene_raw = getattr(
+        cfg.scenario, "max_scenarios_per_scene", None
+    )
     scenario_cfg = ScenarioConfig(
         n_variants=int(cfg.scenario.n_variants),
         augment=bool(getattr(cfg.scenario, "augment", True)),
-        max_scenarios_per_scene=getattr(cfg.scenario, "max_scenarios_per_scene", None),
+        max_scenarios=(
+            None
+            if max_scenarios_raw in (None, "", "null")
+            else int(max_scenarios_raw)
+        ),
+        max_scenarios_per_scene=(
+            None
+            if max_scenarios_per_scene_raw in (None, "", "null")
+            else int(max_scenarios_per_scene_raw)
+        ),
         respect_scene_selection=bool(
             getattr(cfg.scenario, "respect_scene_selection", True)
         ),
