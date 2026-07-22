@@ -106,7 +106,10 @@ def sample_one_profile(seed: int, density_cap: float = 1.0, horizon_steps: int =
     creep_speed = float(np.percentile(sampler.speeds, 5))
     lane_change_freq = float(sampler.lane_change_rate_per_km)
 
-    normal_speed = float(np.clip(sampler.normal_speed(), 2.0, 15.0))
+    # Floor raised 2.0 -> 12.0 m/s (~43 km/h): the ego/IDM cruising speed must sit
+    # ABOVE the 3.24 zone limits (20/40) so a sign-UNAWARE idm actually drives fast
+    # enough to violate the zone (the old 2 m/s floor made idm crawl & comply).
+    normal_speed = float(np.clip(sampler.normal_speed(), 12.0, 15.0))
     acc_factor = float(np.clip(sampler.acc_factor(), 0.2, 4.0))
     deacc_factor = float(np.clip(sampler.deacc_factor(), 0.2, 5.0))
     distance_wanted = float(np.clip(sampler.distance_wanted(), 5.0, 45.0))
