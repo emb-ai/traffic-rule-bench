@@ -435,6 +435,13 @@ def main() -> None:
     p.add_argument("--horizon", type=int, default=HORIZON_DEFAULT)
     p.add_argument("--output-dir", default=".",
                    help="where to write oracle_metrics_*.tsv/md")
+    p.add_argument("--universe", choices=["all", "covered"], default="all",
+                   help="scene universe for the rate denominator: 'all' = "
+                        "every scene seen in the source rows; 'covered' = "
+                        "only scenes that received an oracle pick, i.e. the "
+                        "unified solvable set (the oracle is 1.00 there by "
+                        "construction; policy rates show their true share "
+                        "of solvable scenes)")
     args = p.parse_args()
 
     if not args.jsonl:
@@ -457,6 +464,16 @@ def main() -> None:
         for sign, n in sorted(skipped_unknown.items()):
             print(f"[warn] skipped {n} rows for unknown sign class: {sign}",
                   file=sys.stderr)
+
+    if args.universe == "covered":
+        covered_keys = {(normalize_sign(p_.get("sign")), scene_key(p_))
+                        for p_ in picks}
+        n_full = len({(r["sign"], r["scene_key"]) for r in records})
+        records = [r for r in records
+                   if (r["sign"], r["scene_key"]) in covered_keys]
+        n_kept = len({(r["sign"], r["scene_key"]) for r in records})
+        print(f"universe=covered: kept {n_kept} of {n_full} scenes "
+              f"({n_full - n_kept} uncovered dropped)")
 
     observed_columns = {r["label"] for r in records}
     observed_columns.update(pick_policy_label(p) for p in picks)
