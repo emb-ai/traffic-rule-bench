@@ -1,0 +1,54 @@
+# Lane Direction Signs (5.15.1) Benchmark Configuration
+# Board of allowed directions by lanes. See README.md and lib/direction_sign_spec.py.
+
+defaults:
+  - _self_
+
+hydra:
+  run:
+    dir: ${paths.output_base}/${paths.experiment_name}
+  output_subdir: .hydra
+  job:
+    chdir: false
+
+sign:
+  pdd_code: "5.15.1"
+
+paths:
+  scenes_base: scenes
+  scenes_dir: null              # auto → scenes/5_15_1
+  output_base: benchmark_output/${pdd_slug:${sign.pdd_code}}
+  experiment_name: ${now:%Y-%m-%d_%H-%M-%S}
+
+scenario:
+  n_variants: 1
+  augment: true
+  max_scenarios_per_scene: 5
+  respect_scene_selection: true
+  min_dual_path_gain_m: 0.0     # lane-change scenarios; gain optional
+  min_ego_lane_m: 8.0
+  # Validate MetaDrive route from *target* (correct) lane → dest.
+  validate_metadrive_routes: true
+
+simulation:
+  spawn_velocity_ms: 2.5
+  traffic_density: 0.0
+  horizon: 600
+  sign_distance_before_end: 0.0
+  spawn_distance_before_end: 20.0
+
+auxiliary:
+  enabled: false
+  distance_from_intersection: 20.0
+  convoy_size: 3
+  lanes_occupied: 4
+  convoy_gap_m: 10.0
+
+gif:
+  enabled: false
+  policy: idm
+  max_scenes: null
+  dry_run: false
+  hide_signs: true
+  dir: null
+  run_name: null
