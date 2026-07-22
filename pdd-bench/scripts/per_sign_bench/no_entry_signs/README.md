@@ -55,7 +55,10 @@ overrides arrive_dest; timeout/crash do not).
 
 The route endpoint is shortly past the sign (`destination_past_sign_m`,
 default 8 m): non-compliant agents that cross the line finish there instead of
-driving to the far end of a long forbidden edge.
+driving to the far end of a long forbidden edge. Manifest / crop viability and
+placement require the forbidden lane to be **longer than**
+`sign_distance_from_start + destination_past_sign_m` (otherwise the endpoint
+would sit on the sign and violations would never fire).
 
 Eval:
 

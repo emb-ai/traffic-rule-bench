@@ -13,6 +13,6 @@ python generate_manifest.py sign.pdd_code=3.2
 | `paths.scenes_dir` | auto `scenes/<slug>` | Per-member scene root. |
 | `paths.output_base` | `benchmark_output/<slug>` | Per-member outputs. |
 | `simulation.sign_distance_from_start` | `10` | Sign offset from start of forbidden (destination) lane (m). |
-| `simulation.destination_past_sign_m` | `8` | Route end this far past the sign (short finish for non-compliant). Forbidden lane must be strictly longer than sign+past. |
+| `simulation.destination_past_sign_m` | `8` | Route end this far past the sign (short finish for non-compliant). Forbidden lane must be longer than `sign_distance_from_start + destination_past_sign_m`. |
 | `simulation.spawn_distance_before_end` | `25` | Ego spawn offset from approach lane end (m). |
 | `simulation.compliant_stop_success_seconds` | `3` | Stopped before sign this long → arrive_dest (**only** this override). |

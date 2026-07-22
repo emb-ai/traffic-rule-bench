@@ -43,43 +43,6 @@ def edge_length_m(net_path: Path | str, edge_id: str) -> Optional[float]:
     return None
 
 
-def min_forbidden_lane_length_m(
-    sign_distance_from_start: float,
-    destination_past_sign_m: float,
-) -> float:
-    """Minimum length so sign and short dest past it do not coincide."""
-    return float(sign_distance_from_start) + float(destination_past_sign_m)
-
-
-def forbidden_edge_long_enough(
-    net_path: Path | str,
-    edge_id: str,
-    *,
-    sign_distance_from_start: float,
-    destination_past_sign_m: float,
-) -> tuple[bool, str]:
-    """Require forbidden edge length > sign offset + past-sign destination.
-
-    Otherwise the short route end lands on (or before) the sign line and a
-    baseline that reaches dest never accumulates a no-entry violation.
-    """
-    if not edge_id:
-        return False, "missing forbidden edge id"
-    length = edge_length_m(net_path, edge_id)
-    need = min_forbidden_lane_length_m(
-        sign_distance_from_start, destination_past_sign_m
-    )
-    if length is None or length <= 0:
-        return False, f"forbidden edge {edge_id!r} missing or empty"
-    if length <= need:
-        return (
-            False,
-            f"forbidden edge {edge_id} length {length:.2f}m "
-            f"<= sign+past ({need:.2f}m)",
-        )
-    return True, "ok"
-
-
 def count_drivable_lanes(net_path: Path | str, edge_id: str) -> int:
     try:
         root = ET.parse(str(net_path)).getroot()
@@ -160,6 +123,7 @@ def scene_geometry_ok(
     *,
     min_sign_dist: float = MIN_SIGN_DISTANCE_FROM_START_M,
     min_past: float = MIN_LENGTH_PAST_SIGN_M,
+    destination_past_sign_m: Optional[float] = None,
 ) -> tuple[bool, str]:
     """Validate that the signed edge can host spawn-before / drive-past (import)."""
     if not road_id:
@@ -170,10 +134,41 @@ def scene_geometry_ok(
     dist = float(distance_from_start)
     if dist < min_sign_dist:
         return False, f"distance_from_start={dist:.2f} < {min_sign_dist}"
+    past = float(destination_past_sign_m) if destination_past_sign_m is not None else float(min_past)
+    # Sign + short route end must both fit with room past the sign line.
+    if length <= dist + past:
+        return (
+            False,
+            f"forbidden edge too short ({length:.2f}m <= "
+            f"sign_from_start+past {dist + past:.2f}m)",
+        )
     if dist > length - min_past:
         return False, f"sign too close to edge end ({dist:.2f}/{length:.2f})"
     if spawn_longitude_before_sign(dist, length) >= dist - 1.0:
         return False, "not enough room to spawn before the sign"
     if destination_lane_id(net_path, road_id) is None:
         return False, "no forward destination past the signed edge"
+    return True, "ok"
+
+
+def forbidden_edge_geometry_ok(
+    net_path: Path | str,
+    edge_id: str,
+    *,
+    sign_distance_from_start: float,
+    destination_past_sign_m: float,
+) -> tuple[bool, str]:
+    """Check destination/forbidden edge is long enough for sign + short route end."""
+    if not edge_id:
+        return False, "missing forbidden edge_id"
+    length = edge_length_m(net_path, edge_id)
+    if length is None or length <= 0:
+        return False, f"edge {edge_id!r} missing or empty"
+    needed = float(sign_distance_from_start) + float(destination_past_sign_m)
+    if length <= needed:
+        return (
+            False,
+            f"forbidden edge {edge_id!r} length {length:.2f}m <= "
+            f"sign_from_start+past {needed:.2f}m",
+        )
     return True, "ok"

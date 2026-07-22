@@ -54,9 +54,8 @@ simulation:
   sign_distance_from_start: 10.0
   # Route endpoint is this far *past* the sign on the forbidden lane.
   # Non-compliant agents that cross the sign end here (no long drive beyond).
-  # Forbidden lane must be strictly longer than sign_distance_from_start +
-  # destination_past_sign_m, else dest coincides with the sign and violations
-  # cannot occur.
+  # Forbidden lane must be longer than sign_distance_from_start + this value,
+  # otherwise the route end collapses onto the sign and violations never fire.
   destination_past_sign_m: 8.0
   # Ego still spawns on the approach arm, before the junction.
   spawn_distance_before_end: 25.0 # Ego spawn offset from approach lane end (m)

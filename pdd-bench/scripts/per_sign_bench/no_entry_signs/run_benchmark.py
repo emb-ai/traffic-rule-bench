@@ -39,6 +39,8 @@ from lib.junction_sign_placement import (
     sign_placement_long_from_start,
 )
 from lib.manifest_config import (
+    DEFAULT_DESTINATION_PAST_SIGN_M,
+    DEFAULT_SIGN_DISTANCE_FROM_START,
     enrich_manifest_row,
     load_manifest_config,
 )
@@ -47,8 +49,6 @@ from lib.manifest_config import (
 DEFAULT_COMPLIANT_STOP_SUCCESS_SECONDS = 3.0
 DEFAULT_COMPLIANT_STOP_MAX_DIST_M = 12.0
 DEFAULT_COMPLIANT_STOP_SPEED_MPS = 0.5
-DEFAULT_DESTINATION_PAST_SIGN_M = 8.0
-DEFAULT_SIGN_DISTANCE_FROM_START_M = 10.0
 
 BENCH_DIR = Path(__file__).resolve().parent
 PER_SIGN_BENCH_DIR = BENCH_DIR.parent
@@ -879,21 +879,21 @@ def _place_no_entry_sign(
             return False
 
         distance_from_start = float(
-            row.get("sign_distance_from_start", DEFAULT_SIGN_DISTANCE_FROM_START_M)
-            or DEFAULT_SIGN_DISTANCE_FROM_START_M
+            row.get("sign_distance_from_start", DEFAULT_SIGN_DISTANCE_FROM_START)
+            or DEFAULT_SIGN_DISTANCE_FROM_START
         )
         past_sign_m = float(
             row.get("destination_past_sign_m", DEFAULT_DESTINATION_PAST_SIGN_M)
             or DEFAULT_DESTINATION_PAST_SIGN_M
         )
-        # Sign + short dest past it must both fit on the forbidden lane;
-        # otherwise dest coincides with the sign and violations never occur.
-        need_len = distance_from_start + past_sign_m
-        if float(lane.length) <= need_len:
+        # Must leave room past the sign for the short route end; otherwise
+        # destination collapses onto the sign and violations never fire.
+        needed = distance_from_start + past_sign_m
+        lane_len = float(getattr(lane, "length", 0.0) or 0.0)
+        if lane_len <= needed:
             print(
-                f"[NoEntrySign] Forbidden lane too short "
-                f"({float(lane.length):.2f}m <= sign+past {need_len:.2f}m) "
-                f"on edge {sign_road_id}; skip placement"
+                f"[NoEntrySign] Forbidden lane too short on {sign_road_id}: "
+                f"{lane_len:.2f}m <= sign_from_start+past {needed:.2f}m"
             )
             return False
         placement_long = sign_placement_long_from_start(lane, distance_from_start)

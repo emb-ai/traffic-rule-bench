@@ -27,8 +27,12 @@ from omegaconf import DictConfig, OmegaConf
 
 from lib.junction_priority_layout import JunctionLayoutError, build_junction_priority_layout
 from lib.lane_keys import make_lane_key
-from lib.manifest_config import DEFAULT_SPAWN_DISTANCE_BEFORE_END
-from lib.no_entry_route import forbidden_edge_long_enough
+from lib.manifest_config import (
+    DEFAULT_DESTINATION_PAST_SIGN_M,
+    DEFAULT_SIGN_DISTANCE_FROM_START,
+    DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+)
+from lib.no_entry_route import forbidden_edge_geometry_ok
 from lib.no_entry_sign_spec import (
     DEFAULT_PDD_CODE,
     SIGN_FAMILY,
@@ -112,8 +116,8 @@ class SimulationConfig:
     spawn_velocity_ms: float = 2.5
     traffic_density: float = 0.0
     horizon: int = 600
-    sign_distance_from_start: float = 10.0
-    destination_past_sign_m: float = 8.0
+    sign_distance_from_start: float = DEFAULT_SIGN_DISTANCE_FROM_START
+    destination_past_sign_m: float = DEFAULT_DESTINATION_PAST_SIGN_M
     spawn_distance_before_end: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END
     # Legacy / unused for placement (kept for Hydra compatibility).
     sign_distance_before_end: float = 0.0
@@ -391,30 +395,6 @@ def _optional_metadrive_route_ok(
                 pass
 
 
-def _filter_scenarios_forbidden_length(
-    net_path: Path,
-    scenarios: List[SpawnScenario],
-    *,
-    sign_distance_from_start: float,
-    destination_past_sign_m: float,
-) -> List[SpawnScenario]:
-    """Drop scenarios whose destination (sign) edge is too short for sign+dest."""
-    kept: List[SpawnScenario] = []
-    for sc in scenarios:
-        edge_id = str(sc.ego_destination_edge_id or "").strip()
-        ok, reason = forbidden_edge_long_enough(
-            net_path,
-            edge_id,
-            sign_distance_from_start=sign_distance_from_start,
-            destination_past_sign_m=destination_past_sign_m,
-        )
-        if not ok:
-            print(f"  [skip] {reason} ({sc.scenario_id})")
-            continue
-        kept.append(sc)
-    return kept
-
-
 def resolve_through_path_scenarios(
     net_path: Path,
     meta: Dict[str, Any],
@@ -423,16 +403,11 @@ def resolve_through_path_scenarios(
     augment: bool,
     max_scenarios: Optional[int],
     min_ego_lane_m: float,
-    sign_distance_from_start: float = 10.0,
-    destination_past_sign_m: float = 8.0,
 ) -> List[SpawnScenario]:
     """Resolve one or more through-path spawn/dest scenarios for a crop.
 
     Prefer crop-time meta spawn/dest (already validated at crop) when present,
     then optional layout augmentation, then default main-arm pick.
-
-    Dest (forbidden) edges must be strictly longer than
-    ``sign_distance_from_start + destination_past_sign_m``.
     """
     meta_scenario = _spawn_scenario_from_meta(meta)
 
@@ -472,43 +447,34 @@ def resolve_through_path_scenarios(
         seen.add(key)
         ordered.append(sc)
 
-    if not ordered:
-        spawn_meta = pick_default_main_spawn_meta_for_net(
-            net_path,
-            prefer_ego_edge_id=str(meta.get("road_id") or "") or None,
-            min_lane_length=min_ego_lane_m,
-            sign_lat=float(meta["latitude"]) if meta.get("latitude") is not None else None,
-            sign_lon=float(meta["longitude"]) if meta.get("longitude") is not None else None,
-        )
-        if spawn_meta:
-            ordered = [
-                SpawnScenario(
-                    ego_edge_id=str(spawn_meta["road_id"]),
-                    ego_lane_num=int(spawn_meta.get("spawn_lane_num", 0) or 0),
-                    ego_destination_edge_id=str(spawn_meta["destination_edge_id"]),
-                    ego_destination_lane_key=str(spawn_meta["destination_lane_id"]),
-                    scenario_id=(
-                        f"default_{spawn_meta['road_id']}_to_"
-                        f"{spawn_meta['destination_edge_id']}"
-                    ),
-                )
-            ]
+    if ordered:
+        if max_scenarios is not None and len(ordered) > max_scenarios:
+            head = ordered[:1]
+            tail = ordered[1:]
+            random.shuffle(tail)
+            ordered = (head + tail)[:max_scenarios]
+        return ordered
 
-    ordered = _filter_scenarios_forbidden_length(
+    spawn_meta = pick_default_main_spawn_meta_for_net(
         net_path,
-        ordered,
-        sign_distance_from_start=sign_distance_from_start,
-        destination_past_sign_m=destination_past_sign_m,
+        prefer_ego_edge_id=str(meta.get("road_id") or "") or None,
+        min_lane_length=min_ego_lane_m,
+        sign_lat=float(meta["latitude"]) if meta.get("latitude") is not None else None,
+        sign_lon=float(meta["longitude"]) if meta.get("longitude") is not None else None,
     )
-    if not ordered:
+    if not spawn_meta:
         return []
-
-    if max_scenarios is not None and len(ordered) > max_scenarios:
-        head = ordered[:1]
-        tail = ordered[1:]
-        random.shuffle(tail)
-        ordered = (head + tail)[:max_scenarios]
-    return ordered
+    return [
+        SpawnScenario(
+            ego_edge_id=str(spawn_meta["road_id"]),
+            ego_lane_num=int(spawn_meta.get("spawn_lane_num", 0) or 0),
+            ego_destination_edge_id=str(spawn_meta["destination_edge_id"]),
+            ego_destination_lane_key=str(spawn_meta["destination_lane_id"]),
+            scenario_id=(
+                f"default_{spawn_meta['road_id']}_to_{spawn_meta['destination_edge_id']}"
+            ),
+        )
+    ]
 
 
 # -----------------------------------------------------------------------------
@@ -674,20 +640,27 @@ def generate_manifest(
             augment=scenario_cfg.augment,
             max_scenarios=scenario_cfg.max_scenarios_per_scene,
             min_ego_lane_m=scenario_cfg.min_ego_lane_m,
-            sign_distance_from_start=sim_cfg.sign_distance_from_start,
-            destination_past_sign_m=sim_cfg.destination_past_sign_m,
         )
         if not scenarios:
-            print(
-                f"  [skip] no through-path spawn/dest for {scene_name} "
-                f"(need forbidden edge > "
-                f"{sim_cfg.sign_distance_from_start + sim_cfg.destination_past_sign_m:.1f}m)"
-            )
+            print(f"  [skip] no through-path spawn/dest for {scene_name}")
             continue
 
         print(f"  Through-path scenarios: {len(scenarios)}")
         scene_entries: List[Dict[str, Any]] = []
         for variant, scenario in enumerate(scenarios):
+            geom_ok, geom_reason = forbidden_edge_geometry_ok(
+                net_full_path,
+                scenario.ego_destination_edge_id,
+                sign_distance_from_start=sim_cfg.sign_distance_from_start,
+                destination_past_sign_m=sim_cfg.destination_past_sign_m,
+            )
+            if not geom_ok:
+                print(
+                    f"  [skip] forbidden-lane geometry {geom_reason} "
+                    f"({scenario.scenario_id})"
+                )
+                continue
+
             if scenario_cfg.validate_metadrive_routes:
                 md_ok, md_reason = _optional_metadrive_route_ok(
                     net_full_path,
@@ -760,7 +733,6 @@ def generate_manifest(
         "traffic_density": sim_cfg.traffic_density,
         "horizon": sim_cfg.horizon,
         "sign_distance_from_start": sim_cfg.sign_distance_from_start,
-        "destination_past_sign_m": sim_cfg.destination_past_sign_m,
         "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
         "sign_distance_before_end": sim_cfg.sign_distance_before_end,
         "generated_at": datetime.now().isoformat(),
@@ -952,10 +924,18 @@ def main(cfg: DictConfig) -> None:
         traffic_density=float(cfg.simulation.traffic_density),
         horizon=int(cfg.simulation.horizon),
         sign_distance_from_start=float(
-            getattr(cfg.simulation, "sign_distance_from_start", 10.0)
+            getattr(
+                cfg.simulation,
+                "sign_distance_from_start",
+                DEFAULT_SIGN_DISTANCE_FROM_START,
+            )
         ),
         destination_past_sign_m=float(
-            getattr(cfg.simulation, "destination_past_sign_m", 8.0)
+            getattr(
+                cfg.simulation,
+                "destination_past_sign_m",
+                DEFAULT_DESTINATION_PAST_SIGN_M,
+            )
         ),
         spawn_distance_before_end=float(
             getattr(

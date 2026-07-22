@@ -8,6 +8,33 @@ from typing import Any
 
 # Shared with generate_manifest.py / run_benchmark.py CLI defaults.
 DEFAULT_SPAWN_DISTANCE_BEFORE_END = 20.0
+DEFAULT_SIGN_DISTANCE_FROM_START = 10.0
+DEFAULT_DESTINATION_PAST_SIGN_M = 8.0
+
+
+def min_forbidden_lane_length_m(
+    sign_distance_from_start: float = DEFAULT_SIGN_DISTANCE_FROM_START,
+    destination_past_sign_m: float = DEFAULT_DESTINATION_PAST_SIGN_M,
+) -> float:
+    """Minimum forbidden-lane length so sign and short route end do not coincide.
+
+    Requires length *strictly greater* than sign offset + past-sign destination.
+    """
+    return float(sign_distance_from_start) + float(destination_past_sign_m)
+
+
+def forbidden_lane_long_enough(
+    length_m: float,
+    *,
+    sign_distance_from_start: float = DEFAULT_SIGN_DISTANCE_FROM_START,
+    destination_past_sign_m: float = DEFAULT_DESTINATION_PAST_SIGN_M,
+) -> bool:
+    """True when the forbidden lane can host sign + destination_past_sign_m."""
+    return float(length_m) > min_forbidden_lane_length_m(
+        sign_distance_from_start,
+        destination_past_sign_m,
+    )
+
 
 # Row fields that may be filled from manifest.json / real_manifest_summary.json.
 EXPERIMENT_DEFAULT_KEYS = (
