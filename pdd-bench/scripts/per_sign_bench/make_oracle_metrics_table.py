@@ -26,19 +26,25 @@ from select_experts import (
 )
 
 
+# All *_rate rows share ONE denominator: the number of unique scenes of the
+# sign (the scene universe observed in the source rows). A missing or
+# filter-failing episode counts as a failure for its policy on that scene, and
+# the ORACLE dest/pass rate becomes its scene coverage — columns are directly
+# comparable. avg_* rows are means over the episodes where the quantity is
+# defined (stated in the row name); a common denominator cannot exist there.
 METRICS = [
     "n (episodes)",
-    "n_passing",
-    "dest_rate (recomputed)",
-    "crash_rate",
-    "out_of_road_rate",
-    "avg_violations (target)",
-    "compliance_rate",
+    "n_scenes (rate denominator)",
+    "dest_rate (of scenes)",
+    "crash_rate (of scenes)",
+    "out_of_road_rate (of scenes)",
+    "avg_violations (target, per episode)",
+    "compliance_rate (of scenes)",
     "compliance among arrived",
-    "avg_comfort",
+    "avg_comfort (per episode)",
     "avg_time_eff (passing)",
     "F1 beta={beta} (passing)",
-    "pass_rate",
+    "pass_rate (of scenes)",
     "oracle picks (of {n})",
 ]
 
@@ -206,24 +212,37 @@ def build_records(rows: list[dict], signs: list[str] | None,
     return records, skipped_unknown_class
 
 
-def aggregate_records(records: list[dict]) -> dict:
+_EMPTY_STATS = {
+    "n": 0,
+    "n_scenes": 0,
+    "dest_rate": None,
+    "crash_rate": None,
+    "out_of_road_rate": None,
+    "avg_violations": None,
+    "compliance_rate": None,
+    "compliance_arrived_rate": None,
+    "arrived_n": 0,
+    "avg_comfort": None,
+    "avg_time_eff": None,
+    "avg_f1": None,
+    "pass_rate": None,
+}
+
+
+def aggregate_records(records: list[dict], n_scenes: int) -> dict:
+    """Column stats for one policy_variant.
+
+    All *_rate values share the common denominator n_scenes (the sign's scene
+    universe): a scene where this policy has no valid episode, or fails the
+    condition, counts against the rate. avg_* values are means over the
+    episodes where the quantity is defined.
+    """
     n = len(records)
-    if n == 0:
-        return {
-            "n": 0,
-            "n_passing": 0,
-            "dest_rate": None,
-            "crash_rate": None,
-            "out_of_road_rate": None,
-            "avg_violations": None,
-            "compliance_rate": None,
-            "compliance_arrived_rate": None,
-            "arrived_n": 0,
-            "avg_comfort": None,
-            "avg_time_eff": None,
-            "avg_f1": None,
-            "pass_rate": None,
-        }
+    if n == 0 or n_scenes == 0:
+        return dict(_EMPTY_STATS, n_scenes=n_scenes)
+
+    def scene_count(pred) -> int:
+        return len({(r["sign"], r["scene_key"]) for r in records if pred(r)})
 
     passing = [r for r in records if r["passing"]]
     arrived = [r for r in records if r["dest_new"]]
@@ -232,14 +251,14 @@ def aggregate_records(records: list[dict]) -> dict:
 
     return {
         "n": n,
-        "n_passing": len(passing),
-        "dest_rate": sum(1 for r in records if r["dest_new"]) / n,
-        "crash_rate": sum(1 for r in records if r["row"].get("crashed")) / n,
+        "n_scenes": n_scenes,
+        "dest_rate": scene_count(lambda r: r["dest_new"]) / n_scenes,
+        "crash_rate": scene_count(lambda r: r["row"].get("crashed")) / n_scenes,
         "out_of_road_rate": (
-            sum(1 for r in records if r["row"].get("out_of_road")) / n
+            scene_count(lambda r: r["row"].get("out_of_road")) / n_scenes
         ),
         "avg_violations": sum(r["target_violations"] for r in records) / n,
-        "compliance_rate": sum(1 for r in records if r["compliant"]) / n,
+        "compliance_rate": scene_count(lambda r: r["compliant"]) / n_scenes,
         "compliance_arrived_rate": (
             sum(1 for r in arrived if r["compliant"]) / len(arrived)
             if arrived else None
@@ -250,42 +269,37 @@ def aggregate_records(records: list[dict]) -> dict:
             sum(passing_time) / len(passing_time) if passing_time else None
         ),
         "avg_f1": sum(passing_f1) / len(passing_f1) if passing_f1 else None,
-        "pass_rate": len(passing) / n,
+        "pass_rate": scene_count(lambda r: r["passing"]) / n_scenes,
     }
 
 
-def aggregate_picks(picks: list[dict]) -> dict:
+def aggregate_picks(picks: list[dict], n_scenes: int) -> dict:
+    """ORACLE_new column stats over the SAME scene denominator.
+
+    dest/compliance/pass rates = covered scenes / n_scenes (scene coverage);
+    an uncovered scene counts as an oracle failure, mirroring the policy
+    columns. avg_* values are means over the picks (top-2 lists may hold two
+    picks per scene).
+    """
     n = len(picks)
-    if n == 0:
-        return {
-            "n": 0,
-            "n_passing": 0,
-            "dest_rate": None,
-            "crash_rate": None,
-            "out_of_road_rate": None,
-            "avg_violations": None,
-            "compliance_rate": None,
-            "compliance_arrived_rate": None,
-            "arrived_n": 0,
-            "avg_comfort": None,
-            "avg_time_eff": None,
-            "avg_f1": None,
-            "pass_rate": None,
-        }
+    if n == 0 or n_scenes == 0:
+        return dict(_EMPTY_STATS, n_scenes=n_scenes)
+    covered = len({(normalize_sign(p.get("sign")), scene_key(p))
+                   for p in picks}) / n_scenes
     return {
         "n": n,
-        "n_passing": n,
-        "dest_rate": 1.0,
+        "n_scenes": n_scenes,
+        "dest_rate": covered,
         "crash_rate": 0.0,
         "out_of_road_rate": 0.0,
         "avg_violations": 0.0,
-        "compliance_rate": 1.0,
+        "compliance_rate": covered,
         "compliance_arrived_rate": 1.0,
         "arrived_n": n,
         "avg_comfort": sum(float(p.get("comfort") or 0.0) for p in picks) / n,
         "avg_time_eff": sum(float(p.get("time_eff") or 0.0) for p in picks) / n,
         "avg_f1": sum(float(p.get("f1_score") or 0.0) for p in picks) / n,
-        "pass_rate": 1.0,
+        "pass_rate": covered,
     }
 
 
@@ -294,7 +308,7 @@ def values_for_stats(stats: dict, oracle_total: int,
     metric_names = [m.format(beta=beta, n=oracle_total) for m in METRICS]
     return {
         metric_names[0]: fmt_count(stats["n"]),
-        metric_names[1]: fmt_count(stats["n_passing"]),
+        metric_names[1]: fmt_count(stats["n_scenes"]),
         metric_names[2]: fmt_rate(stats["dest_rate"]),
         metric_names[3]: fmt_rate(stats["crash_rate"]),
         metric_names[4]: fmt_rate(stats["out_of_road_rate"]),
@@ -318,8 +332,11 @@ def build_table(records: list[dict], picks: list[dict],
     for rec in records:
         by_label[rec["label"]].append(rec)
 
+    # The single rate denominator: unique scenes observed in the source rows.
+    n_scenes = len({(rec["sign"], rec["scene_key"]) for rec in records})
+
     pick_counts = Counter(pick_policy_label(p) for p in picks)
-    oracle_stats = aggregate_picks(picks)
+    oracle_stats = aggregate_picks(picks, n_scenes)
     oracle_total = len(picks)
     metric_names = [m.format(beta=beta, n=oracle_total) for m in METRICS]
 
@@ -331,7 +348,7 @@ def build_table(records: list[dict], picks: list[dict],
             )
             values_by_column[col][metric_names[-1]] = str(oracle_total)
         else:
-            stats = aggregate_records(by_label.get(col, []))
+            stats = aggregate_records(by_label.get(col, []), n_scenes)
             values_by_column[col] = values_for_stats(
                 stats, oracle_total, beta,
             )
