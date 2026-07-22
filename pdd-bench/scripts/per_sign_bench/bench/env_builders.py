@@ -236,8 +236,46 @@ def _apply_manifest_npc_speed_cap(row: dict) -> None:
         cls.MAX_SPEED = cap
 
 
+# Set by run_benchmark.main() before building envs. True (default) teleports ego
+# onto the sign-topology lane after sign placement; run_benchmark flips this to
+# False for NN policies (plant2/carl/ppo_lidar), matching upstream 1300c1e —
+# those policies fail when relocated off the manifest road_id.
+RELOCATE_EGO_TO_SIGN_LANE = True
+
+
+def _sample_profile_for_catalog_row(row: dict, max_steps: int) -> None:
+    """Catalog-direct mode (no materialization): the row has no profile_*.
+
+    Materialization used to sample the NPC profile from the row seed and write
+    it into the manifest; when running straight off catalog.jsonl we do the
+    same on the fly — the same sample_one_profile function and the same seed →
+    the same profile the manifest would have carried. horizon_steps is raised
+    to max_steps (the catalog has none, and the sampler default of 600 would
+    truncate the episode).
+    """
+    if _manifest_profile(row):
+        return  # manifest row — the profile is already baked in
+    import os
+
+    from factorized_space.agent_profile_bank import sample_one_profile
+
+    prof = sample_one_profile(_row_seed(row), horizon_steps=max_steps)
+    for key, value in prof.items():
+        row[f"profile_{key}"] = value
+    # NPC cap at the sign limit: for a manifest the source of truth was
+    # materialization (PER_SIGN_COMPLIANT_NPC=1 → npc_compliant in the row);
+    # for a catalog row we reproduce the same rule from the env variable.
+    if (os.environ.get("PER_SIGN_COMPLIANT_NPC") == "1"
+            and "npc_compliant" not in row):
+        cap = float(row.get("v_target_kmh") or 0.0)
+        if cap > 0:
+            row["npc_compliant"] = True
+            row["npc_speed_cap_kmh"] = cap
+
+
 def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSignSumoEnv:
     SumoTrafficManager.EGO_SAFE_RADIUS = 15
+    _sample_profile_for_catalog_row(row, max_steps)
     _apply_manifest_profile_to_npcs(row)
     _apply_manifest_npc_speed_cap(row)
     traffic_density = _manifest_traffic_density(row, default=0.1)
@@ -277,7 +315,25 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         num_scenarios=100000,
         vehicle_config=vehicle_config,
         debug_one_way_sign_selection=bool(row.get("debug_one_way_sign_selection", False)),
+        relocate_ego_to_sign_lane=RELOCATE_EGO_TO_SIGN_LANE,
     )
+    # Control-rate test toggle. Default MetaDrive = 10 Hz (physics 0.02s *
+    # decision_repeat 5); CARLA runs the controller at 20 Hz. These keys are
+    # GLOBAL (affect NPC stepping + SUMO co-sim step = physics_world_step_size),
+    # so results are only comparable across policies run at the same rate.
+    # Off by default. For exact 20 Hz: EGO_PHYSICS_DT=0.025 EGO_DECISION_REPEAT=2.
+    import os as _os
+    _dr = _os.environ.get("EGO_DECISION_REPEAT")
+    if _dr:
+        config["decision_repeat"] = int(_dr)
+    _dt = _os.environ.get("EGO_PHYSICS_DT")
+    if _dt:
+        config["physics_world_step_size"] = float(_dt)
+    if _dr or _dt:
+        _phys = config.get("physics_world_step_size", 0.02)
+        _rep = config.get("decision_repeat", 5)
+        print(f"[env] sim cadence override: physics_dt={_phys} decision_repeat={_rep} "
+              f"-> {1.0/(_phys*_rep):.1f} Hz", flush=True)
     if row.get("road_id"):
         config["vehicle_config"]["spawn_lane_index"] = row["road_id"]
     if "spawn_lane_num" in row:
@@ -293,6 +349,7 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
     # sumo_runner._build_env so the EVAL actor spawn is correct.
     if is_braking:
         config["ego_braking_spawn"] = True
+        config["ego_spawn_mode"] = str(row.get("spawn_mode", "brake"))
         config["ego_spawn_v0_ms"] = float(row.get("spawn_velocity_ms", 0.0) or 0.0)
         config["ego_brake_d_required"] = float(row.get("d_required_m", 0.0) or 0.0)
         config["ego_v_target_kmh"] = float(row.get("v_target_kmh", 0.0) or 0.0)
