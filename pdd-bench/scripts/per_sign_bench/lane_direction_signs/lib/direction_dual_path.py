@@ -373,12 +373,15 @@ def _dijkstra_from(
     *,
     goal: Optional[str] = None,
     max_cost: float = 800.0,
+    blocked: Optional[Set[str]] = None,
 ) -> Tuple[Dict[str, float], Dict[str, str]]:
+    """Shortest-path tree over edges. ``blocked`` edges are never expanded."""
+    blocked = blocked or set()
     dist: Dict[str, float] = {}
     prev: Dict[str, str] = {}
     pq: List[Tuple[float, str]] = []
     for edge_id, cost0 in starts:
-        if edge_id not in graph.edge_length:
+        if edge_id not in graph.edge_length or edge_id in blocked:
             continue
         if cost0 < dist.get(edge_id, math.inf):
             dist[edge_id] = cost0
@@ -392,6 +395,8 @@ def _dijkstra_from(
         if cost > max_cost:
             continue
         for v, w in graph.adj.get(u, []):
+            if v in blocked:
+                continue
             nd = cost + w
             if nd > max_cost:
                 continue
@@ -456,6 +461,45 @@ def path_revisits_signed_approach(ego_edge_id: str, path: Sequence[str]) -> bool
     return bool(ego_edge_id) and bool(path) and ego_edge_id in path
 
 
+def _sumo_edge_opposite(edge_id: str) -> str:
+    """SUMO reverse of ``edge_id`` (``A`` ↔ ``-A``)."""
+    if edge_id.startswith("-"):
+        return edge_id[1:]
+    return f"-{edge_id}"
+
+
+def path_has_immediate_uturn(path: Sequence[str]) -> bool:
+    """True if consecutive edges are a SUMO forward/back pair (tight U-turn)."""
+    for a, b in zip(path, path[1:]):
+        if not a or not b:
+            continue
+        if _sumo_edge_opposite(a) == b:
+            return True
+    return False
+
+
+def path_rejoins_spawn_corridor(
+    path: Sequence[str],
+    dist_corridor: Dict[str, float],
+    dist_via_turn: Dict[str, float],
+    *,
+    slack_m: float = 5.0,
+) -> bool:
+    """True if a hop after the exclusive exit is cheaper (or equal) via spawn corridor.
+
+    That means the compliant route left the turn arm and rejoined the road the
+    ego could already reach by staying in the spawn lane.
+    """
+    if len(path) < 2:
+        return False
+    for edge in path[1:]:
+        c_turn = dist_via_turn.get(edge, math.inf)
+        c_corr = dist_corridor.get(edge, math.inf)
+        if c_corr <= c_turn + float(slack_m):
+            return True
+    return False
+
+
 def straight_path_reenters_signed_junction(
     net_path: Path | str,
     scenario: DualPathScenario,
@@ -468,8 +512,8 @@ def straight_path_has_dead_end_uturn(
     net_path: Path | str,
     scenario: DualPathScenario,
 ) -> bool:
-    del net_path, scenario
-    return False
+    del net_path
+    return path_has_immediate_uturn(scenario.straight_path)
 
 
 def _lane_dirs(graph: _EdgeGraph, edge_id: str, lane_num: int) -> Set[str]:
@@ -658,18 +702,41 @@ def find_dual_path_scenarios(
                     exclusive = target_exit_edges - spawn_exit_edges
                     if not exclusive:
                         continue
+                    # Only left/right exclusive exits — dest must be on a turn
+                    # arm, not a straight continuation of the approach.
+                    turn_exclusive = {
+                        e
+                        for e in exclusive
+                        if target_exit_dir.get(e) in ("l", "r")
+                    }
+                    if not turn_exclusive:
+                        continue
 
-                    # Destinations via exclusive first exits only.
+                    # Corridor from spawn exits with the exclusive turn blocked.
+                    # A dest is "on the turn" only if reaching it via the turn is
+                    # strictly cheaper than via this corridor (no U-turn-back).
+                    dist_corridor, _ = _dijkstra_from(
+                        graph,
+                        [(e, graph.edge_length[e]) for e in spawn_exit_edges],
+                        max_cost=max_straight_length_m,
+                        blocked=turn_exclusive,
+                    )
+
+                    # Destinations via exclusive turn exits only.
                     dist_from_excl, prev_from_excl = _dijkstra_from(
                         graph,
-                        [(e, graph.edge_length[e]) for e in exclusive],
+                        [(e, graph.edge_length[e]) for e in turn_exclusive],
                         max_cost=max_straight_length_m,
                     )
+                    corridor_slack_m = 5.0
                     dest_candidates = sorted(
                         (
                             (cost, edge)
                             for edge, cost in dist_from_excl.items()
-                            if edge != ego and cost >= float(min_dest_after_exit_m)
+                            if edge != ego
+                            and cost >= float(min_dest_after_exit_m)
+                            and edge not in turn_exclusive
+                            and dist_corridor.get(edge, math.inf) > cost + corridor_slack_m
                         ),
                         key=lambda x: x[0],
                     )
@@ -677,26 +744,34 @@ def find_dual_path_scenarios(
                     for dest_cost, dest in dest_candidates:
                         if kept >= max(1, dests_per_arm):
                             break
-                        correct_path = _rebuild_path(prev_from_excl, exclusive, dest)
+                        correct_path = _rebuild_path(prev_from_excl, turn_exclusive, dest)
                         if not correct_path:
                             continue
                         if path_revisits_signed_approach(ego, correct_path):
                             continue
+                        if path_has_immediate_uturn(correct_path):
+                            continue
+                        if path_rejoins_spawn_corridor(
+                            correct_path, dist_corridor, dist_from_excl, slack_m=corridor_slack_m
+                        ):
+                            continue
                         compliant_first = correct_path[0]
-                        if compliant_first not in exclusive:
+                        if compliant_first not in turn_exclusive:
                             continue
                         # Dest must be past the exclusive first exit (not the stub itself).
-                        if len(correct_path) < 2 and dest in exclusive:
+                        if len(correct_path) < 2:
                             continue
                         # Lane-level: spawn has no first-hop onto the compliant exit.
                         if compliant_first in spawn_exit_edges:
                             continue
 
                         compliant_dir = target_exit_dir.get(compliant_first, "s")
+                        if compliant_dir not in ("l", "r"):
+                            continue
                         wrong_path, wrong_len, wrong_first = _wrong_spur_path(
                             graph,
                             spawn_exit_edges,
-                            avoid={dest, *exclusive},
+                            avoid={dest, *turn_exclusive},
                             max_cost=max_turn_length_m,
                         )
                         if not wrong_path or wrong_first is None:
@@ -875,6 +950,12 @@ def rebuild_dual_path_on_net(
     seed = exclusive
     if scenario.straight_first_exit in exclusive:
         seed = {scenario.straight_first_exit}
+    # Dest must sit on a left/right turn arm, not a straight continuation.
+    if target_exit_dir.get(next(iter(seed))) not in ("l", "r"):
+        # If preferred seed isn't a turn, fall back to turn-only exclusive.
+        seed = {e for e in exclusive if target_exit_dir.get(e) in ("l", "r")}
+        if not seed:
+            return None
 
     correct_path, correct_len, compliant_first = _can_reach_from_exits(
         graph, seed, dest, max_cost=max_straight_length_m
@@ -882,6 +963,29 @@ def rebuild_dual_path_on_net(
     if not correct_path or compliant_first is None:
         return None
     if compliant_first in spawn_exit_edges:
+        return None
+    if target_exit_dir.get(compliant_first) not in ("l", "r"):
+        return None
+    if path_has_immediate_uturn(correct_path):
+        return None
+
+    dist_corridor, _ = _dijkstra_from(
+        graph,
+        [(e, graph.edge_length[e]) for e in spawn_exit_edges],
+        max_cost=max_straight_length_m,
+        blocked=set(seed),
+    )
+    dist_via_turn, _ = _dijkstra_from(
+        graph,
+        [(e, graph.edge_length[e]) for e in seed],
+        max_cost=max_straight_length_m,
+    )
+    corridor_slack_m = 5.0
+    if dist_corridor.get(dest, math.inf) <= correct_len + corridor_slack_m:
+        return None
+    if path_rejoins_spawn_corridor(
+        correct_path, dist_corridor, dist_via_turn, slack_m=corridor_slack_m
+    ):
         return None
 
     wrong_path, wrong_len, wrong_first = _wrong_spur_path(

@@ -23,8 +23,12 @@ class LaneDirectionsSign(DirectionSign):
         # Original allowed exits from meta (before connector injection for baseline).
         # Format: {lane_index_str: {dir: [to_edge, ...], ...}, ...}
         self._original_allowed_exits = kwargs.pop("original_allowed_exits_by_lane", None)
+        # Never show a board icon for 5.15.1 (top-down or 3D).
+        kwargs.pop("icon_path", None)
+        kwargs["show_model"] = False
         # DirectionSign.__init__ calls BaseTrafficSign.__init__
         super().__init__(lane, **kwargs)
+        self.icon_path = None
         self.applicable_lanes = self._collect_applicable_lanes()
         self.applicable_lane_ids = {
             getattr(l, "index", None) for l in self.applicable_lanes if l is not None
@@ -155,8 +159,16 @@ class LaneDirectionsSign(DirectionSign):
         )
 
     def get_top_down_icon_poses(self):
-        # Board is informational for crop/GIFs; pavement arrows carry the dirs.
+        # Never draw a top-down board icon for 5.15.1 (pavement arrows only).
         return []
+
+    @property
+    def top_down_length(self):
+        return 0
+
+    @property
+    def top_down_width(self):
+        return 0
 
 
 # Alias kept for registry clarity.
