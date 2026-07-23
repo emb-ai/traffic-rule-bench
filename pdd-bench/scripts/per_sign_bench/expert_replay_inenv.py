@@ -10,7 +10,12 @@ places the sign at the recorded offsets, then runs one of:
              "new_policy" ← drive a fresh policy (e.g. IDM) for comparison
              "live"       ← whatever env.config["agent_policy"] dictates
 
-  npc_mode = "recorded"   ← NPCs frozen to pkl tracks via ScenarioReplayPolicy
+  npc_mode = "recorded"   ← live NPCs matched to pkl tracks by proximity and
+                            teleported (composition may drift from the pkl)
+             "ghost"      ← live traffic is removed entirely; EVERY recorded
+                            object id gets its own spawned vehicle driven by
+                            the pkl — exact 1:1 composition, including
+                            mid-episode spawns/despawns
              "live"       ← NPCs keep their own managers (PG/SumoTraffic)
 
 Usage:
@@ -98,7 +103,7 @@ def replay_in_our_env(
     # pkl format: {frame: [[FrameInfo, ...], ...], ...}
     # Each FrameInfo.step_info[obj_id] = {position, heading_theta, velocity, ...}
     npc_frames = []
-    if npc_mode == "recorded" and "frame" in scenario:
+    if npc_mode in ("recorded", "ghost") and "frame" in scenario:
         for frame_group in scenario["frame"]:
             if frame_group:
                 npc_frames.append(frame_group[0].step_info)
@@ -232,6 +237,62 @@ def replay_in_our_env(
                 print(f"[info] removed {removed}/{len(stray)} live objects "
                       f"absent from the recording")
 
+        def _spawn_ghost(state):
+            """Spawn a replay-driven vehicle for one recorded object state."""
+            from metadrive.component.vehicle.vehicle_type import DefaultVehicle
+            cfg = {"spawn_lane_index": env.vehicle.config["spawn_lane_index"],
+                   "spawn_longitude": 5.0, "destination": None}
+            v = env.engine.spawn_object(DefaultVehicle, vehicle_config=cfg)
+            pos = state.get("position", [0, 0, 0])
+            v.set_position([float(pos[0]), float(pos[1])])
+            v.set_heading_theta(float(state.get("heading_theta", 0.0)))
+            if "velocity" in state:
+                try:
+                    v.set_velocity(state["velocity"])
+                except Exception:
+                    pass
+            return v
+
+        if npc_mode == "ghost" and npc_frames:
+            rec_frame0 = npc_frames[0]
+            ego_pos = env.vehicle.position
+            best_ego_dist = 10.0
+            for rid, rstate in rec_frame0.items():
+                rpos = rstate.get("position", [0, 0, 0])
+                d = ((rpos[0] - ego_pos[0]) ** 2
+                     + (rpos[1] - ego_pos[1]) ** 2) ** 0.5
+                if d < best_ego_dist:
+                    best_ego_dist = d
+                    ego_rec_id = rid
+            if ego_rec_id:
+                obj_map[ego_rec_id] = env.vehicle
+
+            # Remove the live traffic entirely and silence its manager: the
+            # recording is the only source of truth for NPC composition.
+            for mgr in getattr(env.engine, "_managers", {}).values():
+                tv = getattr(mgr, "_traffic_vehicles", None)
+                if tv is None:
+                    continue
+                ids = [v.id for v in tv]
+                tv[:] = []
+                for lid in ids:
+                    try:
+                        env.engine.clear_objects([lid])
+                    except Exception:
+                        pass
+                mgr.before_step = lambda *a, **kw: dict()
+                mgr.after_step = lambda *a, **kw: dict()
+            for rid, rstate in rec_frame0.items():
+                if rid == ego_rec_id or rid in obj_map:
+                    continue
+                try:
+                    obj_map[rid] = _spawn_ghost(rstate)
+                except Exception as exc:
+                    print(f"[warn] ghost spawn failed for {rid}: {exc}")
+            print(f"[info] ghost replay: live traffic removed, spawned "
+                  f"{len(obj_map) - (1 if ego_rec_id else 0)} of "
+                  f"{len(rec_frame0) - (1 if ego_rec_id else 0)} recorded NPCs")
+
         expert_actions = sidecar.get("expert_actions", [])
         violations_replay = []
         prev_violating: set = set()
@@ -240,8 +301,25 @@ def replay_in_our_env(
 
         for step in range(min(max_steps, n_replay_frames)):
             # 1. Set ALL object states from pkl BEFORE env.step
-            if npc_mode == "recorded" and step < len(npc_frames):
+            if npc_mode in ("recorded", "ghost") and step < len(npc_frames):
                 frame_data = npc_frames[step]
+                if npc_mode == "ghost":
+                    # Mirror the recording's composition: despawn ids gone
+                    # from this frame, spawn ids that appear mid-episode.
+                    for rid in [r for r in obj_map
+                                if r != ego_rec_id and r not in frame_data]:
+                        try:
+                            env.engine.clear_objects([obj_map[rid].id])
+                        except Exception:
+                            pass
+                        obj_map.pop(rid, None)
+                    for rid, state in frame_data.items():
+                        if rid == ego_rec_id or rid in obj_map:
+                            continue
+                        try:
+                            obj_map[rid] = _spawn_ghost(state)
+                        except Exception:
+                            pass
                 for rid, live_obj in obj_map.items():
                     state = frame_data.get(rid)
                     if state is None:
@@ -262,7 +340,7 @@ def replay_in_our_env(
             _, _, term, trunc, info = env.step(action)
 
             # 3. Override positions AGAIN after step (physics may have moved them)
-            if npc_mode == "recorded" and step < len(npc_frames):
+            if npc_mode in ("recorded", "ghost") and step < len(npc_frames):
                 frame_data = npc_frames[step]
                 for rid, live_obj in obj_map.items():
                     state = frame_data.get(rid)
@@ -302,7 +380,7 @@ def replay_in_our_env(
             # termination signal (e.g. a residual phantom collision) must not
             # cut the replay short. Other modes keep normal env semantics.
             if (term or trunc) and not (ego_mode == "recorded"
-                                        and npc_mode == "recorded"):
+                                        and npc_mode in ("recorded", "ghost")):
                 break
 
         if save_gif:
@@ -352,7 +430,8 @@ def main():
     parser.add_argument("--preset", type=str, default="mini")
     parser.add_argument("--ego-mode", choices=["recorded", "new_policy", "live"],
                         default="recorded")
-    parser.add_argument("--npc-mode", choices=["recorded", "live"], default="recorded")
+    parser.add_argument("--npc-mode", choices=["recorded", "ghost", "live"],
+                        default="recorded")
     parser.add_argument("--render-2d", action="store_true")
     parser.add_argument("--render-3d", action="store_true")
     parser.add_argument("--save-gif", type=str, default=None)
