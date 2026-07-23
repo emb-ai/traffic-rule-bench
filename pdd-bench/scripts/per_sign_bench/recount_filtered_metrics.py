@@ -80,6 +80,11 @@ def load(csv_path: Path, manifest_path: Path) -> pd.DataFrame:
 
     man = pd.DataFrame(
         json.loads(line) for line in open(manifest_path, encoding="utf-8"))
+    # v_target_kmh exists only in speed-sign catalogs (3.24/4.6/5.21/5.31);
+    # detour and other catalogs have none — the A6 sets (F2/F3) don't need it,
+    # only the uniform-weight metrics do, so default it to None.
+    if "v_target_kmh" not in man.columns:
+        man["v_target_kmh"] = None
     man = man[["scene_id", "seed", "v_target_kmh"]]
     df = df.merge(man, on=["scene_id", "seed"], how="left")
 
