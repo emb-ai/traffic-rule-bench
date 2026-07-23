@@ -5,10 +5,16 @@ Layout written under ``plant2_dir``::
     data/<scene_uid>_<variant>/
         boxes/NNNN.json.gz
         measurements/NNNN.json.gz
+        bev_no_car_semantics/NNNN.png              # semantic indices 0-4 (256²)
+        bev_no_car_semantics_augmented/NNNN.png    # same when aug offsets are 0
         results.json.gz
     slurm/run_files/logs/qsub_out2025_07.log   # required by PlanTDataset(filter_routes=True)
 
 Frames are captured *before* each ``env.step`` (PlanTDataset convention).
+
+BEV is required for default PlanT training (``model.training.input_bev=True``):
+``PlanTDataset`` loads the PNG, crops ``[64:-64, 64:-64]`` → 128², then
+colours via ``PlanTVariables.bev_colors``.
 """
 from __future__ import annotations
 
@@ -22,6 +28,9 @@ import numpy as np
 _MAX_TARGET_SPEED = 20.0  # max from PlanTVariables.target_speeds (m/s)
 _TIMESTAMP = "2025_07_20_00_00_00"
 _LOG_SUFFIX = "_".join(_TIMESTAMP.split("_")[:2])  # "2025_07"
+# 256 so PlanTDataset crop 64:-64 yields 128 (model / CARLA convention).
+_BEV_RESOLUTION = 256
+_BEV_SIZE_METERS = 64.0
 
 
 def build_ego_matrix(position, heading: float) -> list:
@@ -206,12 +215,41 @@ def plant2_route_dir(plant2_dir: Path, scene_uid: str, variant: str) -> Path:
     return Path(plant2_dir) / "data" / f"{scene_uid}_{variant}"
 
 
-class Plant2FrameCollector:
-    """Accumulate pre-step PlanT2 boxes/measurements and flush to disk."""
+def render_bev_semantics(engine, vehicle,
+                         resolution: int = _BEV_RESOLUTION,
+                         size_meters: float = _BEV_SIZE_METERS):
+    """Semantic BEV index map (H, W) uint8, or None if render fails."""
+    try:
+        from metadrive.policy.metadrive_obs_to_plant2 import render_bev_plant2
+        sem = render_bev_plant2(
+            engine, vehicle,
+            resolution=resolution,
+            size_meters=size_meters,
+            device="cpu",
+            return_semantic_map=True,
+        )
+        if sem is None:
+            return None
+        return np.asarray(sem, dtype=np.uint8)
+    except Exception:
+        return None
 
-    def __init__(self, row: dict):
+
+def write_bev_png(path: Path, sem_map: np.ndarray) -> None:
+    """Write PlanTDataset-compatible semantic index PNG (mode L)."""
+    from PIL import Image
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(np.asarray(sem_map, dtype=np.uint8), mode="L").save(str(path))
+
+
+class Plant2FrameCollector:
+    """Accumulate pre-step PlanT2 boxes/measurements(/BEV) and flush to disk."""
+
+    def __init__(self, row: dict, save_bev: bool = True):
         self.row = row
-        self.step_records: list[tuple[list, dict]] = []
+        self.save_bev = bool(save_bev)
+        # (boxes, measurements, optional sem_map)
+        self.step_records: list[tuple[list, dict, np.ndarray | None]] = []
 
     def on_step(self, base_env, row: dict | None = None) -> None:
         """Capture one frame from the current pre-action env state."""
@@ -246,15 +284,27 @@ class Plant2FrameCollector:
             "augmentation_translation": 0.0,
             "augmentation_rotation": 0.0,
         }
-        self.step_records.append((boxes, measurements))
+        sem_map = None
+        if self.save_bev:
+            sem_map = render_bev_semantics(engine, vehicle)
+        self.step_records.append((boxes, measurements, sem_map))
 
     def flush(self, route_dir: Path, success: bool) -> int:
-        """Write boxes/measurements/results under ``route_dir``. Returns frame count."""
+        """Write boxes/measurements/BEV/results under ``route_dir``. Returns frame count."""
         route_dir = Path(route_dir)
-        for idx, (bxs, meas) in enumerate(self.step_records):
+        n_bev = 0
+        for idx, (bxs, meas, sem) in enumerate(self.step_records):
             fname = f"{idx:04d}.json.gz"
             write_gz_json(route_dir / "boxes" / fname, bxs)
             write_gz_json(route_dir / "measurements" / fname, meas)
+            if sem is not None:
+                png = f"{idx:04d}.png"
+                # PlanTDataset with augment=True also opens the *_augmented path.
+                # Our aug offsets are 0 → same semantic map is a valid stand-in.
+                write_bev_png(route_dir / "bev_no_car_semantics" / png, sem)
+                write_bev_png(
+                    route_dir / "bev_no_car_semantics_augmented" / png, sem)
+                n_bev += 1
 
         score = 100.0 if success else 0.0
         results = {
@@ -265,4 +315,9 @@ class Plant2FrameCollector:
             "timestamp": _TIMESTAMP,
         }
         write_gz_json(route_dir / "results.json.gz", results)
+        if self.save_bev and n_bev == 0 and self.step_records:
+            print("[plant2] WARNING: save_bev=True but no BEV frames written "
+                  "(render_bev_semantics returned None)")
+        elif self.save_bev:
+            print(f"[plant2] wrote {n_bev} BEV frames under {route_dir}")
         return len(self.step_records)
