@@ -70,8 +70,13 @@ def build_replay_row(pick: dict) -> dict | None:
 
     out["initial_speed_mps"] = metrics.get("initial_speed_mps") or out.get("spawn_velocity_ms") or 0.0
     out["recorded_final_step"] = metrics.get("final_step")
-    out["recorded_total_violations"] = metrics.get("total_violations")
-    out["recorded_violations_by_class"] = metrics.get("violations_by_class") or {}
+    # Event-counted semantics; new sidecars carry them under *_event (their
+    # total_violations/violations_by_class are per-step), legacy ones directly.
+    out["recorded_total_violations"] = metrics.get(
+        "violations_event_count", metrics.get("total_violations"))
+    out["recorded_violations_by_class"] = (metrics.get("violations_by_class_event")
+                                           or metrics.get("violations_by_class")
+                                           or {})
     out["recorded_arrived_dest"] = metrics.get("arrived_dest")
     out["recorded_route_completion"] = metrics.get("route_completion")
     out["recorded_total_reward"] = metrics.get("total_reward")

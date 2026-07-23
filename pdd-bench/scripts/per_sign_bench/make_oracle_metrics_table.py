@@ -26,19 +26,27 @@ from select_experts import (
 )
 
 
+# Every row except "n" and "compliance among arrived" shares ONE denominator:
+# the number of unique scenes of the sign (the scene universe observed in the
+# source rows). A missing or filter-failing episode counts as a failure for
+# its policy on that scene; for avg_* rows such a scene contributes 0 to the
+# numerator. This makes every column (policies and ORACLE) a per-scene
+# expectation over the SAME task set — directly comparable, with no
+# survivor-selection bias in the avg rows. "compliance among arrived" is the
+# only intentionally conditional row (its own n is shown in parentheses).
 METRICS = [
     "n (episodes)",
-    "n_passing",
-    "dest_rate (recomputed)",
-    "crash_rate",
-    "out_of_road_rate",
-    "avg_violations (target)",
-    "compliance_rate",
+    "n_scenes (common denominator)",
+    "dest_rate (of scenes)",
+    "crash_rate (of scenes)",
+    "out_of_road_rate (of scenes)",
+    "avg_violations (target, per scene)",
+    "compliance_rate (of scenes)",
     "compliance among arrived",
-    "avg_comfort",
-    "avg_time_eff (passing)",
-    "F1 beta={beta} (passing)",
-    "pass_rate",
+    "avg_comfort (per scene, 0 if missing)",
+    "avg_time_eff (per scene, 0 if not passed)",
+    "F1 beta={beta} (per scene, 0 if not passed)",
+    "pass_rate (of scenes)",
     "oracle picks (of {n})",
 ]
 
@@ -86,8 +94,9 @@ def scene_key(row: dict) -> str | None:
 def policy_label(policy: str | None, variant: str | None) -> str:
     policy = policy or "unknown"
     variant = variant or "default"
-    if policy == "comprehensive":
-        return f"comp_{variant}"
+    # The IDM-family expert is reported as "idm_rule" in the tables.
+    if policy in {"comprehensive", "comprehensive_rule_expert"}:
+        return f"idm_rule_{variant}"
     if policy in {"ppo_signs", "carl_signs", "plant2_signs"}:
         return policy
     if policy in POLICY_ALIASES:
@@ -106,10 +115,10 @@ def pick_policy_label(pick: dict) -> str:
 
 
 def column_sort_key(label: str) -> tuple:
-    if label == "comp_default":
+    if label == "idm_rule_default":
         return (0, 0, "")
-    if label.startswith("comp_s"):
-        suffix = label[6:]
+    if label.startswith("idm_rule_s"):
+        suffix = label[10:]
         if suffix.isdigit():
             return (0, int(suffix), "")
         return (0, 1000, suffix)
@@ -162,8 +171,10 @@ def build_records(rows: list[dict], signs: list[str] | None,
         if not skey:
             continue
 
-        target_viol = int((row.get("violations_by_class") or {})
-                          .get(target_class, 0) or 0)
+        vbc = row.get("violations_by_class_event")
+        if vbc is None:  # legacy rows: event counts under violations_by_class
+            vbc = row.get("violations_by_class") or {}
+        target_viol = int(vbc.get(target_class, 0) or 0)
         # min_final_step=0: anti-bug filter is for expert_selection, NOT metric compute.
         passed = passes_filter(row, sign, target_class, horizon, min_final_step=0)
         records.append({
@@ -203,24 +214,37 @@ def build_records(rows: list[dict], signs: list[str] | None,
     return records, skipped_unknown_class
 
 
-def aggregate_records(records: list[dict]) -> dict:
+_EMPTY_STATS = {
+    "n": 0,
+    "n_scenes": 0,
+    "dest_rate": None,
+    "crash_rate": None,
+    "out_of_road_rate": None,
+    "avg_violations": None,
+    "compliance_rate": None,
+    "compliance_arrived_rate": None,
+    "arrived_n": 0,
+    "avg_comfort": None,
+    "avg_time_eff": None,
+    "avg_f1": None,
+    "pass_rate": None,
+}
+
+
+def aggregate_records(records: list[dict], n_scenes: int) -> dict:
+    """Column stats for one policy_variant.
+
+    All *_rate values share the common denominator n_scenes (the sign's scene
+    universe): a scene where this policy has no valid episode, or fails the
+    condition, counts against the rate. avg_* values are means over the
+    episodes where the quantity is defined.
+    """
     n = len(records)
-    if n == 0:
-        return {
-            "n": 0,
-            "n_passing": 0,
-            "dest_rate": None,
-            "crash_rate": None,
-            "out_of_road_rate": None,
-            "avg_violations": None,
-            "compliance_rate": None,
-            "compliance_arrived_rate": None,
-            "arrived_n": 0,
-            "avg_comfort": None,
-            "avg_time_eff": None,
-            "avg_f1": None,
-            "pass_rate": None,
-        }
+    if n == 0 or n_scenes == 0:
+        return dict(_EMPTY_STATS, n_scenes=n_scenes)
+
+    def scene_count(pred) -> int:
+        return len({(r["sign"], r["scene_key"]) for r in records if pred(r)})
 
     passing = [r for r in records if r["passing"]]
     arrived = [r for r in records if r["dest_new"]]
@@ -229,60 +253,61 @@ def aggregate_records(records: list[dict]) -> dict:
 
     return {
         "n": n,
-        "n_passing": len(passing),
-        "dest_rate": sum(1 for r in records if r["dest_new"]) / n,
-        "crash_rate": sum(1 for r in records if r["row"].get("crashed")) / n,
+        "n_scenes": n_scenes,
+        "dest_rate": scene_count(lambda r: r["dest_new"]) / n_scenes,
+        "crash_rate": scene_count(lambda r: r["row"].get("crashed")) / n_scenes,
         "out_of_road_rate": (
-            sum(1 for r in records if r["row"].get("out_of_road")) / n
+            scene_count(lambda r: r["row"].get("out_of_road")) / n_scenes
         ),
-        "avg_violations": sum(r["target_violations"] for r in records) / n,
-        "compliance_rate": sum(1 for r in records if r["compliant"]) / n,
+        "avg_violations": sum(r["target_violations"] for r in records) / n_scenes,
+        "compliance_rate": scene_count(lambda r: r["compliant"]) / n_scenes,
         "compliance_arrived_rate": (
             sum(1 for r in arrived if r["compliant"]) / len(arrived)
             if arrived else None
         ),
         "arrived_n": len(arrived),
-        "avg_comfort": sum(r["comfort"] for r in records) / n,
-        "avg_time_eff": (
-            sum(passing_time) / len(passing_time) if passing_time else None
-        ),
-        "avg_f1": sum(passing_f1) / len(passing_f1) if passing_f1 else None,
-        "pass_rate": len(passing) / n,
+        "avg_comfort": sum(r["comfort"] for r in records) / n_scenes,
+        "avg_time_eff": sum(passing_time) / n_scenes,
+        "avg_f1": sum(passing_f1) / n_scenes,
+        "pass_rate": scene_count(lambda r: r["passing"]) / n_scenes,
     }
 
 
-def aggregate_picks(picks: list[dict]) -> dict:
+def aggregate_picks(picks: list[dict], n_scenes: int) -> dict:
+    """ORACLE_new column stats over the SAME scene denominator.
+
+    dest/compliance/pass rates = covered scenes / n_scenes (scene coverage);
+    an uncovered scene counts as an oracle failure, mirroring the policy
+    columns. avg_* values are per-scene: the best (rank-1) pick represents its
+    scene (top-2 lists hold two picks per scene) and an uncovered scene
+    contributes 0 — the same convention as the policy columns.
+    """
     n = len(picks)
-    if n == 0:
-        return {
-            "n": 0,
-            "n_passing": 0,
-            "dest_rate": None,
-            "crash_rate": None,
-            "out_of_road_rate": None,
-            "avg_violations": None,
-            "compliance_rate": None,
-            "compliance_arrived_rate": None,
-            "arrived_n": 0,
-            "avg_comfort": None,
-            "avg_time_eff": None,
-            "avg_f1": None,
-            "pass_rate": None,
-        }
+    if n == 0 or n_scenes == 0:
+        return dict(_EMPTY_STATS, n_scenes=n_scenes)
+    best_by_scene: dict[tuple, dict] = {}
+    for p in picks:
+        key = (normalize_sign(p.get("sign")), scene_key(p))
+        cur = best_by_scene.get(key)
+        if cur is None or (float(p.get("f1_score") or 0.0)
+                           > float(cur.get("f1_score") or 0.0)):
+            best_by_scene[key] = p
+    best = list(best_by_scene.values())
+    covered = len(best) / n_scenes
     return {
         "n": n,
-        "n_passing": n,
-        "dest_rate": 1.0,
+        "n_scenes": n_scenes,
+        "dest_rate": covered,
         "crash_rate": 0.0,
         "out_of_road_rate": 0.0,
         "avg_violations": 0.0,
-        "compliance_rate": 1.0,
+        "compliance_rate": covered,
         "compliance_arrived_rate": 1.0,
         "arrived_n": n,
-        "avg_comfort": sum(float(p.get("comfort") or 0.0) for p in picks) / n,
-        "avg_time_eff": sum(float(p.get("time_eff") or 0.0) for p in picks) / n,
-        "avg_f1": sum(float(p.get("f1_score") or 0.0) for p in picks) / n,
-        "pass_rate": 1.0,
+        "avg_comfort": sum(float(p.get("comfort") or 0.0) for p in best) / n_scenes,
+        "avg_time_eff": sum(float(p.get("time_eff") or 0.0) for p in best) / n_scenes,
+        "avg_f1": sum(float(p.get("f1_score") or 0.0) for p in best) / n_scenes,
+        "pass_rate": covered,
     }
 
 
@@ -291,7 +316,7 @@ def values_for_stats(stats: dict, oracle_total: int,
     metric_names = [m.format(beta=beta, n=oracle_total) for m in METRICS]
     return {
         metric_names[0]: fmt_count(stats["n"]),
-        metric_names[1]: fmt_count(stats["n_passing"]),
+        metric_names[1]: fmt_count(stats["n_scenes"]),
         metric_names[2]: fmt_rate(stats["dest_rate"]),
         metric_names[3]: fmt_rate(stats["crash_rate"]),
         metric_names[4]: fmt_rate(stats["out_of_road_rate"]),
@@ -315,8 +340,11 @@ def build_table(records: list[dict], picks: list[dict],
     for rec in records:
         by_label[rec["label"]].append(rec)
 
+    # The single rate denominator: unique scenes observed in the source rows.
+    n_scenes = len({(rec["sign"], rec["scene_key"]) for rec in records})
+
     pick_counts = Counter(pick_policy_label(p) for p in picks)
-    oracle_stats = aggregate_picks(picks)
+    oracle_stats = aggregate_picks(picks, n_scenes)
     oracle_total = len(picks)
     metric_names = [m.format(beta=beta, n=oracle_total) for m in METRICS]
 
@@ -328,7 +356,7 @@ def build_table(records: list[dict], picks: list[dict],
             )
             values_by_column[col][metric_names[-1]] = str(oracle_total)
         else:
-            stats = aggregate_records(by_label.get(col, []))
+            stats = aggregate_records(by_label.get(col, []), n_scenes)
             values_by_column[col] = values_for_stats(
                 stats, oracle_total, beta,
             )
@@ -415,6 +443,13 @@ def main() -> None:
     p.add_argument("--horizon", type=int, default=HORIZON_DEFAULT)
     p.add_argument("--output-dir", default=".",
                    help="where to write oracle_metrics_*.tsv/md")
+    p.add_argument("--universe", choices=["all", "covered"], default="all",
+                   help="scene universe for the rate denominator: 'all' = "
+                        "every scene seen in the source rows; 'covered' = "
+                        "only scenes that received an oracle pick, i.e. the "
+                        "unified solvable set (the oracle is 1.00 there by "
+                        "construction; policy rates show their true share "
+                        "of solvable scenes)")
     args = p.parse_args()
 
     if not args.jsonl:
@@ -437,6 +472,16 @@ def main() -> None:
         for sign, n in sorted(skipped_unknown.items()):
             print(f"[warn] skipped {n} rows for unknown sign class: {sign}",
                   file=sys.stderr)
+
+    if args.universe == "covered":
+        covered_keys = {(normalize_sign(p_.get("sign")), scene_key(p_))
+                        for p_ in picks}
+        n_full = len({(r["sign"], r["scene_key"]) for r in records})
+        records = [r for r in records
+                   if (r["sign"], r["scene_key"]) in covered_keys]
+        n_kept = len({(r["sign"], r["scene_key"]) for r in records})
+        print(f"universe=covered: kept {n_kept} of {n_full} scenes "
+              f"({n_full - n_kept} uncovered dropped)")
 
     observed_columns = {r["label"] for r in records}
     observed_columns.update(pick_policy_label(p) for p in picks)

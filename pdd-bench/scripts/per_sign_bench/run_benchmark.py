@@ -361,6 +361,60 @@ def _run_rollout(env, base_env, policy_obj, *, max_steps: int,
     return r
 
 
+def build_sidecar_metrics(r: Rollout) -> dict:
+    """Sidecar `metrics` block from a finished Rollout — the single source of
+    truth for the replay.json metrics schema (also imported by expert_replay.py,
+    so the recorder and the eval can never drift apart on metric semantics)."""
+    return {
+        "arrived_dest": bool(r.reached_dest),
+        "crashed": r.crashed_flag_raw,
+        "crash_attribution": r.crash_attribution,
+        "crashed_ego_fault": r.crashed_ego_fault,
+        "crashed_npc_fault": r.crashed_npc_fault,
+        "out_of_road": bool(r.out_of_road),
+        "final_step": int(r.steps),
+        # Per-step counts (frames where any sign was violating)
+        "total_violations": int(r.violations),
+        # 3-bucket per-step (run_benchmark-style):
+        "violations_by_class": {
+            "sign": int(r.sign_violations),
+            "traffic_light": int(r.traffic_light_violations),
+            "crosswalk": int(r.crosswalk_violations),
+        },
+        # Per-class per-step (NEW — combines both styles):
+        # {StopSign: 50, TrafficLightSign: 5, ...}
+        "violations_by_class_step": dict(r.violations_by_class_step),
+        # Steps ego was inside (or approaching) any sign's zone.
+        # Pair with violations_by_class_step → per-zone violation rate.
+        "in_zone_total_steps": int(r.in_zone_total_steps),
+        "in_zone_by_class_step": dict(r.in_zone_by_class_step),
+        # Edge-counts (expert_replay style — one event per class
+        # transition not-violating → started-violating):
+        "violations_event_count": int(r.violations_event_count),
+        "violations_by_class_event": dict(r.violations_by_class_event),
+        "violations_timeline": list(r.violations_timeline),
+        "route_completion": (float(r.route_completion_pct) / 100.0
+                              if r.route_completion_pct else 0.0),
+        "total_reward": round(float(r.total_reward), 4),
+        "smoothness_ratio": r.smoothness["smoothness_ratio"],
+        "frame_smooth_ratio": r.smoothness["frame_smooth_ratio"],
+        "smooth_segments": r.smoothness["smooth_segments"],
+        "total_segments": r.smoothness["total_segments"],
+        "driving_score": float(r.driving_score),
+        "driving_efficiency": float(r.driving_efficiency),
+        "infraction_penalty": float(r.infraction_penalty),
+        "min_ttc_sec": float(r.min_ttc) if r.min_ttc is not None else None,
+        "mean_abs_lane_offset": r.mean_abs_lane_offset,
+        "mean_abs_steer_delta": r.mean_abs_steer_delta,
+        "hard_brake_count": int(r.hard_brake_count),
+        "hard_accel_count": int(r.hard_accel_count),
+        "route_length_m": (float(r.route_length_m)
+                            if r.route_length_m is not None else None),
+        "distance_travelled_m": float(r.distance_travelled_m),
+        "success": bool(r.reached_dest and not r.crashed_flag_raw and not r.out_of_road),
+    }
+
+
 def run_one_episode(
     row: dict,
     backend: str,
@@ -398,10 +452,9 @@ def run_one_episode(
             return _error_result(row, setup_error, backend=backend)
 
         # Resolve + instantiate the ego BasePolicy and apply the IDM ego variant.
-        # Braking spawn: the default ego-IDM "holds v0" (desired speed ≥ spawn
-        # speed) so a sign-unaware agent enters the zone above the limit instead
-        # of decaying to 36 km/h right at the sign (vacuous v40 compliance).
-        # The rule expert is capped by the sign itself.
+        # Braking-spawn: default ego-IDM "holds v0" (desired speed >= spawn speed)
+        # so a sign-unaware agent enters the zone above the limit instead of decaying
+        # to 36 km/h right at the sign (vacuous v40 compliance). Rule-expert: sign-capped.
         ego_hold_speed_ms = None
         if row.get("braking_spawn"):
             try:
@@ -434,54 +487,7 @@ def run_one_episode(
                 out_replay.mkdir(parents=True, exist_ok=True)
                 sidecar_path = out_replay / "replay.json"
 
-                sidecar_metrics = {
-                    "arrived_dest": bool(r.reached_dest),
-                    "crashed": r.crashed_flag_raw,
-                    "crash_attribution": r.crash_attribution,
-                    "crashed_ego_fault": r.crashed_ego_fault,
-                    "crashed_npc_fault": r.crashed_npc_fault,
-                    "out_of_road": bool(r.out_of_road),
-                    "final_step": int(r.steps),
-                    # Per-step counts (frames where any sign was violating)
-                    "total_violations": int(r.violations),
-                    # 3-bucket per-step (run_benchmark-style):
-                    "violations_by_class": {
-                        "sign": int(r.sign_violations),
-                        "traffic_light": int(r.traffic_light_violations),
-                        "crosswalk": int(r.crosswalk_violations),
-                    },
-                    # Per-class per-step (NEW — combines both styles):
-                    # {StopSign: 50, TrafficLightSign: 5, ...}
-                    "violations_by_class_step": dict(r.violations_by_class_step),
-                    # Steps ego was inside (or approaching) any sign's zone.
-                    # Pair with violations_by_class_step → per-zone violation rate.
-                    "in_zone_total_steps": int(r.in_zone_total_steps),
-                    "in_zone_by_class_step": dict(r.in_zone_by_class_step),
-                    # Edge-counts (expert_replay style — one event per class
-                    # transition not-violating → started-violating):
-                    "violations_event_count": int(r.violations_event_count),
-                    "violations_by_class_event": dict(r.violations_by_class_event),
-                    "violations_timeline": list(r.violations_timeline),
-                    "route_completion": (float(r.route_completion_pct) / 100.0
-                                          if r.route_completion_pct else 0.0),
-                    "total_reward": round(float(r.total_reward), 4),
-                    "smoothness_ratio": r.smoothness["smoothness_ratio"],
-                    "frame_smooth_ratio": r.smoothness["frame_smooth_ratio"],
-                    "smooth_segments": r.smoothness["smooth_segments"],
-                    "total_segments": r.smoothness["total_segments"],
-                    "driving_score": float(r.driving_score),
-                    "driving_efficiency": float(r.driving_efficiency),
-                    "infraction_penalty": float(r.infraction_penalty),
-                    "min_ttc_sec": float(r.min_ttc) if r.min_ttc is not None else None,
-                    "mean_abs_lane_offset": r.mean_abs_lane_offset,
-                    "mean_abs_steer_delta": r.mean_abs_steer_delta,
-                    "hard_brake_count": int(r.hard_brake_count),
-                    "hard_accel_count": int(r.hard_accel_count),
-                    "route_length_m": (float(r.route_length_m)
-                                        if r.route_length_m is not None else None),
-                    "distance_travelled_m": float(r.distance_travelled_m),
-                    "success": bool(r.reached_dest and not r.crashed_flag_raw and not r.out_of_road),
-                }
+                sidecar_metrics = build_sidecar_metrics(r)
                 sidecar = {
                     "scene_id": scene_id_for_uid,
                     "scene_uid": scene_uid,
