@@ -67,8 +67,6 @@ def main() -> None:
     ap.add_argument("--picks", required=True,
                     help="experts_scene_uid_top1.jsonl (or any picks jsonl)")
     ap.add_argument("--path-map", default=None, help="OLD=NEW path prefix swap")
-    ap.add_argument("--slack", type=float, default=30.0,
-                    help="allowed start_dist excess over sign_s, m (default 30)")
     ap.add_argument("--limit", type=int, default=0,
                     help="audit only the first N picks (0 = all)")
     ap.add_argument("--out-csv", default=None)
@@ -106,14 +104,24 @@ def main() -> None:
             sign_s = float(sc.get("source_row", {}).get("sign_s")
                            or sc.get("source_row", {}).get("sign_spawn_distance")
                            or 0.0)
-            susp = ds[0] > sign_s + args.slack
+            in_zone = int((sc.get("metrics") or {}).get("in_zone_total_steps")
+                          or 0)
+            # The authoritative signal is the zone tracker, not raw geometry:
+            # non-braking routes legitimately spawn 100-200 m up the approach
+            # edge, so start_dist >> sign_s alone proves nothing.
+            if in_zone > 0 and ds[k] <= 8.0:
+                verdict = "ok"                    # passed the sign zone
+            elif in_zone > 0:
+                verdict = "ZONE_OK_SIGN_POS_BAD"  # zone hit, snapshot pos garbage
+            else:
+                verdict = "NO_ZONE_CONTACT"       # vacuous expert trajectory
             rec.update({"start_dist_m": round(ds[0], 1),
                         "min_dist_m": round(ds[k], 1), "min_step": k,
                         "steps": len(ds), "sign_s": round(sign_s, 1),
-                        "ego_how": how,
-                        "verdict": "SUSPICIOUS" if susp else "ok"})
-            n_susp += susp
-            n_ok += (not susp)
+                        "in_zone_steps": in_zone,
+                        "ego_how": how, "verdict": verdict})
+            n_susp += (verdict != "ok")
+            n_ok += (verdict == "ok")
         except Exception as exc:
             rec.update({"verdict": f"ERROR:{type(exc).__name__}",
                         "error": str(exc)[:120]})
@@ -122,14 +130,16 @@ def main() -> None:
         if rec["verdict"] != "ok":
             print(rec)
 
-    print(f"\naudited: {len(rows_out)}  ok: {n_ok}  suspicious: {n_susp}  "
+    print(f"\naudited: {len(rows_out)}  ok: {n_ok}  flagged: {n_susp}  "
           f"errors: {n_err}")
-    by_sign = {}
+    by_kind: dict = {}
     for r in rows_out:
-        if r["verdict"] == "SUSPICIOUS":
-            by_sign[r["sign"]] = by_sign.get(r["sign"], 0) + 1
-    if by_sign:
-        print("suspicious per sign:", dict(sorted(by_sign.items())))
+        v = r["verdict"]
+        if v != "ok" and not v.startswith("ERROR"):
+            by_kind.setdefault(v, {}).setdefault(r["sign"], 0)
+            by_kind[v][r["sign"]] += 1
+    for v, signs in sorted(by_kind.items()):
+        print(f"{v}: {dict(sorted(signs.items()))}")
 
     if args.out_csv and rows_out:
         keys = sorted({k for r in rows_out for k in r})
