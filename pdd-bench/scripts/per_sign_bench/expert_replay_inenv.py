@@ -204,9 +204,24 @@ def replay_in_our_env(
                   f"(ego + {len(obj_map)-1} NPC/ped) of {len(rec_frame0)} recorded, "
                   f"{len(all_live_objs)} live")
 
+            # Live objects that matched nothing in the recording are leftovers
+            # of env drift (different env flags/seeds at replay time). Left in
+            # place they collide with the teleported recorded objects and kill
+            # the playback with a phantom crash at step 1 — remove them.
+            stray = [lid for lid in all_live_objs if lid not in used_live]
+            if stray:
+                try:
+                    env.engine.clear_objects(stray)
+                    print(f"[info] removed {len(stray)} live objects absent "
+                          f"from the recording")
+                except Exception as exc:
+                    print(f"[warn] could not remove {len(stray)} stray "
+                          f"objects: {exc}")
+
         expert_actions = sidecar.get("expert_actions", [])
         violations_replay = []
         prev_violating: set = set()
+        crashed_any = False
         n_replay_frames = len(npc_frames) if npc_frames else max_steps
 
         for step in range(min(max_steps, n_replay_frames)):
@@ -268,7 +283,12 @@ def replay_in_our_env(
             elif render_3d:
                 env.render()
 
-            if term or trunc:
+            crashed_any = crashed_any or bool(info.get("crash", False))
+            # Full-recorded playback is teleported frame by frame: a live
+            # termination signal (e.g. a residual phantom collision) must not
+            # cut the replay short. Other modes keep normal env semantics.
+            if (term or trunc) and not (ego_mode == "recorded"
+                                        and npc_mode == "recorded"):
                 break
 
         if save_gif:
@@ -295,7 +315,7 @@ def replay_in_our_env(
             "npc_mode": npc_mode,
             "steps_run": step + 1,
             "arrived_dest": bool(info.get("arrive_dest", False)),
-            "crashed": bool(info.get("crash", False)),
+            "crashed": bool(crashed_any or info.get("crash", False)),
             "violations_replay": violations_replay,
             "violations_original": original_violations,
             "violations_match": match,
