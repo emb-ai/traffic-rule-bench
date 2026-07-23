@@ -31,8 +31,10 @@ def _ego_track(d: dict, sc: dict) -> list:
     """
     if "metadata" in d and "tracks" in d:
         sdc = d["metadata"]["sdc_id"]
-        return [(float(p[0]), float(p[1]))
-                for p in d["tracks"][sdc]["state"]["position"]]
+        st = d["tracks"][sdc]["state"]
+        vels = [math.hypot(float(v[0]), float(v[1]))
+                for v in st.get("velocity", [])]
+        return ([(float(p[0]), float(p[1])) for p in st["position"]], vels)
 
     frames = [fg[0].step_info if fg else {} for fg in d["frame"]]
     v0 = float(sc.get("metrics", {}).get("initial_speed_mps")
@@ -52,15 +54,33 @@ def _ego_track(d: dict, sc: dict) -> list:
         raise SystemExit("ERROR: could not identify the ego in raw frames")
     print(f"[info] raw-frame pkl; ego={best_id} "
           f"(speed gap to sidecar v0: {best_gap:.2f} m/s)")
-    return [(float(f[best_id]["position"][0]), float(f[best_id]["position"][1]))
-            for f in frames if best_id in f]
+    pos, vels = [], []
+    for f in frames:
+        if best_id not in f:
+            continue
+        st = f[best_id]
+        pos.append((float(st["position"][0]), float(st["position"][1])))
+        vel = st.get("velocity", (0.0, 0.0))
+        vels.append(math.hypot(float(vel[0]), float(vel[1])))
+    return pos, vels
 
 
 def main() -> None:
     ep = Path(sys.argv[1])
     sc = json.load(open(ep / "replay.json"))
     d = pickle.load(open(ep / "replay.pkl", "rb"))
-    pos = _ego_track(d, sc)
+    pos, vels = _ego_track(d, sc)
+
+    print(f"ego start {pos[0]} -> end {pos[-1]}")
+    if vels:
+        # Braking-spawn discriminator: WHERE the ego first held <= 20 km/h
+        # is where the speed-limit sign actually acted.
+        lim = 5.7  # 20 km/h + epsilon, m/s
+        first_slow = next((k for k in range(len(vels))
+                           if all(v <= lim for v in vels[k:k + 20])), None)
+        print(f"speed m/s: v0 {vels[0]:.1f} | step30 {vels[min(30, len(vels)-1)]:.1f} "
+              f"| min {min(vels):.1f} | end {vels[-1]:.1f}")
+        print(f"first sustained <=20 km/h at step: {first_slow}")
 
     for s in sc.get("signs", []):
         sp = s.get("position_world")
