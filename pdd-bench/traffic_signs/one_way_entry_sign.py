@@ -185,48 +185,71 @@ class OneWayEntrySign(BaseTrafficSign):
                 continue
         return poses
 
+    def _is_neighbor_lane(self, lane_a, lane_b) -> bool:
+        """True if two lane ids are adjacent lanes on the same SUMO edge."""
+        key_a, num_a = self._lane_index_parts(lane_a)
+        key_b, num_b = self._lane_index_parts(lane_b)
+        if key_a is None or key_b is None or key_a != key_b:
+            return False
+        if num_a is None or num_b is None:
+            return False
+        return abs(num_a - num_b) == 1
+
     def _is_violating(self, vehicle) -> bool:
+        """Same SUMO check as ``NoLeftTurnSign`` / ``NoRightTurnSign``.
+
+        5.7.1 ≡ no-left (forbidden ``l``); 5.7.2 ≡ no-right (forbidden ``r``).
+        A violation is recorded when the ego leaves the signed approach via a
+        turn whose ``direction`` matches ``not_allowed_direction`` — including
+        the moment it enters the forbidden junction ``via_lane`` (not only the
+        downstream ``to_lane``). Unknown exits are *not* violations (unlike the
+        previous OneWay-only path that treated any unmatched exit as a fault).
+        """
         agent_id = vehicle.name
         current_lane = vehicle.lane_index
+        prohibited = self.not_allowed_direction
 
         if current_lane in self.applicable_lane_ids:
             self.active_agents[agent_id] = current_lane
             return False
 
-        # Vehicle was on an applicable lane and has left it
-        if agent_id in self.active_agents:
-            prev_lane = self.active_agents[agent_id]
-            if prev_lane in self.applicable_lane_ids and current_lane != prev_lane:
-                src_lane_obj = self._lane_for_id(prev_lane)
-                if src_lane_obj is None:
-                    self.active_agents.pop(agent_id, None)
-                    return False
-                if self._is_pre_junction_adjacent_lane_change(src_lane_obj, current_lane):
-                    self.active_agents.pop(agent_id, None)
-                    return False
-                turn_info = next(
-                    (turn for turn in (getattr(src_lane_obj, "turns", None) or []) if (turn.get("to_lane") == current_lane or turn.get("via_lane") == current_lane)),
-                    None
+        if agent_id not in self.active_agents:
+            return False
+
+        prev_lane = self.active_agents[agent_id]
+        if prev_lane not in self.applicable_lane_ids or current_lane == prev_lane:
+            return False
+
+        # Peer lane-change on the same approach is not a turn violation.
+        if self._is_neighbor_lane(prev_lane, current_lane):
+            self.active_agents.pop(agent_id, None)
+            return False
+
+        src_lane_obj = self._lane_for_id(prev_lane)
+        if src_lane_obj is None:
+            self.active_agents.pop(agent_id, None)
+            return False
+
+        turn_info = next(
+            (
+                turn
+                for turn in (getattr(src_lane_obj, "turns", None) or [])
+                if (
+                    turn.get("to_lane") == current_lane
+                    or turn.get("via_lane") == current_lane
                 )
-                if turn_info:
-                    # If a turn was taken, its direction must not be the blocked one
-                    # print(turn_info, self.not_allowed_direction)
-                    if  turn_info.get("via_lane") != current_lane and  _normalize_turn_direction(turn_info.get("direction")) == self.not_allowed_direction:
-                        self.active_agents.pop(agent_id, None)
-                        return True   # violation: turn into blocked direction
-                    # Explicit turn into an allowed direction
-                    if  turn_info.get("via_lane") != current_lane:
-                        self.active_agents.pop(agent_id, None)
-                    return False
-                # Maneuver not in source lane's turn list: treat as invalid exit
-                if "junction_" in current_lane or "lane_:" in current_lane:
-                    return False
-                self.active_agents.pop(agent_id, None)
-                return True
+            ),
+            None,
+        )
+        # Always clear arming once the vehicle has left the approach, matching
+        # No*TurnSign: one decision per departure from the signed lane.
+        self.active_agents.pop(agent_id, None)
+        if turn_info and _normalize_turn_direction(turn_info.get("direction")) == prohibited:
+            return True
         return False
 
     def get_rule_description(self) -> str:
-        side = "right" if self.not_allowed_direction == 'l' else "left"
+        side = "right" if self.not_allowed_direction == "l" else "left"
         return f"Exit onto a one-way road, turn {side}."
     
 class OneWayEntrySignL(OneWayEntrySign):
