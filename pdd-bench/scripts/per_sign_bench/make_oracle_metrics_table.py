@@ -26,24 +26,26 @@ from select_experts import (
 )
 
 
-# All *_rate rows share ONE denominator: the number of unique scenes of the
-# sign (the scene universe observed in the source rows). A missing or
-# filter-failing episode counts as a failure for its policy on that scene, and
-# the ORACLE dest/pass rate becomes its scene coverage — columns are directly
-# comparable. avg_* rows are means over the episodes where the quantity is
-# defined (stated in the row name); a common denominator cannot exist there.
+# Every row except "n" and "compliance among arrived" shares ONE denominator:
+# the number of unique scenes of the sign (the scene universe observed in the
+# source rows). A missing or filter-failing episode counts as a failure for
+# its policy on that scene; for avg_* rows such a scene contributes 0 to the
+# numerator. This makes every column (policies and ORACLE) a per-scene
+# expectation over the SAME task set — directly comparable, with no
+# survivor-selection bias in the avg rows. "compliance among arrived" is the
+# only intentionally conditional row (its own n is shown in parentheses).
 METRICS = [
     "n (episodes)",
-    "n_scenes (rate denominator)",
+    "n_scenes (common denominator)",
     "dest_rate (of scenes)",
     "crash_rate (of scenes)",
     "out_of_road_rate (of scenes)",
-    "avg_violations (target, per episode)",
+    "avg_violations (target, per scene)",
     "compliance_rate (of scenes)",
     "compliance among arrived",
-    "avg_comfort (per episode)",
-    "avg_time_eff (passing)",
-    "F1 beta={beta} (passing)",
+    "avg_comfort (per scene, 0 if missing)",
+    "avg_time_eff (per scene, 0 if not passed)",
+    "F1 beta={beta} (per scene, 0 if not passed)",
     "pass_rate (of scenes)",
     "oracle picks (of {n})",
 ]
@@ -257,18 +259,16 @@ def aggregate_records(records: list[dict], n_scenes: int) -> dict:
         "out_of_road_rate": (
             scene_count(lambda r: r["row"].get("out_of_road")) / n_scenes
         ),
-        "avg_violations": sum(r["target_violations"] for r in records) / n,
+        "avg_violations": sum(r["target_violations"] for r in records) / n_scenes,
         "compliance_rate": scene_count(lambda r: r["compliant"]) / n_scenes,
         "compliance_arrived_rate": (
             sum(1 for r in arrived if r["compliant"]) / len(arrived)
             if arrived else None
         ),
         "arrived_n": len(arrived),
-        "avg_comfort": sum(r["comfort"] for r in records) / n,
-        "avg_time_eff": (
-            sum(passing_time) / len(passing_time) if passing_time else None
-        ),
-        "avg_f1": sum(passing_f1) / len(passing_f1) if passing_f1 else None,
+        "avg_comfort": sum(r["comfort"] for r in records) / n_scenes,
+        "avg_time_eff": sum(passing_time) / n_scenes,
+        "avg_f1": sum(passing_f1) / n_scenes,
         "pass_rate": scene_count(lambda r: r["passing"]) / n_scenes,
     }
 
@@ -278,14 +278,22 @@ def aggregate_picks(picks: list[dict], n_scenes: int) -> dict:
 
     dest/compliance/pass rates = covered scenes / n_scenes (scene coverage);
     an uncovered scene counts as an oracle failure, mirroring the policy
-    columns. avg_* values are means over the picks (top-2 lists may hold two
-    picks per scene).
+    columns. avg_* values are per-scene: the best (rank-1) pick represents its
+    scene (top-2 lists hold two picks per scene) and an uncovered scene
+    contributes 0 — the same convention as the policy columns.
     """
     n = len(picks)
     if n == 0 or n_scenes == 0:
         return dict(_EMPTY_STATS, n_scenes=n_scenes)
-    covered = len({(normalize_sign(p.get("sign")), scene_key(p))
-                   for p in picks}) / n_scenes
+    best_by_scene: dict[tuple, dict] = {}
+    for p in picks:
+        key = (normalize_sign(p.get("sign")), scene_key(p))
+        cur = best_by_scene.get(key)
+        if cur is None or (float(p.get("f1_score") or 0.0)
+                           > float(cur.get("f1_score") or 0.0)):
+            best_by_scene[key] = p
+    best = list(best_by_scene.values())
+    covered = len(best) / n_scenes
     return {
         "n": n,
         "n_scenes": n_scenes,
@@ -296,9 +304,9 @@ def aggregate_picks(picks: list[dict], n_scenes: int) -> dict:
         "compliance_rate": covered,
         "compliance_arrived_rate": 1.0,
         "arrived_n": n,
-        "avg_comfort": sum(float(p.get("comfort") or 0.0) for p in picks) / n,
-        "avg_time_eff": sum(float(p.get("time_eff") or 0.0) for p in picks) / n,
-        "avg_f1": sum(float(p.get("f1_score") or 0.0) for p in picks) / n,
+        "avg_comfort": sum(float(p.get("comfort") or 0.0) for p in best) / n_scenes,
+        "avg_time_eff": sum(float(p.get("time_eff") or 0.0) for p in best) / n_scenes,
+        "avg_f1": sum(float(p.get("f1_score") or 0.0) for p in best) / n_scenes,
         "pass_rate": covered,
     }
 
