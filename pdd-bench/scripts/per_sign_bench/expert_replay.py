@@ -265,6 +265,7 @@ def record_expert_replay(
     spawn_velocity_override_ms: Optional[float] = None,
     scenes_root: Optional[Path] = None,
     extra_sidecar: Optional[dict] = None,
+    plant2_dir: Optional[Path] = None,
 ) -> dict:
     """Run one policy on one scene with RecordManager on; write pkl + sidecar.
 
@@ -285,6 +286,9 @@ def record_expert_replay(
             reconstructs the upstream brake spawn itself).
         extra_sidecar: optional dict merged into the sidecar JSON (e.g.,
             policy/variant identifiers).
+        plant2_dir: if set, live-dump PlanT2 boxes/measurements/results under
+            ``<plant2_dir>/data/<scene_uid>_<variant>/`` during the rollout.
+            ``None`` (default) leaves the code path identical to today.
     """
     from metadrive.scenario.utils import convert_recorded_scenario_exported
 
@@ -381,11 +385,24 @@ def record_expert_replay(
             ego_variant=ego_variant, ego_sample_seed_base=ego_sample_seed_base,
             ego_hold_speed_ms=ego_hold_speed_ms)
 
+        # Optional PlanT2 live dump — capture pre-action frames via step_hook.
+        plant2_collector = None
+        step_hook = None
+        plant2_path: Optional[str] = None
+        if plant2_dir is not None:
+            from bench.plant2_frames import (
+                Plant2FrameCollector, ensure_slurm_dummy,
+            )
+            ensure_slurm_dummy(Path(plant2_dir))
+            plant2_collector = Plant2FrameCollector(row)
+            step_hook = lambda: plant2_collector.on_step(base_env, row)
+
         # The shared eval step loop — in-zone tracking, step+event violation
         # counts, dt=0.1 kinematics, TTC, smoothness, driving score etc. all
         # come from here (and from build_sidecar_metrics below).
         r = _run_rollout(env, base_env, policy_obj,
-                         max_steps=max_steps, save_gif=save_gif)
+                         max_steps=max_steps, save_gif=save_gif,
+                         step_hook=step_hook)
 
         # Dump episode data.
         # Try ScenarioDescription conversion first (works for PGMap); fallback
@@ -428,6 +445,13 @@ def record_expert_replay(
         scene_id_out = row.get("scene_id") or f"scene_{seed}"
         scene_uid = _scene_uid(row)
 
+        if plant2_collector is not None and plant2_dir is not None:
+            from bench.plant2_frames import plant2_route_dir
+            route_dir = plant2_route_dir(Path(plant2_dir), scene_uid, ego_variant)
+            success = bool(r.reached_dest and not r.crashed_flag_raw and not r.out_of_road)
+            plant2_collector.flush(route_dir, success=success)
+            plant2_path = str(route_dir)
+
         metrics = build_sidecar_metrics(r)
         # Recorder-only telemetry on top of the shared schema:
         metrics["initial_speed_mps"] = float(initial_speed_mps)
@@ -465,6 +489,8 @@ def record_expert_replay(
             "sidecar_path": str(output_sidecar),
             "valid": bool(scenario_desc is not None),
         }
+        if plant2_path is not None:
+            sidecar["plant2_path"] = plant2_path
         if extra_sidecar:
             sidecar.update(extra_sidecar)
         output_sidecar.parent.mkdir(parents=True, exist_ok=True)
@@ -475,7 +501,7 @@ def record_expert_replay(
         # bulky violations_timeline (it stays in the sidecar).
         flat_metrics = {k: v for k, v in metrics.items()
                         if k != "violations_timeline"}
-        return {
+        flat_row = {
             "scene_id": scene_id_out,
             "scene_uid": scene_uid,
             "backend": backend,
@@ -492,6 +518,9 @@ def record_expert_replay(
                                else "DEFAULT_EGO_PARAMS"),
             "failure_reason": reason,
         }
+        if plant2_path is not None:
+            flat_row["plant2_path"] = plant2_path
+        return flat_row
     finally:
         try:
             env.close()
@@ -605,6 +634,7 @@ def run_batch_multi_variant(
     skip_variants: Optional[set[str]] = None,
     scenes_root: Optional[Path] = None,
     spawn_velocity_override_ms: Optional[float] = None,
+    plant2_dir: Optional[Path] = None,
 ) -> dict:
     """Record one policy across all scenes in the manifest, with `1 + extra_samples`
     variants per scene for IDM-family policies. Appends rows to <run_root>/all_runs.jsonl.
@@ -717,6 +747,7 @@ def run_batch_multi_variant(
                         sample_ego_velocity=sample_ego_velocity,
                         spawn_velocity_override_ms=spawn_velocity_override_ms,
                         scenes_root=scenes_root,
+                        plant2_dir=plant2_dir,
                         extra_sidecar={
                             "policy": policy_type,
                             "variant": variant_id,
@@ -916,6 +947,10 @@ def main():
                         help="Sample ego initial spawn velocity from nuPlan distribution "
                              "(sample_spawn_velocity(row.seed)) instead of using the "
                              "manifest value. Ignored for braking_spawn rows.")
+    parser.add_argument("--save-plant2-dir", type=str, default=None,
+                        help="If set, live-dump PlanT2 boxes/measurements/results under "
+                             "<dir>/data/<scene_uid>_<variant>/ during recording. "
+                             "Without this flag behaviour is unchanged.")
     parser.add_argument("--build-oracle-manifest", action="store_true",
                         help="Read <run-dir>/all_runs.jsonl and write oracle_manifest.jsonl")
     parser.add_argument("--run-dir", type=str, default=None,
@@ -1015,6 +1050,10 @@ def main():
         {v.strip() for v in args.skip_variants.split(",") if v.strip()}
         if args.skip_variants else None
     )
+    plant2_dir = Path(args.save_plant2_dir).resolve() if args.save_plant2_dir else None
+    if plant2_dir is not None:
+        plant2_dir.mkdir(parents=True, exist_ok=True)
+        print(f"PlanT2 dir:  {plant2_dir}")
     out = run_batch_multi_variant(
         manifest_path, backend, run_root,
         sign_slug=sign_slug,
@@ -1028,6 +1067,7 @@ def main():
         skip_variants=skip_variants,
         scenes_root=scenes_root,
         spawn_velocity_override_ms=args.spawn_velocity_ms,
+        plant2_dir=plant2_dir,
     )
     print(json.dumps(out, indent=2))
 

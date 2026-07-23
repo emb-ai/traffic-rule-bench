@@ -38,6 +38,7 @@ import logging
 import math
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -143,19 +144,26 @@ class Rollout:
 
 
 def _run_rollout(env, base_env, policy_obj, *, max_steps: int,
-                 save_gif: Path | None = None) -> Rollout:
+                 save_gif: Path | None = None,
+                 step_hook: Callable[[], None] | None = None) -> Rollout:
     """Step the ego policy through one reset env, writing all state into a Rollout.
 
     Pure rollout — no manifest/identity/output concerns. All episode state lives
     on the returned Rollout (no separate local accumulators); only per-iteration
     temporaries are local. run_one_episode wraps this with env setup and record
     assembly (episodes row + optional sidecar).
+
+    ``step_hook`` (optional) runs once per step *before* ``policy.act`` / ``env.step``,
+    while the env is still in the pre-action state (PlanT2 frame capture, freezes).
+    Default ``None`` leaves eval/recorder behaviour unchanged.
     """
     r = Rollout()
     # One-shot snapshot of placed signs after sign-placement (post-reset).
     r.sign_info_snapshot = _extract_sign_info(base_env)
 
     for step in range(max_steps):
+        if step_hook is not None:
+            step_hook()
         action = policy_obj.act(base_env.vehicle.name)
         r.expert_actions.append([float(action[0]), float(action[1])])
 
