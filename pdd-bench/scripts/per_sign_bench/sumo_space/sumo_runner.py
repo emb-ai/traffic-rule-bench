@@ -86,6 +86,10 @@ def _build_env(catalog_row: dict, profile: dict):
     if "spawn_lane_num" in catalog_row:
         config["spawn_lane_num"] = int(catalog_row["spawn_lane_num"])
 
+    # Detour (4.2.x): catalog splits scenes into cones+sign vs sign-only.
+    if "detour_cones" in catalog_row:
+        config["spawn_detour_cones"] = bool(catalog_row["detour_cones"])
+
     # Braking-spawn (3.24): ego starts above the limit, placed d_required before
     # the sign (resolved up the road graph in sumo_env). Pass the spec through.
     if catalog_row.get("braking_spawn"):

@@ -137,6 +137,9 @@ class SumoScene:
     # so navigation BFS returns a short deterministic route that passes
     # through the sign. None when no forward edge exists (dead end).
     destination_lane_id: Optional[str] = None
+    # Detour signs (4.2.x): the OBSTACLE lane index on road_id, written by
+    # detour_scene_editor.py. None for other codes / legacy scenes.
+    sign_lane_index: Optional[int] = None
 
     @property
     def scene_id(self) -> str:
@@ -174,6 +177,11 @@ def enumerate_all_scenes(scenes_root: str | Path) -> List[SumoScene]:
             except Exception:
                 continue
 
+            # Scenes marked excluded (e.g. detour infeasible — no adjacent
+            # lane anywhere near the sign) never reach the catalog.
+            if meta.get("excluded"):
+                continue
+
             net_file = meta.get("net_file")
             if not net_file:
                 continue
@@ -194,6 +202,9 @@ def enumerate_all_scenes(scenes_root: str | Path) -> List[SumoScene]:
                     distance_from_start=float(meta.get("distance_from_start", 0.0)),
                     osm_way_id=str(meta.get("osm_way_id", "")),
                     destination_lane_id=dest_lane_id,
+                    sign_lane_index=(int(meta["sign_lane_index"])
+                                     if meta.get("sign_lane_index") is not None
+                                     else None),
                 ))
             except (TypeError, ValueError):
                 continue
