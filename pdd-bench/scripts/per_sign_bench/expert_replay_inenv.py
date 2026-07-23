@@ -210,13 +210,27 @@ def replay_in_our_env(
             # the playback with a phantom crash at step 1 — remove them.
             stray = [lid for lid in all_live_objs if lid not in used_live]
             if stray:
-                try:
-                    env.engine.clear_objects(stray)
-                    print(f"[info] removed {len(stray)} live objects absent "
-                          f"from the recording")
-                except Exception as exc:
-                    print(f"[warn] could not remove {len(stray)} stray "
-                          f"objects: {exc}")
+                stray_set = set(stray)
+                # De-register from traffic managers FIRST: SumoTrafficManager
+                # keeps its own _traffic_vehicles list and would try to clear
+                # these ids again in before_step — KeyError on the engine
+                # registry once we have removed them below.
+                for mgr in getattr(env.engine, "_managers", {}).values():
+                    tv = getattr(mgr, "_traffic_vehicles", None)
+                    if tv:
+                        try:
+                            tv[:] = [v for v in tv if v.id not in stray_set]
+                        except Exception:
+                            pass
+                removed = 0
+                for lid in stray:
+                    try:
+                        env.engine.clear_objects([lid])
+                        removed += 1
+                    except Exception:
+                        pass
+                print(f"[info] removed {removed}/{len(stray)} live objects "
+                      f"absent from the recording")
 
         expert_actions = sidecar.get("expert_actions", [])
         violations_replay = []
