@@ -297,6 +297,7 @@ def replay_in_our_env(
         violations_replay = []
         prev_violating: set = set()
         crashed_any = False
+        arrived_any = False
         n_replay_frames = len(npc_frames) if npc_frames else max_steps
 
         for step in range(min(max_steps, n_replay_frames)):
@@ -376,6 +377,7 @@ def replay_in_our_env(
                 env.render()
 
             crashed_any = crashed_any or bool(info.get("crash", False))
+            arrived_any = arrived_any or bool(info.get("arrive_dest", False))
             # Full-recorded playback is teleported frame by frame: a live
             # termination signal (e.g. a residual phantom collision) must not
             # cut the replay short. Other modes keep normal env semantics.
@@ -406,7 +408,7 @@ def replay_in_our_env(
             "ego_mode": ego_mode,
             "npc_mode": npc_mode,
             "steps_run": step + 1,
-            "arrived_dest": bool(info.get("arrive_dest", False)),
+            "arrived_dest": bool(arrived_any or info.get("arrive_dest", False)),
             "crashed": bool(crashed_any or info.get("crash", False)),
             "violations_replay": violations_replay,
             "violations_original": original_violations,
