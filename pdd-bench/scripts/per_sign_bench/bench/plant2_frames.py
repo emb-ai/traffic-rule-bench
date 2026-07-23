@@ -57,6 +57,8 @@ def collect_boxes(engine, vehicle,
 
     boxes = [{
         "class": "car",
+        # PlanTDataset indexes type_id for emergency-vehicle filtering.
+        "type_id": "vehicle.tesla.model3",
         "position": [0.0, 0.0, 0.0],
         "yaw": 0.0,
         "speed": ego_speed,
@@ -112,6 +114,13 @@ def collect_boxes(engine, vehicle,
             "extent": [l / 2.0, w / 2.0, 0.75],
             "id": obj_id,
         }
+        # CARLA-compatible type_id (required by PlanTDataset; MetaDrive has no asset ids).
+        if cls == "car":
+            entry["type_id"] = "vehicle.tesla.model3"
+        elif cls == "walker":
+            entry["type_id"] = "walker.pedestrian.0001"
+        elif cls == "static":
+            entry["type_id"] = "static.prop.constructioncone"
         if cls == "traffic_light":
             from metadrive.constants import MetaDriveType
             status = getattr(obj, "status", MetaDriveType.LIGHT_UNKNOWN)
@@ -119,6 +128,7 @@ def collect_boxes(engine, vehicle,
                 return
             entry["state"] = ("Red" if status == MetaDriveType.LIGHT_RED else "Yellow")
             entry["affects_ego"] = True
+            entry["type_id"] = "traffic.traffic_light"
 
         boxes.append(entry)
         obj_id += 1
