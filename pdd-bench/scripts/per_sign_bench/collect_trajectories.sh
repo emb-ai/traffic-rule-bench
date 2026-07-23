@@ -99,6 +99,10 @@ export CUDA_DEVICE_ORDER=PCI_BUS_ID
 # COMP_CHUNKS: split the IDM-family subprocess into N parallel chunks
 # (--start/--count over one filtered manifest; resume prevents duplicates).
 : "${COMP_CHUNKS:=1}"
+# NN_CHUNKS: the same splitting for carl*/plant2* tasks — N parallel chunk
+# processes sharing the task's assigned GPU (VRAM permitting). With
+# NN_CHUNKS>1 keep JOBS_PER_GPU=1 so GPU slots stay equal to tasks.
+: "${NN_CHUNKS:=1}"
 
 TS="$(date +%Y%m%d_%H%M%S)"
 # OUT_BASE may point at an existing dir to append to it (resume).
@@ -202,6 +206,7 @@ echo "  SCENES_ROOT          = $SCENES_ROOT"
 echo "  COVERAGE_CSV         = ${COVERAGE_CSV:-<not set>}"
 echo "  MAX_VAR_PER_SID      = ${MAX_VAR_PER_SID:-<no cap>}"
 echo "  COMP_CHUNKS          = ${COMP_CHUNKS} (1 = no chunking)"
+echo "  NN_CHUNKS            = ${NN_CHUNKS} (chunk processes per carl/plant2 task)"
 echo "  PYTHON_BIN           = $PYTHON_BIN"
 echo "  N_WORKERS            = $N_WORKERS  (CPU policies)"
 echo "  POLICIES_CPU         = $POLICIES_CPU"
@@ -470,7 +475,12 @@ run_one() {
     # COMP_CHUNKS: for IDM-family — split into parallel chunks over one
     # filtered manifest (different --start/--count; resume prevents duplicates).
     local chunks="${COMP_CHUNKS:-1}"
-    if _is_idm_variant_policy "$policy" && [ "$chunks" -gt 1 ] && [ "$rows" -gt "$chunks" ]; then
+    local chunkable=0
+    if _is_idm_variant_policy "$policy"; then chunkable=1; fi
+    case "$policy" in
+        carl*|plant2*) chunkable=1; chunks="${NN_CHUNKS:-1}" ;;
+    esac
+    if [ "$chunkable" -eq 1 ] && [ "$chunks" -gt 1 ] && [ "$rows" -gt "$chunks" ]; then
         local chunk_size=$(( (rows + chunks - 1) / chunks ))
         echo "[chunked] $policy/$sign/$phase  rows=$rows split into $chunks chunks × $chunk_size"
         local cpids=()
@@ -532,7 +542,7 @@ export -f run_one _pick_manifest_for _filter_manifest_for_policy _is_idm_variant
 export FULL_DIR PYTHON_BIN RUNNER ROWS_LIMIT PGMAP_ROWS_LIMIT CITYMAP_ROWS_LIMIT MAX_STEPS OUT_BASE LOG_DIR
 export SUMO_MANIFEST_NAME PGMAP_MANIFEST_NAME PGMAP_FALLBACK_NAME CITYMAP_MANIFEST_NAME
 export EXTRA_SAMPLES_COMPREHENSIVE IDM_SEED_BASE SCENES_ROOT
-export COVERAGE_CSV MAX_VAR_PER_SID COMP_CHUNKS
+export COVERAGE_CSV MAX_VAR_PER_SID COMP_CHUNKS NN_CHUNKS
 
 # ---------------------------------------------------------------------------
 # CPU policies: pool throttled by N_WORKERS.
