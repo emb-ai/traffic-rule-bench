@@ -63,22 +63,36 @@ def replay_in_our_env(
     render_3d: bool = False,
     save_gif: Optional[Path] = None,
     max_steps: int = 500,
+    scenes_root: Optional[Path] = None,
 ) -> dict:
     sidecar = json.load(open(sidecar_path))
     scenario = pickle.load(open(pkl_path, "rb"))
 
     from expert_replay import _build_env    # re-use env-builder
+    from bench import env_builders as _env_builders
     from factorized_space.benchmark_runner import SIGN_CLASS_MAP
     from factorized_space.ego_defaults import apply_ego_defaults
 
     row = sidecar["source_row"]
     backend = sidecar["backend"]
 
+    # Mirror the RECORDING's relocate mode. NN policies are recorded with ego
+    # left on the manifest road (RELOCATE_EGO_TO_SIGN_LANE=False); IDM-family
+    # with True. The module default (True) would rebuild a DIFFERENT scene for
+    # NN recordings — ego spawn/route mismatch, instant termination in replay.
+    _idm_family = {"idm", "comprehensive_rule_expert", "rule_compliant"}
+    _rec_policy = str(sidecar.get("policy") or "")
+    _env_builders.RELOCATE_EGO_TO_SIGN_LANE = (
+        (_rec_policy in _idm_family) if _rec_policy else True)
+    print(f"[replay] relocate_ego_to_sign_lane="
+          f"{_env_builders.RELOCATE_EGO_TO_SIGN_LANE} (policy={_rec_policy or '?'})")
+
     # Build env WITHOUT auto-policy, WITHOUT recording.
     env = _build_env(row, backend, max_steps=max_steps,
                       record_episode=False,
                       ego_policy_cls=None,
-                      render=bool(render_3d))
+                      render=bool(render_3d),
+                      scenes_root=scenes_root)
 
     # Extract per-step NPC states from pkl FrameInfo for manual replay.
     # pkl format: {frame: [[FrameInfo, ...], ...], ...}
@@ -192,6 +206,7 @@ def replay_in_our_env(
 
         expert_actions = sidecar.get("expert_actions", [])
         violations_replay = []
+        prev_violating: set = set()
         n_replay_frames = len(npc_frames) if npc_frames else max_steps
 
         for step in range(min(max_steps, n_replay_frames)):
@@ -233,11 +248,18 @@ def replay_in_our_env(
                         pass
 
             if sign_mgr is not None:
+                # Edge-counted, mirroring the recorder's violations_timeline:
+                # one entry per not-violating -> violating transition per class.
+                current_violating = set()
                 for s_obj, v in sign_mgr.check_all_violations(env.vehicle):
                     if v:
-                        violations_replay.append({
-                            "step": step, "sign_class": type(s_obj).__name__,
-                        })
+                        cls = type(s_obj).__name__
+                        current_violating.add(cls)
+                        if cls not in prev_violating:
+                            violations_replay.append({
+                                "step": step, "sign_class": cls,
+                            })
+                prev_violating = current_violating
 
             if save_gif:
                 _render_top_down(env, window=False, screen_record=True)
@@ -258,10 +280,13 @@ def replay_in_our_env(
                 pass
 
         original_violations = sidecar.get("violations_timeline", [])
+        # Same events in the same order; the step may differ by one frame — the
+        # replay teleports recorded states BEFORE env.step, so violation
+        # detection can shift by a single step relative to the live run.
         match = (
             len(violations_replay) == len(original_violations)
             and all(a.get("sign_class") == b.get("sign_class")
-                    and a.get("step") == b.get("step")
+                    and abs(int(a.get("step", -99)) - int(b.get("step", 99))) <= 1
                     for a, b in zip(violations_replay, original_violations))
         )
         result = {
@@ -298,6 +323,9 @@ def main():
     parser.add_argument("--render-3d", action="store_true")
     parser.add_argument("--save-gif", type=str, default=None)
     parser.add_argument("--max-steps", type=int, default=500)
+    parser.add_argument("--scenes-root", type=str, default=None,
+                        help="Root dir sidecar net_path entries resolve against "
+                             "(default: pdd-bench/scenes)")
     args = parser.parse_args()
 
     if args.scene_id and args.code:
@@ -325,6 +353,7 @@ def main():
         render_2d=args.render_2d, render_3d=args.render_3d,
         save_gif=Path(args.save_gif) if args.save_gif else None,
         max_steps=args.max_steps,
+        scenes_root=Path(args.scenes_root) if args.scenes_root else None,
     )
     print(json.dumps({k: v for k, v in result.items() if k != "violations_replay"
                        and k != "violations_original"}, indent=2, ensure_ascii=False))
