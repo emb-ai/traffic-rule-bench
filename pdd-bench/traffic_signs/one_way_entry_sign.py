@@ -165,14 +165,19 @@ class OneWayEntrySign(BaseTrafficSign):
         return abs(src_lane_num - cur_lane_num) == 1
 
     def get_top_down_icon_poses(self):
-        """Positions/headings for rendering this sign on all applicable lanes."""
+        """Positions/headings for rendering this sign on all applicable lanes.
+
+        Lateral offset matches physical placement (half lane width + 1.8 m
+        shoulder) so the top-down icon sits off the pavement, not on it.
+        """
         poses = []
+        shoulder_m = 1.8
         offset_from_end = max(0.1, float(self.lane.length) - float(self.placement_long))
         for lane in self.applicable_lanes:
             try:
                 lane_len = float(lane.length)
                 place_long = min(max(0.1, lane_len - offset_from_end), lane_len - 0.1)
-                lat = lane.width_at(place_long) / 2 + 0.8
+                lat = lane.width_at(place_long) / 2 + shoulder_m
                 pos = lane.position(place_long, lat)
                 heading = lane.heading_theta_at(place_long) + 3.141592653589793 / 2
                 poses.append((pos, heading))

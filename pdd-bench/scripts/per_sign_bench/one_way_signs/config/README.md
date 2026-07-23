@@ -12,5 +12,7 @@ python generate_manifest.py sign.pdd_code=5.7.2
 | `pdd_code` | `5.7.1` | Active member (`lib/one_way_sign_spec.py`). |
 | `scenes_dir` | `null` → `scenes/<slug>` | Cropped scenes for the active `sign.pdd_code` |
 | `output_base` | `benchmark_output/<slug>` | Via `${pdd_slug:...}` resolver |
+| `scenario.max_scenarios` | `null` | Cap dual-path geometry picks (`null` = all); density tiers multiply rows on top. |
+| `scenario.max_scenarios_per_scene` | `5` | Cap dual-path variants per crop (`null` = all). |
 
 Auxiliary traffic is **off**: the task is route compliance (forbidden vs allowed first exit).

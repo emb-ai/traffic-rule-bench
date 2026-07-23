@@ -38,14 +38,15 @@ class RuleCompliantExpertPolicy(SignComplianceMixin, ExpertPolicy):
         return self._lateral_pid
 
     def act(self, agent_id=None):
-        # Base PPO action (neural network)
+        # Replan / speed-cap state BEFORE PPO so ExpertPolicy does not
+        # steer along a still-forbidden MetaDrive shortest path (e.g. 5.7.1
+        # left onto the one-way wrong-way carriageway).
+        self._process_signs()
+
+        # Base PPO action (neural network) — now sees the compliant route.
         action = ExpertPolicy.act(self, agent_id)
         steering = float(action[0])
         throttle = float(action[1])
-
-        # Process all signs -> sets _speed_cap, _speed_floor,
-        # _blocked_lanes, _lc_target_lane, _no_overtaking_active, etc.
-        self._process_signs()
 
         # Lane-change override
         self._update_lane_change()
