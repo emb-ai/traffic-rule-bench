@@ -5,6 +5,8 @@ are — same lane? sign ahead of the spawn? how far?
 
 Per row classification:
   SAME_LANE_AHEAD   ego on the sign's lane, sign ahead of the spawn — correct
+  APPROACH_ON_ROUTE ego spawns upstream, but the sign edge IS on the route —
+                    correct (approach room before the sign)
   SAME_LANE_BEHIND  ego on the sign's lane but PAST the sign (spawned inside
                     the zone) — broken variation
   SAME_EDGE_OTHER_LANE  same edge, different lane index
@@ -79,14 +81,21 @@ def probe_row(row: dict, scenes_root, relocate: bool) -> dict:
         except Exception:
             ego_on_sign_lane_s = None
 
+        nav = getattr(veh, "navigation", None)
+        ckpts = [str(c) for c in (getattr(nav, "checkpoints", None) or [])]
+        sign_on_route = sign_lid in ckpts
+
         rec.update({"ego_lane": ego_lid, "ego_s": round(ego_s, 1),
                     "sign_lane": sign_lid, "sign_s_runtime": round(sign_s, 1),
                     "sign_class": type(s).__name__,
+                    "sign_on_route": sign_on_route,
                     "gap_m": (round(sign_s - ego_on_sign_lane_s, 1)
                               if ego_on_sign_lane_s is not None else None)})
         if ego_lid == sign_lid:
             rec["verdict"] = ("SAME_LANE_AHEAD"
                               if sign_s - ego_s > 0 else "SAME_LANE_BEHIND")
+        elif sign_on_route:
+            rec["verdict"] = "APPROACH_ON_ROUTE"   # spawn upstream, sign ahead on route
         elif _edge_of(ego_lid) == _edge_of(sign_lid):
             rec["verdict"] = "SAME_EDGE_OTHER_LANE"
         else:
@@ -139,7 +148,7 @@ def main() -> None:
     for i, r in enumerate(rows):
         rec = probe_row(r, Path(args.scenes_root), bool(args.relocate))
         out.append(rec)
-        if rec["verdict"] != "SAME_LANE_AHEAD":
+        if rec["verdict"] not in ("SAME_LANE_AHEAD", "APPROACH_ON_ROUTE"):
             print(rec, flush=True)
         if (i + 1) % 25 == 0:
             print(f"  ...{i + 1}/{len(rows)}", flush=True)

@@ -1930,15 +1930,26 @@ class TrafficSignSumoEnv(BaseEnv):
             # =====================================================
             self._spawn_ego_on_lane(spawn_lane)
             self._refresh_navigation_after_spawn(spawn_lane)
-            # Detour (4.2.x): ego spawns ON the obstacle lane, so the BFS route
-            # from _refresh_navigation_after_spawn already passes the sign edge.
-            # Only repair a degenerate [spawn, spawn] route (dead-end BFS pick):
-            # route explicitly through the sign edge and onward if possible.
-            if self.sign_type in DETOUR_SIGN_CODES and sign_lane is not None:
+            # The upstream hop (entry_lanes[0]) + BFS reroute above can produce
+            # a route that BYPASSES the sign edge entirely: the ego then drives
+            # a parallel/opposite leg and never meets the sign (audited
+            # collections: spawn 50-240 m away, closest approach 80-165 m).
+            # Enforce for every sign type except prohibitory entries (ego must
+            # NOT drive through 3.1/3.2): the sign edge must be on the route.
+            # Detour keeps its extra degenerate-route repair ([spawn, spawn]).
+            if sign_lane is not None and self.sign_type not in ("3.1", "3.2"):
                 nav = getattr(self.vehicle, "navigation", None)
                 ckpts = [str(c) for c in (getattr(nav, "checkpoints", None) or [])]
-                if len(set(ckpts)) < 2:
-                    self._route_through_sign(spawn_lane, sign_lane.index)
+                sign_key = str(sign_lane.index)
+                degenerate = (self.sign_type in DETOUR_SIGN_CODES
+                              and len(set(ckpts)) < 2)
+                if (sign_key not in ckpts or degenerate) \
+                        and not self._route_through_sign(spawn_lane,
+                                                        sign_lane.index):
+                    # Last resort: spawn ON the sign lane itself — same lane,
+                    # sign ahead by construction (approach room = sign_s).
+                    self._spawn_ego_on_lane(sign_lane)
+                    self._refresh_navigation_after_spawn(sign_lane)
 
         graph = self.engine.map_manager.graph
         for lane_name, lane_node in graph.lanes.items():
