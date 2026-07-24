@@ -38,6 +38,30 @@ LANE_END_BUFFER_DEFAULT = 5.0           # m, buffer from lane end
 OBSTACLE_PROXIMITY_DEFAULT = 20.0       # m, distance before obstacle for detour signs
 INTERSECTION_ENTRY_OFFSET = 10.0        # m from stop line back toward approach
 
+# Paired zone-scene geometry (start sign + end sign on one lane). All values are
+# longitudinal distances FROM THE LANE START (the unified `longitudinal_from_start`
+# convention of speed/zone/end signs). `approach` gives the ego room to enter the
+# zone after passing the start sign; `tail` gives room after the end sign so
+# post-zone behaviour (resuming speed) is observable by the verifier.
+ZONE_APPROACH_DEFAULT = 10.0            # m before the start sign / zone_start
+ZONE_TAIL_DEFAULT = 10.0                # m of drivable lane after the end sign / zone_end
+
+
+def zone_pair_offsets(zone_length: float,
+                      approach: float = ZONE_APPROACH_DEFAULT,
+                      tail: float = ZONE_TAIL_DEFAULT):
+    """Return (start_long, end_long, min_lane) for a start+end zone pair.
+
+    `start_long`/`end_long` are meters from the lane start (pass directly as
+    `longitudinal_offset` with `longitudinal_from_start=True`). `min_lane` is the
+    minimum lane/edge length needed to fit approach + zone + tail; callers must
+    refuse lanes shorter than this rather than squeeze the geometry.
+    """
+    start_long = float(approach)
+    end_long = start_long + float(zone_length)
+    min_lane = float(approach) + float(zone_length) + float(tail)
+    return start_long, end_long, min_lane
+
 
 @dataclass(frozen=True)
 class PlacementRule:

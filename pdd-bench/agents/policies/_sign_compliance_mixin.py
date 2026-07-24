@@ -67,7 +67,10 @@ STOP_PAST_THRESHOLD = 5.0          # metres past stop line before state resets
 BRAKE_PROP_GAIN = 0.05             # proportional gain for braking
 BRAKE_BIAS = 0.15                  # constant offset for braking
 FLOOR_PROP_GAIN = 0.08             # proportional gain for acceleration floor
-FLOOR_BIAS = 0.3                   # constant offset for acceleration floor
+FLOOR_BIAS = 0.4                   # constant offset for acceleration floor
+FLOOR_OVERSHOOT_KMH = 3.0          # aim this far ABOVE the min so a policy's
+                                   # pull-back (its own target is below the min)
+                                   # doesn't dip below min - tolerance
 
 STOP_SAFETY_CONFLICT_RADIUS = 25.0 # metres around intersection to check for conflicts
 STOP_SAFETY_MAX_WAIT = 200         # max extra steps to wait after stop (timeout)
@@ -1328,14 +1331,22 @@ class SignComplianceMixin:
         return None
 
     def _handle_speed_limit(self, sign):
+        limit = float(sign.speed_limit)
+        # In-zone check via the SIGN's own is_vehicle_in_zone (multi-edge aware,
+        # exactly what the verifier uses). The previous lane-local check
+        # (zone_start<=veh_long<=zone_end on sign.lane + on_same_road) lost the
+        # limit when the ego crossed into another edge of a multi-edge zone
+        # (5.21/5.31), so the ego sped up mid-zone. Asking the sign keeps the cap
+        # applied across the WHOLE zone, matching where violations are measured.
+        if sign.is_vehicle_in_zone(self.control_object):
+            self._cap_speed(limit)
+            return
+        # Approach phase (before entering the zone): brake early within lookahead.
         if not on_same_road(self.control_object.lane, sign.lane):
             if not self._is_sign_on_route(sign):
                 return
-        limit = float(sign.speed_limit)
         veh_long = self._veh_long(sign.lane)
-        if sign.zone_start <= veh_long <= sign.zone_end:
-            self._cap_speed(limit)
-        elif veh_long < sign.zone_start:
+        if veh_long < sign.zone_start:
             approach = max(self._approach_dist(limit), SPEED_SIGN_LOOKAHEAD)
             if 0 < (sign.zone_start - veh_long) < approach:
                 self._cap_speed(limit)
@@ -1507,34 +1518,162 @@ class SignComplianceMixin:
         if dist < approach:
             self._cap_speed(0.001)
 
+    # Distance (m) before the detour zone at which the preemptive lane change
+    # starts. The zone itself starts violating immediately, so the manoeuvre
+    # must begin before zone_start for a zero-violation run.
+    PREEMPT_DETOUR_M = 10.0
+    # Longitudinal clearance past the cone cluster centre before merging back
+    # into the original lane (cone half-span 2.25 m + ego half-length + margin).
+    DETOUR_RETURN_CLEARANCE_M = 8.0
+
     def _handle_detour(self, sign):
         self._blocked_lanes.add(getattr(sign.lane, "index", None))
         if not on_same_road(self.control_object.lane, sign.lane):
             return
         sign_ln = lane_index_num(sign.lane)
         cur = self._cur_lane_num()
-        if cur is None or sign_ln is None or cur != sign_ln:
+        if cur is None or sign_ln is None:
             return
         veh_long = self._veh_long(sign.lane)
-        if not (sign.zone_start <= veh_long <= sign.zone_end):
+        if cur != sign_ln:
+            # Ego is on the detour lane. Once the cone cluster is fully
+            # cleared, merge back into the original (route) lane — completes
+            # the manoeuvre and restores route-lane arrival checks.
+            on_detour_lane = (
+                getattr(self.control_object.lane, "index", None)
+                in (getattr(sign, "_allowed_lane_indices", None) or set()))
+            cleared = veh_long > sign.obstacle_long + self.DETOUR_RETURN_CLEARANCE_M
+            if on_detour_lane and cleared and self._lc_target_lane is None \
+                    and self._detour_gap_ok(sign.lane):
+                self._lc_target_lane = sign.lane
+                self._get_heading_pid().reset()
+                self._get_lateral_pid().reset()
             return
+        in_zone = sign.zone_start <= veh_long <= sign.zone_end
+        approaching = (veh_long < sign.zone_start
+                       and sign.zone_start - veh_long < self.PREEMPT_DETOUR_M)
+        if not (in_zone or approaching):
+            # Queue at the cones: NPCs on the obstacle lane pile up behind the
+            # cluster. Merge BEFORE reaching the queue tail instead of joining
+            # it and crawling behind a stopped leader.
+            if not (veh_long < sign.zone_start
+                    and self._detour_queue_ahead(sign, veh_long)):
+                return
         violation_long = getattr(
             sign, "violation_long",
             sign.obstacle_long + getattr(sign, "OBSTACLE_OFFSET", 2.0),
         )
-        if violation_long - veh_long <= 0:
+        if in_zone and violation_long - veh_long <= 0:
             return
         self._cap_speed(max(SLOW_APPROACH_MIN_KMH,
                             self.control_object.speed_km_h * SLOW_APPROACH_FACTOR))
-        ref = self._get_ref_lanes()
-        allowed = sign.allowed_directions
-        if "right" in allowed and cur + 1 < len(ref):
-            self._begin_lane_change(cur + 1)
-        elif "left" in allowed and cur - 1 >= 0:
-            self._begin_lane_change(cur - 1)
+        target = self._detour_target_lane(sign)
+        if target is not None:
+            if self._lc_target_lane is None and not same_lane(
+                self.control_object.lane, target
+            ):
+                self._lc_target_lane = target
+                self._get_heading_pid().reset()
+                self._get_lateral_pid().reset()
+            # Keep momentum while merging: base IDM brakes for the queued
+            # leader on the lane being vacated. With a clear gap in the target
+            # lane, floor the speed so the merge completes instead of stalling.
+            if self._lc_target_lane is not None \
+                    and self._detour_gap_ok(self._lc_target_lane):
+                self._raise_floor(15.0)
         else:
             self._cap_speed(max(FALLBACK_MIN_KMH,
                                 self.control_object.speed_km_h * FALLBACK_FACTOR))
+
+    # How far ahead (m) to look for a stopped queue on the obstacle lane.
+    DETOUR_QUEUE_LOOKAHEAD_M = 35.0
+
+    def _detour_gap_ok(self, target_lane, ahead=15.0, behind=8.0):
+        """True if no vehicle occupies the target-lane corridor within
+        `ahead` m in front / `behind` m behind the ego's projection."""
+        try:
+            ego_long, _ = target_lane.local_coordinates(self.control_object.position)
+            tm = getattr(self.engine, "traffic_manager", None)
+            vehicles = list(getattr(tm, "traffic_vehicles", None) or [])
+        except Exception:
+            return False
+        half_w = target_lane.width_at(0) / 2 + 0.3
+        for v in vehicles:
+            try:
+                v_long, v_lat = target_lane.local_coordinates(v.position)
+            except Exception:
+                continue
+            if abs(v_lat) > half_w:
+                continue
+            if -behind < v_long - ego_long < ahead:
+                return False
+        return True
+
+    def _detour_queue_ahead(self, sign, veh_long):
+        """True if a slow/stopped vehicle occupies the obstacle lane between
+        ego and the cones — the tail of a queue formed behind the obstacle."""
+        try:
+            tm = getattr(self.engine, "traffic_manager", None)
+            vehicles = list(getattr(tm, "traffic_vehicles", None) or [])
+        except Exception:
+            return False
+        lane = sign.lane
+        half_w = lane.width_at(0) / 2 + 0.3
+        for v in vehicles:
+            try:
+                v_long, v_lat = lane.local_coordinates(v.position)
+            except Exception:
+                continue
+            if abs(v_lat) > half_w:
+                continue
+            if not (veh_long < v_long <= sign.obstacle_long + 3.0):
+                continue
+            if v_long - veh_long > self.DETOUR_QUEUE_LOOKAHEAD_M:
+                continue
+            if float(getattr(v, "speed_km_h", 99.0)) < 10.0:
+                return True
+        return False
+
+    def _detour_target_lane(self, sign):
+        """DETOUR-ONLY: pick the physically-correct adjacent lane from the
+        sign's own resolved allowed set (``_allowed_lane_indices`` is correct
+        on both SUMO and PG networks, unlike raw ``cur±1`` arithmetic — SUMO
+        lane 0 is the rightmost, PG lane 0 is the leftmost). Prefers the
+        right-hand option for 4.2.3."""
+        allowed = list(getattr(sign, "_allowed_lane_indices", None) or [])
+        if not allowed:
+            return None
+        rn = getattr(getattr(getattr(self, "engine", None), "current_map", None),
+                     "road_network", None)
+        if rn is None:
+            return None
+        sign_num = lane_index_num(sign.lane)
+
+        def _num_kind(idx):
+            if isinstance(idx, tuple) and len(idx) >= 3 and isinstance(idx[2], int):
+                return idx[2], "pg"
+            try:
+                return int(str(idx).rsplit("_", 1)[1]), "sumo"
+            except (ValueError, IndexError):
+                return None, None
+
+        def _right_first(idx):
+            # SUMO: right = lower lane num; PG: right = higher lane num.
+            n, kind = _num_kind(idx)
+            if n is None or sign_num is None:
+                return 1
+            is_right = (kind == "sumo" and n < sign_num) or \
+                       (kind == "pg" and n > sign_num)
+            return 0 if is_right else 1
+
+        for idx in sorted(allowed, key=_right_first):
+            try:
+                lane = rn.get_lane(idx)
+            except Exception:
+                lane = None
+            if lane is not None and getattr(lane, "index", None) not in self._restricted_lanes:
+                return lane
+        return None
 
     # Distance (m) before the restricted zone at which we start a preemptive
     # lane change. Works for both SUMO and PG-map lanes (uses generic
@@ -1821,9 +1960,59 @@ class SignComplianceMixin:
         if not checkpoints or len(checkpoints) < 2:
             return
         sign_idx = getattr(sign.lane, "index", None)
-        if sign_idx is None or len(sign_idx) < 2:
+        if sign_idx is None:
             return
-        # Find the next target road after the sign's road segment
+
+        # --- Edge-based (SUMO) path: string lane indices ---
+        if isinstance(sign_idx, str):
+            # Skip peer lanes on the same road edge; find first checkpoint
+            # on a different edge (the actual turn target).
+            next_target = None
+            sign_edge = sign_idx.rsplit("_", 1)[0] if ":" not in sign_idx else None
+            for i, cp in enumerate(checkpoints):
+                if cp == sign_idx:
+                    for j in range(i + 1, len(checkpoints)):
+                        cj = checkpoints[j]
+                        if isinstance(cj, str) and ":" not in cj:
+                            cj_edge = cj.rsplit("_", 1)[0]
+                            if cj_edge != sign_edge:
+                                next_target = cj
+                                break
+                    break
+            if next_target is None:
+                return
+            if next_target in allowed:
+                return
+            veh_long = self._veh_long(sign.lane)
+            dist_to_end = sign.lane.length - veh_long
+            if dist_to_end > LANE_CHANGE_LOOKAHEAD:
+                return
+            rn = self.engine.current_map.road_network
+            peer_lanes = rn.get_peer_lanes_from_index(sign_idx)
+            ref = self._get_ref_lanes()
+            for peer_lane in peer_lanes:
+                peer_idx = getattr(peer_lane, "index", None)
+                if peer_idx is None or peer_idx == sign_idx:
+                    continue
+                if peer_lane not in ref:
+                    continue
+                peer_info = rn.graph.get(peer_idx)
+                if peer_info is None:
+                    continue
+                for turn in (getattr(peer_info, "turns", None) or []):
+                    if turn.get("to_lane") == next_target:
+                        if self._lc_target_lane is None:
+                            self._lc_target_lane = peer_lane
+                            self._get_heading_pid().reset()
+                            self._get_lateral_pid().reset()
+                            self._cap_speed(max(SLOW_APPROACH_MIN_KMH,
+                                                self.control_object.speed_km_h * SLOW_APPROACH_FACTOR))
+                        return
+            return
+
+        # --- Tuple-based (PG) path ---
+        if len(sign_idx) < 2:
+            return
         target_road = None
         for i in range(len(checkpoints) - 1):
             if sign_idx[0] == checkpoints[i] and sign_idx[1] == checkpoints[i + 1]:
@@ -1832,15 +2021,12 @@ class SignComplianceMixin:
                 break
         if target_road is None:
             return
-        # Check if current lane's allowed set covers the target road
         allowed_roads = set()
         for idx in allowed:
             if idx is not None and len(idx) >= 2:
                 allowed_roads.add((idx[0], idx[1]))
         if target_road in allowed_roads:
-            return  # current lane is fine
-        # Need to change lane — find a lane on this road whose direction sign
-        # allows the target road
+            return
         cur = self._cur_lane_num()
         if cur is None:
             return
@@ -1850,8 +2036,7 @@ class SignComplianceMixin:
         veh_long = self._veh_long(sign.lane)
         dist_to_end = sign.lane.length - veh_long
         if dist_to_end > LANE_CHANGE_LOOKAHEAD:
-            return  # too far, don't act yet
-        # Scan other lanes' direction signs for one that covers target_road
+            return
         all_signs = self._get_signs()
         for other_sign in all_signs:
             if other_sign is sign:
@@ -2185,8 +2370,13 @@ class SignComplianceMixin:
                 throttle = min(throttle, 0.0)
 
         if self._speed_floor is not None:
-            if speed_kmh < self._speed_floor:
-                deficit = self._speed_floor - speed_kmh
+            # Aim slightly ABOVE the minimum so a policy whose own desired speed
+            # is below the min doesn't keep dipping under min - tolerance. NN
+            # policies (carl/plant2) have no internal target to raise, so this
+            # firm throttle floor is their only lever to reach/hold the minimum.
+            floor_target = self._speed_floor + FLOOR_OVERSHOOT_KMH
+            if speed_kmh < floor_target:
+                deficit = floor_target - speed_kmh
                 accel = min(FLOOR_PROP_GAIN * deficit + FLOOR_BIAS, 1.0)
                 throttle = max(throttle, accel)
 

@@ -62,6 +62,8 @@ SIGN_CLASS_MAP = {
     "5.15.2": "DirectionSign",
     "5.16":   "BusStationSign",
     "5.19":   "PedestrianYieldRule",
+    "5.21":   "ResidentialZoneSign",
+    "5.22":   "EndOfResidentialZoneSign",
     "5.31":   "ZoneSpeedLimitSign",
     "5.32":   "EndOfZoneSpeedLimitSign",
 }
@@ -69,7 +71,14 @@ SIGN_CLASS_MAP = {
 NO_ENTRY_SIGNS = {"3.1", "3.2", "3.18.1", "3.18.2", "3.19"}
 HORIZON_DEFAULT = 600
 BETA_DEFAULT = 0.25
-NON_IDM_POLICIES = {"rule_compliant", "carl", "plant2"}
+# IDM-family policies with ego variants (default/s1..s4): pre-selected down to
+# ONE variant via pick_best_idm before competing with the rest.
+# "comprehensive" is the legacy recorder name for comprehensive_rule_expert.
+IDM_FAMILY_POLICIES = {"comprehensive", "comprehensive_rule_expert", "idm"}
+# Single-variant policies that compete directly. Legacy "carl"/"plant2" rows
+# were recorded by the sign-aware classes now named carl_rule/plant2_rule.
+NON_IDM_POLICIES = {"rule_compliant", "carl", "plant2",
+                    "carl_rule", "plant2_rule", "ppo_lidar"}
 MIN_FINAL_STEP = 30
 MIN_ROUTE_COMPLETION = 0.0
 
@@ -113,7 +122,12 @@ def load_runs(run_dirs, jsonl_files):
 
 
 def is_compliant(r, target_class):
-    vbc = r.get("violations_by_class") or {}
+    # New recorder rows: per-class EVENT counts live in violations_by_class_event
+    # (violations_by_class there is the 3-bucket per-step dict). Legacy rows only
+    # have the event-counted violations_by_class.
+    vbc = r.get("violations_by_class_event")
+    if vbc is None:
+        vbc = r.get("violations_by_class") or {}
     return int(vbc.get(target_class, 0) or 0) == 0
 
 
@@ -250,7 +264,8 @@ def select_expert_per_scene(rows, signs, beta=BETA_DEFAULT,
         if not passing:
             continue
 
-        idm_eps = [r for r in passing if r.get("policy") == "comprehensive"]
+        idm_eps = [r for r in passing
+                   if r.get("policy") in IDM_FAMILY_POLICIES]
         best_idm, best_idm_variant = pick_best_idm(
             idm_eps,
             max(1, min(int(r.get("final_step") or 10**9) for r in passing)),
@@ -462,6 +477,18 @@ def run_self_tests():
     assert recompute_dest(r, "2.5", "StopSign", horizon=600) is False  # horizon != success
     print("  recompute_dest:  ok")
 
+    # New-schema rows: per-class EVENT counts live in violations_by_class_event;
+    # violations_by_class there is the 3-bucket per-step dict and must NOT
+    # shadow them (a nonzero "sign" bucket ≠ a target-class violation).
+    r = {"arrived_dest": False,
+         "violations_by_class": {"sign": 7, "traffic_light": 0, "crosswalk": 0},
+         "violations_by_class_event": {"NoEntrySign": 0}}
+    assert is_compliant(r, "NoEntrySign") is True
+    assert recompute_dest(r, "3.1", "NoEntrySign", horizon=600) is True
+    r = dict(r); r["violations_by_class_event"] = {"NoEntrySign": 1}
+    assert is_compliant(r, "NoEntrySign") is False
+    print("  is_compliant (new schema): ok")
+
     # passes_filter
     base = {"valid": True, "crashed": False, "out_of_road": False,
             "violations_by_class": {"StopSign": 0}, "arrived_dest": True,
@@ -507,6 +534,34 @@ def run_self_tests():
     _, v = pick_best_idm(eps, scene_min_step=100, strategy="f1")
     assert v == "default", f"f1 ties should prefer default, got {v}"
     print("  pick_best_idm:   ok")
+
+    # select_expert_per_scene with NEW recorder policy names:
+    # comprehensive_rule_expert rows form the IDM pre-selection pool (one
+    # variant survives); carl_rule/plant2_rule compete directly.
+    def _row(policy, variant, fs, smooth, viol=0):
+        return {"valid": True, "policy": policy, "variant": variant,
+                "sign_code": "3_24", "scene_id": "m1",
+                "scene_uid": "m1_lane0_seed7_v0",
+                "crashed": False, "out_of_road": False,
+                "arrived_dest": True, "final_step": fs,
+                "frame_smooth_ratio": smooth,
+                "violations_by_class": {"sign": 0, "traffic_light": 0,
+                                        "crosswalk": 0},
+                "violations_by_class_event": {"SpeedLimitSign": viol}}
+    rows = [_row("comprehensive_rule_expert", "default", 120, 0.9),
+            _row("comprehensive_rule_expert", "s1", 100, 0.9),
+            _row("carl_rule", "default", 110, 0.8),
+            _row("plant2_rule", "default", 90, 0.9, viol=1)]  # non-compliant
+    picks, groups, recs = select_expert_per_scene(rows, ["3.24"], top_n=4)
+    assert len(picks) == 2, f"expected best-IDM + carl_rule, got {len(picks)}"
+    assert {p["winner_policy"] for p in picks} == {"comprehensive_rule_expert",
+                                                   "carl_rule"}
+    best = next(p for p in picks if p["rank"] == 1)
+    assert best["winner_policy"] == "comprehensive_rule_expert"
+    assert best["winner_variant"] == "s1", "faster variant must win the pool"
+    assert all(p["winner_policy"] != "plant2_rule" for p in picks), \
+        "target-class event violation must exclude the row"
+    print("  select (new policy names): ok")
 
     print("All self-tests passed.")
 

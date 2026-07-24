@@ -69,7 +69,9 @@ class EndMainRoadSign(BaseTrafficSign):
 class YieldSign(BaseTrafficSign):
 
     EGO_ZONE_BEFORE = 30.0
-    # Fallback full vehicle length when MetaDrive LENGTH is unavailable.
+    # Treat yield obligation as cleared when the vehicle center passes this far before
+    # the lane end (~half car length), so a junction entry/crash is not missed while
+    # the rear is still geometrically on the approach lane.
     EGO_ZONE_END_CENTER_INSET = 4.0
     MAIN_ROAD_ZONE_BEFORE = 20.0
     MAIN_ROAD_ZONE_AFTER = 15.0     

@@ -1,3 +1,4 @@
 eval_smoke/
 idm_eval_one_scene/
 eval_out/ # default out-dir у нашего eval-скрипта
+*/scenes

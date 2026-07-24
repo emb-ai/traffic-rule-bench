@@ -4,30 +4,49 @@ from typing import Optional
 
 class SpeedLimitSign(BaseTrafficSign):
     def __init__(
-        self, 
-        lane, 
+        self,
+        lane,
         speed_limit: float = 20,
         zone_length: Optional[float] = None,
         longitudinal_offset: float = 0.0,
+        speed_limit_override: Optional[float] = None,
         **kwargs
     ):
-        if hasattr(lane, 'speed') and lane.speed is not None:
+        # `speed_limit_override` forces the enforced limit (e.g. the bucketed
+        # 20/40/60 value for 3.24 scenes), bypassing the lane's raw OSM speed.
+        if speed_limit_override is not None:
+            self.speed_limit = int(round(float(speed_limit_override)))
+        elif hasattr(lane, 'speed') and lane.speed is not None:
             self.speed_limit = round(lane.speed * 3.6)
         else:
             self.speed_limit = speed_limit
         lane.speed_limit = self.speed_limit
 
-        base_longitudinal_offset = -lane.length + longitudinal_offset
         super().__init__(
-            lane, 
-            longitudinal_offset=base_longitudinal_offset, 
-            icon_path=f"3.24_{self.speed_limit:02d}.png", 
+            lane,
+            longitudinal_offset=longitudinal_offset,
+            longitudinal_from_start=True,
+            icon_path=f"3.24_{self.speed_limit:02d}.png",
             **kwargs
         )
         self.sign_lane = lane.index
         self.zone_start = self.placement_long
         self.zone_length = max(0.0, self._calculate_zone_length())
         self.zone_end = self.zone_start + self.zone_length
+        # Multi-edge zone (set by configure_multi_edge_zone for combined SUMO
+        # pairs whose zone spans several connected edges). None = single-lane.
+        self.zone_edges = None
+        self.zone_end_s = None
+
+    def configure_multi_edge_zone(self, zone_edges, zone_start, zone_end_s):
+        """Configure a zone that spans connected edges start_edge..end_edge.
+
+        `zone_edges` is the ordered list of directed edge ids, `zone_start` the
+        offset on the first edge, `zone_end_s` the offset on the last edge.
+        """
+        self.zone_edges = list(zone_edges)
+        self.zone_start = float(zone_start)
+        self.zone_end_s = float(zone_end_s)
 
     def _calculate_zone_length(self) -> float:
         if self._is_sumo_network():
@@ -39,7 +58,17 @@ class SpeedLimitSign(BaseTrafficSign):
             return False
         return vehicle.speed_km_h > self.speed_limit
 
+    def is_vehicle_in_zone(self, vehicle) -> bool:
+        """Public zone-membership check used by the verifier (manager)."""
+        return self._is_inside_zone(vehicle)
+
     def _is_inside_zone(self, vehicle) -> bool:
+        # Multi-edge zone (combined pairs): directed edge ids already encode
+        # direction, so this subsumes the same-lane/direction check.
+        multi = self._in_multi_edge_zone(vehicle)
+        if multi is not None:
+            return multi
+
         veh_long = self.lane.local_coordinates(vehicle.position)[0]
 
         if self._is_sumo_network():

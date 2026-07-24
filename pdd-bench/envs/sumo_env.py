@@ -28,6 +28,7 @@ from traffic_signs.no_stopping_allowed_sign import NoStoppingAllowedSign
 from traffic_signs.no_overtaking_sign import NoOvertakingSign
 from traffic_signs.zone_signs import ZoneSpeedLimitSign
 from traffic_signs.end_of_zone_signs import EndOfZoneSpeedLimitSign
+from traffic_signs.residential_zone_signs import ResidentialZoneSign, EndOfResidentialZoneSign
 from traffic_signs.speed_limit_sign import SpeedLimitSign
 from traffic_signs.no_stopping_allowed_sign import NoStoppingAllowedSign
 from traffic_signs.lane_allowed_direction_sign import *
@@ -71,6 +72,8 @@ SIGN_TYPE_TO_CLASS = {
     "5.15.2": DirectionSign,
     "5.31": ZoneSpeedLimitSign,
     "5.32": EndOfZoneSpeedLimitSign,
+    "5.21": ResidentialZoneSign,
+    "5.22": EndOfResidentialZoneSign,
     "5.16": BusStationSign,
     "5.3":  OnlyAutoSign,
     "3.1" : NoEntrySign,
@@ -108,6 +111,31 @@ SIGN_TYPE_TO_CLASS = {
     "5.14.3": EndBusLaneSign,
     "5.14.4": EndBikeLaneSign,
 }
+
+# Zone-ENTRY signs (PDD 5.21 residential zone). For these the scene must read
+# "big road -> sign -> courtyard": the ego spawns on the approaching big road,
+# crosses the junction INTO the courtyard, and passes the sign on the INBOUND
+# carriageway. Gated separately from BRAKING_SPAWN_CODES so 3.24 (a normal
+# through-road speed sign) keeps its existing upstream-spawn behaviour.
+# Parameterized so 5.31 (zone speed limit, same entry semantics) can be added.
+ZONE_ENTRY_SIGN_CODES = {"5.21"}
+
+# Detour signs (mandatory obstacle detour): the sign lane is the
+# OBSTACLE lane (meta sign_lane_index), cones are spawned on it, and ego is
+# pinned to that lane so the prescribed lane change is actually exercised.
+DETOUR_SIGN_CODES = ("4.2.1", "4.2.2", "4.2.3")
+
+
+def _edge_base(edge_id: str) -> str:
+    """Way base of a directed SUMO edge id: '-794#0' -> '794'."""
+    return edge_id.lstrip("-").split("#")[0]
+
+
+def _edges_are_reverse(a: str, b: str) -> bool:
+    """True iff a and b are the two directions of the same way segment (a U-turn:
+    same base way id, opposite leading '-')."""
+    return _edge_base(a) == _edge_base(b) and a.startswith("-") != b.startswith("-")
+
 
 class SimpleTrafficManager(BaseManager):
     def after_reset(self):
@@ -210,8 +238,33 @@ class TrafficSignSumoEnv(BaseEnv):
         # sign's road_id after reset:  0 = rightmost
         config["spawn_lane_num"] = 0
         config["debug_one_way_sign_selection"] = False
-        config["min_route_hops_after_spawn"] = 10
-        config["max_route_hops_after_spawn"] = 10
+        config["min_route_hops_after_spawn"] = 2
+        config["max_route_hops_after_spawn"] = 4
+        # How far PAST the sign the route destination is placed (edges). Keeps the
+        # route short: approach -> sign -> a few edges into the zone, instead of
+        # winding to the far end of a multi-edge zone. The in-zone metric / zone
+        # of effect is independent (see _configure_standalone_zone).
+        config["route_forward_edges"] = 3
+        # When True (default), after sign placement ego is teleported onto the
+        # sign-topology lane. Neural policies (plant2/carl) need False — keep ego
+        # on vehicle_config spawn_lane_index / meta road_id instead.
+        config["relocate_ego_to_sign_lane"] = True
+        # Spawn the physical cone cluster for detour signs (4.2.x).
+        config["spawn_detour_cones"] = True
+        # NPCs are cleared from the obstacle lane starting this many metres
+        # before the detour sign (up to the far end of the cones). Traffic
+        # elsewhere around the sign is kept.
+        config["detour_clear_before_sign_m"] = 5.0
+        # Braking-spawn (3.24): ego starts above the limit, placed d_required
+        # before the sign (resolved up the road graph). Disabled by default.
+        config["ego_braking_spawn"] = False
+        config["ego_spawn_mode"] = "brake"   # "brake" (3.24/5.21/5.31) | "accel" (4.6)
+        config["ego_spawn_v0_ms"] = 0.0
+        config["ego_brake_d_required"] = 0.0
+        config["ego_v_target_kmh"] = 0.0
+        config["ego_brake_decel"] = 2.5
+        config["ego_brake_delay"] = 1.0
+        config["ego_brake_margin"] = 5.0
         return config
     
     def __init__(self, config):
@@ -821,6 +874,99 @@ class TrafficSignSumoEnv(BaseEnv):
 
         return best_lane, candidate_lane_keys
 
+    def _setup_direction_sign_trap(self, road_network, current_lane):
+        """For sign 5.15.2, find a lane_A (fewer turn options) and a parallel
+        lane_B (more turn options). Returns (trap_lane_id, trap_lane_obj,
+        violation_target_id, adjacent_lane_id) or (None, None, None, None)."""
+        def _dirs_and_targets(lane_key):
+            info = road_network.graph.get(lane_key)
+            if info is None:
+                return set(), set()
+            dirs = set()
+            targets = set()
+            for t in (getattr(info, "turns", None) or []):
+                d = t.get("direction")
+                to = t.get("to_lane")
+                if d:
+                    dirs.add(d)
+                if to:
+                    targets.add(to)
+            return dirs, targets
+
+        def _peers_by_edge(candidate_key):
+            edge = candidate_key.rsplit("_", 1)[0]
+            return [
+                k for k in road_network.graph
+                if k != candidate_key and k.startswith(edge + "_") and ":" not in k
+            ]
+
+        # Build edge groups first
+        edge_groups = {}
+        for key in road_network.graph:
+            if not isinstance(key, str) or not key.startswith("lane_") or ":" in key:
+                continue
+            e = key.rsplit("_", 1)[0]
+            edge_groups.setdefault(e, []).append(key)
+
+        for edge, lane_keys in edge_groups.items():
+            if len(lane_keys) < 2:
+                continue
+            lane_data = {}
+            for lk in lane_keys:
+                dirs, targets = _dirs_and_targets(lk)
+                if dirs and targets:
+                    lane_data[lk] = (dirs, targets)
+            keys = list(lane_data.keys())
+            for i in range(len(keys)):
+                for j in range(i + 1, len(keys)):
+                    kA, kDirsA, kTargetsA = keys[i], lane_data[keys[i]][0], lane_data[keys[i]][1]
+                    kB, kDirsB, kTargetsB = keys[j], lane_data[keys[j]][0], lane_data[keys[j]][1]
+                    extra_B = kDirsB - kDirsA
+                    extra_A = kDirsA - kDirsB
+                    if len(extra_B) > 0:
+                        # kB (peer) has extra direction(s) — kA is trap
+                        violation_target = self._find_extra_target(kB, extra_B, road_network)
+                        if violation_target is not None:
+                            return kA, road_network.graph[kA].lane, violation_target, kB
+                    if len(extra_A) > 0:
+                        # kA (peer) has extra direction(s) — kB is trap
+                        violation_target = self._find_extra_target(kA, extra_A, road_network)
+                        if violation_target is not None:
+                            return kB, road_network.graph[kB].lane, violation_target, kA
+
+        return None, None, None, None
+
+    def _find_extra_target(self, lane_key, extra_dirs, road_network):
+        """Find a to_lane from lane_key's turns that matches any of
+        extra_dirs and is NOT reachable from peers of lane_key."""
+        info = road_network.graph.get(lane_key)
+        if info is None:
+            return None
+        edge = lane_key.rsplit("_", 1)[0]
+        peer_keys = [
+            k for k in road_network.graph
+            if k != lane_key and k.startswith(edge + "_") and ":" not in k
+        ]
+        for t in (getattr(info, "turns", None) or []):
+            d = t.get("direction")
+            to = t.get("to_lane")
+            if d in extra_dirs and to:
+                # Verify this target is NOT reachable from any peer
+                is_unique = True
+                for pk in peer_keys:
+                    pi = road_network.graph.get(pk)
+                    if pi is None:
+                        continue
+                    for pt in (getattr(pi, "turns", None) or []):
+                        if pt.get("to_lane") == to:
+                            is_unique = False
+                            break
+                    if not is_unique:
+                        break
+                if is_unique:
+                    return to
+        return None
+
     @staticmethod
     def _counterpart_dir_for_no_turn_anchor(sign_type: str) -> Optional[str]:
         mapping = {
@@ -1061,6 +1207,398 @@ class TrafficSignSumoEnv(BaseEnv):
         except Exception:
             pass
 
+    def _upstream_real_lane(self, lane, road_network, visited,
+                            skip_reverse=False, prefer_big_road=False):
+        """Nearest upstream NON-internal lane feeding `lane`, crossing at most one
+        junction. Returns (lane, gap_len) where gap_len is the internal junction
+        lane length traversed (0.0 if directly connected). (None, 0.0) if none.
+
+        SUMO edges connect THROUGH junctions via internal ':' lanes; walking only
+        real edges would dead-end at every intersection. This follows the internal
+        lane one hop to reach the real upstream edge after the intersection.
+
+        `skip_reverse`: never follow the reverse (U-turn) direction of `lane`'s own
+        edge, so an inbound courtyard lane can't walk back onto its own outbound
+        carriageway. `prefer_big_road`: among eligible predecessors choose the
+        longest lane (a proxy for a main road over a short courtyard stub), so the
+        ego ends up approaching from the big road.
+        """
+        cur_edge = self._lane_key_edge(str(getattr(lane, "index", None)))
+
+        def _eligible(l):
+            if l is None or str(getattr(l, "index", None)) in visited:
+                return False
+            if skip_reverse and cur_edge is not None:
+                e = self._lane_key_edge(str(getattr(l, "index", None)))
+                if e is not None and _edges_are_reverse(cur_edge, e):
+                    return False
+            return True
+
+        def _pick(cands):
+            if prefer_big_road and len(cands) > 1:
+                cands = sorted(cands, key=lambda l: float(getattr(l, "length", 0.0)),
+                               reverse=True)
+            return cands[0]
+
+        entries = list(getattr(lane, "entry_lanes", None) or [])
+        # Direct real predecessors first.
+        direct = []
+        for e in entries:
+            if ":" in str(e):
+                continue
+            try:
+                l = road_network.get_lane(e)
+            except Exception:
+                l = None
+            if _eligible(l):
+                direct.append(l)
+        if direct:
+            return _pick(direct), 0.0
+        # Otherwise cross an internal junction lane to its real upstream edge.
+        for e in entries:
+            if ":" not in str(e):
+                continue
+            try:
+                il = road_network.get_lane(e)
+            except Exception:
+                il = None
+            if il is None:
+                continue
+            gap = float(getattr(il, "length", 0.0))
+            cross = []
+            for e2 in (getattr(il, "entry_lanes", None) or []):
+                if ":" in str(e2):
+                    continue
+                try:
+                    l2 = road_network.get_lane(e2)
+                except Exception:
+                    l2 = None
+                if _eligible(l2):
+                    cross.append(l2)
+            if cross:
+                return _pick(cross), gap
+        return None, 0.0
+
+    def _route_through_sign(self, spawn_lane, sign_lane_index, forward_dest=None):
+        """Route ego from spawn_lane so the path passes THROUGH the sign edge.
+
+        Tries the configured downstream destination first (gives post-sign road),
+        but only accepts it if the resulting route actually contains the sign
+        edge. Otherwise routes directly to the sign edge (always reachable — we
+        walked upstream from it). Returns True if the sign edge is on the route.
+
+        For zone-ENTRY signs (5.21) `forward_dest` (a lane deep in the courtyard)
+        is tried FIRST so the route is big-road -> sign -> courtyard interior, and
+        a degenerate `[spawn, spawn]` route (the sign edge present but the route
+        not actually continuing past it) is rejected — the sign must be strictly
+        mid-route.
+        """
+        nav = getattr(self.vehicle, "navigation", None)
+        if nav is None:
+            return False
+        sign_key = str(sign_lane_index)
+        zone_entry = self.sign_type in ZONE_ENTRY_SIGN_CODES
+
+        def _route_has_sign():
+            ckpts = [str(c) for c in (getattr(nav, "checkpoints", None) or [])]
+            return sign_key in ckpts
+
+        def _n_checkpoints():
+            return len(getattr(nav, "checkpoints", None) or [])
+
+        dest = (getattr(self.vehicle, "config", {}) or {}).get("destination")
+        # Reachable forward destination walked from the sign's own lane in the live
+        # graph — used as a fallback so the route CONTINUES past the sign even when
+        # the catalog destination isn't reachable from this lane (junction branch).
+        try:
+            road_network = self.engine.current_map.road_network
+        except Exception:
+            road_network = None
+        fwd_reach = (self._forward_reachable_destination(sign_lane_index, road_network)
+                     if road_network is not None else None)
+        targets = ([forward_dest, dest, fwd_reach, sign_lane_index] if zone_entry
+                   else [dest, fwd_reach, sign_lane_index])
+        for target in targets:
+            if not target:
+                continue
+            try:
+                nav.set_route(spawn_lane.index, target)
+            except Exception:
+                continue
+            has_sign = _route_has_sign()
+            if zone_entry:
+                # Sign strictly mid-route (path continues into the courtyard):
+                # present AND more than the degenerate 2-checkpoint route.
+                if has_sign and _n_checkpoints() > 2:
+                    nav.update_localization(self.vehicle)
+                    return True
+                # Last resort: routing to the sign edge itself, only if it yields
+                # a real (>1 edge) route — never the [spawn, spawn] degenerate.
+                if str(target) == sign_key and has_sign and _n_checkpoints() > 1:
+                    nav.update_localization(self.vehicle)
+                    return True
+            else:
+                if has_sign or str(target) == sign_key:
+                    nav.update_localization(self.vehicle)
+                    return True
+        self._refresh_navigation_after_spawn(spawn_lane)
+        return _route_has_sign()
+
+    def _restrict_npcs_to_zone_or_adjacent(self, corridor_lanes, sign_lane_index,
+                                           sign_s, lane_lat=2.0):
+        """Keep surrounding NPCs only on ADJACENT lanes or INSIDE the sign zone.
+
+        `corridor_lanes` are the lanes ego traverses from its braking spawn up to
+        the sign. An NPC is removed iff it sits on one of those lanes BEFORE the
+        sign:
+          - on an upstream corridor lane (not the sign's lane) → always before
+            the sign → remove;
+          - on the sign's own lane with longitudinal < sign_s → before sign →
+            remove; at/after sign_s it is in the zone → keep.
+        NPCs on any other (adjacent / non-corridor) lane are kept regardless of
+        position. Returns the number removed.
+
+        To preserve the sampled traffic_density, every NPC removed from the
+        corridor is RELOCATED: an equal number is respawned on allowed lanes
+        (corridor lanes excluded → adjacent lanes / elsewhere). Spawn/removal/
+        relocation counts are recorded in `self._npc_density_stats` so the
+        realized density can be reported in the manifest.
+
+        Lane membership is by local coordinates: |lateral| < `lane_lat` (half a
+        lane width) so a car one lane over (~3.5 m) is treated as adjacent.
+        """
+        try:
+            traffic_mgr = self.engine.traffic_manager
+            if not hasattr(traffic_mgr, "traffic_vehicles"):
+                return 0
+            n_before = len(traffic_mgr.traffic_vehicles)
+            sign_key = str(sign_lane_index)
+            # Dedup corridor lanes by index, drop None.
+            seen = set()
+            lanes = []
+            for ln in corridor_lanes:
+                if ln is None:
+                    continue
+                k = str(getattr(ln, "index", None))
+                if k in seen:
+                    continue
+                seen.add(k)
+                lanes.append(ln)
+            to_remove = []
+            for v in list(traffic_mgr.traffic_vehicles):
+                pos = np.asarray(v.position, dtype=np.float64)
+                drop = False
+                for ln in lanes:
+                    try:
+                        lng, lat = ln.local_coordinates(pos)
+                    except Exception:
+                        continue
+                    if not (0.0 <= lng <= float(getattr(ln, "length", 0.0)) and abs(lat) < lane_lat):
+                        continue  # not on this corridor lane
+                    # On a corridor lane. Keep only if it's the sign lane AND the
+                    # NPC is at/after the sign (already in the enforced zone).
+                    if str(getattr(ln, "index", None)) == sign_key and lng >= float(sign_s):
+                        drop = False
+                        break
+                    drop = True
+                    break
+                if drop:
+                    to_remove.append(v)
+            for v in to_remove:
+                traffic_mgr.clear_objects([v.id])
+                if v in getattr(traffic_mgr, "_traffic_vehicles", []):
+                    traffic_mgr._traffic_vehicles.remove(v)
+
+            # Relocate: respawn the same count on allowed lanes (corridor lanes
+            # excluded) so the realized density matches the sampled profile.
+            n_removed = len(to_remove)
+            relocated = 0
+            if n_removed > 0 and hasattr(traffic_mgr, "_try_respawn"):
+                corridor_keys = [str(getattr(ln, "index", None)) for ln in lanes]
+                try:
+                    relocated = int(traffic_mgr._try_respawn(
+                        n_removed, forbidden_keys=corridor_keys) or 0)
+                except Exception as exc:
+                    logging.warning(f"braking-spawn NPC relocation failed: {exc}")
+            n_after = len(traffic_mgr.traffic_vehicles)
+            self._npc_density_stats = {
+                "npc_before": int(n_before),
+                "npc_removed_corridor": int(n_removed),
+                "npc_relocated": int(relocated),
+                "npc_after": int(n_after),
+                "npc_density_preserved": bool(relocated >= n_removed),
+                "traffic_density": float(self.config.get("traffic_density", 0.0) or 0.0),
+            }
+            return n_removed
+        except Exception as exc:
+            logging.warning(f"braking-spawn NPC restriction failed: {exc}")
+            return 0
+
+    def _spawn_ego_before_sign(self, sign_obj, road_network):
+        """Place ego `d_required` UPSTREAM of the sign along the road graph at v0.
+
+        Reads the braking spec from config (ego_spawn_v0_ms, ego_brake_d_required,
+        ego_v_target_kmh, brake params). Walks up `entry_lanes` when the required
+        distance exceeds the sign's offset on its own edge. On a dead-end
+        (insufficient runway) it clamps to the furthest reachable point and lowers
+        v0 to what fits (still above the limit). Returns an info dict or None.
+        """
+        try:
+            v0 = float(self.config.get("ego_spawn_v0_ms", 0.0) or 0.0)
+            d_req = float(self.config.get("ego_brake_d_required", 0.0) or 0.0)
+            v_target_mps = float(self.config.get("ego_v_target_kmh", 0.0) or 0.0) / 3.6
+            # "accel" (4.6): ego starts BELOW the target and must speed up; "brake"
+            # (3.24/5.21/5.31): ego starts above and must slow down.
+            accel_mode = str(self.config.get("ego_spawn_mode", "brake")) == "accel"
+            sign_lane = sign_obj.lane
+            sign_s = float(getattr(sign_obj, "placement_long", 0.0))
+        except Exception:
+            return None
+        if sign_lane is None or v0 <= 0.0:
+            return None
+
+        # Zone-entry signs (5.21): keep the upstream walk on the inbound
+        # carriageway (no U-turn) and bias toward the big road, so the ego
+        # approaches FROM the big road instead of deeper in the courtyard.
+        zone_entry = self.sign_type in ZONE_ENTRY_SIGN_CODES
+
+        lane_num = int(self.config.get("spawn_lane_num", 0) or 0)
+        spawn_lane = sign_lane
+        road_id = str((self.meta or {}).get("road_id") or "")
+        if road_id:
+            try:
+                cand = road_network.get_lane(f"lane_{road_id}_{lane_num}")
+                if cand is not None:
+                    spawn_lane = cand
+            except Exception:
+                pass
+
+        # Walk upstream until d_required is covered, crossing junctions (internal
+        # ':' lanes) to reach the real upstream edge AFTER each intersection.
+        remaining = d_req
+        cur = spawn_lane
+        avail_here = min(sign_s, float(getattr(cur, "length", sign_s)))
+        visited = {str(getattr(cur, "index", None))}
+        # Lanes ego traverses from spawn up to the sign — the braking corridor.
+        # NPCs on these (before the sign) get removed so ego, starting above the
+        # limit, doesn't rear-end a slower car it can't avoid. The sign lane is
+        # included but only its pre-sign part counts as corridor (the zone after
+        # the sign keeps its traffic).
+        corridor_lanes = [cur]
+        insufficient = False
+        spawn_long = None
+        for _ in range(30):
+            if remaining <= avail_here:
+                spawn_long = avail_here - remaining
+                spawn_lane = cur
+                remaining = 0.0
+                break
+            remaining -= avail_here
+            # skip_reverse is correct for EVERY braking sign: the ego approaches
+            # on the sign's own carriageway, so the upstream walk must never
+            # U-turn onto the oncoming (reverse) edge (else the sign ends up "on
+            # the other side"). prefer_big_road stays zone-entry-only.
+            pred, gap = self._upstream_real_lane(
+                cur, road_network, visited,
+                skip_reverse=True, prefer_big_road=zone_entry)
+            if pred is None:
+                insufficient = True
+                spawn_lane = cur
+                spawn_long = 0.2
+                break
+            # If the spawn point falls inside the junction, place it just before
+            # the junction at the end of the upstream edge.
+            if remaining <= gap:
+                spawn_lane = pred
+                spawn_long = max(0.2, float(getattr(pred, "length", 1.0)) - 0.5)
+                corridor_lanes.append(pred)
+                remaining = 0.0
+                break
+            remaining -= gap
+            cur = pred
+            visited.add(str(getattr(cur, "index", None)))
+            corridor_lanes.append(cur)
+            avail_here = float(getattr(cur, "length", 0.0))
+        if spawn_long is None:
+            insufficient = True
+            spawn_lane = cur
+            spawn_long = 0.2
+
+        # Insufficient runway → lower v0 to what the achieved distance allows
+        # (kept above the limit). If even v0 = limit+ε doesn't fit, the scene
+        # can't test braking to the limit → mark braking_invalid for filtering.
+        d_achieved = max(0.0, d_req - remaining)
+        braking_invalid = False
+        # Braking only: on insufficient runway lower v0 to what can be braked in
+        # d_achieved. For ACCEL (4.6) keep v0 — a short runway just means the ego
+        # reaches the minimum later (within the zone), which is still valid.
+        if not accel_mode:
+            if insufficient and d_achieved > 0.0:
+                try:
+                    from factorized_space.agent_profile_bank import max_v0_for_distance
+                    v0_fit = max_v0_for_distance(
+                        d_achieved, v_target_mps,
+                        float(self.config.get("ego_brake_decel", 2.5)),
+                        float(self.config.get("ego_brake_delay", 1.0)),
+                        float(self.config.get("ego_brake_margin", 5.0)),
+                    )
+                    if v0_fit > v_target_mps:
+                        v0 = min(v0, v0_fit)
+                    else:
+                        braking_invalid = True
+                except Exception:
+                    pass
+            elif insufficient:
+                braking_invalid = True
+
+        spawn_long = max(0.2, min(float(spawn_long),
+                                  float(getattr(spawn_lane, "length", spawn_long)) - 0.1))
+        routed = False
+        try:
+            pos = np.asarray(spawn_lane.position(spawn_long, 0.0), dtype=np.float64)
+            heading = float(spawn_lane.heading_theta_at(spawn_long))
+            self.vehicle.set_position(pos)
+            self.vehicle.set_heading_theta(heading)
+            try:
+                self.vehicle.spawn_place = pos.copy()
+            except Exception:
+                pass
+            # Restrict surrounding traffic: NPCs may only sit on ADJACENT lanes
+            # or already INSIDE the sign's zone (from the sign onward). Any NPC on
+            # ego's own braking-corridor lanes BEFORE the sign is removed — ego
+            # starts above the limit among slower (limit-capped) NPCs, so such a
+            # car is an unavoidable rear-end before ego can brake → spurious crash.
+            n_cleared = self._restrict_npcs_to_zone_or_adjacent(
+                corridor_lanes, getattr(sign_lane, "index", None), sign_s)
+            fwd_dest = (self._forward_courtyard_destination(sign_obj, road_network)
+                        if zone_entry else None)
+            routed = self._route_through_sign(
+                spawn_lane, getattr(sign_lane, "index", None), forward_dest=fwd_dest)
+            try:
+                self.vehicle.set_velocity([float(v0), 0.0], in_local_frame=True)
+            except TypeError:
+                self.vehicle.set_velocity([float(v0), 0.0])
+        except Exception as exc:
+            logging.warning(f"braking spawn failed: {exc}")
+            return None
+
+        info = {
+            "ego_spawn_edge": str(getattr(spawn_lane, "index", None)),
+            "ego_spawn_long": round(float(spawn_long), 3),
+            "ego_spawn_v0_ms": round(float(v0), 4),
+            "ego_d_required_m": round(float(d_req), 3),
+            "ego_d_achieved_m": round(float(d_achieved), 3),
+            "insufficient_runway": bool(insufficient),
+            "braking_invalid": bool(braking_invalid),
+            "routed_through_sign": bool(routed),
+            "npc_cleared_corridor": int(n_cleared),
+        }
+        # Density bookkeeping (spawn/removal/relocation) so the realized traffic
+        # density can be audited per scene.
+        info.update(getattr(self, "_npc_density_stats", {}) or {})
+        self._braking_spawn_info = info
+        return info
+
     @staticmethod
     def _spawn_edge_id(lane_index: str) -> str:
         raw = lane_index[5:] if lane_index.startswith("lane_") else lane_index
@@ -1240,7 +1778,55 @@ class TrafficSignSumoEnv(BaseEnv):
         except Exception:
             pass
         
+    def _resolve_detour_lane_and_s(self, road_network, road_id):
+        """Resolve the OBSTACLE lane + sign longitudinal position for 4.2.x.
+
+        Uses meta ``sign_lane_index`` (written by detour_scene_editor.py) when
+        present; legacy scenes fall back to a feasibility-aware auto-pick: the
+        obstacle lane must have an adjacent same-direction lane on the side
+        prescribed by the sign (MetaDrive lane_info semantics: ``right_lanes``
+        is the physically-right neighbour, i.e. lower SUMO lane index).
+        """
+        meta = self.meta or {}
+        nums = self.list_parallel_lane_nums(road_id)
+        lane = None
+        idx = meta.get("sign_lane_index")
+        if idx is not None and int(idx) in nums:
+            try:
+                lane = road_network.get_lane(f"lane_{road_id}_{int(idx)}")
+            except Exception:
+                lane = None
+        if lane is None:
+            graph = getattr(road_network, "graph", {}) or {}
+            need_r = self.sign_type in ("4.2.1", "4.2.3")
+            need_l = self.sign_type in ("4.2.2", "4.2.3")
+
+            def feasible(n):
+                info = graph.get(f"lane_{road_id}_{n}")
+                if info is None:
+                    return False
+                return bool((need_r and getattr(info, "right_lanes", None)) or
+                            (need_l and getattr(info, "left_lanes", None)))
+
+            cand = [n for n in nums if feasible(n)]
+            if not cand:
+                raise RuntimeError(
+                    "detour_infeasible: no adjacent same-direction lane "
+                    f"on road_id={road_id} for sign {self.sign_type}"
+                )
+            above = [c for c in cand if c > 0]
+            pick = min(above) if self.sign_type != "4.2.2" and above else cand[0]
+            lane = road_network.get_lane(f"lane_{road_id}_{pick}")
+        sign_s = float(meta.get("sign_s", meta.get("distance_from_start", 0.0)) or 0.0)
+        # Keep the obstacle cluster (sign_s + 3.5 + half-span) on the lane.
+        sign_s = min(max(0.5, sign_s), max(0.5, lane.length - 4.5))
+        return lane, sign_s
+
     def reset(self, *, seed=None):
+        if self.meta and self.meta.get("excluded"):
+            raise RuntimeError(
+                f"scene_excluded: {self.meta.get('excluded_reason', 'unspecified')}"
+            )
         obs, info = super().reset(seed=seed)
 
         sign_mgr = self.engine.traffic_sign_manager
@@ -1316,9 +1902,17 @@ class TrafficSignSumoEnv(BaseEnv):
             road_id = str(self.meta["road_id"])
             try:
                 if sign_lane is None:
-                    lane_key = road_network.find_rightmost_lane_by_road_id(road_id)
-                    sign_lane = road_network.get_lane(lane_key)
-                    lane_source = f"meta_road_id({road_id})"
+                    # Zone-entry signs (5.21): place on the EXACT inbound directed
+                    # edge so the sign sits on the entering carriageway, never the
+                    # opposite/outbound one. Fall back to the generic picker.
+                    if self.sign_type in ZONE_ENTRY_SIGN_CODES:
+                        sign_lane = self._lane_for_exact_edge(road_network, road_id)
+                        if sign_lane is not None:
+                            lane_source = f"meta_road_id_exact({road_id})"
+                    if sign_lane is None:
+                        lane_key = road_network.find_rightmost_lane_by_road_id(road_id)
+                        sign_lane = road_network.get_lane(lane_key)
+                        lane_source = f"meta_road_id({road_id})"
             except Exception:
                 logging.warning(f"Could not find lane for road_id={road_id}, falling back to vehicle lane")
 
@@ -1345,6 +1939,22 @@ class TrafficSignSumoEnv(BaseEnv):
         # if self.sign_type == "2.2" and self._priority_candidate_lane_keys:
         #     sign_kwargs["applicable_lane_indices"] = list(self._priority_candidate_lane_keys)
 
+        # For DirectionSign (5.15.2), set up trap lane with parallel alternatives
+        trap_lane_id = trap_violation_target = trap_adjacent_lane_id = None
+        if self.sign_type == "5.15.2":
+            trap_lane_id, trap_candidate, trap_violation_target, trap_adjacent_lane_id = self._setup_direction_sign_trap(
+                road_network, sign_lane
+            )
+            if trap_candidate is not None:
+                sign_lane = trap_candidate
+                lane_source = "direction_sign_trap"
+            if trap_lane_id is not None:
+                sign_kwargs["trap_lane_id"] = trap_lane_id
+            if trap_violation_target is not None:
+                sign_kwargs["trap_violation_target"] = trap_violation_target
+            if trap_adjacent_lane_id is not None:
+                sign_kwargs["trap_adjacent_lane_id"] = trap_adjacent_lane_id
+
         # Signs that manage their own placement offsets internally
         from traffic_signs.restricted_lane_sign import (
             RestrictedLaneSign as _RLS,
@@ -1364,7 +1974,72 @@ class TrafficSignSumoEnv(BaseEnv):
         elif issubclass(sign_class, (_IRLS, _EORLS)):
             sign_mgr.add_sign(sign_class, lane=sign_lane)
         elif issubclass(sign_class, _DS):
-            sign_mgr.add_sign(sign_class, lane=sign_lane)
+            detour_s = None
+            if preferred_road_id:
+                try:
+                    sign_lane, detour_s = self._resolve_detour_lane_and_s(
+                        road_network, preferred_road_id
+                    )
+                    lane_source = f"meta_detour_lane({preferred_road_id})"
+                except Exception as e:
+                    logging.warning(f"detour lane resolution failed: {e}")
+            detour_kwargs = {}
+            if detour_s is not None:
+                detour_kwargs = {
+                    "longitudinal_offset": detour_s,
+                    "longitudinal_from_start": True,
+                }
+            sign_obj = sign_mgr.add_sign(sign_class, lane=sign_lane, **detour_kwargs)
+            self._detour_sign_obj = sign_obj
+            if sign_obj is not None and self.config.get("spawn_detour_cones", True):
+                from traffic_signs.detour_obstacle import spawn_detour_obstacle
+                spawn_detour_obstacle(self.engine, sign_lane, sign_obj)
+                # Clear NPCs ONLY from the obstacle-lane corridor between
+                # `detour_clear_before_sign_m` before the sign and the far end
+                # of the cone cluster — otherwise cones spawn on top of an NPC.
+                # Traffic on the adjacent lanes and elsewhere near the sign is
+                # deliberately kept (ego must merge into real traffic).
+                clear_before = float(self.config.get("detour_clear_before_sign_m", 5.0))
+                win_start = float(sign_obj.placement_long) - clear_before
+                win_end = float(sign_obj.obstacle_long) + 5.0
+                half_w = sign_lane.width_at(0) / 2 + 0.3
+                traffic_mgr = self.engine.traffic_manager
+                if hasattr(traffic_mgr, 'traffic_vehicles'):
+                    to_remove = []
+                    for v in list(traffic_mgr.traffic_vehicles):
+                        try:
+                            v_long, v_lat = sign_lane.local_coordinates(v.position)
+                        except Exception:
+                            continue
+                        if win_start <= v_long <= win_end and abs(v_lat) <= half_w:
+                            to_remove.append(v)
+                    for v in to_remove:
+                        traffic_mgr.clear_objects([v.id])
+                        traffic_mgr._traffic_vehicles.remove(v)
+        elif issubclass(sign_class, (SpeedLimitSign, ZoneSpeedLimitSign, BaseEndOfZoneSign)):
+            # Speed/zone/end-of-zone signs use the unified `longitudinal_from_start`
+            # convention (offset = meters from the edge START). For a combined
+            # pair, place the start sign at its re-projected offset `s_start`;
+            # otherwise `sign_spawn_distance` into the edge for approach room.
+            if (self.meta or {}).get("is_paired") and (self.meta or {}).get("s_start") is not None:
+                spawn_dist = max(0.1, float(self.meta["s_start"]))
+            else:
+                spawn_dist = max(0.1, float(self.sign_spawn_distance))
+            sign_longitudinal_offset = min(spawn_dist, max(0.1, sign_lane.length - 1.0))
+            speed_kwargs = dict(sign_kwargs)
+            # 3.24 / 5.31: force the enforced limit to the bucketed value
+            # ({20,30,40}) so the verifier checks the canonical limit (not the raw
+            # road speed) and the icon resolves. 5.31's catalog v_target is now
+            # bucketed too, so its runtime sign must use the same value.
+            if self.sign_type in ("3.24", "5.31") and float(self.config.get("ego_v_target_kmh", 0) or 0) > 0:
+                speed_kwargs["speed_limit_override"] = float(self.config.get("ego_v_target_kmh"))
+            sign_obj = sign_mgr.add_sign(
+                sign_class,
+                lane=sign_lane,
+                longitudinal_offset=sign_longitudinal_offset,
+                lateral_offset=sign_lane.width_at(0) / 2 + 0.8,
+                **speed_kwargs,
+            )
         else:
             # For approach-style signs (Stop, NoEntry, NoTraffic, TL, etc.)
             # the stop-line is at the intersection entrance, which in SUMO
@@ -1372,6 +2047,7 @@ class TrafficSignSumoEnv(BaseEnv):
             # initial lane we offset by `sign_spawn_distance` from the lane
             # start (= near the end on this short edge); otherwise place at
             # lane start so the sign isn't pushed off the parallel edge.
+            # These signs keep the legacy from-END convention.
             initial_lane_idx = getattr(getattr(self, "vehicle", None), "lane", None)
             initial_lane_idx = getattr(initial_lane_idx, "index", None)
             sign_lane_idx = getattr(sign_lane, "index", None)
@@ -1381,17 +2057,22 @@ class TrafficSignSumoEnv(BaseEnv):
                 if is_initial_sign_lane
                 else 0.0
             )
+            approach_kwargs = dict(sign_kwargs)
+            # 4.6: enforce the catalog's achievable-capped minimum (20/40) so the
+            # verifier checks the same value the acceleration scene targets.
+            if self.sign_type == "4.6" and float(self.config.get("ego_v_target_kmh", 0) or 0) > 0:
+                approach_kwargs["min_speed_override"] = float(self.config.get("ego_v_target_kmh"))
             sign_obj = sign_mgr.add_sign(
                 sign_class,
                 lane=sign_lane,
                 longitudinal_offset=sign_longitudinal_offset,
                 lateral_offset=sign_lane.width_at(0) / 2 + 0.8,
-                **sign_kwargs,
+                **approach_kwargs,
             )
 
         # If sign was attached to a concrete lane set, spawn ego on one of those
         # lanes instead of an unrelated default lane.
-        if lane_source != "vehicle_lane_fallback":
+        if self.config.get("relocate_ego_to_sign_lane", True) and lane_source != "vehicle_lane_fallback":
             # For no-turn signs, spawn only from render lanes.
             if self.sign_type in ("3.18.1", "3.18.2", "3.19"):
                 render_lanes = [
@@ -1405,14 +2086,47 @@ class TrafficSignSumoEnv(BaseEnv):
                     spawn_lane = self._pick_spawn_lane_from_sign_attachment(road_network, sign_lane, sign_kwargs)
             else:
                 spawn_lane = self._pick_spawn_lane_from_sign_attachment(road_network, sign_lane, sign_kwargs)
-            start_entry_lanes = [
+            approach_lanes = []
+            if trap_lane_id is not None:
+                # Walk backward through the road graph from trap_lane_id until
+                # we have accumulated at least 80 m of total lane length, so
+                # the ego has room to change lanes before the junction.
+                seen = set()
+                current_idx = trap_lane_id
+                total_len = 0.0
+                spawn_lane = road_network.get_lane(trap_lane_id)
+                spawn_long = 0.0
+                approach_lanes = [trap_lane_id]
+                for _ in range(10):
+                    lane_obj = road_network.get_lane(current_idx)
+                    total_len += float(getattr(lane_obj, "length", 0.0))
+                    if total_len >= 80.0:
+                        spawn_lane = lane_obj
+                        spawn_long = total_len - 80.0
+                        break
+                    spawn_lane = lane_obj
+                    spawn_long = 0.0
+                    seen.add(current_idx)
+                    found = None
+                    for k, v in road_network.graph.items():
+                        if k in seen:
+                            continue
+                        if current_idx in set(getattr(v, "exit_lanes", None) or []):
+                            found = k
+                            break
+                    if found is None:
+                        break
+                    current_idx = found
+                    approach_lanes.append(found)
+            else:
+                start_entry_lanes = [
                     lane_id
                     for lane_id in spawn_lane.entry_lanes
                     if ":" not in lane_id
                 ]
-            if len(start_entry_lanes) > 0:
-                spawn_lane = road_network.get_lane(start_entry_lanes[0])
-            spawn_long = min(2.0, max(0.2, spawn_lane.length * 0.05))
+                if len(start_entry_lanes) > 0:
+                    spawn_lane = road_network.get_lane(start_entry_lanes[0])
+                spawn_long = min(2.0, max(0.2, spawn_lane.length * 0.05))
             ego_spawn_pos = spawn_lane.position(spawn_long, 0.0)
             
             traffic_mgr = self.engine.traffic_manager
@@ -1426,8 +2140,72 @@ class TrafficSignSumoEnv(BaseEnv):
                     traffic_mgr.clear_objects([v.id])
                     traffic_mgr._traffic_vehicles.remove(v)
             # =====================================================
-            self._spawn_ego_on_lane(spawn_lane)
+            if trap_lane_id is not None:
+                # For trap scenarios, manually set spawn position from the
+                # walkback spawn_lane so the ego has room to change lanes.
+                try:
+                    heading = spawn_lane.heading_theta_at(spawn_long)
+                    self.vehicle.set_position(ego_spawn_pos)
+                    self.vehicle.set_heading_theta(heading)
+                except Exception:
+                    self._spawn_ego_on_lane(spawn_lane)
+            else:
+                self._spawn_ego_on_lane(spawn_lane)
             self._refresh_navigation_after_spawn(spawn_lane)
+            # Detour (4.2.x): ego spawns ON the obstacle lane, so the BFS route
+            # from _refresh_navigation_after_spawn already passes the sign edge.
+            # Only repair a degenerate [spawn, spawn] route (dead-end BFS pick):
+            # route explicitly through the sign edge and onward if possible.
+            if self.sign_type in DETOUR_SIGN_CODES and sign_lane is not None:
+                nav = getattr(self.vehicle, "navigation", None)
+                ckpts = [str(c) for c in (getattr(nav, "checkpoints", None) or [])]
+                if len(set(ckpts)) < 2:
+                    self._route_through_sign(spawn_lane, sign_lane.index)
+
+            # Force navigation checkpoints through the trap lane to the
+            # violation target (which is NOT in the trap lane's allowed set),
+            # then extend the route from the violation target via BFS.
+            if trap_lane_id is not None and trap_violation_target is not None:
+                nav = getattr(self.vehicle, "navigation", None)
+                if nav is not None:
+                    # Detect if the policy is a sign-compliant expert (has
+                    # _handle_direction_compliance) or a vanilla IDM / neural
+                    # policy.  Expert route includes the adjacent lane as an
+                    # explicit checkpoint so the agent can switch to it and
+                    # still follow the navigation.  Non-expert route skips it
+                    # and goes straight to violation_target (route-based
+                    # violation check triggers).
+                    is_expert = False
+                    ap = self.config.get("agent_policy")
+                    if ap is not None:
+                        name = getattr(ap, "__name__", "")
+                        if "Expert" in name or "SignCompliant" in name or "Rule" in name:
+                            is_expert = True
+                    approach_prefix = list(reversed(approach_lanes))
+                    if trap_adjacent_lane_id is not None and is_expert:
+                        tail = road_network.find_path(trap_adjacent_lane_id, None, max_len=10)
+                        if tail:
+                            tail = tail[1:]
+                        else:
+                            tail = []
+                        forced_route = approach_prefix + [trap_adjacent_lane_id] + tail
+                    else:
+                        tail = road_network.find_path(trap_violation_target, None, max_len=10)
+                        if tail:
+                            tail = tail[1:]
+                        else:
+                            tail = []
+                        forced_route = approach_prefix + [trap_violation_target] + tail
+                    nav.checkpoints = forced_route
+                    nav.final_lane = road_network.get_lane(forced_route[-1])
+                    nav._target_checkpoints_index = [0, 1]
+                    if nav._dest_node_path is not None:
+                        ref_lane = nav.final_lane
+                        later_middle = (float(nav.get_current_lane_num()) / 2 - 0.5) * nav.get_current_lane_width()
+                        check_point = ref_lane.position(ref_lane.length, later_middle)
+                        from metadrive.utils.math import panda_vector
+                        nav._dest_node_path.setPos(panda_vector(check_point[0], check_point[1], nav.MARK_HEIGHT))
+                    nav.update_localization(self.vehicle)
 
         graph = self.engine.map_manager.graph
         for lane_name, lane_node in graph.lanes.items():
@@ -1451,9 +2229,21 @@ class TrafficSignSumoEnv(BaseEnv):
         lane_num = self.config.get("spawn_lane_num", None)
         road_id = None
         vehicle_cfg = self.config.get("vehicle_config") or {}
-        if vehicle_cfg.get("spawn_lane_index"):
+        # Detour (4.2.x): when ego was relocated to the obstacle lane above,
+        # the parallel-lane teleport must not move it off that lane — the guard
+        # covers BOTH entry points (spawn_lane_index is set by the catalog eval
+        # path for every row, so it must not bypass the guard). With relocation
+        # disabled (NN policies) the teleport IS the pinning mechanism (catalog
+        # sets spawn_lane_num = sign_lane_index) — keep it.
+        if (self.sign_type in DETOUR_SIGN_CODES
+                and self.config.get("relocate_ego_to_sign_lane", True)):
+            pass
+        elif vehicle_cfg.get("spawn_lane_index"):
+            # yield scenes: explicit spawn_lane_index (lane 0 included)
             road_id = str(vehicle_cfg["spawn_lane_index"])
-        elif self.meta and self.meta.get("road_id"):
+        elif (lane_num is not None and int(lane_num) > 0
+                and self.meta and self.meta.get("road_id")):
+            # legacy path: relocate via meta.road_id only for lanes > 0
             road_id = str(self.meta["road_id"])
         if lane_num is not None and road_id:
             target_key = f"lane_{road_id}_{int(lane_num)}"
@@ -1477,7 +2267,163 @@ class TrafficSignSumoEnv(BaseEnv):
             except Exception as e:
                 logging.warning(f"spawn_lane_num={lane_num}: could not teleport to {target_key}: {e}")
 
+        # Paired zone scene: the start sign was placed above (self.sign_type = the
+        # start code). If meta carries the matching END sign, place it on its own
+        # edge at its re-projected offset so the zone is terminated on the same
+        # road (see sumo_space pairing script). Both use the from-start convention.
+        self._place_paired_end_sign(sign_mgr, road_network)
+
+        # Build zone boundaries now that all signs are placed: this runs
+        # update_zones()/_terminate_zones() so an end-of-zone sign actually
+        # truncates the preceding speed/zone limit (otherwise zone_end stays at
+        # the edge end / infinity and the end sign has no effect).
+        try:
+            sign_mgr.build_zones()
+        except Exception as exc:
+            logging.warning(f"build_zones failed: {exc}")
+
+        # Standalone zone signs (5.21/5.31) with no end-of-zone partner in the
+        # scene: their zone is in effect until the end sign (which isn't here),
+        # so extend it forward along the connected corridor instead of leaving it
+        # clipped to the sign's own edge. Paired scenes already get a multi-edge
+        # zone via _place_paired_end_sign (skip those — zone_edges already set).
+        if not (self.meta or {}).get("sign_type_end"):
+            for _sg in list(sign_mgr.signs):
+                if isinstance(_sg, ZoneSpeedLimitSign) and not getattr(_sg, "zone_edges", None):
+                    self._configure_standalone_zone(_sg, road_network)
+
+        # Braking-spawn (3.24): place ego above the limit, d_required before the
+        # sign (resolved up the road graph). Done LAST so the spawn_lane_num
+        # teleport above doesn't clobber it.
+        if self.config.get("ego_braking_spawn", False):
+            # Spawn-upstream start sign: 3.24 (SpeedLimitSign), 5.31
+            # (ZoneSpeedLimitSign), 5.21 (ResidentialZoneSign ⊂ ZoneSpeedLimitSign)
+            # for braking; 4.6 (MinimumSpeedLimitSign) for acceleration (ego starts
+            # below the min and must speed up). End-of-zone signs excluded.
+            start_sign = next(
+                (s for s in sign_mgr.signs
+                 if isinstance(s, (SpeedLimitSign, ZoneSpeedLimitSign,
+                                   MinimumSpeedLimitSign))),
+                None,
+            )
+            if start_sign is not None:
+                self._spawn_ego_before_sign(start_sign, road_network)
+
         return obs, info
+
+    def _place_paired_end_sign(self, sign_mgr, road_network):
+        """Place the end-of-zone partner sign for a combined SUMO pair scene.
+
+        Reads paired fields from meta.json (written by the sumo_space pairing
+        script): `sign_type_end`, `road_id_end`, `s_end`. No-op when absent.
+        """
+        meta = self.meta or {}
+        end_code = meta.get("sign_type_end")
+        if not end_code:
+            return
+        end_cls = SIGN_TYPE_TO_CLASS.get(end_code)
+        if end_cls is None:
+            logging.warning(f"paired end sign: unknown sign_type_end={end_code!r}")
+            return
+        road_id_end = str(meta.get("road_id_end") or meta.get("road_id") or "")
+        if not road_id_end:
+            return
+        try:
+            lane_key = road_network.find_rightmost_lane_by_road_id(road_id_end)
+            end_lane = road_network.get_lane(lane_key)
+        except Exception as exc:
+            logging.warning(f"paired end sign: lane for road_id_end={road_id_end} not found: {exc}")
+            return
+        s_end = float(meta.get("s_end", meta.get("distance_from_start", 0.0)) or 0.0)
+        s_end = min(max(0.1, s_end), max(0.1, end_lane.length - 0.5))
+        try:
+            sign_mgr.add_sign(
+                end_cls,
+                lane=end_lane,
+                longitudinal_offset=s_end,
+                lateral_offset=end_lane.width_at(0) / 2 + 0.8,
+                use_random_lane=False,
+                check_zone_overlap=False,
+            )
+        except Exception as exc:
+            logging.warning(f"paired end sign: add_sign failed: {exc}")
+
+        # Configure the start sign's multi-edge zone so the verifier treats the
+        # whole connected route start_edge..end_edge as the zone (the end sign on
+        # a downstream edge can't truncate via single-lane get_signs_before).
+        zone_edges = meta.get("zone_edges")
+        if zone_edges:
+            s_start = float(meta.get("s_start", meta.get("distance_from_start", 0.0)) or 0.0)
+            for sg in sign_mgr.signs:
+                if (isinstance(sg, (SpeedLimitSign, ZoneSpeedLimitSign))
+                        and hasattr(sg, "configure_multi_edge_zone")):
+                    sg.configure_multi_edge_zone(zone_edges, s_start, s_end)
+                    break
+
+    def _configure_standalone_zone(self, sign, road_network, max_edges: int = 12):
+        """Extend a zone sign's zone forward along the connected corridor when no
+        end-of-zone partner is present in the scene.
+
+        Walks the road graph from the sign's lane via `exit_lanes` (crossing
+        internal junction lanes, skipping the reverse-direction U-turn), collects
+        the ordered directed edge ids, and calls `configure_multi_edge_zone` so
+        the in-zone / violation checks span the whole corridor (matching the
+        multi-edge zone that paired scenes get). Mirrors the edge-id format of
+        `_sumo_edge_id_from_lane_index`. No-op if nothing reachable downstream.
+        """
+        if getattr(sign, "zone_edges", None) or not hasattr(sign, "configure_multi_edge_zone"):
+            return
+        sign_lane = getattr(sign, "lane", None)
+        graph = getattr(road_network, "graph", None)
+        if sign_lane is None or graph is None:
+            return
+        e0 = sign._sumo_edge_id_from_lane_index(getattr(sign_lane, "index", None))
+        if e0 is None:
+            return
+
+        _is_rev = _edges_are_reverse
+
+        zone_edges = [e0]
+        seen = {e0}
+        cur_key = str(getattr(sign_lane, "index", None))
+        cur_edge = e0
+        last_lane = sign_lane
+        hops = 0
+        while len(zone_edges) < max_edges and hops < 60:
+            hops += 1
+            info = graph.get(cur_key)
+            if info is None:
+                break
+            nxt_key = None
+            for ek in sorted(str(e) for e in (getattr(info, "exit_lanes", None) or [])):
+                if ek == cur_key:
+                    continue
+                ee = sign._sumo_edge_id_from_lane_index(ek)
+                internal = ":" in ek
+                if ee is not None and not internal and (ee in seen or _is_rev(cur_edge, ee)):
+                    continue
+                nxt_key = ek
+                break
+            if nxt_key is None:
+                break
+            cur_key = nxt_key
+            ee = sign._sumo_edge_id_from_lane_index(nxt_key)
+            if ee is not None and ":" not in nxt_key and ee not in seen:
+                zone_edges.append(ee)
+                seen.add(ee)
+                cur_edge = ee
+                try:
+                    last_lane = road_network.get_lane(nxt_key)
+                except Exception:
+                    pass
+        if len(zone_edges) <= 1:
+            return  # nothing downstream — single-edge default stands
+        zone_end_s = float(getattr(last_lane, "length", 0.0) or 0.0)
+        try:
+            sign.configure_multi_edge_zone(
+                zone_edges, float(getattr(sign, "zone_start", 0.0) or 0.0), zone_end_s)
+        except Exception as exc:
+            logging.warning(f"standalone zone config failed: {exc}")
 
     @staticmethod
     def _lane_key_edge(lane_key: str):
@@ -1487,6 +2433,97 @@ class TrafficSignSumoEnv(BaseEnv):
         if ":" in raw:
             return None
         return raw.rsplit("_", 1)[0]
+
+    def _lane_for_exact_edge(self, road_network, edge_id):
+        """Rightmost lane (lowest lane index) on the EXACT directed edge `edge_id`.
+
+        Direction-aware (keeps the leading '-'), so a zone-entry sign lands on the
+        INBOUND carriageway and never on the opposite (outbound) directed edge.
+        Returns the lane object, or None if `edge_id` has no lane in the graph
+        (caller falls back to the generic picker)."""
+        graph = getattr(road_network, "graph", None)
+        if graph is None:
+            return None
+        best_key, best_idx = None, None
+        for lane_key in graph.keys():
+            if not isinstance(lane_key, str) or not lane_key.startswith("lane_"):
+                continue
+            if self._lane_key_edge(lane_key) != edge_id:
+                continue
+            try:
+                idx = int(lane_key.rsplit("_", 1)[1])
+            except (ValueError, IndexError):
+                continue
+            if best_idx is None or idx < best_idx:
+                best_idx, best_key = idx, lane_key
+        if best_key is None:
+            return None
+        try:
+            return road_network.get_lane(best_key)
+        except Exception:
+            return None
+
+    def _forward_reachable_destination(self, sign_lane_index, road_network, max_edges=None):
+        """Furthest lane reachable FORWARD from the sign LANE via the live routing
+        graph (`road_network.graph` exit_lanes), crossing internal junction lanes
+        and skipping the reverse/U-turn edge. Reachable by construction — so
+        `set_route` to it won't degenerate — which lets the route CONTINUE past
+        the sign even when the catalog's edge-level destination isn't reachable
+        from the sign's own lane (different junction branch). Returns a lane index
+        or None."""
+        graph = getattr(road_network, "graph", None)
+        if graph is None or sign_lane_index is None:
+            return None
+        if max_edges is None:
+            max_edges = max(1, int(self.config.get("route_forward_edges", 3)))
+        cur_key = str(sign_lane_index)
+        cur_edge = self._lane_key_edge(cur_key)
+        seen = {cur_edge} if cur_edge else set()
+        last_real = None
+        for _ in range(40):
+            info = graph.get(cur_key)
+            if info is None:
+                break
+            nxt = None
+            for ek in sorted(str(e) for e in (getattr(info, "exit_lanes", None) or [])):
+                if ek == cur_key:
+                    continue
+                ee = self._lane_key_edge(ek)  # None for internal ':' lanes
+                if ee is not None and (ee in seen
+                                       or (cur_edge and _edges_are_reverse(cur_edge, ee))):
+                    continue
+                nxt = ek
+                break
+            if nxt is None:
+                break
+            cur_key = nxt
+            ee = self._lane_key_edge(nxt)
+            if ee is not None and ":" not in nxt:
+                seen.add(ee)
+                cur_edge = ee
+                last_real = nxt
+                if len(seen) - 1 >= max_edges:
+                    break
+        return last_real
+
+    def _forward_courtyard_destination(self, sign_obj, road_network):
+        """Lane index of the furthest courtyard edge reachable FORWARD from the
+        sign (skipping the reverse/U-turn edge), for use as the route destination
+        so the path is big-road -> sign -> courtyard interior (not ending at the
+        sign). Reuses the forward corridor already computed by
+        `_configure_standalone_zone` (sign.zone_edges). None if nothing forward."""
+        zone_edges = getattr(sign_obj, "zone_edges", None)
+        if not zone_edges or len(zone_edges) <= 1:
+            return None
+        # Cap how far past the sign the route goes: target ~route_forward_edges
+        # edges in, closest-resolvable within the cap (never zone_edges[0] = the
+        # sign edge), so the route doesn't wind to the far end of the zone.
+        cap = max(1, int(self.config.get("route_forward_edges", 3)))
+        for k in range(min(cap, len(zone_edges) - 1), 0, -1):
+            lane = self._lane_for_exact_edge(road_network, zone_edges[k])
+            if lane is not None:
+                return lane.index
+        return None
 
     def is_lane_relevant_for_sign(self, lane_key: str, sign_road_id: str, max_depth: int = 8) -> bool:
         """Walk the road graph forward from `lane_key` via exit_lanes (skipping

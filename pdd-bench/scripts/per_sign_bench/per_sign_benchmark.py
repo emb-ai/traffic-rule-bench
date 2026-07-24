@@ -163,19 +163,26 @@ def _collect_citymap_plan(pdd_code: str, target_citymap: int, seed: int) -> dict
 
 def _collect_real_rows(scenes_root: str, pdd_code: str, target: int,
                        n_variations: int, n_velocity_samples: int,
-                       seed: int) -> List[dict]:
+                       seed: int, brake_cfg: Optional[dict] = None) -> List[dict]:
     """Build the SUMO catalog rows for a single PDD code.
 
     n_per_category = min(target, available) — enforced by stratified_sample
-    inside build_sumo_catalog.
+    inside build_sumo_catalog. `brake_cfg` carries the braking-spawn parameters
+    (used only for codes in BRAKING_SPAWN_CODES, e.g. 3.24).
     """
+    brake_cfg = brake_cfg or {}
     rows = build_sumo_catalog(
         scenes_root=scenes_root,
         n_per_category=target,
         n_variations=n_variations,
-        n_velocity_samples=n_velocity_samples,
         sign_categories=[pdd_code],
         seed=seed,
+        n_v0_samples=int(brake_cfg.get("n_v0_samples", n_velocity_samples)),
+        brake_decel_mps2=float(brake_cfg.get("brake_decel", 2.5)),
+        brake_delay_s=float(brake_cfg.get("brake_delay", 1.0)),
+        brake_margin_m=float(brake_cfg.get("brake_margin", 5.0)),
+        v0_min_excess_mps=float(brake_cfg.get("v0_min_excess", 2.0)),
+        v0_max_kmh=float(brake_cfg.get("v0_max_kmh", 80.0)),
     )
     for r in rows:
         r["pdd_code"] = pdd_code
@@ -216,6 +223,7 @@ def _plan_for_sign(
     n_variations: int,
     n_velocity_samples: int,
     seed: int,
+    brake_cfg: Optional[dict] = None,
 ) -> dict:
     """Assemble the per-sign plan (without materializing CityMap scenes).
 
@@ -232,6 +240,7 @@ def _plan_for_sign(
             n_variations=n_variations,
             n_velocity_samples=n_velocity_samples,
             seed=seed,
+            brake_cfg=brake_cfg,
         )
 
     has_synthetic_source = bool(
@@ -339,35 +348,8 @@ def _write_sign(output_dir: Path, plan: dict) -> None:
 # CLI
 # ----------------------------------------------------------------------------
 
-PRESETS = {
-    # Mini: quick smoke on a laptop. A handful of scenes per sign, no multipliers.
-    "mini": dict(
-        target_per_sign=10,
-        min_synthetic_for_cp=5,
-        n_variations=1,
-        n_velocity_samples=2,
-        sumo_workers=2,
-        citymap_maps=4,
-        horizon=600,
-    ),
-    # Full: remote machine. Full 250 + multipliers.
-    "full": dict(
-        target_per_sign=250,
-        min_synthetic_for_cp=50,
-        n_variations=10,
-        n_velocity_samples=5,
-        sumo_workers=16,
-        citymap_maps=40,
-        horizon=1200,
-    ),
-}
-
-
 def main():
     parser = argparse.ArgumentParser(description="Per-sign benchmark orchestrator")
-    parser.add_argument("--preset", choices=list(PRESETS.keys()), default=None,
-                        help="mini (laptop smoke) / full (remote). Overrides the "
-                             "individual params below when set.")
     parser.add_argument("--output-dir", type=str, default="benchmark_output/per_sign")
     parser.add_argument("--scenes-root", type=str, default=DEFAULT_SCENES_ROOT)
     parser.add_argument("--target-per-sign", type=int, default=250)
@@ -377,6 +359,20 @@ def main():
     parser.add_argument("--n-variations", type=int, default=10)
     parser.add_argument("--n-velocity-samples", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
+    # Braking-spawn (3.24): ego starts above the limit, placed d_required before
+    # the sign so braking is actually tested. See sumo_catalog / sumo_env.
+    parser.add_argument("--n-v0-samples", type=int, default=10,
+                        help="v0 draws per scene for braking codes (default: 10).")
+    parser.add_argument("--brake-decel", type=float, default=2.5,
+                        help="Assumed comfortable deceleration (m/s²) for required distance.")
+    parser.add_argument("--brake-delay", type=float, default=1.0,
+                        help="Reaction/latency time (s) added to required distance.")
+    parser.add_argument("--brake-margin", type=float, default=5.0,
+                        help="Safety margin (m) added to required distance.")
+    parser.add_argument("--v0-min-excess", type=float, default=2.0,
+                        help="Minimum amount (m/s) ego v0 must exceed the sign limit.")
+    parser.add_argument("--v0-max-kmh", type=float, default=80.0,
+                        help="Upper cap (km/h) on sampled ego v0.")
     parser.add_argument("--only-codes", type=str, default=None,
                         help="Comma-separated PDD codes to process (default: all in plan).")
     parser.add_argument("--dry-run", action="store_true",
@@ -388,18 +384,12 @@ def main():
                         help="Parallel workers for SUMO materialization.")
     parser.add_argument("--citymap-maps", type=int, default=40,
                         help="Number of CityMap seeds for prohibition-with-detour scenes.")
+    parser.add_argument("--horizon", type=int, default=1200,
+                        help="Episode horizon (max steps) used during materialization.")
     parser.add_argument("--skip-materialize", type=str, default="",
                         help="Comma-separated list of backends to skip in materialize step: "
                              "pgmap,paired,citymap,sumo")
     args = parser.parse_args()
-
-    if args.preset:
-        p = PRESETS[args.preset]
-        for k, v in p.items():
-            setattr(args, k, v)
-        print(f"[preset={args.preset}] target={args.target_per_sign} "
-              f"n_variations={args.n_variations} n_velocity_samples={args.n_velocity_samples} "
-              f"sumo_workers={args.sumo_workers} citymap_maps={args.citymap_maps}")
 
     codes = list(DEFAULT_SOURCE_PLAN.keys())
     if args.only_codes:
@@ -425,6 +415,15 @@ def main():
     codec = FactorizedSpaceCodec()
     pcodec = PairedSpaceCodec()
 
+    brake_cfg = {
+        "n_v0_samples": args.n_v0_samples if args.n_v0_samples is not None else args.n_velocity_samples,
+        "brake_decel": args.brake_decel,
+        "brake_delay": args.brake_delay,
+        "brake_margin": args.brake_margin,
+        "v0_min_excess": args.v0_min_excess,
+        "v0_max_kmh": args.v0_max_kmh,
+    }
+
     plans: List[dict] = []
     for code in codes:
         source = DEFAULT_SOURCE_PLAN[code]
@@ -437,6 +436,7 @@ def main():
             n_variations=args.n_variations,
             n_velocity_samples=args.n_velocity_samples,
             seed=args.seed,
+            brake_cfg=brake_cfg,
         )
         plans.append(plan)
         if not args.dry_run:

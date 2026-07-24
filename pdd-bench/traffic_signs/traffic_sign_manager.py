@@ -304,24 +304,36 @@ class TrafficSignManager(BaseManager):
             lane = getattr(sign, "lane", None)
             if lane is None:
                 continue
-            sign_lane_idx = getattr(lane, "index", None)
-            dir_match = _direction_match(sign_lane_idx)
-            if dir_match is False:
-                continue
-            if dir_match is None:
-                if not sign.is_in_drivable_area(vehicle):
+
+            # Multi-edge zones (combined SUMO pairs) span edges other than the
+            # sign's own lane, so the direction gate / sign-lane veh_long don't
+            # apply — defer entirely to the sign's own membership check.
+            is_multi_edge = is_speed_sign and bool(getattr(sign, "zone_edges", None))
+
+            if not is_multi_edge:
+                sign_lane_idx = getattr(lane, "index", None)
+                dir_match = _direction_match(sign_lane_idx)
+                if dir_match is False:
                     continue
+                if dir_match is None:
+                    if not sign.is_in_drivable_area(vehicle):
+                        continue
             try:
                 veh_long = float(lane.local_coordinates(vehicle.position)[0])
             except Exception:
+                veh_long = None
+            if veh_long is None and not is_multi_edge:
                 continue
 
             if is_speed_sign:
-                zone_start = getattr(sign, "zone_start", None)
-                zone_end = getattr(sign, "zone_end", None)
-                if zone_start is None or zone_end is None:
-                    continue
-                in_zone = zone_start <= veh_long <= zone_end
+                if hasattr(sign, "is_vehicle_in_zone"):
+                    in_zone = bool(sign.is_vehicle_in_zone(vehicle))
+                else:
+                    zone_start = getattr(sign, "zone_start", None)
+                    zone_end = getattr(sign, "zone_end", None)
+                    if zone_start is None or zone_end is None:
+                        continue
+                    in_zone = zone_start <= veh_long <= zone_end
                 if not in_zone:
                     continue
                 speed_zone_seen = True

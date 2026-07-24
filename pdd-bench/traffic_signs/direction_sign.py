@@ -6,6 +6,20 @@ class DirectionSign(BaseTrafficSign):
 
     """
     
+    def __init__(self, lane, **kwargs):
+        self.lane = lane
+        turns = list(getattr(lane, 'turns', []) or [])
+        self._has_turn_metadata = bool(turns)
+        self.active_agents = {}
+        self._trap_lane_id = kwargs.pop("trap_lane_id", None)
+        super().__init__(lane=lane, **kwargs)
+
+    @property
+    def allowed_to_lanes(self):
+        if not hasattr(self, '_allowed_cache'):
+            self._allowed_cache = self._build_allowed_targets(self.lane)
+        return self._allowed_cache
+
     def _build_allowed_targets(self, lane):
         lane_id = getattr(lane, "index", None)
         allowed = set()
@@ -22,15 +36,8 @@ class DirectionSign(BaseTrafficSign):
                         next_lanes2 = set(getattr(to_lane_obj2, "exit_lanes", None) or [])
                         for next_lane2 in next_lanes2:
                             allowed.add(next_lane2)
-            
-        return allowed
 
-    def __init__(self, lane, **kwargs):
-        self.lane = lane
-        turns = list(getattr(lane, 'turns', []) or [])
-        self._has_turn_metadata = bool(turns)
-        self.active_agents = {}
-        super().__init__(lane=lane, **kwargs)
+        return allowed
 
     @staticmethod
     def _is_internal_lane(lane_id):
@@ -41,25 +48,39 @@ class DirectionSign(BaseTrafficSign):
         return ":" in raw
 
     def _is_violating(self, vehicle) -> bool:
-        # Unverifiable without turn metadata (e.g. MetaDrive PG): do not
-        # flag every lane transition as a violation.
         if not self._has_turn_metadata:
             return False
 
-        agent_id = vehicle.name
         current_lane = vehicle.lane_index
 
         if "lane_:" in current_lane or "junction" in current_lane:
             return False
 
+        # Route-based violation for trap lane: check if the vehicle's next
+        # navigation checkpoint is not in the allowed targets of its current lane.
+        # if self._trap_lane_id is not None:
+        #     sign_lane_idx = getattr(self.lane, "index", None)
+        #     if self._same_road_direction(current_lane, sign_lane_idx):
+        #         nav = getattr(vehicle, "navigation", None)
+        #         if nav is not None:
+        #             try:
+        #                 next_ckpt = nav.next_checkpoint_lane_index
+        #             except Exception:
+        #                 next_ckpt = None
+        #             if next_ckpt is not None:
+        #                 src_lane_obj = self.engine.current_map.road_network.get_lane(current_lane)
+        #                 allowed = self._build_allowed_targets(src_lane_obj)
+        #                 if next_ckpt not in allowed:
+        #                     return True
+
+        agent_id = vehicle.name
         if agent_id not in self.active_agents:
             self.active_agents[agent_id] = current_lane
             return False
 
         prev_lane = self.active_agents[agent_id]
-        
 
-        if  current_lane != prev_lane:
+        if current_lane != prev_lane:
             src_lane_obj = self.engine.current_map.road_network.get_lane(prev_lane)
             if self._is_pre_junction_lane_change(src_lane_obj, current_lane):
                 self.active_agents[agent_id] = current_lane

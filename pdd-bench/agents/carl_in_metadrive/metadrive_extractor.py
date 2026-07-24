@@ -328,34 +328,16 @@ class MetaDriveExtractor:
                 for i in range(len(checkpoints)):
                     lane_index = checkpoints[i]
                     try:
-                        lane = road_network.get_lane(lane_index)
-                        lane_center = self._get_lane_center(lane)
-                        if lane_center is not None:
-                            dist = np.linalg.norm(lane_center - ego_pos)
-                            if dist < self.fov_range:
-                                poly = self._lane_to_polygon(lane)
-                                if poly is not None and len(poly) >= 3:
-                                    polygons.append(poly)
-                        # for left_index in lane.left_lanes:
-                        #     left_lane = self.road_network.get_lane(left_index)
-                        #     lane_center = self._get_lane_center(left_lane)
-                        #     if lane_center is not None:
-                        #         dist = np.linalg.norm(lane_center - ego_pos)
-                        #         if dist < self.fov_range:
-                        #             poly = self._lane_to_polygon(left_lane)
-                        #             if poly is not None and len(poly) >= 3:
-                        #                 polygons.append(poly)
-                        # for right_index in lane.right_lanes:
-                        #     right_lane = self.road_network.get_lane(right_index)
-                        #     lane_center = self._get_lane_center(right_lane)
-                        #     if lane_center is not None:
-                        #         dist = np.linalg.norm(lane_center - ego_pos)
-                        #         if dist < self.fov_range:
-                        #             poly = self._lane_to_polygon(right_lane)
-                        #             if poly is not None and len(poly) >= 3:
-                        #                 polygons.append(poly)
+                        peer_lanes = road_network.get_peer_lanes_from_index(lane_index)
+                        for lane in peer_lanes:
+                            lane_center = self._get_lane_center(lane)
+                            if lane_center is not None:
+                                dist = np.linalg.norm(lane_center - ego_pos)
+                                if dist < self.fov_range:
+                                    poly = self._lane_to_polygon(lane)
+                                    if poly is not None and len(poly) >= 3:
+                                        polygons.append(poly)
                     except KeyError:
-                        # Lane not found (e.g., invalid index)
                         continue
                 
         except Exception as e:

@@ -24,6 +24,14 @@ from pathlib import Path
 MIN_ENGAGED_STEPS = 200
 
 
+def _viol_events(ep: dict) -> int:
+    """Event-counted violations. New recorder rows carry them under
+    violations_event_count (total_violations there is per-step); legacy rows
+    only have the event-counted total_violations."""
+    return int(ep.get("violations_event_count",
+                      ep.get("total_violations", 0)) or 0)
+
+
 def is_disqualified(ep: dict) -> bool:
     return bool(ep.get("crashed")) or bool(ep.get("out_of_road"))
 
@@ -31,7 +39,7 @@ def is_disqualified(ep: dict) -> bool:
 def meaningful_compliant(ep: dict) -> bool:
     if is_disqualified(ep):
         return False
-    if int(ep.get("total_violations", 0) or 0) > 0:
+    if _viol_events(ep) > 0:
         return False
     if ep.get("arrived_dest"):
         return True
@@ -42,7 +50,7 @@ def rank_key(ep: dict) -> tuple:
     return (
         1 if meaningful_compliant(ep) else 0,
         1 if ep.get("arrived_dest") else 0,
-        -int(ep.get("total_violations", 0) or 0),
+        -_viol_events(ep),
         float(ep.get("smoothness_ratio", 0.0) or 0.0),
         int(ep.get("final_step", 0) or 0),
     )
@@ -75,11 +83,10 @@ def aggregate(eps: list[dict]) -> dict:
         "crash_ego_fault_rate": sum(1 for e in eps if e.get("crashed_ego_fault")) / n,
         "crash_npc_fault_rate": sum(1 for e in eps if e.get("crashed_npc_fault")) / n,
         "out_of_road_rate": sum(1 for e in eps if e.get("out_of_road")) / n,
-        "avg_violations": sum(int(e.get("total_violations", 0) or 0) for e in eps) / n,
-        "compliance_rate": sum(1 for e in eps
-                                if int(e.get("total_violations", 0) or 0) == 0) / n,
+        "avg_violations": sum(_viol_events(e) for e in eps) / n,
+        "compliance_rate": sum(1 for e in eps if _viol_events(e) == 0) / n,
         "compliance_among_arrived": (
-            sum(1 for e in arrived if int(e.get("total_violations", 0) or 0) == 0)
+            sum(1 for e in arrived if _viol_events(e) == 0)
             / len(arrived)
         ) if arrived else None,
         "n_arrived": len(arrived),
@@ -95,6 +102,8 @@ def aggregate(eps: list[dict]) -> dict:
 
 
 def main():
+    global MIN_ENGAGED_STEPS
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", type=str, required=True,
                          help="Run root containing all_runs.jsonl")
@@ -104,7 +113,6 @@ def main():
                          help=f"Threshold for meaningful 0-viol (default: {MIN_ENGAGED_STEPS})")
     args = parser.parse_args()
 
-    global MIN_ENGAGED_STEPS
     MIN_ENGAGED_STEPS = args.min_engaged_steps
 
     run_root = Path(args.run_dir)
@@ -134,7 +142,7 @@ def main():
             "best_seed": best.get("seed"),
             "scene_uid": best.get("scene_uid"),
             "arrived_dest": best.get("arrived_dest"),
-            "violations": int(best.get("total_violations", 0) or 0),
+            "violations": _viol_events(best),
             "smoothness_ratio": float(best.get("smoothness_ratio", 0.0) or 0.0),
             "frame_smooth_ratio": float(best.get("frame_smooth_ratio", 0.0) or 0.0),
             "final_step": int(best.get("final_step", 0) or 0),

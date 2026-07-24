@@ -33,7 +33,11 @@ yield_sign/
 
 ## Workflow
 
-### Step 1: Build Scene from OSM
+### Step 1A: Build Scenes
+
+Do that with instructions in tools/filter_scenes
+
+### Step 1B: Build Scene from OSM
 
 Each scene folder in `scenes/` must contain:
 - `map.osm` — OpenStreetMap extract

@@ -2,9 +2,15 @@ from traffic_signs.base_traffic_sign import BaseTrafficSign
 
 class MinimumSpeedLimitSign(BaseTrafficSign):
     def __init__(self, lane, min_speed=40,
-                 icon_path="4.6.png", zone_length=None, **kwargs):
-        
-        if hasattr(lane, 'speed'):
+                 icon_path="4.6.png", zone_length=None,
+                 min_speed_override=None, **kwargs):
+
+        # `min_speed_override` forces the enforced minimum (e.g. the catalog's
+        # achievable-capped 20/40) so the verifier checks the same value the
+        # acceleration scene was built for, instead of road_speed - 10.
+        if min_speed_override is not None:
+            self.min_speed = int(round(float(min_speed_override)))
+        elif hasattr(lane, 'speed'):
             self.min_speed = round(lane.speed * 3.6) - 10
         else:
             self.min_speed = min_speed

@@ -106,7 +106,10 @@ def sample_one_profile(seed: int, density_cap: float = 1.0, horizon_steps: int =
     creep_speed = float(np.percentile(sampler.speeds, 5))
     lane_change_freq = float(sampler.lane_change_rate_per_km)
 
-    normal_speed = float(np.clip(sampler.normal_speed(), 2.0, 15.0))
+    # Floor raised 2.0 -> 12.0 m/s (~43 km/h): the ego/IDM cruising speed must sit
+    # ABOVE the 3.24 zone limits (20/40) so a sign-UNAWARE idm actually drives fast
+    # enough to violate the zone (the old 2 m/s floor made idm crawl & comply).
+    normal_speed = float(np.clip(sampler.normal_speed(), 12.0, 15.0))
     acc_factor = float(np.clip(sampler.acc_factor(), 0.2, 4.0))
     deacc_factor = float(np.clip(sampler.deacc_factor(), 0.2, 5.0))
     distance_wanted = float(np.clip(sampler.distance_wanted(), 5.0, 45.0))
@@ -141,6 +144,65 @@ def sample_spawn_velocity(seed: int) -> float:
     v = float(sampler.spawn_velocity())
     lo, hi = SPAWN_VELOCITY_CLIP
     return float(np.clip(v, lo, hi))
+
+
+def sample_spawn_velocity_above_limit(seed: int, v_limit_mps: float,
+                                      min_excess: float = 2.0,
+                                      max_v: float | None = None) -> float:
+    """Sample an ego spawn velocity (m/s) that exceeds the sign limit by a
+    realistic, nuPlan-shaped margin.
+
+    v0 = v_limit + Δ, where Δ is drawn from the nuPlan initial_speed distribution
+    (so the *exceedance* over the limit has a realistic spread, not a fixed +2),
+    floored at `min_excess` so v0 is always strictly above the limit, and capped
+    at `max_v` (m/s) when given (e.g. 80 km/h ≈ 22.22 m/s).
+    """
+    delta = sample_spawn_velocity(seed)          # nuPlan-shaped spread (m/s)
+    delta = max(float(delta), float(min_excess))
+    v0 = float(v_limit_mps) + delta
+    if max_v is not None:
+        v0 = min(v0, float(max_v))
+    return v0
+
+
+def braking_required_distance(v0_mps: float, v_target_mps: float,
+                              decel_mps2: float, delay_s: float,
+                              margin_m: float) -> float:
+    """Distance needed to slow from v0 to v_target + reaction delay + margin.
+
+    d_brake = max(0, (v0² - v_target²) / (2·decel)); d_delay = v0·delay.
+    Returns d_brake + d_delay + margin.
+    """
+    v0 = max(0.0, float(v0_mps))
+    vt = max(0.0, float(v_target_mps))
+    a = max(0.1, float(decel_mps2))
+    d_brake = max(0.0, (v0 * v0 - vt * vt) / (2.0 * a))
+    d_delay = v0 * max(0.0, float(delay_s))
+    return d_brake + d_delay + max(0.0, float(margin_m))
+
+
+def max_v0_for_distance(d_avail_m: float, v_target_mps: float,
+                        decel_mps2: float, delay_s: float,
+                        margin_m: float) -> float:
+    """Inverse of braking_required_distance: the largest v0 whose required
+    distance fits within `d_avail_m`. Used when the upstream road is too short
+    to honour the sampled v0 (insufficient_runway): we lower v0 to fit.
+
+    Solves d_avail = (v0² - vt²)/(2a) + v0·delay + margin for v0 (positive root).
+    Returns a value that may be <= v_target when there is essentially no runway;
+    the caller checks v0 > v_target and drops the scene otherwise.
+    """
+    import math
+    a = max(0.1, float(decel_mps2))
+    vt = max(0.0, float(v_target_mps))
+    delay = max(0.0, float(delay_s))
+    A = 1.0 / (2.0 * a)
+    B = delay
+    C = float(margin_m) - vt * vt / (2.0 * a) - float(d_avail_m)
+    disc = B * B - 4.0 * A * C
+    if disc <= 0.0:
+        return 0.0
+    return (-B + math.sqrt(disc)) / (2.0 * A)
 
 
 def sample_npc_vehicle_type(seed: int) -> str:

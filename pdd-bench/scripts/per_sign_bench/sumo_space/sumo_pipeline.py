@@ -260,6 +260,12 @@ def main():
     parser.add_argument("--progress-every", type=int, default=100)
     args = parser.parse_args()
 
+    # Resolve net_path against THIS scenes root (not the hardcoded default), so
+    # materialize_sumo_scene finds the .net.xml for non-default sets (scenes_uniq).
+    # Set before spawning workers so forked/spawned workers inherit it.
+    import os as _os
+    _os.environ["PER_SIGN_SCENES_ROOT"] = str(Path(args.scenes_root).resolve())
+
     if args.sign_categories:
         sign_codes = [c.strip() for c in args.sign_categories.split(",") if c.strip()]
     else:

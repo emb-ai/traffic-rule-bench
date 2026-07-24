@@ -190,8 +190,11 @@ class SumoTrafficManager(BaseManager):
             if info is None or not info.exit_lanes:
                 break
 
-            # Pick a random exit, preferring non-visited; allow 1 revisit
-            exits = list(set(info.exit_lanes))
+            # Pick a random exit, preferring non-visited; allow 1 revisit.
+            # sorted() (not list(set())) → canonical order independent of
+            # PYTHONHASHSEED, so the np_random.shuffle result is reproducible
+            # across processes.
+            exits = sorted(set(info.exit_lanes))
             self.np_random.shuffle(exits)
             chosen = None
             for e in exits:
@@ -357,6 +360,16 @@ class SumoTrafficManager(BaseManager):
         if abs(self.density) < 1e-3:
             return
 
+        # Determinism of the SPAWNED-traffic realization (count + initial
+        # positions) for a given env seed: the nuPlan sampler draws spawn
+        # velocities from the GLOBAL numpy RNG (kde.resample / np.random.choice),
+        # whose state is otherwise perturbed by engine internals. Pin it here
+        # from the episode's stable seed so the same scenario spawns the same
+        # initial traffic. NPC reactivity AFTER reset still evolves freely.
+        _gs = getattr(self.engine, "global_random_seed", None)
+        if _gs is not None:
+            np.random.seed(int(_gs) % (2 ** 32))
+
         spawnable_lanes = self._get_spawnable_lanes()
         if not spawnable_lanes:
             return
@@ -498,11 +511,21 @@ class SumoTrafficManager(BaseManager):
     RESPAWN_INTERVAL = 30  # try to respawn every N steps
     RESPAWN_BATCH = 5      # max vehicles to try spawning per interval
 
-    def _try_respawn(self, n_to_spawn):
-        """Try to spawn up to n_to_spawn new vehicles on random lanes."""
+    def _try_respawn(self, n_to_spawn, forbidden_keys=None):
+        """Try to spawn up to n_to_spawn new vehicles on random lanes.
+
+        `forbidden_keys`: lane-index strings to exclude (e.g. ego's braking
+        corridor). Used to RELOCATE NPCs removed from the corridor onto allowed
+        lanes so the realized traffic_density still matches the sampled profile.
+        """
         spawnable_lanes = self._get_spawnable_lanes()
         if not spawnable_lanes:
             return 0
+        if forbidden_keys:
+            _fk = {str(k) for k in forbidden_keys}
+            spawnable_lanes = [l for l in spawnable_lanes if str(l.index) not in _fk]
+            if not spawnable_lanes:
+                return 0
 
         ego_position = None
         ego_lane_index = None

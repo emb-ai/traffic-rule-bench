@@ -11,6 +11,7 @@ that's not needed when we already drive the actual agent through the scene.
 from __future__ import annotations
 
 import logging
+import os
 import random
 import sys
 from pathlib import Path
@@ -42,25 +43,28 @@ def _build_env(catalog_row: dict, profile: dict):
     # immediate collision; NPCs spawn directly within the agent's lane
     # segment so traffic interactions start from step 0.
     SumoTrafficManager.EGO_SAFE_RADIUS = 15
-    sign_spawn_distance = max(
-        float(catalog_row.get("sign_spawn_distance",
-                              catalog_row.get("distance_from_start", 0.0)) or 0.0),
-        30.0,
-    )
+    # Sign stays at its REAL distance_from_start — no minimum floor. For braking
+    # scenes the approach runway comes from spawning ego upstream along the graph.
+    sign_spawn_distance = float(catalog_row.get("sign_spawn_distance",
+                                                catalog_row.get("distance_from_start", 0.0)) or 0.0)
 
     config = dict(
         use_render=False,
         manual_control=False,
         use_mesh_terrain=False,
         log_level=logging.CRITICAL,
-        map_name=str(SCENES_ROOT / catalog_row["net_path"]),
+        # net_path is relative to the scenes root the catalog was built from.
+        # Honor PER_SIGN_SCENES_ROOT (set by sumo_pipeline from --scenes-root) so a
+        # non-default scene set (e.g. scenes_uniq) resolves correctly; else default.
+        map_name=str(Path(os.environ.get("PER_SIGN_SCENES_ROOT") or SCENES_ROOT)
+                     / catalog_row["net_path"]),
         sign_type=catalog_row["sign_code"],
         sign_spawn_distance=sign_spawn_distance,
         traffic_density=float(profile["traffic_density"]),
         horizon=int(profile.get("horizon_steps", 600)),
         tl_speed_factor=float(catalog_row.get("tl_speed_factor", 20.0)),
-        min_route_hops_after_spawn=int(catalog_row.get("min_route_hops_after_spawn", 10)),
-        max_route_hops_after_spawn=int(catalog_row.get("max_route_hops_after_spawn", 10)),
+        min_route_hops_after_spawn=int(catalog_row.get("min_route_hops_after_spawn", 2)),
+        max_route_hops_after_spawn=int(catalog_row.get("max_route_hops_after_spawn", 4)),
         num_scenarios=100000,  # allow seeds in [0, 100000) for variation
         vehicle_config={"show_lidar": False},
     )
@@ -71,12 +75,35 @@ def _build_env(catalog_row: dict, profile: dict):
     import os as _os
     if _os.environ.get("PER_SIGN_USE_DESTINATION") == "1" and catalog_row.get("destination_lane_id"):
         config["vehicle_config"]["destination"] = catalog_row["destination_lane_id"]
+    # Combined zone pair: force the destination to the end-sign edge so the route
+    # passes through BOTH signs (start zone -> ... -> end sign).
+    if catalog_row.get("is_paired") and catalog_row.get("destination_lane_id"):
+        config["vehicle_config"]["destination"] = catalog_row["destination_lane_id"]
 
     # Spawn on a specific lane of the chosen road. Catalog entries for SUMO
     # enumerate all lanes per scene (§11.5); pass `spawn_lane_num` through
     # config so sumo_env's reset() teleports ego onto it.
     if "spawn_lane_num" in catalog_row:
         config["spawn_lane_num"] = int(catalog_row["spawn_lane_num"])
+
+    # Detour (4.2.x): catalog splits scenes into cones+sign vs sign-only.
+    if "detour_cones" in catalog_row:
+        config["spawn_detour_cones"] = bool(catalog_row["detour_cones"])
+
+    # Braking-spawn (3.24): ego starts above the limit, placed d_required before
+    # the sign (resolved up the road graph in sumo_env). Pass the spec through.
+    if catalog_row.get("braking_spawn"):
+        config["ego_braking_spawn"] = True
+        config["ego_spawn_mode"] = str(catalog_row.get("spawn_mode", "brake"))
+        config["ego_spawn_v0_ms"] = float(catalog_row.get("spawn_velocity_ms", 0.0) or 0.0)
+        config["ego_brake_d_required"] = float(catalog_row.get("d_required_m", 0.0) or 0.0)
+        config["ego_v_target_kmh"] = float(catalog_row.get("v_target_kmh", 0.0) or 0.0)
+        config["ego_brake_decel"] = float(catalog_row.get("brake_decel_mps2", 2.5) or 2.5)
+        config["ego_brake_delay"] = float(catalog_row.get("brake_delay_s", 1.0) or 1.0)
+        config["ego_brake_margin"] = float(catalog_row.get("brake_margin_m", 5.0) or 5.0)
+        # Route forward through the sign toward the recorded destination.
+        if catalog_row.get("destination_lane_id"):
+            config["vehicle_config"]["destination"] = catalog_row["destination_lane_id"]
 
     class _EnvWithTraffic(TrafficSignSumoEnv):
         @classmethod
@@ -202,6 +229,25 @@ def materialize_sumo_scene(
     # 2. Apply IDM params to NPC policy class attrs (NPC-only)
     apply_profile_to_idm_class(profile)
 
+    # 2b. Rule-compliant NPCs: cap surrounding-traffic speed to the sign limit so
+    # they don't violate it (opt-in via PER_SIGN_COMPLIANT_NPC=1). SUMO NPCs use
+    # SumoTrajectoryIDMPolicy, which has its OWN NORMAL_SPEED — so we must cap it
+    # there (and on IDMPolicy) rather than rely on the sampled profile.
+    npc_speed_cap_kmh = None
+    import os as _os2
+    if _os2.environ.get("PER_SIGN_COMPLIANT_NPC") == "1":
+        v_lim = float(catalog_row.get("v_target_kmh", 0.0) or 0.0)
+        if v_lim > 0:
+            npc_speed_cap_kmh = v_lim
+            try:
+                from metadrive.policy.idm_policy import IDMPolicy
+                from envs.sumo_idm_policy import SumoTrajectoryIDMPolicy
+                for cls in (IDMPolicy, SumoTrajectoryIDMPolicy):
+                    cls.NORMAL_SPEED = min(float(getattr(cls, "NORMAL_SPEED", v_lim)), v_lim)
+                    cls.MAX_SPEED = v_lim
+            except Exception:
+                pass
+
     # 3. NPC vehicle type: use nuPlan-derived weights for PGTrafficManager.
     install_npc_vehicle_type_hook()
 
@@ -216,11 +262,8 @@ def materialize_sumo_scene(
         "sign_code": catalog_row["sign_code"],
         "road_id": catalog_row.get("road_id", ""),
         "net_path": catalog_row["net_path"],
-        "sign_spawn_distance": max(
-            float(catalog_row.get("sign_spawn_distance",
-                                  catalog_row.get("distance_from_start", 0.0)) or 0.0),
-            30.0,
-        ),
+        "sign_spawn_distance": float(catalog_row.get("sign_spawn_distance",
+                              catalog_row.get("distance_from_start", 0.0)) or 0.0),
         "distance_from_start": catalog_row.get("distance_from_start"),
         "destination_lane_id": catalog_row.get("destination_lane_id"),
         "traffic_density": float(profile["traffic_density"]),
@@ -236,11 +279,30 @@ def materialize_sumo_scene(
         "spawn_lane_num": catalog_row.get("spawn_lane_num", 0),
         "deterministic_seed": seed,
         "source": "sumo",
+        "npc_compliant": npc_speed_cap_kmh is not None,
+        "npc_speed_cap_kmh": npc_speed_cap_kmh,
         "valid": False,
         "failure_reason": None,
     }
     for k, v in profile.items():
         result[f"profile_{k}"] = v
+
+    # Braking-spawn (3.24): carry the full spec into the manifest so the EVAL
+    # path (run_benchmark._build_sumo_env) can reconstruct the SAME upstream
+    # spawn + NPC corridor restriction. The env recomputes placement
+    # deterministically from (spawn_velocity_ms, d_required_m, v_target_kmh,
+    # brake params, sign_s), so eval matches materialization exactly.
+    if catalog_row.get("braking_spawn"):
+        result["braking_spawn"] = True
+        result["spawn_velocity_ms"] = float(catalog_row.get("spawn_velocity_ms", 0.0) or 0.0)
+        result["d_required_m"] = float(catalog_row.get("d_required_m", 0.0) or 0.0)
+        result["v_target_kmh"] = float(catalog_row.get("v_target_kmh", 0.0) or 0.0)
+        result["v_target_raw_kmh"] = float(catalog_row.get("v_target_raw_kmh", 0.0) or 0.0)
+        result["brake_decel_mps2"] = float(catalog_row.get("brake_decel_mps2", 2.5) or 2.5)
+        result["brake_delay_s"] = float(catalog_row.get("brake_delay_s", 1.0) or 1.0)
+        result["brake_margin_m"] = float(catalog_row.get("brake_margin_m", 5.0) or 5.0)
+        result["sign_s"] = float(catalog_row.get("sign_s",
+                                                 catalog_row.get("distance_from_start", 0.0)) or 0.0)
 
     env = None
     # Original run_benchmark.py uses seed=int(sign_id) for deterministic routing.
@@ -280,6 +342,11 @@ def materialize_sumo_scene(
 
         # Capture fingerprint from reset state
         result["fingerprint"] = _capture_reset_state(env)
+        # Record the actual braking spawn (3.24): where ego was placed, achieved
+        # distance, final v0, and whether the runway was insufficient.
+        brake_info = getattr(env, "_braking_spawn_info", None)
+        if brake_info:
+            result.update(brake_info)
         result["valid"] = True
     except Exception as exc:
         result["valid"] = False
@@ -296,6 +363,20 @@ def materialize_sumo_scene(
         try:
             drive_metrics = _drive_episode(env, agent_policy, max_steps, save_gif)
             result.update(drive_metrics)
+            # Drivability filter: a scene is only valid if the rule-aware REFERENCE
+            # driver completes it cleanly — reaches the destination, no crash, no
+            # off-road. Scenes where even the expert fails have bad geometry (sharp
+            # junctions / curves the ego can't hold) and are dropped from the bench.
+            drivable = (drive_metrics.get("arrived_dest")
+                        and not drive_metrics.get("crashed")
+                        and not drive_metrics.get("out_of_road"))
+            if not drivable:
+                result["valid"] = False
+                reasons = []
+                if not drive_metrics.get("arrived_dest"): reasons.append("no_dest")
+                if drive_metrics.get("crashed"): reasons.append("crash")
+                if drive_metrics.get("out_of_road"): reasons.append("off_road")
+                result["failure_reason"] = "undrivable:" + ",".join(reasons)
         except Exception as exc:
             result["drive_error"] = f"{type(exc).__name__}: {exc}"
         finally:
@@ -414,6 +495,16 @@ def _drive_episode(env, agent_policy: str, max_steps: int, save_gif: str | None)
 
         if save_gif:
             try:
+                lim = float(env.config.get("ego_v_target_kmh", 0.0) or 0.0)
+                text_dict = {
+                    "Step": step,
+                    "Speed": f"{veh.speed_km_h:.1f} km/h",
+                }
+                if lim > 0:
+                    text_dict["Limit"] = f"{lim:.0f} km/h"
+                    text_dict["Over"] = "YES" if veh.speed_km_h > lim else "no"
+                if n_violations > 0:
+                    text_dict["Violations"] = n_violations
                 env.render(
                     mode="top_down",
                     film_size=(2400, 2400),
@@ -425,6 +516,7 @@ def _drive_episode(env, agent_policy: str, max_steps: int, save_gif: str | None)
                     target_agent_heading_up=True,
                     screen_record=True,
                     window=False,
+                    text=text_dict,
                 )
             except Exception:
                 pass
