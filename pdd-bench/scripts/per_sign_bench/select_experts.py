@@ -138,13 +138,21 @@ def recompute_dest(r, target_sign, target_class, horizon=HORIZON_DEFAULT):
 
 def passes_filter(r, target_sign, target_class, horizon=HORIZON_DEFAULT,
                   min_final_step=MIN_FINAL_STEP,
-                  min_route_completion=MIN_ROUTE_COMPLETION):
+                  min_route_completion=MIN_ROUTE_COMPLETION,
+                  min_in_zone_steps=0):
     if not r.get("valid"):
         return False
     if r.get("crashed") or r.get("out_of_road"):
         return False
     if not is_compliant(r, target_class):
         return False
+    # Anti-vacuous-compliance: a run that never touched the sign zone has 0
+    # violations trivially. Opt-in (min_in_zone_steps > 0); legacy rows
+    # without the field are kept.
+    if min_in_zone_steps > 0:
+        inz = r.get("in_zone_total_steps")
+        if inz is not None and int(inz or 0) < min_in_zone_steps:
+            return False
     # Anti-bug for min_step_episodes; use for expert_selection not metric compute
     # (metric compute passes min_final_step=0 to disable)
     if min_final_step > 0:
@@ -226,7 +234,8 @@ def select_expert_per_scene(rows, signs, beta=BETA_DEFAULT,
                               min_route_completion=MIN_ROUTE_COMPLETION,
                               min_final_step=MIN_FINAL_STEP,
                               idm_pick_strategy="f1",
-                              top_n=1):
+                              top_n=1,
+                              min_in_zone_steps=0):
     """Returns (picks, scene_groups, filter_records).
       picks          — list[dict] (top_n per scene, ranked 1..top_n)
       scene_groups   — dict[(sign,scene)] -> all valid rows
@@ -250,7 +259,8 @@ def select_expert_per_scene(rows, signs, beta=BETA_DEFAULT,
             continue
         scene_groups[(sign, scene_key)].append(r)
         ok = passes_filter(r, sign, target_class, horizon,
-                           min_final_step, min_route_completion)
+                           min_final_step, min_route_completion,
+                           min_in_zone_steps)
         filter_records[(sign, scene_key)].append((r, ok))
 
     picks = []
@@ -258,7 +268,8 @@ def select_expert_per_scene(rows, signs, beta=BETA_DEFAULT,
         target_class = SIGN_CLASS_MAP[sign]
         passing = [r for r in eps
                    if passes_filter(r, sign, target_class, horizon,
-                                    min_final_step, min_route_completion)]
+                                    min_final_step, min_route_completion,
+                                    min_in_zone_steps)]
         if not passing:
             continue
 
@@ -503,6 +514,14 @@ def run_self_tests():
     short = dict(base); short["final_step"] = 5
     assert passes_filter(short, "2.5", "StopSign", horizon=600, min_final_step=30) is False
     assert passes_filter(short, "2.5", "StopSign", horizon=600, min_final_step=0) is True
+    # anti-vacuous: zero in-zone steps rejected only when the flag is on
+    vac = dict(base); vac["in_zone_total_steps"] = 0
+    assert passes_filter(vac, "2.5", "StopSign", horizon=600,
+                         min_in_zone_steps=1) is False
+    assert passes_filter(vac, "2.5", "StopSign", horizon=600) is True
+    inz = dict(base); inz["in_zone_total_steps"] = 33
+    assert passes_filter(inz, "2.5", "StopSign", horizon=600,
+                         min_in_zone_steps=1) is True
     # route_completion soft-success (opt-in)
     rc = {"valid": True, "crashed": False, "out_of_road": False,
           "violations_by_class": {"StopSign": 0}, "arrived_dest": False,
@@ -596,6 +615,9 @@ def main():
     p.add_argument("--min-final-step", type=int, default=MIN_FINAL_STEP,
                    help=f"anti-bug: drop episodes shorter than this (default={MIN_FINAL_STEP}; "
                         "set 0 to disable, e.g. for raw metric compute)")
+    p.add_argument("--min-in-zone-steps", type=int, default=0,
+                   help="drop candidates whose in_zone_total_steps is below "
+                        "this (anti-vacuous compliance; default 0 = off)")
     p.add_argument("--min-route-completion", type=float, default=MIN_ROUTE_COMPLETION,
                    help=f"soft-success if route_completion >= this "
                         f"(default={MIN_ROUTE_COMPLETION}=off)")
@@ -627,7 +649,8 @@ def main():
         min_route_completion=args.min_route_completion,
         min_final_step=args.min_final_step,
         idm_pick_strategy=args.idm_pick,
-        top_n=args.top_n)
+        top_n=args.top_n,
+        min_in_zone_steps=args.min_in_zone_steps)
 
     out_path = Path(args.output)
     with open(out_path, "w") as f:
