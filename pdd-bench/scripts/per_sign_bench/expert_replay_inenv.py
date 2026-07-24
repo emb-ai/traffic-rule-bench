@@ -388,6 +388,7 @@ def replay_in_our_env(
         expert_actions = sidecar.get("expert_actions", [])
         violations_replay = []
         prev_violating: set = set()
+        arrived_any = False
         n_replay_frames = len(npc_frames) if npc_frames else max_steps
         # Prefer expert_actions length when recorded ego — matches original final_step.
         if ego_mode == "recorded" and expert_actions:
@@ -471,6 +472,10 @@ def replay_in_our_env(
             else:
                 action = [0.0, 0.0]
             _, _, term, trunc, info = env.step(action)
+            # arrive_dest is a momentary flag; when the loop continues past the
+            # arrival step (--save-plant2-dir path), the last info no longer
+            # carries it — accumulate over the whole playback.
+            arrived_any = arrived_any or bool(info.get("arrive_dest", False))
 
             # 3. Rematch + teleport AGAIN after step (physics may have moved them)
             if npc_mode == "recorded" and step < len(npc_frames):
@@ -511,7 +516,7 @@ def replay_in_our_env(
             except Exception:
                 pass
 
-        arrived = bool(info.get("arrive_dest", False))
+        arrived = bool(arrived_any or info.get("arrive_dest", False))
         crashed = bool(info.get("crash", False)) or bool(info.get("crash_vehicle", False))
         out_of_road = bool(info.get("out_of_road", False))
 
