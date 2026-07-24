@@ -134,7 +134,8 @@ def _ref_f1(t: float, c: float, beta: float) -> float:
     return (b2 + 1.0) * t * c / (b2 * t + c)
 
 
-def _ref_passes(r: dict, target_class: str, min_fs: int) -> bool:
+def _ref_passes(r: dict, target_class: str, min_fs: int,
+                min_in_zone: int = 0) -> bool:
     if not r.get("valid") or r.get("crashed") or r.get("out_of_road"):
         return False
     vbc = r.get("violations_by_class_event")
@@ -144,13 +145,18 @@ def _ref_passes(r: dict, target_class: str, min_fs: int) -> bool:
         return False
     if int(r.get("final_step") or 0) < min_fs:
         return False
+    if min_in_zone > 0:
+        inz = r.get("in_zone_total_steps")
+        if inz is not None and int(inz or 0) < min_in_zone:
+            return False
     return bool(r.get("arrived_dest"))
 
 
 def reference_winner(group: list[dict], target_class: str,
-                     beta: float, min_fs: int):
+                     beta: float, min_fs: int, min_in_zone: int = 0):
     """Own argmax: (f1, rows tied at best f1) of the best candidate, or None."""
-    passing = [r for r in group if _ref_passes(r, target_class, min_fs)]
+    passing = [r for r in group
+               if _ref_passes(r, target_class, min_fs, min_in_zone)]
     if not passing:
         return None
     idm = [r for r in passing if r.get("policy") in IDM_FAMILY_POLICIES]
@@ -192,6 +198,17 @@ def main() -> None:
     ap.add_argument("--beta", type=float, default=BETA_DEFAULT)
     ap.add_argument("--horizon", type=int, default=1500)
     ap.add_argument("--min-final-step", type=int, default=MIN_FINAL_STEP)
+    ap.add_argument("--min-in-zone-steps", type=int, default=0,
+                    help="drop candidates with in_zone_total_steps below this "
+                         "(anti-vacuous compliance; default 0 = off)")
+    ap.add_argument("--geometry-audit", default=None,
+                    help="audit CSV from check_spawn_sign_geometry --all-runs; "
+                         "candidates whose audit verdict fails the geometry "
+                         "rule are dropped BEFORE selection, so each scene "
+                         "keeps its best geometrically-correct trajectory")
+    ap.add_argument("--geometry-max-dist", type=float, default=8.0,
+                    help="max closest-approach to the sign point, m (with "
+                         "--geometry-audit; in-zone > 0 is always required)")
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--check-files", action="store_true",
                     help="check pkl/sidecar existence")
@@ -224,10 +241,39 @@ def main() -> None:
                  "make sure this is the same catalog the collection "
                  "manifests were built from")
 
+    # --- 2b. geometry audit: keep only candidates that truly passed the sign ---
+    if args.geometry_audit:
+        import csv as _csv
+        good = set()
+        audited = 0
+        for a in _csv.DictReader(open(args.geometry_audit, encoding="utf-8")):
+            audited += 1
+            try:
+                inz = int(float(a.get("in_zone_steps") or 0))
+                md = float(a.get("min_dist_m") or 1e9)
+            except ValueError:
+                continue
+            if a.get("verdict", "").startswith("ERROR"):
+                continue
+            if inz > 0 and md <= args.geometry_max_dist:
+                good.add((a["scene_uid"], a["policy"], a["variant"]))
+        n_before = len(rows)
+        rows = [r for r in rows
+                if (r.get("scene_uid"), r.get("policy"), r.get("variant"))
+                in good]
+        print(f"geometry audit: {audited} audited episodes, "
+              f"{len(good)} pass (in_zone>0 & min_dist<="
+              f"{args.geometry_max_dist}m); candidate rows "
+              f"{n_before} -> {len(rows)}")
+        if not rows:
+            sys.exit("ERROR: geometry audit filtered out every candidate — "
+                     "check that the CSV matches this collection")
+
     # --- 3. selection: top-2 per scene_uid (rank 1 = the top-1 strategy) ---
     picks, scene_groups, _ = select_expert_per_scene(
         rows, sorted(sign_set), beta=args.beta, horizon=args.horizon,
-        min_final_step=args.min_final_step, top_n=2)
+        min_final_step=args.min_final_step, top_n=2,
+        min_in_zone_steps=args.min_in_zone_steps)
     for p in picks:
         p["net_path"] = uid2map.get(p["scene_key"])
 
@@ -252,7 +298,8 @@ def main() -> None:
         sign = p["sign"]
         tclass = SIGN_CLASS_MAP[sign]
         group = scene_groups[(sign, p["scene_key"])]
-        ref = reference_winner(group, tclass, args.beta, args.min_final_step)
+        ref = reference_winner(group, tclass, args.beta, args.min_final_step,
+                               args.min_in_zone_steps)
         if ref is None:
             n_win_mismatch += 1
             print(f"  [MISMATCH] {sign} {p['scene_key']}: pick exists but "
@@ -273,7 +320,8 @@ def main() -> None:
                     if r.get("policy") == p["winner_policy"]
                     and r.get("variant") == p["winner_variant"]]
         if not win_rows or not _ref_passes(win_rows[-1], tclass,
-                                           args.min_final_step):
+                                           args.min_final_step,
+                                           args.min_in_zone_steps):
             n_invariant += 1
             print(f"  [INVARIANT] {sign} {p['scene_key']}: the winner row "
                   f"does not pass the filter")
