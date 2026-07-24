@@ -209,6 +209,9 @@ def main() -> None:
     ap.add_argument("--geometry-max-dist", type=float, default=8.0,
                     help="max closest-approach to the sign point, m (with "
                          "--geometry-audit; in-zone > 0 is always required)")
+    ap.add_argument("--strict-compliance", action="store_true",
+                    help="require zero violation events of EVERY class (the "
+                         "base filter only zeroes the target sign's class)")
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--check-files", action="store_true",
                     help="check pkl/sidecar existence")
@@ -240,6 +243,18 @@ def main() -> None:
         sys.exit("ERROR: run scene_uids do not match the catalog — "
                  "make sure this is the same catalog the collection "
                  "manifests were built from")
+
+    # --- 2a. strict compliance: zero violation events of every class ---
+    if args.strict_compliance:
+        def _clean(r):
+            vbc = r.get("violations_by_class_event")
+            if vbc is None:
+                vbc = r.get("violations_by_class") or {}
+            return all(int(v or 0) == 0 for v in vbc.values())
+        n_before = len(rows)
+        rows = [r for r in rows if _clean(r)]
+        print(f"strict compliance: candidate rows {n_before} -> {len(rows)} "
+              f"(dropped {n_before - len(rows)} with any-class violation events)")
 
     # --- 2b. geometry audit: keep only candidates that truly passed the sign ---
     if args.geometry_audit:
