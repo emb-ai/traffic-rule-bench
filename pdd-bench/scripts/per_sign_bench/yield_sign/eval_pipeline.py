@@ -64,15 +64,22 @@ Usage examples:
         --policies   idm --scene-line 1 \\
         --manifest   <m.jsonl> --scenes-root <scenes>
 
-Default: policies=idm, backends=sumo.
+    # Parallelize up to 8 scenes inside each policy/baseline
+    python3 eval_pipeline.py \\
+        --policies    carl \\
+        --manifest    <run_dir> \\
+        --scenes-root scenes/4_1_1 \\
+        --jobs        8
+
+Default: policies=idm, backends=sumo, jobs=8 (parallelism is per-scene within each baseline).
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 # Policy categories 
@@ -105,6 +112,157 @@ DEFAULT_MODEL_PATHS: dict[str, Path] = {
 def run(cmd: list[str], cwd: Path | None = None) -> None:
     print(f"\n$ {' '.join(cmd)}")
     subprocess.run(cmd, check=True, cwd=cwd)
+
+
+def build_benchmark_cmd(
+    *,
+    policy: str,
+    variant: str,
+    input_manifest: Path,
+    scenes_root: str,
+    bench_root: Path,
+    replay_root: Path,
+    model_paths: dict[str, str],
+    save_gifs: bool,
+    plant2_action_mode: str,
+    output_dir: Path | None = None,
+) -> list[str]:
+    run_name = f"{policy}_{variant}"
+    cmd = [
+        sys.executable, str(BENCH_DIR / "run_benchmark.py"),
+        "--policy", policy,
+        "--run-name", run_name,
+        "--manifest", str(input_manifest),
+        "--scenes-root", scenes_root,
+        "--ego-variant", variant,
+        "--benchmark-output", str(bench_root),
+        "--emit-replay-sidecar",
+        "--replay-root", str(replay_root),
+    ]
+    if output_dir is not None:
+        cmd += ["--output-dir", str(output_dir)]
+    if save_gifs:
+        cmd.append("--save-gifs")
+    if policy in NN_NEED_CHECKPOINT:
+        cmd += ["--model-path", model_paths[policy]]
+    if policy in ("plant2", "plant2_rule"):
+        cmd += ["--plant2-action-mode", plant2_action_mode]
+    return cmd
+
+
+def _scene_label(line: str, index: int) -> str:
+    try:
+        row = json.loads(line)
+        return str(row.get("scene_id") or f"row_{index}")
+    except Exception:
+        return f"row_{index}"
+
+
+def merge_episode_jsonls(shard_dirs: list[Path], policy: str, final_dir: Path) -> Path:
+    """Concatenate per-scene episode files into the policy_eval location."""
+    final_dir.mkdir(parents=True, exist_ok=True)
+    out_path = final_dir / f"episodes_{policy}.jsonl"
+    lines: list[str] = []
+    for shard in shard_dirs:
+        ep = shard / f"episodes_{policy}.jsonl"
+        if not ep.is_file():
+            continue
+        for ln in ep.read_text(encoding="utf-8").splitlines():
+            if ln.strip():
+                lines.append(ln)
+    out_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return out_path
+
+
+def run_baseline_by_scenes(
+    *,
+    policy: str,
+    variant: str,
+    scene_lines: list[str],
+    input_manifest: Path,
+    scenes_root: str,
+    bench_root: Path,
+    out_dir: Path,
+    model_paths: dict[str, str],
+    save_gifs: bool,
+    plant2_action_mode: str,
+    jobs: int,
+) -> None:
+    """Run one (policy, ego-variant) baseline; parallelize across scenes."""
+    run_name = f"{policy}_{variant}"
+    replay_root = out_dir / "runs" / "var_0" / run_name / "replays"
+    final_eval_dir = bench_root / "full" / "policy_eval" / run_name
+
+    if jobs <= 1 or len(scene_lines) <= 1:
+        cmd = build_benchmark_cmd(
+            policy=policy,
+            variant=variant,
+            input_manifest=input_manifest,
+            scenes_root=scenes_root,
+            bench_root=bench_root,
+            replay_root=replay_root,
+            model_paths=model_paths,
+            save_gifs=save_gifs,
+            plant2_action_mode=plant2_action_mode,
+        )
+        run(cmd)
+        return
+
+    workers = min(jobs, len(scene_lines))
+    shards_root = out_dir / "_scene_shards" / run_name
+    shards_root.mkdir(parents=True, exist_ok=True)
+    tasks: list[tuple[int, str, Path, Path]] = []
+    for i, line in enumerate(scene_lines):
+        label = _scene_label(line, i)
+        shard_manifest = shards_root / f"scene_{i:04d}.jsonl"
+        shard_manifest.write_text(line + "\n", encoding="utf-8")
+        shard_out = final_eval_dir / "_shards" / f"{i:04d}"
+        tasks.append((i, label, shard_manifest, shard_out))
+
+    print(
+        f"\n[{run_name}] parallelizing {len(tasks)} scene(s) "
+        f"with jobs={workers} (methods stay sequential)"
+    )
+
+    def _run_one(task: tuple[int, str, Path, Path]) -> str:
+        i, label, shard_manifest, shard_out = task
+        cmd = build_benchmark_cmd(
+            policy=policy,
+            variant=variant,
+            input_manifest=shard_manifest,
+            scenes_root=scenes_root,
+            bench_root=bench_root,
+            replay_root=replay_root,
+            model_paths=model_paths,
+            save_gifs=save_gifs,
+            plant2_action_mode=plant2_action_mode,
+            output_dir=shard_out,
+        )
+        print(f"\n[{run_name}] start scene {i + 1}/{len(tasks)}: {label}")
+        run(cmd)
+        return label
+
+    failures: list[str] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_run_one, task): task for task in tasks}
+        for future in as_completed(futures):
+            i, label, _, _ = futures[future]
+            try:
+                future.result()
+                print(f"[{run_name}] finished scene {i + 1}/{len(tasks)}: {label}")
+            except subprocess.CalledProcessError as exc:
+                failures.append(f"{label} (exit {exc.returncode})")
+            except Exception as exc:
+                failures.append(f"{label} ({exc})")
+
+    if failures:
+        sys.exit(
+            f"[{run_name}] scene failures:\n  - " + "\n  - ".join(failures)
+        )
+
+    shard_dirs = [t[3] for t in tasks]
+    merged = merge_episode_jsonls(shard_dirs, policy, final_eval_dir)
+    print(f"[{run_name}] merged episodes → {merged}")
 
 
 def parse_model_paths(spec: str | None) -> dict[str, str]:
@@ -203,11 +361,15 @@ def main() -> None:
     p.add_argument("--out-dir", default=None,
                    help=("output directory (default: ./eval_out, or "
                          f"<run_dir>/{RUN_EVAL_OUT_DIRNAME} when --manifest is a folder)"))
-    p.add_argument("--no-auxiliary-agent", action="store_true",
-                   help="Disable auxiliary agents on main road")
     p.add_argument("--save-gifs", action="store_true",
                    help="Write per-episode GIFs via run_benchmark.py (slower; off by default)")
+    p.add_argument("--jobs", type=int, default=8,
+                   help=("Max parallel scene workers within each baseline "
+                         "(default: 8). Policies/baselines still run one after another."))
     args = p.parse_args()
+
+    if args.jobs < 1:
+        sys.exit("--jobs must be >= 1")
 
     manifest_paths: list[Path] = []
     run_dirs: list[Path] = []
@@ -293,34 +455,25 @@ def main() -> None:
         sign_counts[s] = sign_counts.get(s, 0) + 1
     print(f"Signs: {sign_counts}")
 
-    #  Run all baselines 
+    # Run baselines sequentially; parallelize scenes inside each baseline.
     # --replay-root writes replays straight into the layout build_csv expects:
     # <OUT>/runs/var_0/<run_name>/replays/<sign>/by_sign/.../replay.json
     bench_root = OUT / "benchmark"
+    print(f"Scene parallelism: jobs={args.jobs}")
     for policy, variant in baselines:
-        run_name = f"{policy}_{variant}"
-        replay_root = OUT / "runs" / "var_0" / run_name / "replays"
-        cmd = [
-            sys.executable, str(BENCH_DIR / "run_benchmark.py"),
-            "--policy",           policy,
-            "--run-name",         run_name,
-            "--manifest",         str(input_manifest),
-            "--scenes-root",      args.scenes_root,
-            # "--backends",         args.backends,
-            "--ego-variant",      variant,
-            "--benchmark-output", str(bench_root),
-            "--emit-replay-sidecar",
-            "--replay-root",      str(replay_root),
-        ]
-        if not args.no_auxiliary_agent:
-            cmd.append("--auxiliary-agent")
-        if args.save_gifs:
-            cmd.append("--save-gifs")
-        if policy in NN_NEED_CHECKPOINT:
-            cmd += ["--model-path", model_paths[policy]]
-        if policy in ("plant2", "plant2_rule"):
-            cmd += ["--plant2-action-mode", args.plant2_action_mode]
-        run(cmd)
+        run_baseline_by_scenes(
+            policy=policy,
+            variant=variant,
+            scene_lines=all_lines,
+            input_manifest=input_manifest,
+            scenes_root=args.scenes_root,
+            bench_root=bench_root,
+            out_dir=OUT,
+            model_paths=model_paths,
+            save_gifs=args.save_gifs,
+            plant2_action_mode=args.plant2_action_mode,
+            jobs=args.jobs,
+        )
 
     # metrics pipeline (build --  aggregate -- MD report) 
     no_manifests = OUT / "_no_manifests"  # placeholder for build_csv
