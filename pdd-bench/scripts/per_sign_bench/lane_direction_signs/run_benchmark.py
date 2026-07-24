@@ -1143,6 +1143,181 @@ def _place_junction_direction_signs(
     )
 
 
+def _apply_original_lane_arrow_turns(env, row: dict) -> int:
+    """Rewrite top-down arrow metadata to pre-injection allowed dirs.
+
+    Baseline needs an injected connector on the spawn lane so IDM can physically
+    take the illegal turn. MetaDrive draws pavement arrows from ``map_data`` /
+    ``lane.turns``, which then include that connector — so the spawn lane looks
+    like the turn is allowed. Violation checks already use
+    ``original_allowed_exits_by_lane``; arrows must match that sign truth.
+    """
+    original = row.get("original_allowed_exits_by_lane") or {}
+    road_id = row.get("road_id")
+    if not original or not road_id:
+        return 0
+    road_id = str(road_id)
+    patched = 0
+
+    def _dirs_for_lane_num(ln: int) -> list[str]:
+        raw = original.get(str(ln)) or original.get(ln) or {}
+        dirs: list[str] = []
+        for d in raw.keys():
+            d_norm = str(d).lower()
+            if d_norm in ("s", "l", "r", "t") and d_norm not in dirs:
+                dirs.append(d_norm)
+        return dirs
+
+    # 1) ScenarioMap block map_data (what `_draw_lane_thin_arrows` reads).
+    try:
+        cur_map = env.engine.current_map
+        for block in getattr(cur_map, "blocks", None) or []:
+            map_data = getattr(block, "map_data", None)
+            if not isinstance(map_data, dict):
+                continue
+            for feat_id, data in list(map_data.items()):
+                if not isinstance(feat_id, str) or not feat_id.startswith("lane_"):
+                    continue
+                if ":" in feat_id:
+                    continue
+                raw = feat_id[5:]
+                if "_" not in raw:
+                    continue
+                edge, ln_s = raw.rsplit("_", 1)
+                if edge != road_id:
+                    continue
+                try:
+                    ln = int(ln_s)
+                except ValueError:
+                    continue
+                dirs = _dirs_for_lane_num(ln)
+                # Keep only display dirs; renderer only needs ``direction``.
+                data["turns"] = [{"direction": d} for d in dirs]
+                patched += 1
+    except Exception as exc:
+        print(f"[LaneArrows] map_data patch failed: {exc}")
+
+    # 2) Optional: store display_turns on Lane objects without removing physical
+    # turns (injection must stay for baseline routing / violation arming).
+    try:
+        road_network = env.engine.current_map.road_network
+        for ln, raw in original.items():
+            try:
+                lane_num = int(ln)
+            except (TypeError, ValueError):
+                continue
+            lane_key = make_lane_key(road_id, lane_num)
+            try:
+                lane = road_network.get_lane(lane_key)
+            except Exception:
+                lane = None
+            if lane is None:
+                continue
+            dirs = _dirs_for_lane_num(lane_num)
+            try:
+                lane.display_turns = [{"direction": d} for d in dirs]
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    if patched:
+        print(
+            f"[LaneArrows] restored original dirs on {patched} approach lane(s) "
+            f"of {road_id} (hide injected connectors from pavement arrows)"
+        )
+    return patched
+
+
+def _normalize_lane_id(lane_id: str) -> str:
+    s = str(lane_id)
+    return s if s.startswith("lane_") else f"lane_{s}"
+
+
+def _resolve_connector_via_ids(env, row: dict) -> tuple[list[str], list[str]]:
+    """Return (injected_via_ids, legal_via_ids) as ``lane_…`` keys."""
+    injected = [
+        _normalize_lane_id(x) for x in (row.get("injected_via_lane_ids") or []) if x
+    ]
+    legal = [_normalize_lane_id(x) for x in (row.get("legal_via_lane_ids") or []) if x]
+    if injected and legal:
+        return injected, legal
+
+    road_id = row.get("road_id")
+    if not road_id:
+        return injected, legal
+    spawn_num = int(row.get("spawn_lane_num", 0) or 0)
+    target_num = int(row.get("target_lane_num", 0) or 0)
+    dual = row.get("dual_path") or {}
+    excl = (
+        row.get("compliant_first_exit")
+        or dual.get("straight_first_exit")
+        or row.get("destination_edge_id")
+    )
+    original = row.get("original_allowed_exits_by_lane") or {}
+    spawn_orig = {
+        e
+        for edges in (original.get(str(spawn_num)) or original.get(spawn_num) or {}).values()
+        for e in edges
+    }
+
+    try:
+        road_network = env.engine.current_map.road_network
+        spawn_lane = road_network.get_lane(make_lane_key(str(road_id), spawn_num))
+        target_lane = road_network.get_lane(make_lane_key(str(road_id), target_num))
+    except Exception:
+        return injected, legal
+
+    def _vias_to_excl(lane) -> list[str]:
+        out = []
+        for turn in getattr(lane, "turns", None) or []:
+            to_lane = str(turn.get("to_lane") or "")
+            via = turn.get("via_lane")
+            # Match exclusive first-exit edge in to_lane id.
+            if excl and excl not in to_lane:
+                continue
+            if via:
+                out.append(_normalize_lane_id(via))
+        return out
+
+    if not injected and spawn_lane is not None:
+        for via in _vias_to_excl(spawn_lane):
+            # Injected = present now but exclusive exit wasn't originally allowed.
+            if excl and excl not in spawn_orig:
+                injected.append(via)
+    if not legal and target_lane is not None:
+        legal.extend(_vias_to_excl(target_lane))
+
+    # Dedupe preserve order
+    def _uniq(xs):
+        seen = set()
+        out = []
+        for x in xs:
+            if x not in seen:
+                seen.add(x)
+                out.append(x)
+        return out
+
+    return _uniq(injected), _uniq(legal)
+
+
+def _configure_connector_highlights(env, row: dict) -> None:
+    """Mark injected (magenta) / legal (cyan) vias for top-down GIF overlays."""
+    injected, legal = _resolve_connector_via_ids(env, row)
+    try:
+        env.engine.global_config["highlight_connectors"] = {
+            "injected": injected,
+            "legal": legal,
+        }
+    except Exception:
+        return
+    if injected or legal:
+        print(
+            f"[Connectors] highlight injected={injected or '-'} "
+            f"legal={legal or '-'}"
+        )
+
+
 def run_one_episode(
     row: dict,
     policy_type: str,
@@ -1253,6 +1428,9 @@ def run_one_episode(
             distance_before_end=sign_distance,
             show_model=not hide_signs,
         )
+        # Pavement arrows must show sign-truth dirs, not injected connectors.
+        _apply_original_lane_arrow_turns(base_env, row)
+        _configure_connector_highlights(base_env, row)
 
         # Analyze and print junction lanes (for debugging/info only)
         incoming_lanes, outgoing_lanes = _analyze_junction_lanes(base_env)
@@ -1469,6 +1647,18 @@ def run_one_episode(
                     "Current lane width: ": vehicle.lane.width,
                     "Violations: ": sign_violations,
                 }
+                try:
+                    hc = base_env.engine.global_config.get("highlight_connectors") or {}
+                    if hc.get("injected"):
+                        text_dict["Injected via (magenta)"] = ",".join(
+                            str(x).replace("lane_", "") for x in hc["injected"]
+                        )
+                    if hc.get("legal"):
+                        text_dict["Legal via (cyan)"] = ",".join(
+                            str(x).replace("lane_", "") for x in hc["legal"]
+                        )
+                except Exception:
+                    pass
                 
                 direction_signs = [
                     sign for sign in sign_mgr.signs

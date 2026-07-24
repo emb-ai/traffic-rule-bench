@@ -89,7 +89,9 @@ DIRECTION_EXIT_MAX_STEER = 0.42
 # SUMO connector starts for r/s/l share almost the same XY; steering alone
 # rarely changes MetaDrive's lane assignment. One short snap onto the
 # allowed via when the approach ends makes the expert take the compliant hop.
-DIRECTION_EXIT_SNAP_REMAINING_M = 2.0
+# 4 m (was 2): CaRL often brakes near the curb ~3–4 m before the end after the
+# rightward exit-aim pull, and never reaches a 2 m snap → stuck on the shoulder.
+DIRECTION_EXIT_SNAP_REMAINING_M = 4.0
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +182,7 @@ class SignComplianceMixin:
 
     def _init_sign_compliance(self):
         self._lc_target_lane = None
+        self._lc_final_sumo_num = None
         self._stop_states = {}
         self._speed_cap = None
         self._speed_floor = None
@@ -200,6 +203,7 @@ class SignComplianceMixin:
         self._stop_states.clear()
         self._rerouted_edges.clear()
         self._lc_target_lane = None
+        self._lc_final_sumo_num = None
         self._has_priority = False
         self._no_overtaking_active = False
         self._direction_exit_lane = None
@@ -355,6 +359,7 @@ class SignComplianceMixin:
         ref = self._get_ref_lanes()
         if ref and 0 <= target_lane_num < len(ref):
             self._lc_target_lane = ref[target_lane_num]
+            self._lc_final_sumo_num = lane_index_num(self._lc_target_lane)
             self._get_heading_pid().reset()
             self._get_lateral_pid().reset()
 
@@ -365,6 +370,7 @@ class SignComplianceMixin:
         cur = self._cur_lane_num()
         if cur is not None and int(cur) == int(sumo_lane_num):
             return True
+        self._lc_final_sumo_num = int(sumo_lane_num)
         # Try ref lanes first (adjacent lanes from navigation).
         ref = self._get_ref_lanes() or []
         for lane in ref:
@@ -400,20 +406,64 @@ class SignComplianceMixin:
         return False
 
     def _update_lane_change(self):
-        if self._lc_target_lane is None:
+        if self._lc_target_lane is None and self._lc_final_sumo_num is None:
             return
-        ref = self._get_ref_lanes()
-        if ref and self._lc_target_lane not in ref:
-            self._lc_target_lane = None
-            return
-        tgt_idx = getattr(self._lc_target_lane, "index", None)
+        final_num = self._lc_final_sumo_num
+        if final_num is None:
+            final_num = lane_index_num(self._lc_target_lane)
+        cur_num = self._cur_lane_num()
         cur_idx = getattr(self.control_object.lane, "index", None)
-        if tgt_idx is not None and cur_idx == tgt_idx:
-            _, lat = self._lc_target_lane.local_coordinates(
-                self.control_object.position
-            )
-            if abs(lat) < LC_COMPLETE_LAT:
+        ref = self._get_ref_lanes() or []
+
+        # Done when on the final SUMO lane and centered.
+        if cur_num is not None and final_num is not None and int(cur_num) == int(final_num):
+            lane = self.control_object.lane
+            if lane is not None:
+                _, lat = lane.local_coordinates(self.control_object.position)
+                if abs(lat) < LC_COMPLETE_LAT:
+                    self._lc_target_lane = None
+                    self._lc_final_sumo_num = None
+                    return
+
+        # Aim at the next hop toward the final lane (supports L0→L2).
+        if final_num is None or cur_num is None:
+            return
+        if int(cur_num) == int(final_num):
+            # On final lane but not yet centered — keep aiming at it.
+            aim_num = int(final_num)
+        else:
+            step = 1 if int(final_num) > int(cur_num) else -1
+            aim_num = int(cur_num) + step
+
+        aim = None
+        for lane in ref:
+            if lane_index_num(lane) == aim_num:
+                aim = lane
+                break
+        if aim is None and self._lc_target_lane is not None:
+            # Keep previous aim object if peers aren't in ref this tick.
+            if lane_index_num(self._lc_target_lane) == aim_num:
+                aim = self._lc_target_lane
+        if aim is None:
+            # Resolve by id on the current edge.
+            try:
+                cur_lane = self.control_object.lane
+                cur_lid = getattr(cur_lane, "index", None)
+                if isinstance(cur_lid, str) and cur_lid.startswith("lane_"):
+                    edge_id = cur_lid[5:].rsplit("_", 1)[0]
+                    road_network = self.control_object.navigation.map.road_network
+                    aim = road_network.get_lane(f"lane_{edge_id}_{aim_num}")
+            except Exception:
+                aim = None
+        if aim is not None:
+            self._lc_target_lane = aim
+        # Drop LC only if we left the approach entirely (no usable aim).
+        elif ref and self._lc_target_lane is not None:
+            tgt_idx = getattr(self._lc_target_lane, "index", None)
+            ref_idxs = {getattr(l, "index", None) for l in ref}
+            if tgt_idx not in ref_idxs and cur_idx not in ref_idxs:
                 self._lc_target_lane = None
+                self._lc_final_sumo_num = None
 
     # ------------------------------------------------------------------
     # Re-routing (BFS around blocked edges)
@@ -727,6 +777,48 @@ class SignComplianceMixin:
         path = self._find_sumo_path_avoiding_lanes(start, destination, blocked_lanes=())
         return bool(path) and self._apply_sumo_nav_path(nav, path)
 
+    def _lane_directions_blocked_exits(self, sign, source_lane) -> set:
+        """First-hop via/to targets not allowed for this approach lane (5.15.1)."""
+        source_id = getattr(source_lane, "index", None)
+        by_src = getattr(sign, "allowed_lanes_by_source", None) or {}
+        allowed = set(by_src.get(source_id) or ())
+        if not allowed:
+            return set()
+        blocked = set()
+        for turn in getattr(source_lane, "turns", None) or []:
+            to_lane = turn.get("to_lane")
+            via = turn.get("via_lane")
+            if to_lane and to_lane not in allowed:
+                blocked.add(to_lane)
+                if via:
+                    blocked.add(via)
+        return blocked
+
+    def _hold_on_lane_until_lc(self, source_lane, blocked) -> bool:
+        """If the next hop is forbidden, park nav on the current lane.
+
+        Used mid lane-change so IDM does not dive into an injected connector.
+        Once on the target lane, ``_reroute_sumo_from_current_lane`` installs
+        the real dest route.
+        """
+        nav = getattr(self.control_object, "navigation", None)
+        if nav is None or not self._is_sumo_edge_nav(nav):
+            return False
+        source_id = getattr(source_lane, "index", None)
+        if not isinstance(source_id, str):
+            return False
+        checkpoints = list(getattr(nav, "checkpoints", None) or [])
+        if len(checkpoints) < 2:
+            return False
+        dest = checkpoints[-1]
+        for i, ck in enumerate(checkpoints[:-1]):
+            if ck == source_id and checkpoints[i + 1] in (blocked or ()):
+                path = [source_id]
+                if dest and dest != source_id:
+                    path.append(dest)
+                return self._apply_sumo_nav_path(nav, path)
+        return False
+
     def _direction_blocked_exits_from_source(self, sign, source_lane) -> set:
         """First-hop via/to_lane targets for directions NOT allowed by the sign."""
         allowed_dirs = set(
@@ -815,6 +907,10 @@ class SignComplianceMixin:
 
     def _arm_direction_exit_from_sign(self, sign) -> bool:
         """Remember the route's first allowed next-hop for near-junction steering."""
+        return self._arm_direction_exit_from_lane(sign, getattr(sign, "lane", None))
+
+    def _arm_direction_exit_from_lane(self, sign, source_lane) -> bool:
+        """Arm exit aiming using ``source_lane`` as the departure lane."""
         # First-exit only: after the compliant hop, dual-path routes often
         # re-enter the same approach and must follow checkpoints without a
         # second forced right/left pull.
@@ -823,11 +919,13 @@ class SignComplianceMixin:
         nav = getattr(self.control_object, "navigation", None)
         if nav is None or not self._is_sumo_edge_nav(nav):
             return False
-        source_lane = getattr(sign, "lane", None)
         source_id = getattr(source_lane, "index", None)
         if source_lane is None or not isinstance(source_id, str):
             return False
-        blocked = self._direction_blocked_exits_from_source(sign, source_lane)
+        if isinstance(sign, LaneDirectionsSign):
+            blocked = self._lane_directions_blocked_exits(sign, source_lane)
+        else:
+            blocked = self._direction_blocked_exits_from_source(sign, source_lane)
         next_id = None
         for i, ck in enumerate(list(nav.checkpoints or [])[:-1]):
             if ck == source_id:
@@ -1651,11 +1749,32 @@ class SignComplianceMixin:
             if target_ln is not None:
                 cur = self._cur_lane_num()
                 if cur is not None and int(cur) != int(target_ln):
+                    # While lane-changing, block the CURRENT lane's illegal
+                    # first-hops (injected connectors). Otherwise IDM keeps
+                    # aiming at the forbidden left/right cut and fights the LC
+                    # steering → out-of-road near the junction.
+                    blocked = self._lane_directions_blocked_exits(
+                        sign, self.control_object.lane
+                    )
+                    for lid in blocked:
+                        self._blocked_lanes.add(lid)
+                    if blocked:
+                        if not self._reroute_sumo_avoiding_lanes(blocked):
+                            # Don't commit to a long "straight spur" path — that
+                            # persists after LC onto the turn lane and drives
+                            # the car straight from a left-only lane (OOR).
+                            self._hold_on_lane_until_lc(
+                                self.control_object.lane, blocked
+                            )
                     self._begin_lane_change_by_sumo_num(int(target_ln))
                     return
                 # Already on target lane — install a route from here to dest.
                 self._reroute_sumo_from_current_lane()
-                self._arm_direction_exit_from_sign(sign)
+                # Arm exit from the *current* (target) lane, not sign.lane —
+                # the board is shared across peers but only this lane may turn.
+                self._arm_direction_exit_from_lane(
+                    sign, self.control_object.lane
+                )
                 return
 
         nav = getattr(self.control_object, "navigation", None)

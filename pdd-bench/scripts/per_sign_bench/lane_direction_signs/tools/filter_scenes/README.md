@@ -1,82 +1,109 @@
-The sequence of commands for the direction-sign (4.1.x) scene pool workflow.
+# Filter / crop workflow — PDD 5.15.1
 
-Per-sign layout under ``direction_signs/scenes/``:
+Lane-direction board («Направления движения по полосам»). Run from
+`lane_direction_signs/`:
+
+```bash
+cd pdd-bench/scripts/per_sign_bench/lane_direction_signs
+```
+
+Layout:
 
 ```
 scenes/
-├── 4_1_1/core/ … crops …
-└── 4_1_2/core/ … crops …
+└── 5_15_1/
+    ├── core/                 # imported catalog maps
+    ├── sign_*_j*/            # lane-change crops
+    ├── scene_selection.json  # review keep/reject
+    └── _rejected/            # after --apply
 ```
 
-Catalog source remains ``pdd-bench/scenes/<pdd_code>`` (e.g. ``4.1.2``).
+Catalog source: `pdd-bench/scenes/5.15.2` (same family; see
+`lib/direction_sign_spec.py` → `catalog_subdir`). Default `--pdd-code` is
+`5.15.1` → writes under `scenes/5_15_1/`.
 
+## What a crop is
+
+Not the 4.1.x “forbidden first exit vs longer compliant loop” dual-path.
+
+Here:
+
+1. Junction has ≥1 **multi-lane** approach (≥2 lanes).
+2. Ego spawns on a **wrong** lane with **no** first-exit route to dest.
+3. A **target** peer lane on the same approach can reach dest (prefer adjacent).
+4. Preview `custom_cropped.png`:
+   - per-lane allowed-direction arrows
+   - **orange dashed** = wrong path (stay on spawn lane)
+   - **blue** = correct path (lane-change → dest)
+
+`meta.json` stores `road_id`, `spawn_lane_num`, `target_lane_num`,
+`destination_*`, and `dual_path` with `kind: lane_change`
+(`turn_*` = wrong, `straight_*` = correct).
+
+At eval, injection adds an illegal connector from the spawn lane so baseline
+`idm` can take the wrong exit; rule policies are expected to lane-change first.
+
+## 1) Import cores
+
+Keep scenes with a 3- and/or 4-arm junction **and** a multi-lane approach:
+
+```bash
+python tools/filter_scenes/import_catalog_scenes.py --arms 4 3 --limit 30
+python tools/filter_scenes/import_catalog_scenes.py --arms 4 --limit 20
+python tools/filter_scenes/import_catalog_scenes.py sign_79054 --no-simulation
 ```
-python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.2 --limit 10
-# writes → scenes/4_1_2/core/
-```
 
-### Dual-path crop (4.1.1–4.1.6)
+Cores land in `scenes/5_15_1/core/`.
 
-1. Import cores (4-arm preferred):
+## 2) Crop lane-change scenes
 
-```
-python tools/filter_scenes/import_catalog_scenes.py --arms 4 --limit 30
-python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.2 --arms 4 --limit 30
-python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.3 --arms 4 --limit 30
-python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.4 --arms 4 --limit 30
-python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.5 --arms 4 --limit 30
-python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.6 --arms 4 --limit 30
-```
-
-2. Select + crop scenes where the **same destination** is reachable by a
-   shorter **baseline** (forbidden) first exit and a longer **compliant**
-   (allowed) path. Roles from ``--pdd-code``:
-
-   * 4.1.1: baseline ``l``/``r``, compliant ``s`` → ``scenes/4_1_1/``
-   * 4.1.2: baseline ``s``/``l``, compliant ``r`` → ``scenes/4_1_2/``
-   * 4.1.3: baseline ``s``/``r``, compliant ``l`` → ``scenes/4_1_3/``
-   * 4.1.4: baseline ``l``, compliant ``s``/``r`` → ``scenes/4_1_4/``
-   * 4.1.5: baseline ``r``, compliant ``s``/``l`` → ``scenes/4_1_5/``
-   * 4.1.6: baseline ``s``, compliant ``r``/``l`` → ``scenes/4_1_6/``
-
-```
+```bash
 python tools/filter_scenes/crop_junction_scene.py --limit 10
-python tools/filter_scenes/crop_junction_scene.py --pdd-code 4.1.2 --limit 10 --overwrite
+python tools/filter_scenes/crop_junction_scene.py --overwrite --min-gain 0
 python tools/filter_scenes/crop_junction_scene.py --dry-run --limit 20
-python tools/filter_scenes/crop_junction_scene.py sign_72915 --overwrite --min-gain 20 --margin 40
+python tools/filter_scenes/crop_junction_scene.py sign_71895 --overwrite
 ```
 
-Each written scene stores canonical ``road_id`` (spawn), ``destination_edge_id``,
-``pdd_code``, and a ``dual_path`` block in ``meta.json``. The preview
-``custom_cropped.png`` overlays both paths (blue = compliant / longer,
-orange = baseline / shorter) plus spawn and destination markers.
+Useful flags:
 
-3. Manifest / eval:
+- `--min-ego-lane-m` (default 21) — approach must fit spawn ≥20 m before junction
+- `--min-gain` (default 0) — optional wrong-spur vs correct-path length gap
+- `--max-scenarios` (default 5) — crops per core
+- `--skip-metadrive-check` — skip MetaDrive routability filter on target→dest
 
-```
-python generate_manifest.py
-# → reads scenes/4_1_1/
-python generate_manifest.py sign.pdd_code=4.1.2 paths.output_base=benchmark_output/4_1_2
-# → reads scenes/4_1_2/
-```
+Dedup: at most one crop per `(junction_id, ego approach)` across all cores.
 
-Pool builder:
+## 3) Pool builder + review
 
-```
-python tools/filter_scenes/build_scene_pool.py crop --pdd-code 4.1.2 --target 20
-```
-
-and check how many scenes are generated in the result:
-```
-ls -1d sign*/ 2>/dev/null | wc -l
+```bash
+python tools/filter_scenes/build_scene_pool.py crop --target 20
+python tools/filter_scenes/build_scene_pool.py status --target 20
+python tools/filter_scenes/review_junction_scenes.py
+python tools/filter_scenes/review_junction_scenes.py --apply   # → scenes/5_15_1/_rejected/
+python tools/filter_scenes/build_scene_pool.py fill --target 20
 ```
 
-4. Optionally move rejected scenes aside
-```
- python tools/filter_scenes/review_junction_scenes.py --pdd-code 4.1.2 --apply
+Count crops:
+
+```bash
+ls -1d scenes/5_15_1/sign*/ 2>/dev/null | wc -l
 ```
 
-### Notes
+## 4) Manifest / eval
 
-Not every OSM extract has a reconverging baseline+compliant pair. Cores without a
-dual-path hit are skipped (see ``junctions.json`` / console output).
+```bash
+python generate_manifest.py sign.pdd_code=5.15.1
+# optional GIF smoke:
+python generate_manifest.py gif.enabled=true gif.policy=carl_rule
+
+python eval_pipeline.py \
+    --policies idm modified_idm carl_rule \
+    --manifest benchmark_output/5_15_1/<timestamp> \
+    --scenes-root scenes/5_15_1
+```
+
+## Notes
+
+- Cores without a wrong-spawn / correct-peer pair are skipped (console /
+  `junctions.json`).
+- Package overview: `../README.md` and `config/config.yaml`.

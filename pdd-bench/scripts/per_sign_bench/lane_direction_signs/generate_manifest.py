@@ -552,6 +552,15 @@ def build_manifest_entry(
     # Pass original allowed exits (pre-connector-injection) for sign violation check.
     if meta.get("original_allowed_exits_by_lane"):
         entry["original_allowed_exits_by_lane"] = meta["original_allowed_exits_by_lane"]
+    for key in (
+        "injected_via_lane_ids",
+        "legal_via_lane_ids",
+        "injected_connection",
+        "injected_via_reshaped",
+        "injected_via_length_m",
+    ):
+        if meta.get(key) is not None:
+            entry[key] = meta[key]
     
     entry = {k: v for k, v in entry.items() if v is not None}
     

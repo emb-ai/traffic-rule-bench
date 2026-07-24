@@ -69,6 +69,163 @@ def _parse_connections_from_edge(net_path: Path, from_edge: str) -> Dict[int, Li
     return dict(result)
 
 
+def _connection_via(
+    net_path: Path, from_edge: str, from_lane: int, to_edge: str
+) -> Optional[str]:
+    """Return the ``via`` internal lane id for a specific connection, if any."""
+    root = ET.parse(net_path).getroot()
+    for conn in root.iter("connection"):
+        if conn.get("from") != from_edge or conn.get("to") != to_edge:
+            continue
+        try:
+            if int(conn.get("fromLane", -1)) != int(from_lane):
+                continue
+        except (TypeError, ValueError):
+            continue
+        via = conn.get("via")
+        if via:
+            return via
+    return None
+
+
+def _lane_shape_points(net_path: Path, lane_id: str) -> List[Tuple[float, float]]:
+    root = ET.parse(net_path).getroot()
+    for lane in root.iter("lane"):
+        if lane.get("id") != lane_id:
+            continue
+        shape = lane.get("shape") or ""
+        pts: List[Tuple[float, float]] = []
+        for token in shape.split():
+            if "," not in token:
+                continue
+            xs, ys = token.split(",", 1)
+            try:
+                pts.append((float(xs), float(ys)))
+            except ValueError:
+                continue
+        return pts
+    return []
+
+
+def _lane_end_point(net_path: Path, edge_id: str, lane_num: int) -> Optional[Tuple[float, float]]:
+    pts = _lane_shape_points(net_path, f"{edge_id}_{lane_num}")
+    return pts[-1] if pts else None
+
+
+def _lane_start_point(net_path: Path, edge_id: str, lane_num: int) -> Optional[Tuple[float, float]]:
+    pts = _lane_shape_points(net_path, f"{edge_id}_{lane_num}")
+    return pts[0] if pts else None
+
+
+def _polyline_length(pts: Sequence[Tuple[float, float]]) -> float:
+    total = 0.0
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+        total += math.hypot(x1 - x0, y1 - y0)
+    return total
+
+
+def _reshape_injected_via(
+    net_path: Path,
+    *,
+    ego_edge: str,
+    spawn_lane: int,
+    target_lane: int,
+    first_exit_edge: str,
+    to_lane: int,
+    injected_via: str,
+    legal_via: Optional[str],
+) -> bool:
+    """Replace stub injected-via geometry with a smooth offset of the legal turn.
+
+    ``netconvert`` often emits a 1–2 m chord for forbidden fromLane→toEdge links.
+    IDM then cuts the corner. We rebuild the via as the legal connector warped
+    so its endpoints match the spawn-lane end and exit-lane start (preserving
+    relative bend), which IDM can track much more like a normal SUMO turn.
+    """
+    spawn_pts = _lane_shape_points(net_path, f"{ego_edge}_{spawn_lane}")
+    exit_pts = _lane_shape_points(net_path, f"{first_exit_edge}_{to_lane}")
+    spawn_end = spawn_pts[-1] if spawn_pts else None
+    exit_start = exit_pts[0] if exit_pts else None
+    if spawn_end is None or exit_start is None:
+        return False
+
+    legal_pts = _lane_shape_points(net_path, legal_via) if legal_via else []
+
+    def _unit(dx: float, dy: float) -> Tuple[float, float]:
+        n = math.hypot(dx, dy) or 1.0
+        return dx / n, dy / n
+
+    if len(spawn_pts) >= 2:
+        shx, shy = _unit(
+            spawn_pts[-1][0] - spawn_pts[-2][0],
+            spawn_pts[-1][1] - spawn_pts[-2][1],
+        )
+    else:
+        shx, shy = _unit(exit_start[0] - spawn_end[0], exit_start[1] - spawn_end[1])
+
+    if len(exit_pts) >= 2:
+        ehx, ehy = _unit(
+            exit_pts[1][0] - exit_pts[0][0],
+            exit_pts[1][1] - exit_pts[0][1],
+        )
+    else:
+        ehx, ehy = _unit(exit_start[0] - spawn_end[0], exit_start[1] - spawn_end[1])
+
+    if len(legal_pts) >= 3:
+        # Warp legal polyline into new endpoints while keeping relative shape.
+        old_s = legal_pts[0]
+        old_e = legal_pts[-1]
+        ox = old_e[0] - old_s[0]
+        oy = old_e[1] - old_s[1]
+        old_len = math.hypot(ox, oy) or 1.0
+        nx = exit_start[0] - spawn_end[0]
+        ny = exit_start[1] - spawn_end[1]
+        new_len = math.hypot(nx, ny) or 1.0
+        # Rotation+scale mapping old chord → new chord.
+        # Complex multiply: (p-old_s) * (new_chord / old_chord).
+        scale_re = (nx * ox + ny * oy) / (old_len * old_len)
+        scale_im = (ny * ox - nx * oy) / (old_len * old_len)
+        warped: List[Tuple[float, float]] = []
+        for x, y in legal_pts:
+            dx, dy = x - old_s[0], y - old_s[1]
+            wx = spawn_end[0] + dx * scale_re - dy * scale_im
+            wy = spawn_end[1] + dx * scale_im + dy * scale_re
+            warped.append((wx, wy))
+        warped[0] = spawn_end
+        warped[-1] = exit_start
+        # Soften ends so the path leaves along spawn heading / arrives along exit.
+        extend = max(1.5, 0.25 * new_len)
+        if len(warped) >= 4:
+            warped[1] = (spawn_end[0] + shx * extend, spawn_end[1] + shy * extend)
+            warped[-2] = (exit_start[0] - ehx * extend, exit_start[1] - ehy * extend)
+        new_pts = warped
+    else:
+        extend = 3.0
+        p1 = (spawn_end[0] + shx * extend, spawn_end[1] + shy * extend)
+        p2 = (exit_start[0] - ehx * extend, exit_start[1] - ehy * extend)
+        new_pts = [spawn_end, p1, p2, exit_start]
+
+    if len(new_pts) < 2:
+        return False
+    shape_str = " ".join(f"{x:.2f},{y:.2f}" for x, y in new_pts)
+    length = _polyline_length(new_pts)
+
+    tree = ET.parse(net_path)
+    root = tree.getroot()
+    touched = False
+    for lane in root.iter("lane"):
+        if lane.get("id") != injected_via:
+            continue
+        lane.set("shape", shape_str)
+        lane.set("length", f"{length:.2f}")
+        touched = True
+        break
+    if not touched:
+        return False
+    tree.write(net_path, encoding="utf-8", xml_declaration=True)
+    return True
+
+
 def _extract_original_allowed_exits(
     net_path: Path,
     ego_edge: str,
@@ -91,18 +248,24 @@ def inject_forbidden_connector(
     scenario: "DualPathScenario",
     *,
     output_path: Optional[Path] = None,
-) -> Tuple[Path, Dict[int, Dict[str, List[str]]]]:
+) -> Tuple[Path, Dict[int, Dict[str, List[str]]], Dict[str, object]]:
     """Add a physical connector from spawn lane to the correct-path first exit.
 
     The baseline (sign-blind IDM) needs to physically reach dest. SUMO only
     builds connectors for allowed turns, so spawn_lane has no connector to the
-    exclusive first exit. We inject one via netconvert, then the sign detects
-    the violation using the *original* allowed exits saved in meta.
+    exclusive first exit. We inject one via netconvert, reshape the stub via so
+    IDM can track it, then the sign detects the violation using the *original*
+    allowed exits saved in meta.
 
-    Returns (modified_net_path, original_allowed_exits_by_lane).
+    Returns ``(modified_net_path, original_allowed_exits_by_lane, inject_meta)``.
     """
     net_path = Path(net_path).resolve()
     output_path = (output_path or net_path).resolve()
+    inject_meta: Dict[str, object] = {
+        "injected_via_lane_ids": [],
+        "legal_via_lane_ids": [],
+        "injected_connection": None,
+    }
 
     ego_edge = scenario.ego_edge_id
     spawn_lane = scenario.ego_lane_num
@@ -119,20 +282,22 @@ def inject_forbidden_connector(
         # Already connected — no injection needed (rare but possible)
         if output_path != net_path:
             shutil.copy2(net_path, output_path)
-        return output_path, original_exits
+        return output_path, original_exits, inject_meta
 
-    # 3) Find target lane's connection to first_exit_edge to get toLane
+    # 3) Find target lane's connection to first_exit_edge to get toLane + legal via
     target_exits = original_exits.get(target_lane, {})
     to_lane = 0
+    legal_via = _connection_via(net_path, ego_edge, target_lane, first_exit_edge)
     for direction, edges in target_exits.items():
         if first_exit_edge in edges:
-            # Get the actual toLane from the connection
             conns = _parse_connections_from_edge(net_path, ego_edge)
             for to_edge, tl, _ in conns.get(target_lane, []):
                 if to_edge == first_exit_edge:
                     to_lane = tl
                     break
             break
+    if legal_via:
+        inject_meta["legal_via_lane_ids"] = [legal_via]
 
     # 4) Create a temporary connection file
     conn_xml = f'''<?xml version="1.0" encoding="UTF-8"?>
@@ -144,12 +309,13 @@ def inject_forbidden_connector(
         f.write(conn_xml)
         conn_file = Path(f.name)
 
-    # 5) Run netconvert to add the connection
+    # 5) Run netconvert to add the connection (rebuild junction corners)
     try:
         cmd = [
             _find_netconvert(),
             "--sumo-net-file", str(net_path),
             "--connection-files", str(conn_file),
+            "--junctions.corner-detail", "5",
             "-o", str(output_path),
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -162,7 +328,38 @@ def inject_forbidden_connector(
     finally:
         conn_file.unlink(missing_ok=True)
 
-    return output_path, original_exits
+    injected_via = _connection_via(output_path, ego_edge, spawn_lane, first_exit_edge)
+    # Legal via id may change after netconvert rebuild — re-resolve.
+    legal_via = _connection_via(output_path, ego_edge, target_lane, first_exit_edge) or legal_via
+    if legal_via:
+        inject_meta["legal_via_lane_ids"] = [legal_via]
+    if injected_via:
+        inject_meta["injected_via_lane_ids"] = [injected_via]
+        inject_meta["injected_connection"] = {
+            "from": ego_edge,
+            "to": first_exit_edge,
+            "fromLane": int(spawn_lane),
+            "toLane": int(to_lane),
+            "via": injected_via,
+        }
+        reshaped = _reshape_injected_via(
+            output_path,
+            ego_edge=ego_edge,
+            spawn_lane=int(spawn_lane),
+            target_lane=int(target_lane),
+            first_exit_edge=first_exit_edge,
+            to_lane=int(to_lane),
+            injected_via=injected_via,
+            legal_via=legal_via,
+        )
+        inject_meta["injected_via_reshaped"] = bool(reshaped)
+        if reshaped and injected_via:
+            pts = _lane_shape_points(output_path, injected_via)
+            inject_meta["injected_via_length_m"] = round(_polyline_length(pts), 2)
+
+    return output_path, original_exits, inject_meta
+
+
 _CARDINAL = frozenset({"s", "l", "r"})
 
 
@@ -812,15 +1009,25 @@ def find_dual_path_scenarios(
         if len(scenarios) >= max_scenarios * 4:
             break
 
-    # Prefer short correct path, longer wrong spur, multi-lane clarity.
+    # Prefer: short correct path, adjacent spawn↔target (LC must be 1 hop for
+    # IDM/expert), longer wrong spur, stable ids. Adjacent preference matters:
+    # spawn far from target (e.g. L0→L2) often never lane-changes because
+    # MetaDrive ref_lanes only expose neighbors.
     scenarios.sort(
-        key=lambda s: (s.straight_length_m, -s.turn_length_m, s.ego_edge_id, s.ego_lane_num)
+        key=lambda s: (
+            s.straight_length_m,
+            abs(int(s.ego_lane_num) - int(s.target_lane_num)),
+            -s.turn_length_m,
+            s.ego_edge_id,
+            s.ego_lane_num,
+        )
     )
-    # Dedup by (junction, ego, spawn_lane, dest)
+    # Dedup by (junction, ego, dest, target): keep the best spawn for each
+    # legal turn (adjacent wrong-lane preferred by the sort above).
     uniq: List[DualPathScenario] = []
-    seen: Set[Tuple[str, str, int, str]] = set()
+    seen: Set[Tuple[str, str, str, int]] = set()
     for sc in scenarios:
-        key = (sc.junction_id, sc.ego_edge_id, sc.ego_lane_num, sc.dest_edge_id)
+        key = (sc.junction_id, sc.ego_edge_id, sc.dest_edge_id, int(sc.target_lane_num))
         if key in seen:
             continue
         seen.add(key)
@@ -1152,8 +1359,9 @@ def crop_scene_to_dual_path_scenario(
     # Inject forbidden connector so baseline can physically reach dest.
     # This must happen BEFORE we read allowed exits for meta.
     original_allowed_exits: Dict[int, Dict[str, List[str]]] = {}
+    inject_meta: Dict[str, object] = {}
     try:
-        _, original_allowed_exits = inject_forbidden_connector(
+        _, original_allowed_exits, inject_meta = inject_forbidden_connector(
             out_net, scenario, output_path=out_net
         )
     except Exception as exc:
@@ -1198,6 +1406,17 @@ def crop_scene_to_dual_path_scenario(
         meta["original_allowed_exits_by_lane"] = {
             str(ln): exits for ln, exits in original_allowed_exits.items()
         }
+    if inject_meta:
+        if inject_meta.get("injected_via_lane_ids"):
+            meta["injected_via_lane_ids"] = list(inject_meta["injected_via_lane_ids"])
+        if inject_meta.get("legal_via_lane_ids"):
+            meta["legal_via_lane_ids"] = list(inject_meta["legal_via_lane_ids"])
+        if inject_meta.get("injected_connection") is not None:
+            meta["injected_connection"] = inject_meta["injected_connection"]
+        if "injected_via_reshaped" in inject_meta:
+            meta["injected_via_reshaped"] = inject_meta["injected_via_reshaped"]
+        if inject_meta.get("injected_via_length_m") is not None:
+            meta["injected_via_length_m"] = inject_meta["injected_via_length_m"]
     if junction_rank is not None:
         meta["junction_rank"] = junction_rank
     meta.pop("distance_from_start", None)
