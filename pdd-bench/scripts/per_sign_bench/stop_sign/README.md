@@ -106,6 +106,15 @@ python -m tools.render_map <scene_name>
 python -m tools.render_map <scene_name> --out custom_output.png
 ```
 
+## Trajectory collection (aux agents + replay.pkl)
+
+Same pipeline as yield. See `collect_trajectories/README.md`.
+
+```bash
+cd collect_trajectories
+SMOKE=1 ./collect_trajectories.sh
+```
+
 ## Configuration
 
 See `config/config.yaml` for available options:

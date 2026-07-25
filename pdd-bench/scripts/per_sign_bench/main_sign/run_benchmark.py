@@ -1037,7 +1037,7 @@ def run_one_episode(
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     aux_policy: str = "idm",
     aux_spawn_velocity_ms: float = DEFAULT_SPAWN_VELOCITY_MS,
-    aux_release_when_ego_within_m: float = 5.0,
+    aux_release_when_ego_within_m: float = 20.0,
     aux_convoy_size: int = DEFAULT_CONVOY_SIZE,
     aux_convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
     aux_lanes_occupied: int = DEFAULT_AUX_LANES_OCCUPIED_MAX,
