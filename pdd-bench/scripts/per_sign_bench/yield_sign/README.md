@@ -31,6 +31,20 @@ yield_sign/
 └── benchmark_output/       # Evaluation results
 ```
 
+## Trajectory collection + oracle (aux agents)
+
+To collect expert trajectories the same way as the general bench
+(`collect_trajectories.sh` → oracle selection), but with yield auxiliary
+agents, see [`collect_trajectories/README.md`](collect_trajectories/README.md).
+
+Quick visual smoke test:
+
+```bash
+cd collect_trajectories
+SMOKE=1 ./collect_trajectories.sh
+# GIFs under output/trajectories_*/comprehensive_rule_expert/2_4/gifs/
+```
+
 ## Workflow
 
 ### Step 1A: Build Scenes
