@@ -21,10 +21,11 @@ paths:
   experiment_name: ${now:%Y-%m-%d_%H-%M-%S}
 
 scenario:
-  n_variants: 1
-  augment: false
-  max_scenarios: null             # Cap total dual-path picks (null = all); density tiers multiply rows on top
-  max_scenarios_per_scene: 5
+  n_variants: 1                 # legacy dual-path index (keep 1)
+  n_variations: 5               # like sumo_space: × NPC/traffic seeds (nuPlan profile)
+  augment: true
+  max_scenarios: null             # Cap total dual-path picks (null = all); n_variations multiply rows on top
+  max_scenarios_per_scene: 10
   respect_scene_selection: true
   min_dual_path_gain_m: 0.0     # lane-change scenarios; gain optional
   min_ego_lane_m: 21.0
@@ -34,9 +35,11 @@ scenario:
 simulation:
   spawn_velocity_ms: 2.5
   traffic_density: 0.0
-  # false → one row per dual-path with traffic_density above;
-  # true  → expand into nuPlan p25/p50/p75 density levels (_td1/_td2/_td3).
+  # false → use n_variations × nuPlan NPC profiles (density + IDM params);
+  # true  → expand into fixed nuPlan p25/p50/p75 density levels (_td1/_td2/_td3).
   traffic_density_augment: false
+  # Cap for sample_one_profile when n_variations>0 (1.0 = same as sumo_space).
+  nuplan_density_cap: 1.0
   horizon: 600
   sign_distance_before_end: 0.0
   spawn_distance_before_end: 20.0

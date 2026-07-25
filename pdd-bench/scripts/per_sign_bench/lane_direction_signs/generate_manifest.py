@@ -186,6 +186,7 @@ class PathsConfig:
 @dataclass
 class ScenarioConfig:
     n_variants: int = 1
+    n_variations: int = 5
     augment: bool = True
     max_scenarios: Optional[int] = None
     max_scenarios_per_scene: Optional[int] = None
@@ -199,7 +200,8 @@ class ScenarioConfig:
 class SimulationConfig:
     spawn_velocity_ms: float = 2.5
     traffic_density: float = 0.0
-    traffic_density_augment: bool = True
+    traffic_density_augment: bool = False
+    nuplan_density_cap: float = 1.0
     horizon: int = 600
     sign_distance_before_end: float = 0.0
     spawn_distance_before_end: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END
@@ -369,6 +371,40 @@ def _stable_seed(
     return int.from_bytes(h.digest()[:4], "big")
 
 
+def _sample_nuplan_traffic_profile(
+    seed: int,
+    *,
+    density_cap: float,
+    horizon_steps: int,
+) -> dict:
+    """Sample NPC traffic profile from nuPlan (same path as sumo_space)."""
+    # factorized_space lives next to this package under per_sign_bench/
+    per_sign_bench = Path(__file__).resolve().parent.parent
+    if str(per_sign_bench) not in sys.path:
+        sys.path.insert(0, str(per_sign_bench))
+    from factorized_space.agent_profile_bank import sample_one_profile
+
+    return sample_one_profile(
+        int(seed),
+        density_cap=float(density_cap),
+        horizon_steps=int(horizon_steps),
+    )
+
+
+_PROFILE_MANIFEST_KEYS = (
+    "NORMAL_SPEED",
+    "MAX_SPEED",
+    "CREEP_SPEED",
+    "ACC_FACTOR",
+    "DEACC_FACTOR",
+    "DISTANCE_WANTED",
+    "TIME_WANTED",
+    "LANE_CHANGE_FREQ",
+    "traffic_density",
+    "horizon_steps",
+)
+
+
 # -----------------------------------------------------------------------------
 # Scene discovery and metadata
 # -----------------------------------------------------------------------------
@@ -428,6 +464,8 @@ def build_manifest_entry(
     spawn_scenario: Optional[SpawnScenario] = None,
     dual_path: Optional[DualPathScenario] = None,
     density_level: Optional[TrafficDensityLevel] = None,
+    var_idx: int = 0,
+    nuplan_profile: Optional[Dict[str, Any]] = None,
 ) -> Dict:
     """Build a single manifest entry for a scene."""
     scene_name = meta.get("scene_name", scene_dir.name)
@@ -437,18 +475,22 @@ def build_manifest_entry(
     net_full_path = scene_dir / net_file
     
     scenario_id = spawn_scenario.scenario_id if spawn_scenario else ""
-    traffic_density = (
-        float(density_level.traffic_density)
-        if density_level is not None
-        else float(sim_cfg.traffic_density)
-    )
-    if density_level is not None:
+    if nuplan_profile is not None:
+        traffic_density = float(nuplan_profile.get("traffic_density", sim_cfg.traffic_density))
+        seed_key = f"{scenario_id}_v{int(var_idx)}"
+        if int(variant) == 0:
+            scene_id = f"{scene_name}_v{int(var_idx)}"
+        else:
+            scene_id = f"{scene_name}_d{int(variant)}_v{int(var_idx)}"
+    elif density_level is not None:
+        traffic_density = float(density_level.traffic_density)
         seed_key = f"{scenario_id}_td{density_level.id}"
         scene_id = f"{scene_name}_td{density_level.id}"
     else:
+        traffic_density = float(sim_cfg.traffic_density)
         seed_key = scenario_id
         scene_id = scene_name
-    seed = _stable_seed(scene_name, variant, seed_key)
+    seed = _stable_seed(scene_name, int(var_idx) if nuplan_profile is not None else variant, seed_key)
 
     if spawn_lanes_cache is None:
         spawn_lanes_cache = parse_sumo_net_for_spawn_lanes(
@@ -477,7 +519,7 @@ def build_manifest_entry(
         "scene_name": scene_name,
         "net_path": str(net_path),
         "seed": seed,
-        "var_idx": variant,
+        "var_idx": int(var_idx) if nuplan_profile is not None else variant,
         "pdd_code": PDD_CODE,
         "sign_code": PDD_CODE,
         "sign_type": SIGN_TYPE,
@@ -508,6 +550,16 @@ def build_manifest_entry(
         "osm_file": meta.get("osm_file"),
         "junction_id": meta.get("junction_id"),
     }
+
+    if nuplan_profile is not None:
+        # Prefixed keys match run_benchmark._manifest_profile / sumo_space reporting.
+        for key in _PROFILE_MANIFEST_KEYS:
+            if key not in nuplan_profile:
+                continue
+            entry[f"profile_{key}"] = nuplan_profile[key]
+        entry["traffic_density"] = traffic_density
+        if nuplan_profile.get("horizon_steps") is not None:
+            entry["horizon"] = int(nuplan_profile["horizon_steps"])
     
     if spawn_scenario is not None:
         entry.update(spawn_scenario.to_manifest_fields())
@@ -589,11 +641,24 @@ def generate_manifest(
     )
 
     density_levels: List[Optional[TrafficDensityLevel]]
+    use_nuplan_variations = (
+        not sim_cfg.traffic_density_augment
+        and int(getattr(scenario_cfg, "n_variations", 1) or 1) > 0
+    )
+    n_variations = max(1, int(getattr(scenario_cfg, "n_variations", 1) or 1))
     if sim_cfg.traffic_density_augment:
         density_levels = list(list_traffic_density_levels(MAX_TRAFFIC_DENSITY_LEVELS))
-        print("[direction_signs] Traffic density levels (nuPlan):")
+        print("[direction_signs] Traffic density levels (nuPlan fixed tiers):")
         for level in density_levels:
             print(f"  td{level.id} {level.describe()}")
+        n_variations = 1
+        use_nuplan_variations = False
+    elif use_nuplan_variations:
+        density_levels = [None]
+        print(
+            f"[direction_signs] nuPlan traffic variations: n_variations={n_variations} "
+            f"(density_cap={sim_cfg.nuplan_density_cap})"
+        )
     else:
         density_levels = [None]
 
@@ -602,16 +667,16 @@ def generate_manifest(
     if max_total is not None:
         max_total = max(1, int(max_total))
 
-    # max_scenarios caps dual-path geometry picks; density multiplies rows.
-    n_density = max(1, len(density_levels))
-    max_total_rows = None if max_total is None else max_total * n_density
+    # max_scenarios caps dual-path geometry picks; density/variations multiply rows.
+    n_row_mult = n_variations if use_nuplan_variations else max(1, len(density_levels))
+    max_total_rows = None if max_total is None else max_total * n_row_mult
     base_scenarios_kept = 0
 
     for scene_dir in scenes:
         if max_total is not None and base_scenarios_kept >= max_total:
             print(
                 f"\n[cap] reached max_scenarios={max_total} "
-                f"({len(entries)} row(s) with density×{n_density}); stopping"
+                f"({len(entries)} row(s) with ×{n_row_mult}); stopping"
             )
             break
 
@@ -700,8 +765,18 @@ def generate_manifest(
             if max_total is not None and base_scenarios_kept >= max_total:
                 break
             spawn_scenario = dual_path_to_spawn_scenario(dual)
-            for density_level in density_levels:
-                for _rep in range(n_variants):
+            if use_nuplan_variations:
+                for var_idx in range(n_variations):
+                    seed = _stable_seed(
+                        scene_name,
+                        var_idx,
+                        f"{spawn_scenario.scenario_id}_v{var_idx}",
+                    )
+                    profile = _sample_nuplan_traffic_profile(
+                        seed,
+                        density_cap=sim_cfg.nuplan_density_cap,
+                        horizon_steps=sim_cfg.horizon,
+                    )
                     entry = build_manifest_entry(
                         scene_dir=scene_dir,
                         scenes_root=scenes_dir,
@@ -712,17 +787,35 @@ def generate_manifest(
                         junction_layout_cache=junction_layout,
                         spawn_scenario=spawn_scenario,
                         dual_path=dual,
-                        density_level=density_level,
+                        density_level=None,
+                        var_idx=var_idx,
+                        nuplan_profile=profile,
                     )
                     scene_entries.append(entry)
+            else:
+                for density_level in density_levels:
+                    for _rep in range(n_variants):
+                        entry = build_manifest_entry(
+                            scene_dir=scene_dir,
+                            scenes_root=scenes_dir,
+                            meta=meta,
+                            variant=variant,
+                            sim_cfg=sim_cfg,
+                            spawn_lanes_cache=spawn_lanes,
+                            junction_layout_cache=junction_layout,
+                            spawn_scenario=spawn_scenario,
+                            dual_path=dual,
+                            density_level=density_level,
+                        )
+                        scene_entries.append(entry)
             base_scenarios_kept += 1
 
         if not scene_entries:
             continue
 
-        # Cap counts dual-path picks; density levels multiply rows on top.
+        # Cap counts dual-path picks; density/variations multiply rows on top.
         max_entries = (
-            scenario_cfg.max_scenarios_per_scene * len(density_levels)
+            scenario_cfg.max_scenarios_per_scene * n_row_mult
             if scenario_cfg.max_scenarios_per_scene is not None
             else None
         )
@@ -741,7 +834,7 @@ def generate_manifest(
             keep = max_total_rows - len(entries)
             print(
                 f"  [cap] retaining {keep}/{len(scene_entries)} row(s) "
-                f"for max_scenarios={max_total} × density"
+                f"for max_scenarios={max_total} ×{n_row_mult}"
             )
             scene_entries = scene_entries[:keep]
 
@@ -769,6 +862,12 @@ def generate_manifest(
         "total_scenes": len(scenes),
         "total_entries": len(entries),
         "variants_per_scene": scenario_cfg.n_variants,
+        "n_variations": n_variations if use_nuplan_variations else 1,
+        "traffic_randomization": (
+            "nuplan_profile" if use_nuplan_variations else (
+                "fixed_density_tiers" if sim_cfg.traffic_density_augment else "none"
+            )
+        ),
         "augment": scenario_cfg.augment,
         "max_scenarios": scenario_cfg.max_scenarios,
         "max_scenarios_per_scene": scenario_cfg.max_scenarios_per_scene,
@@ -777,6 +876,7 @@ def generate_manifest(
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
         "traffic_density": sim_cfg.traffic_density,
         "traffic_density_augment": sim_cfg.traffic_density_augment,
+        "nuplan_density_cap": sim_cfg.nuplan_density_cap,
         "traffic_density_levels": [
             {
                 "id": level.id,
@@ -965,6 +1065,7 @@ def main(cfg: DictConfig) -> None:
     )
     scenario_cfg = ScenarioConfig(
         n_variants=cfg.scenario.n_variants,
+        n_variations=int(getattr(cfg.scenario, "n_variations", 5) or 5),
         augment=cfg.scenario.augment,
         max_scenarios=(
             None
@@ -991,7 +1092,10 @@ def main(cfg: DictConfig) -> None:
         spawn_velocity_ms=cfg.simulation.spawn_velocity_ms,
         traffic_density=cfg.simulation.traffic_density,
         traffic_density_augment=bool(
-            getattr(cfg.simulation, "traffic_density_augment", True)
+            getattr(cfg.simulation, "traffic_density_augment", False)
+        ),
+        nuplan_density_cap=float(
+            getattr(cfg.simulation, "nuplan_density_cap", 1.0)
         ),
         horizon=cfg.simulation.horizon,
         sign_distance_before_end=cfg.simulation.sign_distance_before_end,
