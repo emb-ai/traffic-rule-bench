@@ -48,6 +48,8 @@ python tools/filter_scenes/crop_junction_scene.py --limit 5 --overwrite
 
 # 3) Manifest + eval
 python generate_manifest.py sign.pdd_code=5.15.1
+# optional global cap on dual-path scenarios:
+python generate_manifest.py scenario.max_scenarios=20
 python eval_pipeline.py \
     --policies idm modified_idm \
     --manifest benchmark_output/5_15_1/<timestamp> \
