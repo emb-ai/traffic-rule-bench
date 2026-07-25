@@ -247,6 +247,7 @@ def process_core_scene(
     validate_metadrive: bool,
     pdd_code: str = DEFAULT_PDD_CODE,
     claimed: set[tuple[str, str]] | None = None,
+    min_arms: int = 2,
 ) -> int:
     """Find dual-path scenarios and crop each to its path-union bbox.
 
@@ -277,6 +278,7 @@ def process_core_scene(
             min_gain_m=min_gain_m,
             max_scenarios=max(max_scenarios * 8, 40),
             dests_per_arm=8,
+            min_arms=min_arms,
         )
     except (FileNotFoundError, JunctionLayoutError) as exc:
         print(f"  [skip] {exc}")
@@ -527,6 +529,12 @@ def main() -> None:
         help="Min wrong_spur_length - correct_path_length (m) (default: 0)",
     )
     parser.add_argument(
+        "--min-arms",
+        type=int,
+        default=2,
+        help="Min non-stub incoming edges at a junction (default: 2; stubs <0.5 m ignored)",
+    )
+    parser.add_argument(
         "--max-scenarios",
         type=int,
         default=5,
@@ -552,6 +560,8 @@ def main() -> None:
 
     if args.max_scenarios < 1:
         sys.exit("--max-scenarios must be at least 1")
+    if args.min_arms < 1:
+        sys.exit("--min-arms must be at least 1")
 
     sign_spec = get_direction_sign_spec(args.pdd_code)
     scenes_base = args.scenes_base.expanduser().resolve()
@@ -614,6 +624,7 @@ def main() -> None:
             validate_metadrive=not args.skip_metadrive_check,
             pdd_code=sign_spec.pdd_code,
             claimed=claimed,
+            min_arms=args.min_arms,
         )
         if created > 0 or args.dry_run:
             ok += 1

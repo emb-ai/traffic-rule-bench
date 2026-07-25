@@ -788,9 +788,13 @@ def _find_multi_lane_junctions(
     graph: _EdgeGraph,
     *,
     min_arm_lane_m: float = 0.5,
-    min_arms: int = 3,
+    min_arms: int = 2,
 ) -> List[Tuple[str, Tuple[float, float], List[str]]]:
-    """Junctions where ≥1 incoming edge has ≥2 lanes."""
+    """Junctions where ≥1 incoming edge has ≥2 lanes.
+
+    ``min_arms`` counts only non-stub incoming edges (length > ``min_arm_lane_m``).
+    Short connector stubs must not disqualify an otherwise valid junction.
+    """
     out: List[Tuple[str, Tuple[float, float], List[str]]] = []
     for jid, info in graph.junctions.items():
         if info.get("type") not in INTERSECTION_JUNCTION_TYPES:
@@ -798,9 +802,12 @@ def _find_multi_lane_junctions(
         incoming = [
             eid for eid, to_node in graph.edge_to_node.items() if to_node == jid
         ]
-        if len(incoming) < min_arms:
-            continue
-        if not all(graph.edge_length.get(eid, 0.0) > min_arm_lane_m for eid in incoming):
+        long_incoming = [
+            eid
+            for eid in incoming
+            if graph.edge_length.get(eid, 0.0) > float(min_arm_lane_m)
+        ]
+        if len(long_incoming) < int(min_arms):
             continue
         multi = [eid for eid in incoming if len(graph.lane_nums.get(eid) or []) >= 2]
         if not multi:
@@ -825,7 +832,7 @@ def find_dual_path_scenarios(
     dests_per_arm: int = 1,
     junction_ids: Optional[Sequence[str]] = None,
     require_uturn_continuation: bool = True,
-    min_arms: int = 3,
+    min_arms: int = 2,
 ) -> List[DualPathScenario]:
     """Find spawn-on-wrong-lane / dest-via-peer-lane scenarios.
 

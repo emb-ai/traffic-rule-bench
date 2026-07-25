@@ -11,7 +11,7 @@ lane-change before the junction.
 ```
 scenes/
 └── 5_15_1/
-    ├── core/              # imported from catalog scenes/5.15.2
+    ├── core/              # imported from pdd-bench/scenes/{5.15.2,4.1.x,…}
     └── sign_*_j*/         # lane-change crops
 ```
 

@@ -18,9 +18,11 @@ scenes/
     └── _rejected/            # after --apply
 ```
 
-Catalog source: `pdd-bench/scenes/5.15.2` (same family; see
-`lib/direction_sign_spec.py` → `catalog_subdir`). Default `--pdd-code` is
-`5.15.1` → writes under `scenes/5_15_1/`.
+Catalog sources: by default several folders under `pdd-bench/scenes/`
+(`5.15.2` + `4.1.1`…`4.1.6` — same OSM maps under other signs; see
+`lib/direction_sign_spec.py` → `catalog_subdirs`). Use `--catalogs all` for
+every PDD folder, or `--catalogs 5.15.2 5.5 …` / `--source PATH` to restrict.
+Default `--pdd-code` is `5.15.1` → writes under `scenes/5_15_1/`.
 
 ## What a crop is
 
@@ -49,11 +51,14 @@ Keep scenes with a 3- and/or 4-arm junction **and** a multi-lane approach:
 
 ```bash
 python tools/filter_scenes/import_catalog_scenes.py --arms 4 3 --limit 30
+python tools/filter_scenes/import_catalog_scenes.py --catalogs all --arms 4 3 --limit 50
+python tools/filter_scenes/import_catalog_scenes.py --catalogs 5.15.2 4.1.1 5.5 --limit 20
 python tools/filter_scenes/import_catalog_scenes.py --arms 4 --limit 20
 python tools/filter_scenes/import_catalog_scenes.py sign_79054 --no-simulation
 ```
 
-Cores land in `scenes/5_15_1/core/`.
+Cores land in `scenes/5_15_1/core/`. Duplicate `sign_*` names across catalogs
+are taken from the first listed catalog only.
 
 ## 2) Crop lane-change scenes
 
@@ -66,8 +71,9 @@ python tools/filter_scenes/crop_junction_scene.py sign_71895 --overwrite
 
 Useful flags:
 
-- `--min-ego-lane-m` (default 21) — approach must fit spawn ≥20 m before junction
+- `--min-ego-lane-m` / `--min-lane-length` (default 21) — approach must fit spawn ≥20 m before junction
 - `--min-gain` (default 0) — optional wrong-spur vs correct-path length gap
+- `--min-arms` (default 2) — min non-stub incoming edges; short connector stubs are ignored
 - `--max-scenarios` (default 5) — crops per core
 - `--skip-metadrive-check` — skip MetaDrive routability filter on target→dest
 

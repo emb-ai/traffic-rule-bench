@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """Import direction-sign catalog scenes into scenes/<slug>/core with junction filtering.
 
-Scans the catalog (default: pdd-bench/scenes/<pdd_code>), keeps only scenes with a
-valid 3- and/or 4-arm junction (each arm has a lane longer than --min-lane-length),
-then copies them into ``direction_signs/scenes/<4_1_x>/core/``, renders custom.png,
-and optionally runs a simulation GIF.
+Scans one or more catalog roots under ``pdd-bench/scenes/`` (default: 5.15.2 plus
+4.1.x — same OSM maps tagged under other signs). Keeps scenes with a valid 3-
+and/or 4-arm junction (each arm has a lane longer than --min-lane-length),
+copies them into ``lane_direction_signs/scenes/5_15_1/core/``, renders
+custom.png, and optionally runs a simulation GIF.
 
 Use crop_junction_scene.py afterward to emit junction crops as siblings under
-``scenes/<4_1_x>/`` (e.g. ``scenes/4_1_2/sign_72424_j0``).
+``scenes/5_15_1/`` (e.g. ``scenes/5_15_1/sign_72424_j0``).
 
 Examples:
     python tools/filter_scenes/import_catalog_scenes.py --limit 10
-    python tools/filter_scenes/import_catalog_scenes.py --pdd-code 4.1.2 --limit 10
-    python tools/filter_scenes/import_catalog_scenes.py --limit 10 --arms 4 3
+    python tools/filter_scenes/import_catalog_scenes.py --catalogs all --limit 50
+    python tools/filter_scenes/import_catalog_scenes.py --catalogs 5.15.2 4.1.1 --arms 4 3
+    python tools/filter_scenes/import_catalog_scenes.py --source /path/to/one/catalog --limit 10
     python tools/filter_scenes/import_catalog_scenes.py sign_79054 75605
     python tools/filter_scenes/import_catalog_scenes.py --sign-ids 79054 75605
     python tools/filter_scenes/import_catalog_scenes.py sign_79054 --no-simulation
@@ -33,7 +35,8 @@ TOOLS_DIR = FILTER_SCENES_DIR.parent
 DIRECTION_SIGNS_DIR = TOOLS_DIR.parent
 PDD_BENCH_DIR = DIRECTION_SIGNS_DIR.parent.parent.parent
 SCENES_BASE_DEFAULT = DIRECTION_SIGNS_DIR / "scenes"
-DEFAULT_SOURCE = PDD_BENCH_DIR / "scenes" / "5.15.2"
+CATALOG_SCENES_ROOT = PDD_BENCH_DIR / "scenes"
+DEFAULT_SOURCE = CATALOG_SCENES_ROOT / "5.15.2"
 
 sys.path.insert(0, str(DIRECTION_SIGNS_DIR))
 
@@ -74,6 +77,8 @@ class SceneAnalysis:
     total_lanes: Optional[int] = None
     incoming_edge_ids: Optional[list[str]] = None
     reason: Optional[str] = None
+    source_dir: Optional[Path] = None  # catalog folder containing this scene
+    catalog_label: Optional[str] = None  # e.g. "5.15.2"
 
 
 def _scene_name_from_sign_id(sign_id: int | str) -> str:
@@ -114,6 +119,86 @@ def discover_source_scenes(source_dir: Path) -> list[Path]:
     return scenes
 
 
+def _looks_like_catalog_subdir(name: str) -> bool:
+    """True for PDD-code folders like ``5.15.2`` / ``4.1.1`` (skip junk)."""
+    if not name or name.startswith(".") or name.startswith("_"):
+        return False
+    if name.endswith(".json") or name.endswith(".txt"):
+        return False
+    return name[0].isdigit()
+
+
+def resolve_catalog_roots(
+    *,
+    catalog_scenes_root: Path,
+    catalogs: list[str] | None,
+    sources: list[Path] | None,
+    preferred_subdirs: tuple[str, ...],
+) -> list[Path]:
+    """Resolve ordered catalog directories to scan.
+
+    Priority:
+      1. Explicit ``--source`` path(s)
+      2. ``--catalogs all`` → every PDD-like folder under ``pdd-bench/scenes/``
+      3. ``--catalogs A B …`` → those subdirs (missing ones skipped with a warning)
+      4. Default → ``preferred_subdirs`` from the sign spec (5.15.2 + 4.1.x)
+    """
+    if sources:
+        roots: list[Path] = []
+        for raw in sources:
+            path = raw.expanduser().resolve()
+            if not path.is_dir():
+                raise SystemExit(f"Source catalog not found: {path}")
+            roots.append(path)
+        return roots
+
+    root = catalog_scenes_root.expanduser().resolve()
+    if not root.is_dir():
+        raise SystemExit(f"Catalog scenes root not found: {root}")
+
+    labels = list(catalogs) if catalogs else list(preferred_subdirs)
+    if len(labels) == 1 and labels[0].lower() == "all":
+        # Prefer the sign-family catalogs first, then the rest alphabetically.
+        preferred = [d for d in preferred_subdirs if (root / d).is_dir()]
+        others = sorted(
+            p.name
+            for p in root.iterdir()
+            if p.is_dir()
+            and _looks_like_catalog_subdir(p.name)
+            and p.name not in preferred
+        )
+        labels = preferred + others
+
+    roots = []
+    seen: set[Path] = set()
+    for label in labels:
+        path = (root / label).resolve() if not Path(label).is_absolute() else Path(label).resolve()
+        if not path.is_dir():
+            print(f"  [warn] catalog not found, skipping: {label} ({path})")
+            continue
+        if path in seen:
+            continue
+        seen.add(path)
+        roots.append(path)
+    if not roots:
+        raise SystemExit(f"No catalog folders found under {root} for {labels}")
+    return roots
+
+
+def discover_available_scenes(
+    catalog_roots: list[Path],
+) -> dict[str, Path]:
+    """Map scene_name → scene_dir across catalogs (first catalog wins on name clash)."""
+    available: dict[str, Path] = {}
+    for catalog in catalog_roots:
+        for scene_dir in discover_source_scenes(catalog):
+            name = scene_dir.name
+            if name in available:
+                continue
+            available[name] = scene_dir
+    return available
+
+
 def existing_dest_scene_names(dest_root: Path) -> set[str]:
     """Scene folder names already present under the destination root."""
     if not dest_root.is_dir():
@@ -133,17 +218,26 @@ def analyze_scene_strict(
 ) -> SceneAnalysis:
     """Match only when the scene has a qualifying junction with exactly ``require_arm_count`` arms."""
     scene_name = scene_dir.name
+    catalog_label = scene_dir.parent.name
     try:
         meta = load_scene_meta(scene_dir)
         net_path = scene_dir / resolve_net_file(scene_dir, meta)
     except (FileNotFoundError, ValueError) as exc:
-        return SceneAnalysis(scene_name=scene_name, matched=False, reason=str(exc))
+        return SceneAnalysis(
+            scene_name=scene_name,
+            matched=False,
+            reason=str(exc),
+            source_dir=scene_dir.parent,
+            catalog_label=catalog_label,
+        )
 
     if not net_path.is_file():
         return SceneAnalysis(
             scene_name=scene_name,
             matched=False,
             reason=f"net file not found: {net_path.name}",
+            source_dir=scene_dir.parent,
+            catalog_label=catalog_label,
         )
 
     pick = try_find_junction_with_arm_count(
@@ -156,12 +250,16 @@ def analyze_scene_strict(
             scene_name=scene_name,
             matched=False,
             reason=f"no {require_arm_count}-arm junction with all arms longer than min lane length",
+            source_dir=scene_dir.parent,
+            catalog_label=catalog_label,
         )
     if not _junction_has_multi_lane_approach(net_path, pick.junction_id):
         return SceneAnalysis(
             scene_name=scene_name,
             matched=False,
             reason="no approach with ≥2 lanes at the matched junction",
+            source_dir=scene_dir.parent,
+            catalog_label=catalog_label,
         )
 
     return SceneAnalysis(
@@ -171,6 +269,8 @@ def analyze_scene_strict(
         junction_id=pick.junction_id,
         total_lanes=pick.total_lanes,
         incoming_edge_ids=list(pick.incoming_edge_ids),
+        source_dir=scene_dir.parent,
+        catalog_label=catalog_label,
     )
 
 
@@ -181,17 +281,26 @@ def analyze_scene(
     min_lane_length_m: float,
 ) -> SceneAnalysis:
     scene_name = scene_dir.name
+    catalog_label = scene_dir.parent.name
     try:
         meta = load_scene_meta(scene_dir)
         net_path = scene_dir / resolve_net_file(scene_dir, meta)
     except (FileNotFoundError, ValueError) as exc:
-        return SceneAnalysis(scene_name=scene_name, matched=False, reason=str(exc))
+        return SceneAnalysis(
+            scene_name=scene_name,
+            matched=False,
+            reason=str(exc),
+            source_dir=scene_dir.parent,
+            catalog_label=catalog_label,
+        )
 
     if not net_path.is_file():
         return SceneAnalysis(
             scene_name=scene_name,
             matched=False,
             reason=f"net file not found: {net_path.name}",
+            source_dir=scene_dir.parent,
+            catalog_label=catalog_label,
         )
 
     pick = try_find_junction_for_arm_counts(
@@ -205,12 +314,16 @@ def analyze_scene(
             scene_name=scene_name,
             matched=False,
             reason=f"no {label} junction with all arms longer than min lane length",
+            source_dir=scene_dir.parent,
+            catalog_label=catalog_label,
         )
     if not _junction_has_multi_lane_approach(net_path, pick.junction_id):
         return SceneAnalysis(
             scene_name=scene_name,
             matched=False,
             reason="no approach with ≥2 lanes at the matched junction",
+            source_dir=scene_dir.parent,
+            catalog_label=catalog_label,
         )
 
     return SceneAnalysis(
@@ -220,6 +333,8 @@ def analyze_scene(
         junction_id=pick.junction_id,
         total_lanes=pick.total_lanes,
         incoming_edge_ids=list(pick.incoming_edge_ids),
+        source_dir=scene_dir.parent,
+        catalog_label=catalog_label,
     )
 
 
@@ -275,7 +390,7 @@ def resolve_import_candidates_bulk(
 
 
 def resolve_import_candidates(
-    source_dir: Path,
+    available: dict[str, Path],
     dest_root: Path,
     names: list[str],
     sign_ids: list[int],
@@ -286,9 +401,8 @@ def resolve_import_candidates(
     min_lane_length_m: float,
     junction_filter: bool,
 ) -> list[SceneAnalysis]:
-    available = {p.name: p for p in discover_source_scenes(source_dir)}
     if not available:
-        raise SystemExit(f"No valid scenes found under {source_dir}")
+        raise SystemExit("No valid scenes found in the selected catalog(s)")
 
     requested: list[str] = []
     for raw in names:
@@ -296,13 +410,13 @@ def resolve_import_candidates(
         if name.isdigit():
             name = _scene_name_from_sign_id(int(name))
         if name not in available:
-            raise SystemExit(f"Scene not found in catalog: {name!r} (source: {source_dir})")
+            raise SystemExit(f"Scene not found in catalog(s): {name!r}")
         requested.append(name)
 
     for sign_id in sign_ids:
         name = _scene_name_from_sign_id(sign_id)
         if name not in available:
-            raise SystemExit(f"Sign id {sign_id} not found in catalog ({name!r})")
+            raise SystemExit(f"Sign id {sign_id} not found in catalog(s) ({name!r})")
         requested.append(name)
 
     if requested:
@@ -315,7 +429,15 @@ def resolve_import_candidates(
         candidate_names = [name for name in candidate_names if name not in already]
 
     if not junction_filter:
-        matched = [SceneAnalysis(scene_name=name, matched=True) for name in candidate_names]
+        matched = [
+            SceneAnalysis(
+                scene_name=name,
+                matched=True,
+                source_dir=available[name].parent,
+                catalog_label=available[name].parent.name,
+            )
+            for name in candidate_names
+        ]
         if limit is not None and not requested:
             matched = matched[:limit]
         if requested and limit is not None:
@@ -364,18 +486,20 @@ def normalize_meta(meta: dict, scene_name: str, analysis: SceneAnalysis | None =
         out["catalog_junction_id"] = analysis.junction_id
         out["catalog_junction_arm_count"] = analysis.arm_count
         out["catalog_junction_total_lanes"] = analysis.total_lanes
+    if analysis is not None and analysis.catalog_label:
+        out["catalog_source"] = analysis.catalog_label
     return out
 
 
 def copy_scene(
-    source_dir: Path,
     dest_root: Path,
     scene_name: str,
     *,
+    source_scene_dir: Path,
     overwrite: bool,
     analysis: SceneAnalysis | None = None,
 ) -> Path:
-    src = source_dir / scene_name
+    src = source_scene_dir
     dst = dest_root / scene_name
     if dst.exists():
         if not overwrite:
@@ -388,7 +512,8 @@ def copy_scene(
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta = normalize_meta(meta, scene_name, analysis)
     meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
-    print(f"  copied -> {dst}")
+    src_label = analysis.catalog_label if analysis and analysis.catalog_label else src.parent.name
+    print(f"  copied from {src_label} -> {dst}")
     return dst
 
 
@@ -442,14 +567,24 @@ def main() -> None:
     parser.add_argument(
         "--source",
         type=Path,
+        action="append",
         default=None,
-        help=f"Catalog root (default: pdd-bench/scenes/<pdd_code>, initially {DEFAULT_SOURCE})",
+        dest="sources",
+        help="Explicit catalog root (repeatable). Overrides --catalogs.",
+    )
+    parser.add_argument(
+        "--catalogs",
+        nargs="+",
+        default=None,
+        metavar="CODE",
+        help="Catalog subdirs under pdd-bench/scenes/ (e.g. 5.15.2 4.1.1) or 'all'. "
+        "Default: sign-spec preferred list (5.15.2 + 4.1.x).",
     )
     parser.add_argument(
         "--pdd-code",
         type=str,
         default=DEFAULT_PDD_CODE,
-        help="Direction-sign family member (4.1.1–4.1.6); sets default --source catalog",
+        help="Lane-direction sign code for dest folder (default: 5.15.1)",
     )
     parser.add_argument(
         "--dest",
@@ -533,10 +668,15 @@ def main() -> None:
     arm_counts = parse_arm_counts(args.arms)
     junction_filter = not args.no_junction_filter
     sign_spec = get_direction_sign_spec(args.pdd_code)
-    if args.source is None:
-        source_dir = (PDD_BENCH_DIR / "scenes" / sign_spec.catalog_subdir).resolve()
-    else:
-        source_dir = args.source.expanduser().resolve()
+
+    catalog_roots = resolve_catalog_roots(
+        catalog_scenes_root=CATALOG_SCENES_ROOT,
+        catalogs=args.catalogs,
+        sources=args.sources,
+        preferred_subdirs=sign_spec.catalog_subdirs,
+    )
+    available = discover_available_scenes(catalog_roots)
+
     scenes_base = args.scenes_base.expanduser().resolve()
     if args.dest is None:
         dest_root = local_core_scenes_root(scenes_base, sign_spec.pdd_code).resolve()
@@ -544,13 +684,14 @@ def main() -> None:
         dest_root = args.dest.expanduser().resolve()
     dest_root.mkdir(parents=True, exist_ok=True)
 
-    if not source_dir.is_dir():
-        sys.exit(f"Source catalog not found: {source_dir}")
-
     run_sim = args.run_simulation and not args.no_simulation
 
     print(f"Sign:   {sign_spec.pdd_code} ({sign_spec.title})")
-    print(f"Source: {source_dir}")
+    print(f"Catalogs ({len(catalog_roots)}):")
+    for root in catalog_roots:
+        n = len(discover_source_scenes(root))
+        print(f"  - {root.name}: {n} scene(s)  [{root}]")
+    print(f"Unique scenes: {len(available)}")
     print(f"Dest:   {dest_root}")
     if junction_filter:
         print(f"Arms:   {arm_counts_label(arm_counts)} (min lane {args.min_lane_length} m)")
@@ -558,10 +699,10 @@ def main() -> None:
         print("Filter: junction check disabled")
     print(f"Render previews: {not args.no_render}")
     print(f"Run simulation:  {run_sim}")
-    print("Scanning catalog...")
+    print("Scanning catalog(s)...")
 
     to_import = resolve_import_candidates(
-        source_dir,
+        available,
         dest_root,
         list(args.scenes),
         list(args.sign_ids),
@@ -579,11 +720,12 @@ def main() -> None:
             if junction_filter
             else ""
         )
+        sample = ", ".join(sorted(available)[:8])
         sys.exit(
             "No scenes to import. Pass scene names, --sign-ids, or --limit N.\n"
-            f"Catalog: {len(discover_source_scenes(source_dir))} scene(s), "
+            f"Catalogs: {len(available)} unique scene(s), "
             f"already in dest: {already}{filter_note}.\n"
-            f"Available: {', '.join(p.name for p in discover_source_scenes(source_dir)[:8])}..."
+            f"Available: {sample}..."
         )
 
     print(f"Import: {', '.join(a.scene_name for a in to_import)}")
@@ -591,7 +733,8 @@ def main() -> None:
     imported = 0
     for analysis in to_import:
         scene_name = analysis.scene_name
-        print(f"\n=== {scene_name} ===")
+        src_scene = available[scene_name]
+        print(f"\n=== {scene_name} (from {analysis.catalog_label or src_scene.parent.name}) ===")
         if junction_filter and analysis.matched:
             print(
                 f"  junction {analysis.junction_id} ({analysis.arm_count}-arm), "
@@ -599,9 +742,9 @@ def main() -> None:
             )
 
         scene_dir = copy_scene(
-            source_dir,
             dest_root,
             scene_name,
+            source_scene_dir=src_scene,
             overwrite=args.overwrite,
             analysis=analysis if junction_filter else None,
         )

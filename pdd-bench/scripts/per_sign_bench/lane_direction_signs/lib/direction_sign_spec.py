@@ -25,6 +25,17 @@ class DirectionSignSpec:
     # Empty = per-lane dirs come from map topology, not a fixed class set.
     allowed_dirs: FrozenSet[str]
     class_name: str
+    # Preferred catalog roots under pdd-bench/scenes/ (same OSM maps, other signs).
+    # Import may still scan all catalogs via --catalogs all.
+    catalog_subdirs: tuple[str, ...] = (
+        "5.15.2",
+        "4.1.1",
+        "4.1.2",
+        "4.1.3",
+        "4.1.4",
+        "4.1.5",
+        "4.1.6",
+    )
 
     @property
     def output_slug(self) -> str:
@@ -32,8 +43,8 @@ class DirectionSignSpec:
 
     @property
     def catalog_subdir(self) -> str:
-        # Reuse 5.15.2 catalog cores (same family of lane-direction scenes).
-        return "5.15.2"
+        """Primary catalog folder (first of ``catalog_subdirs``)."""
+        return self.catalog_subdirs[0] if self.catalog_subdirs else "5.15.2"
 
 
 DIRECTION_SIGN_SPECS: dict[str, DirectionSignSpec] = {

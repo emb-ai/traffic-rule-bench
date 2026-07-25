@@ -95,6 +95,15 @@ DIRECTION_EXIT_MAX_STEER = 0.42
 # 4 m (was 2): CaRL often brakes near the curb ~3–4 m before the end after the
 # rightward exit-aim pull, and never reaches a 2 m snap → stuck on the shoulder.
 DIRECTION_EXIT_SNAP_REMAINING_M = 4.0
+# A one-shot teleport (1.5–2 m in a single frame) reads as a visible "jump"
+# on GIFs. Instead, glide: pull ego toward the allowed via by at most
+# GLIDE_MAX_STEP_M per step (plus a bounded heading turn) until it actually
+# sits on the via, then finalize nav/hold. Also un-sticks a stalled CaRL,
+# since the glide moves the body regardless of throttle.
+DIRECTION_EXIT_GLIDE_MAX_STEP_M = 0.40
+DIRECTION_EXIT_GLIDE_MAX_TURN_RAD = np.radians(6.0)
+DIRECTION_EXIT_GLIDE_DONE_LAT_M = 0.4
+DIRECTION_EXIT_GLIDE_MAX_STEPS = 40  # safety: hard-snap if glide drags on
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +207,11 @@ class SignComplianceMixin:
         self._direction_exit_source_lane = None
         self._direction_exit_bias = 0.0  # MetaDrive action[0] bias toward allowed turn
         self._direction_exit_snapped = False
+        # Whether exit snap should physically relocate ego to the connector.
+        # For plain 5.15.2 DirectionSign this creates a visible "forward jump";
+        # keep only nav/checkpoint snap there.
+        self._direction_exit_position_snap = True
+        self._direction_exit_glide_steps = 0
         self._direction_exit_hold_lane = None
         self._direction_exit_hold_steps = 0
 
@@ -213,6 +227,8 @@ class SignComplianceMixin:
         self._direction_exit_source_lane = None
         self._direction_exit_bias = 0.0
         self._direction_exit_snapped = False
+        self._direction_exit_position_snap = True
+        self._direction_exit_glide_steps = 0
         self._direction_exit_hold_lane = None
         self._direction_exit_hold_steps = 0
 
@@ -905,6 +921,8 @@ class SignComplianceMixin:
         self._direction_exit_lane = None
         self._direction_exit_source_lane = None
         self._direction_exit_bias = 0.0
+        self._direction_exit_position_snap = True
+        self._direction_exit_glide_steps = 0
         # Keep _direction_exit_snapped so a loop-back onto the approach does
         # not re-snap (first-exit semantics for dual-path routes).
 
@@ -944,6 +962,11 @@ class SignComplianceMixin:
             return False
         self._direction_exit_lane = exit_lane
         self._direction_exit_source_lane = source_lane
+        # 5.15.2 (DirectionSign) should avoid physical teleport snap; route/nav
+        # snap is enough and removes visible "jump forward" artifacts.
+        self._direction_exit_position_snap = not (
+            isinstance(sign, DirectionSign) and not isinstance(sign, LaneDirectionsSign)
+        )
         # Bias derived from turn metadata (more stable than lateral chase).
         # Empirically on SUMO EdgeRoadNetwork: negative action[0] → +lane.lat
         # (right side of the approach for these maps).
@@ -1023,8 +1046,26 @@ class SignComplianceMixin:
         except Exception as exc:
             logger.debug("Force nav onto lane failed: %s", exc)
 
+    def _finalize_direction_exit_snap(self) -> bool:
+        exit_lane = self._direction_exit_lane
+        self._direction_exit_snapped = True
+        self._direction_exit_glide_steps = 0
+        self._direction_exit_hold_lane = exit_lane
+        self._direction_exit_hold_steps = 20
+        self._force_nav_onto_lane(exit_lane)
+        self._reset_steering_pids()
+        logger.info(
+            "Direction exit snap → %s", getattr(exit_lane, "index", None)
+        )
+        return True
+
     def _maybe_snap_to_direction_exit(self) -> bool:
-        """Once per episode, place ego onto the allowed via near the lane end."""
+        """Once per episode, guide ego onto the allowed via near the lane end.
+
+        Instead of a one-shot teleport (a visible "jump" on GIFs), pull the
+        body toward the via with a bounded per-step displacement/turn until it
+        actually sits there, then finalize the nav/checkpoint switch.
+        """
         # Keep nav glued to the snapped via for a few steps — ray_localization
         # otherwise often reassigns the overlapping straight connector.
         if self._direction_exit_hold_steps > 0 and self._direction_exit_hold_lane is not None:
@@ -1033,39 +1074,75 @@ class SignComplianceMixin:
 
         if self._direction_exit_snapped or self._direction_exit_lane is None:
             return False
-        src = self._direction_exit_source_lane
         ego = self.control_object
-        ego_lane = getattr(ego, "lane", None)
-        if src is None or ego_lane is None or not on_same_road(ego_lane, src):
-            return False
-        try:
-            long, _ = src.local_coordinates(ego.position)
-            remaining = float(src.length) - float(long)
-        except Exception:
-            return False
-        if remaining > DIRECTION_EXIT_SNAP_REMAINING_M or remaining < -1.0:
-            return False
         exit_lane = self._direction_exit_lane
-        s = min(1.5, max(0.5, float(exit_lane.length) * 0.25))
+        if self._direction_exit_glide_steps == 0:
+            # Not gliding yet: arm only within the snap window on the approach.
+            src = self._direction_exit_source_lane
+            ego_lane = getattr(ego, "lane", None)
+            if src is None or ego_lane is None or not on_same_road(ego_lane, src):
+                return False
+            try:
+                long, _ = src.local_coordinates(ego.position)
+                remaining = float(src.length) - float(long)
+            except Exception:
+                return False
+            if remaining > DIRECTION_EXIT_SNAP_REMAINING_M or remaining < -1.0:
+                return False
+            if not self._direction_exit_position_snap:
+                # 5.15.2: pure nav/checkpoint snap, no physical relocation.
+                return self._finalize_direction_exit_snap()
+
+        self._direction_exit_glide_steps += 1
         try:
-            pos = exit_lane.position(s, 0)
-            heading = exit_lane.heading_theta_at(s)
-            ego.set_position(pos)
-            ego.set_heading_theta(heading)
+            long_v, lat_v = exit_lane.local_coordinates(ego.position)
+        except Exception:
+            long_v, lat_v = -1.0, 10.0
+        if float(long_v) >= 0.35 and abs(float(lat_v)) <= DIRECTION_EXIT_GLIDE_DONE_LAT_M:
+            # Final exact placement on the via centerline (≤ DONE_LAT lateral,
+            # invisible on GIFs) so IDM starts the connector from the same
+            # clean state the old one-shot snap provided.
+            s = float(np.clip(float(long_v), 0.35, max(0.35, float(exit_lane.length) - 0.3)))
+            try:
+                ego.set_position(exit_lane.position(s, 0))
+                ego.set_heading_theta(exit_lane.heading_theta_at(s))
+            except Exception as exc:
+                logger.debug("Direction exit final placement failed: %s", exc)
+            return self._finalize_direction_exit_snap()
+        if self._direction_exit_glide_steps > DIRECTION_EXIT_GLIDE_MAX_STEPS:
+            # Glide never converged (physics fighting back) — hard snap as a
+            # last resort so the episode still takes the compliant exit.
+            s = min(1.5, max(0.5, float(exit_lane.length) * 0.25))
+            try:
+                ego.set_position(exit_lane.position(s, 0))
+                ego.set_heading_theta(exit_lane.heading_theta_at(s))
+            except Exception as exc:
+                logger.debug("Direction exit snap failed: %s", exc)
+                return False
+            return self._finalize_direction_exit_snap()
+        # One bounded glide increment toward a point slightly ahead on the via.
+        s_cap = max(0.5, float(exit_lane.length) - 0.5)
+        s_t = float(np.clip(float(long_v) + 0.6, 0.35, s_cap))
+        try:
+            target = np.asarray(exit_lane.position(s_t, 0), dtype=float)[:2]
+            target_heading = float(exit_lane.heading_theta_at(s_t))
         except Exception as exc:
-            logger.debug("Direction exit snap failed: %s", exc)
+            logger.debug("Direction exit glide failed: %s", exc)
             return False
-        self._direction_exit_snapped = True
-        self._direction_exit_hold_lane = exit_lane
-        self._direction_exit_hold_steps = 20
-        self._force_nav_onto_lane(exit_lane)
-        self._reset_steering_pids()
-        logger.info(
-            "Direction exit snap → %s (remaining was %.2f m)",
-            getattr(exit_lane, "index", None),
-            remaining,
-        )
-        return True
+        try:
+            pos = np.asarray(ego.position, dtype=float)[:2]
+            delta = target - pos
+            dist = float(np.linalg.norm(delta))
+            if dist > 1e-6:
+                step = delta * (min(DIRECTION_EXIT_GLIDE_MAX_STEP_M, dist) / dist)
+                ego.set_position(pos + step)
+            heading = float(ego.heading_theta)
+            dh = float(wrap_to_pi(target_heading - heading))
+            dh = float(np.clip(dh, -DIRECTION_EXIT_GLIDE_MAX_TURN_RAD, DIRECTION_EXIT_GLIDE_MAX_TURN_RAD))
+            ego.set_heading_theta(heading + dh)
+        except Exception as exc:
+            logger.debug("Direction exit glide failed: %s", exc)
+        return False
 
     def _maybe_override_steering_for_direction_exit(self, steering: float) -> float:
         """Near a direction sign, replace IDM steering to select the allowed via.
