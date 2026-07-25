@@ -133,6 +133,12 @@ class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
     def _get_lateral_pid(self):
         return self.lateral_pid
 
+    def _find_relevant_stop_sign(self):
+        # Disable MetaDrive's built-in stop-sign IDM branch: SignComplianceMixin
+        # owns stop / yield handling. Same intent as ModifiedIDMSignCompliantPolicy
+        # neutralizing ModifiedIDMPolicy._find_relevant_stop_sign.
+        return None
+
     def steering_control(self, target_lane) -> float:
         """PID steering with extended lookahead for junction turns."""
         ego = self.control_object
