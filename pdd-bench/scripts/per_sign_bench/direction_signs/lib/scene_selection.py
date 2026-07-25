@@ -61,9 +61,55 @@ def is_reserved_scene_dir(name: str) -> bool:
 
 
 def is_scene_rejected(scenes_root: Path, scene_name: str) -> bool:
-    return scene_verdict(scenes_root, scene_name) == VERDICT_REJECT
+    """True if marked reject in scene_selection.json or moved under ``_rejected/``."""
+    if scene_verdict(scenes_root, scene_name) == VERDICT_REJECT:
+        return True
+    # After ``review_junction_scenes.py --apply`` the folder lives only here.
+    if (Path(scenes_root) / REJECTED_SUBDIR / scene_name).is_dir():
+        return True
+    return False
+
+
+def scene_name_from_manifest_row(row: dict) -> str | None:
+    name = row.get("scene_name")
+    if name:
+        return str(name)
+    net_path = row.get("net_path")
+    if not net_path:
+        return None
+    parts = Path(str(net_path)).parts
+    return parts[0] if parts else None
+
+
+def manifest_row_scene_available(
+    scenes_root: Path,
+    row: dict,
+    *,
+    respect_scene_selection: bool = True,
+) -> bool:
+    """False for rejected / missing scene folders (stale manifest rows)."""
+    scenes_root = Path(scenes_root)
+    scene_name = scene_name_from_manifest_row(row)
+    if scene_name and respect_scene_selection and is_scene_rejected(scenes_root, scene_name):
+        return False
+    net_path = row.get("net_path")
+    if not net_path:
+        return False
+    net_file = Path(str(net_path))
+    full = net_file if net_file.is_absolute() else scenes_root / net_file
+    return full.is_file()
 
 
 def rejected_scene_names(scenes_root: Path) -> list[str]:
+    scenes_root = Path(scenes_root)
+    names = set()
     verdicts = load_scene_selection(scenes_root).get("scenes", {})
-    return sorted(name for name, verdict in verdicts.items() if verdict == VERDICT_REJECT)
+    names.update(name for name, verdict in verdicts.items() if verdict == VERDICT_REJECT)
+    rejected_dir = scenes_root / REJECTED_SUBDIR
+    if rejected_dir.is_dir():
+        names.update(
+            entry.name
+            for entry in rejected_dir.iterdir()
+            if entry.is_dir() and (entry / "meta.json").is_file()
+        )
+    return sorted(names)

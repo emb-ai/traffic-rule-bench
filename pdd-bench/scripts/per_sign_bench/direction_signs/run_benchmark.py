@@ -46,6 +46,10 @@ from lib.manifest_config import (
     enrich_manifest_row,
     load_manifest_config,
 )
+from lib.scene_selection import (
+    manifest_row_scene_available,
+    scene_name_from_manifest_row,
+)
 
 BENCH_DIR = Path(__file__).resolve().parent
 PER_SIGN_BENCH_DIR = BENCH_DIR.parent
@@ -1726,14 +1730,25 @@ def main():
         if not manifest_path.exists():
             raise FileNotFoundError(f"--manifest not found: {manifest_path}")
         rows: list[dict] = []
+        skipped_unavailable = 0
         for row in _load_enriched_manifest_rows(manifest_path):
             if "valid" in row and not row["valid"]:
+                continue
+            if not manifest_row_scene_available(scenes_root, row):
+                skipped_unavailable += 1
+                name = scene_name_from_manifest_row(row) or row.get("scene_id")
+                print(f"  [skip] rejected/missing scene: {name}")
                 continue
             row["_backend"] = "sumo"
             if not row.get("_sign_code"):
                 row["_sign_code"] = (row.get("sign_code") or row.get("pdd_code")
                                       or row.get("sign_type") or "")
             rows.append(row)
+        if skipped_unavailable:
+            print(
+                f"Skipped {skipped_unavailable} rejected/missing scene row(s) "
+                f"under {scenes_root}"
+            )
     else:
         rows = collect_rows(
             benchmark_output_dir=benchmark_output_dir,

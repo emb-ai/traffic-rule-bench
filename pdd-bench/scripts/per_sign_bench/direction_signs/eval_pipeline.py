@@ -100,6 +100,10 @@ from lib.manifest_config import (
     enrich_manifest_row,
     load_manifest_config,
 )
+from lib.scene_selection import (
+    manifest_row_scene_available,
+    scene_name_from_manifest_row,
+)
 
 DEFAULT_MODEL_PATHS: dict[str, Path] = {
     "carl": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
@@ -440,6 +444,26 @@ def main() -> None:
     if args.max_scenes is not None and args.max_scenes < len(all_lines):
         all_lines = all_lines[: args.max_scenes]
         print(f"Capped to first {args.max_scenes} rows")
+
+    # Drop stale rows for scenes moved to _rejected/ or missing on disk.
+    scenes_root = Path(args.scenes_root).expanduser().resolve()
+    kept_lines: list[str] = []
+    skipped_names: dict[str, int] = {}
+    for ln in all_lines:
+        row = json.loads(ln)
+        if manifest_row_scene_available(scenes_root, row):
+            kept_lines.append(ln)
+            continue
+        name = scene_name_from_manifest_row(row) or row.get("scene_id") or "?"
+        skipped_names[str(name)] = skipped_names.get(str(name), 0) + 1
+    if skipped_names:
+        n_skip = sum(skipped_names.values())
+        print(
+            f"Skipping {n_skip} row(s) for rejected/missing scenes under {scenes_root}:"
+        )
+        for name, count in sorted(skipped_names.items()):
+            print(f"  - {name} ({count})")
+    all_lines = kept_lines
 
     if not all_lines:
         sys.exit("No scenes left after filtering")
