@@ -36,11 +36,25 @@ Same shapes as other junction benches (`main_sign`, `stop_sign`). This family
 has **no auxiliary agents**: the 4.1.x task is route compliance, so scenes
 contain only the ego vehicle plus background traffic.
 
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `scenario.max_scenarios` | `null` | Cap dual-path geometry picks (`null` = all); density tiers multiply rows on top. |
+| `scenario.max_scenarios_per_scene` | `5` | Cap dual-path variants per crop (`null` = all). |
+| `simulation.traffic_density_augment` | `true` | If true: multiply rows by nuPlan density tiers. If false: one row per scenario with fixed `traffic_density` (use `0.0` for no NPCs). |
+
 `simulation.traffic_density_augment: true` (default) expands each dual-path
 scenario into 3 rows with nuPlan-derived background-traffic densities
 (p25/p50/p75 of vehicles per frame; see `lib/traffic_density_levels.py`).
 Rows get `scene_id` suffixes `_td1`/`_td2`/`_td3` and distinct seeds. Set it
 to `false` to emit a single row with `simulation.traffic_density`.
+
+```bash
+# No density-tier augmentation (single row per dual-path scenario, no NPCs):
+python generate_manifest.py simulation.traffic_density_augment=false simulation.traffic_density=0.0
+
+# Cap total dual-path scenarios (density tiers still multiply rows if augment=true):
+python generate_manifest.py scenario.max_scenarios=10
+```
 
 Background traffic (when density > 0) is skill-bench friendly:
 - `npc_ego_yield_radius=15` — NPCs brake for ego in a front hemisphere

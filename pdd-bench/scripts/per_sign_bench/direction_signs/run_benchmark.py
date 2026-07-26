@@ -7,7 +7,7 @@ import math
 import pickle
 import random
 import sys
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 
 # per_sign_bench/ on path for shared bench.* helpers (RecordManager patch, etc.)
@@ -35,7 +35,7 @@ from scripts.per_sign_bench.factorized_space.ego_defaults import (
     sample_ego_params,
 )
 from traffic_signs.lane_allowed_direction_sign import LaneAllowedDirectionSign
-from lib.lane_keys import make_lane_key
+from lib.lane_keys import lane_edge_id, make_lane_key
 from lib.direction_sign_spec import (
     DEFAULT_PDD_CODE,
     get_direction_sign_spec,
@@ -826,6 +826,262 @@ def _reposition_ego_before_lane_end(env, distance_before_end: float) -> bool:
         return False
 
 
+def _lanes_on_edges(road_network, edges) -> set[str]:
+    """All EdgeRoadNetwork lane ids belonging to the given SUMO edge ids."""
+    want = {str(e) for e in (edges or ())}
+    if not want:
+        return set()
+    graph = getattr(road_network, "graph", None) or {}
+    out: set[str] = set()
+    for lid in graph:
+        if not isinstance(lid, str):
+            continue
+        if lane_edge_id(lid) in want:
+            out.add(lid)
+    return out
+
+
+def _bfs_lane_path(
+    road_network,
+    start_lane_id: str,
+    goal_lane_id: str,
+    blocked_lanes,
+    *,
+    max_len: int = 120,
+) -> list[str] | None:
+    """BFS on EdgeRoadNetwork.exit_lanes that never enters ``blocked_lanes``."""
+    graph = getattr(road_network, "graph", None)
+    if graph is None or start_lane_id not in graph:
+        return None
+    blocked = set(blocked_lanes or ())
+    if start_lane_id in blocked:
+        return None
+    queue = deque([(start_lane_id, [start_lane_id])])
+    seen = {start_lane_id}
+    while queue:
+        lane_id, path = queue.popleft()
+        if lane_id == goal_lane_id:
+            return path
+        lane_data = graph.get(lane_id)
+        if lane_data is None:
+            continue
+        for nxt in sorted(set(getattr(lane_data, "exit_lanes", None) or [])):
+            if nxt in seen or nxt in blocked or nxt not in graph:
+                continue
+            new_path = path + [nxt]
+            if len(new_path) > max_len:
+                continue
+            seen.add(nxt)
+            queue.append((nxt, new_path))
+    return None
+
+
+def _expand_edge_seq_to_lane_path(
+    road_network,
+    edge_seq: list[str],
+    spawn_lane_id: str,
+    dest_lane_id: str,
+    blocked_lanes,
+    *,
+    max_seg: int = 25,
+) -> list[str] | None:
+    """Follow manifest ``straight_path`` edges through MetaDrive exit_lanes.
+
+    Unconstrained BFS often fails on long detours (``max_len``) or picks a
+    dead-end peer lane (``lane_*_1`` with no exits). Expanding edge-by-edge
+    along the blue dual-path route matches ``custom_cropped.png``.
+    """
+    graph = getattr(road_network, "graph", None) or {}
+    if spawn_lane_id not in graph:
+        return None
+    blocked = set(blocked_lanes or ())
+    path: list[str] = [spawn_lane_id]
+
+    def _lane_exits(lid: str) -> list[str]:
+        data = graph.get(lid)
+        if data is None:
+            return []
+        return list(set(getattr(data, "exit_lanes", None) or []))
+
+    def _prefer_live_peer(lid: str) -> str:
+        """If ``lid`` is a dead-end peer, snap to lane_0 / any peer with exits."""
+        edge = lane_edge_id(lid)
+        peers = [p for p in _lanes_on_edges(road_network, [edge]) if p not in blocked]
+        if not peers:
+            return lid
+        if _lane_exits(lid):
+            return lid
+        peers_sorted = sorted(
+            peers,
+            key=lambda p: (0 if p.endswith("_0") else 1, -len(_lane_exits(p)), p),
+        )
+        return peers_sorted[0] if peers_sorted else lid
+
+    for next_edge in edge_seq[1:]:
+        cur = path[-1]
+        if lane_edge_id(cur) == next_edge:
+            continue
+        targets = _lanes_on_edges(road_network, [next_edge]) - blocked
+        if not targets:
+            return None
+        queue = deque([(cur, [cur])])
+        seen = {cur}
+        found: list[str] | None = None
+        while queue:
+            lid, seg = queue.popleft()
+            if lid in targets and lid != cur:
+                found = seg
+                break
+            if len(seg) > max_seg:
+                continue
+            exits = _lane_exits(lid)
+            exits.sort(
+                key=lambda x: (
+                    0 if lane_edge_id(x) == next_edge else 1,
+                    0 if x.endswith("_0") else 1,
+                    x,
+                )
+            )
+            for nxt in exits:
+                if nxt in seen or nxt in blocked or nxt not in graph:
+                    continue
+                seen.add(nxt)
+                queue.append((nxt, seg + [nxt]))
+        if not found:
+            return None
+        path.extend(found[1:])
+        path[-1] = _prefer_live_peer(path[-1])
+
+    if path[-1] != dest_lane_id:
+        queue = deque([(path[-1], [path[-1]])])
+        seen = {path[-1]}
+        found = None
+        while queue:
+            lid, seg = queue.popleft()
+            if lid == dest_lane_id:
+                found = seg
+                break
+            if len(seg) > max_seg:
+                continue
+            for nxt in sorted(_lane_exits(lid)):
+                if nxt in seen or nxt in blocked or nxt not in graph:
+                    continue
+                seen.add(nxt)
+                queue.append((nxt, seg + [nxt]))
+        if not found:
+            return None
+        path.extend(found[1:])
+    return path
+
+
+def _apply_nav_lane_path(env, path: list[str]) -> bool:
+    """Install a lane-id checkpoint list onto EdgeNetworkNavigation."""
+    if not path or len(path) < 2:
+        return False
+    vehicle = env.agent
+    nav = getattr(vehicle, "navigation", None)
+    if nav is None:
+        return False
+    road_network = env.engine.current_map.road_network
+    try:
+        nav.checkpoints = list(path)
+        nav._target_checkpoints_index = [0, 1]
+        nav.final_lane = road_network.get_lane(path[-1])
+        if getattr(nav, "_navi_info", None) is not None:
+            nav._navi_info.fill(0.0)
+        nav.current_ref_lanes = road_network.get_peer_lanes_from_index(path[0])
+        nav.next_ref_lanes = road_network.get_peer_lanes_from_index(path[1])
+        try:
+            vehicle.config["destination"] = path[-1]
+        except Exception:
+            pass
+        try:
+            nav.update_localization(vehicle)
+        except Exception:
+            pass
+        return True
+    except Exception as exc:
+        print(f"[DirectionNav] apply path failed: {exc}")
+        return False
+
+
+def _install_direction_compliant_nav_route(env, row: dict) -> bool:
+    """Install the dual-path *compliant* (blue) route at episode start.
+
+    MetaDrive ``shortest_path(max_len=10)`` picks the short baseline (orange)
+    turn. Unconstrained BFS with ``max_len=40`` also fails on long detours or
+    dies on peer-lane dead-ends. Follow ``dual_path.straight_path``
+    edge-by-edge instead — same geometry as ``custom_cropped.png``.
+
+    Do not permanently block the baseline first exit: a long detour may
+    legally re-enter and take that turn later.
+    """
+    dual = row.get("dual_path") or {}
+    dest = row.get("destination_lane_id")
+    road_id = row.get("road_id")
+    straight_edges = [str(e) for e in (dual.get("straight_path") or [])]
+    if not dest or not road_id or not straight_edges:
+        return False
+    dest = str(dest)
+    if not dest.startswith("lane_"):
+        dest = f"lane_{dest}"
+    spawn_num = int(row.get("spawn_lane_num", 0) or 0)
+    spawn_key = make_lane_key(str(road_id), spawn_num)
+
+    try:
+        vehicle = env.agent
+        nav = getattr(vehicle, "navigation", None)
+        if nav is None:
+            return False
+        road_network = env.engine.current_map.road_network
+        graph = getattr(road_network, "graph", None) or {}
+        if spawn_key not in graph or dest not in graph:
+            print(f"[DirectionNav] missing lanes spawn={spawn_key} dest={dest}")
+            return False
+
+        blocked: set[str] = set()
+        edge_seq = [str(road_id), *straight_edges]
+        path = _expand_edge_seq_to_lane_path(
+            road_network, edge_seq, spawn_key, dest, blocked
+        )
+        if not path:
+            path = _bfs_lane_path(
+                road_network, spawn_key, dest, blocked, max_len=120
+            )
+            method = "bfs"
+        else:
+            method = "edge_expand"
+
+        if not path:
+            print(
+                f"[DirectionNav] no compliant path {spawn_key} → {dest} "
+                f"(straight_edges={len(straight_edges)})"
+            )
+            return False
+
+        if not _apply_nav_lane_path(env, path):
+            return False
+
+        first_road = None
+        for ck in path[1:]:
+            e = lane_edge_id(ck)
+            if not str(e).startswith(":"):
+                first_road = e
+                break
+        expected = dual.get("straight_first_exit") or row.get("compliant_first_exit")
+        note = ""
+        if expected and first_road and str(expected) != str(first_road):
+            note = f" (first_road={first_road}, manifest={expected})"
+        print(
+            f"[DirectionNav] installed compliant {len(path)}-hop route via {method} "
+            f"{spawn_key} → {dest}{note}"
+        )
+        return True
+    except Exception as exc:
+        print(f"[DirectionNav] failed: {exc}")
+        return False
+
+
 def _get_junction_layout(row: dict, scenes_root: Path) -> dict | None:
     """Load junction layout from manifest row or build from scene net.xml.
 
@@ -1088,6 +1344,10 @@ def run_one_episode(
         spawn_distance = float(row.get("spawn_distance_before_end", 0) or 0)
         if spawn_distance > 0:
             _reposition_ego_before_lane_end(base_env, spawn_distance)
+
+        # Replace MetaDrive shortest (baseline) path with the compliant dual-path
+        # route before the policy loop — avoids mid-episode replan/teleport.
+        _install_direction_compliant_nav_route(base_env, row)
 
         # Validate route: check that destination is different from spawn
         nav = getattr(base_env.vehicle, "navigation", None)

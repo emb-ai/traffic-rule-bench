@@ -185,6 +185,7 @@ class PathsConfig:
 class ScenarioConfig:
     n_variants: int = 1
     augment: bool = True
+    max_scenarios: Optional[int] = None
     max_scenarios_per_scene: Optional[int] = None
     respect_scene_selection: bool = True
     min_dual_path_gain_m: float = 20.0
@@ -581,7 +582,24 @@ def generate_manifest(
     else:
         density_levels = [None]
 
+    n_variants = max(1, int(scenario_cfg.n_variants))
+    max_total = scenario_cfg.max_scenarios
+    if max_total is not None:
+        max_total = max(1, int(max_total))
+
+    # max_scenarios caps dual-path geometry picks; density multiplies rows.
+    n_density = max(1, len(density_levels))
+    max_total_rows = None if max_total is None else max_total * n_density
+    base_scenarios_kept = 0
+
     for scene_dir in scenes:
+        if max_total is not None and base_scenarios_kept >= max_total:
+            print(
+                f"\n[cap] reached max_scenarios={max_total} "
+                f"({len(entries)} row(s) with density×{n_density}); stopping"
+            )
+            break
+
         meta = load_scene_metadata(scene_dir)
         scene_name = meta.get("scene_name", scene_dir.name)
         net_file = meta.get("net_file", "map.net.xml")
@@ -664,9 +682,11 @@ def generate_manifest(
 
         scene_entries: List[Dict] = []
         for variant, dual in enumerate(dual_paths):
+            if max_total is not None and base_scenarios_kept >= max_total:
+                break
             spawn_scenario = dual_path_to_spawn_scenario(dual)
             for density_level in density_levels:
-                for _rep in range(max(1, scenario_cfg.n_variants)):
+                for _rep in range(n_variants):
                     entry = build_manifest_entry(
                         scene_dir=scene_dir,
                         scenes_root=scenes_dir,
@@ -680,6 +700,10 @@ def generate_manifest(
                         density_level=density_level,
                     )
                     scene_entries.append(entry)
+            base_scenarios_kept += 1
+
+        if not scene_entries:
+            continue
 
         # Cap counts dual-path picks; density levels multiply rows on top.
         max_entries = (
@@ -694,9 +718,19 @@ def generate_manifest(
             )
             random.shuffle(scene_entries)
             scene_entries = scene_entries[:max_entries]
-        else:
-            print(f"  Manifest entries for {scene_name}: {len(scene_entries)}")
 
+        if (
+            max_total_rows is not None
+            and len(entries) + len(scene_entries) > max_total_rows
+        ):
+            keep = max_total_rows - len(entries)
+            print(
+                f"  [cap] retaining {keep}/{len(scene_entries)} row(s) "
+                f"for max_scenarios={max_total} × density"
+            )
+            scene_entries = scene_entries[:keep]
+
+        print(f"  Manifest entries for {scene_name}: {len(scene_entries)}")
         entries.extend(scene_entries)
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -721,6 +755,7 @@ def generate_manifest(
         "total_entries": len(entries),
         "variants_per_scene": scenario_cfg.n_variants,
         "augment": scenario_cfg.augment,
+        "max_scenarios": scenario_cfg.max_scenarios,
         "max_scenarios_per_scene": scenario_cfg.max_scenarios_per_scene,
         "min_dual_path_gain_m": scenario_cfg.min_dual_path_gain_m,
         "validate_metadrive_routes": scenario_cfg.validate_metadrive_routes,
@@ -909,10 +944,23 @@ def main(cfg: DictConfig) -> None:
     with open(config_path, "w", encoding="utf-8") as f:
         f.write(OmegaConf.to_yaml(cfg))
     
+    max_scenarios_raw = getattr(cfg.scenario, "max_scenarios", None)
+    max_scenarios_per_scene_raw = getattr(
+        cfg.scenario, "max_scenarios_per_scene", None
+    )
     scenario_cfg = ScenarioConfig(
         n_variants=cfg.scenario.n_variants,
         augment=cfg.scenario.augment,
-        max_scenarios_per_scene=cfg.scenario.max_scenarios_per_scene,
+        max_scenarios=(
+            None
+            if max_scenarios_raw in (None, "", "null")
+            else int(max_scenarios_raw)
+        ),
+        max_scenarios_per_scene=(
+            None
+            if max_scenarios_per_scene_raw in (None, "", "null")
+            else int(max_scenarios_per_scene_raw)
+        ),
         respect_scene_selection=bool(
             getattr(cfg.scenario, "respect_scene_selection", True)
         ),

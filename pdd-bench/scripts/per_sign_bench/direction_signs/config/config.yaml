@@ -37,6 +37,7 @@ paths:
 scenario:
   n_variants: 1                   # Extra repeats per dual-path scenario
   augment: true                   # Reserved; dual-path used for 4.1.1–4.1.6
+  max_scenarios: null             # Cap dual-path picks (null = all); density tiers multiply rows only if traffic_density_augment=true
   max_scenarios_per_scene: 5      # Dual-path scenarios per cropped scene
   respect_scene_selection: true  # Skip scenes marked reject in scene_selection.json
   min_dual_path_gain_m: 20.0     # Min (straight_len - turn_len) in meters
@@ -49,7 +50,12 @@ scenario:
 # =============================================================================
 simulation:
   spawn_velocity_ms: 2.5          # Ego initial velocity (m/s)
-  traffic_density: 0.0            # Background traffic [0.0 - 1.0]
+  # Background traffic. When traffic_density_augment=true, generate_manifest
+  # multiplies each dual-path scenario by nuPlan density tiers (td1..tdN) and
+  # ignores this scalar. Set augment=false to emit one row per scenario with
+  # this fixed density (0.0 = no background traffic).
+  traffic_density: 0.0            # Used only if traffic_density_augment=false
+  traffic_density_augment: true   # false → no density-tier augmentation
   horizon: 600                    # Max simulation steps
   sign_distance_before_end: 0.0   # Sign offset from lane end (m)
   spawn_distance_before_end: 20.0 # Ego spawn offset from lane end (m)
