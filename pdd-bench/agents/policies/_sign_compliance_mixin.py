@@ -214,6 +214,8 @@ class SignComplianceMixin:
         self._direction_exit_glide_steps = 0
         self._direction_exit_hold_lane = None
         self._direction_exit_hold_steps = 0
+        # One-way first hop: slow into the short connector.
+        self._direction_exit_creep = False
 
     def _reset_sign_compliance(self):
         """Call on episode reset to clear stale state."""
@@ -231,6 +233,7 @@ class SignComplianceMixin:
         self._direction_exit_glide_steps = 0
         self._direction_exit_hold_lane = None
         self._direction_exit_hold_steps = 0
+        self._direction_exit_creep = False
 
     # ------------------------------------------------------------------
     # Helpers
@@ -923,6 +926,8 @@ class SignComplianceMixin:
         self._direction_exit_bias = 0.0
         self._direction_exit_position_snap = True
         self._direction_exit_glide_steps = 0
+        if self._direction_exit_hold_steps <= 0:
+            self._direction_exit_creep = False
         # Keep _direction_exit_snapped so a loop-back onto the approach does
         # not re-snap (first-exit semantics for dual-path routes).
 
@@ -964,9 +969,11 @@ class SignComplianceMixin:
         self._direction_exit_source_lane = source_lane
         # 5.15.2 (DirectionSign) should avoid physical teleport snap; route/nav
         # snap is enough and removes visible "jump forward" artifacts.
+        is_one_way = isinstance(sign, OneWayEntrySign)
         self._direction_exit_position_snap = not (
             isinstance(sign, DirectionSign) and not isinstance(sign, LaneDirectionsSign)
         )
+        self._direction_exit_creep = is_one_way
         # Bias derived from turn metadata (more stable than lateral chase).
         # Empirically on SUMO EdgeRoadNetwork: negative action[0] → +lane.lat
         # (right side of the approach for these maps).
@@ -980,7 +987,13 @@ class SignComplianceMixin:
         try:
             long, _ = source_lane.local_coordinates(self.control_object.position)
             remaining = float(source_lane.length) - float(long)
-            if remaining <= DIRECTION_EXIT_LOOKAHEAD_M:
+            if is_one_way:
+                # Compliant first hops are often short sharp vias (~5m).
+                if remaining <= 20.0:
+                    self._cap_speed(12.0)
+                if remaining <= 10.0:
+                    self._cap_speed(8.0)
+            elif remaining <= DIRECTION_EXIT_LOOKAHEAD_M:
                 self._cap_speed(DIRECTION_EXIT_SPEED_CAP_KMH)
         except Exception:
             pass
@@ -989,6 +1002,9 @@ class SignComplianceMixin:
     def _update_direction_exit_steering_state(self):
         """Drop the exit target after leaving the signed approach."""
         if self._direction_exit_lane is None:
+            return
+        # Keep arming while hold is active so creep cap / nav glue still apply.
+        if self._direction_exit_hold_steps > 0:
             return
         ego_lane = getattr(self.control_object, "lane", None)
         if ego_lane is None:
@@ -1162,14 +1178,17 @@ class SignComplianceMixin:
         hold = self._direction_exit_hold_lane
         if self._direction_exit_hold_steps > 0 and hold is not None:
             try:
+                if getattr(self, "_direction_exit_creep", False):
+                    self._cap_speed(8.0)
                 long_v, lat_v = hold.local_coordinates(ego.position)
-                heading = hold.heading_theta_at(long_v + 1.0)
+                heading = hold.heading_theta_at(max(0.0, float(long_v)) + 0.5)
                 heading_err = wrap_to_pi(heading - ego.heading_theta)
                 return float(np.clip(1.4 * (-heading_err) + 0.55 * (-lat_v), -1.0, 1.0))
             except Exception:
                 pass
         elif self._direction_exit_hold_lane is not None and self._direction_exit_hold_steps <= 0:
             self._direction_exit_hold_lane = None
+            self._direction_exit_creep = False
             self._reset_steering_pids()
 
         # After the first compliant hop, only clip IDM (do not pull again).
@@ -1886,13 +1905,18 @@ class SignComplianceMixin:
             # One-way entry (5.7.x): the crossing road is one-way. Unlike a
             # no-turn sign — where the dual-path detour may legally loop back and
             # take the once-forbidden turn on a second pass — here the wrong-way
-            # carriageway must NEVER be driven (no oncoming lane exists). Block
-            # the whole carriageway and replan a detour that fully avoids it.
+            # carriageway must NEVER be driven (no oncoming lane exists).
+            # Prefer the compliant route already installed at episode start
+            # (one_way_signs.run_benchmark._install_one_way_compliant_nav_route).
+            # Replan only if nav still touches wrong-way lanes; always arm the
+            # first allowed exit for steering (position snap is off for OneWay).
             forbidden_edges = getattr(sign, "one_way_forbidden_edges", None)
             if forbidden_edges:
                 wrong_lanes = self._lanes_on_edges(forbidden_edges)
                 if wrong_lanes:
-                    self._reroute_sumo_avoiding_lanes(wrong_lanes)
+                    ckpts = list(getattr(nav, "checkpoints", None) or [])
+                    if any(ck in wrong_lanes for ck in ckpts):
+                        self._reroute_sumo_avoiding_lanes(wrong_lanes)
                     self._arm_direction_exit_from_sign(sign)
                     return
             self._reroute_sumo_for_direction_sign(sign)
@@ -2364,6 +2388,9 @@ class SignComplianceMixin:
         self._speed_floor = None
         self._blocked_lanes.clear()
         self._restricted_lanes.clear()
+        if (self._direction_exit_hold_steps > 0
+                and getattr(self, "_direction_exit_creep", False)):
+            self._cap_speed(8.0)
         self._no_overtaking_active = False
 
         for sign in self._get_signs():
