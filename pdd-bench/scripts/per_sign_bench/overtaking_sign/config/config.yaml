@@ -1,0 +1,63 @@
+# No-Overtaking (3.20) Benchmark Configuration
+# Straight 1+1 roads: sign + ego at start, stationary aux mid-lane.
+# Compliant wait behind aux → arrive_dest. Overtaking onto opposite = violation.
+
+defaults:
+  - _self_
+
+hydra:
+  run:
+    dir: ${paths.output_base}/${paths.experiment_name}
+  output_subdir: .hydra
+  job:
+    chdir: false
+
+sign:
+  pdd_code: "3.20"
+
+paths:
+  scenes_base: scenes
+  scenes_dir: null              # auto → scenes/3_20
+  output_base: benchmark_output/${pdd_slug:${sign.pdd_code}}
+  experiment_name: ${now:%Y-%m-%d_%H-%M-%S}
+
+scenario:
+  n_variants: 1
+  n_variations: 1
+  augment: false
+  max_scenarios: null
+  max_scenarios_per_scene: 1
+  respect_scene_selection: false
+  min_ego_lane_m: 60.0
+  max_heading_std_deg: 12.0
+  aux_frac: 0.5
+  # Pretend oncoming edge is a left peer so IDM/NN may try to overtake.
+  force_opposite_as_peer: true
+  opposite_peer_side: left
+  # When probing overtake, do not end episode on 2s wait-behind.
+  probe_overtake_disable_wait_success: true
+
+simulation:
+  spawn_velocity_ms: 2.5
+  traffic_density: 0.0
+  traffic_density_augment: false
+  horizon: 600
+  sign_distance_from_start: 2.0
+  spawn_distance_from_start: 3.0
+  wait_behind_success_seconds: 2.0
+  wait_behind_speed_mps: 0.5
+  wait_behind_gap_max_m: 18.0
+  wait_behind_gap_min_m: 2.0
+
+auxiliary:
+  enabled: true                 # mid-lane stationary blocker (required for 3.20)
+
+gif:
+  enabled: false
+  policy: idm
+  max_scenes: null
+  dry_run: false
+  hide_signs: true
+  dir: null
+  run_name: null
+  model_path: null
