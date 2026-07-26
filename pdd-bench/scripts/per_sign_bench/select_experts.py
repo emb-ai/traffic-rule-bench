@@ -40,6 +40,7 @@ SIGN_CLASS_MAP = {
     "4.2.1":  "DetourRightSign",
     "4.2.2":  "DetourLeftSign",
     "4.2.3":  "DetourEitherSign",
+    "4.3":    "RoundaboutYieldSign",
     "4.6":    "MinimumSpeedLimitSign",
     "5.3":    "OnlyAutoSign",
     "5.4":    "EndOfOnlyAutoSign",

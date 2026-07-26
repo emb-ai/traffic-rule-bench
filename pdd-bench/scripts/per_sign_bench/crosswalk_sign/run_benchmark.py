@@ -4,13 +4,23 @@ import argparse
 import json
 import logging
 import math
+import pickle
 import random
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 import torch
 from stable_baselines3 import PPO
+
+# per_sign_bench/ on path for shared bench.* helpers (RecordManager patch, etc.)
+_PER_SIGN_DIR = Path(__file__).resolve().parent.parent
+if str(_PER_SIGN_DIR) not in sys.path:
+    sys.path.insert(0, str(_PER_SIGN_DIR))
+_PDD_BENCH = _PER_SIGN_DIR.parent.parent
+if str(_PDD_BENCH) not in sys.path:
+    sys.path.insert(0, str(_PDD_BENCH))
 
 from envs.sumo_env import TrafficSignSumoEnv
 from envs.sumo_traffic_manager import SumoTrafficManager
@@ -1154,6 +1164,7 @@ def run_one_episode(
     aux_convoy_size: int = DEFAULT_CONVOY_SIZE,
     aux_convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
     aux_lanes_occupied: int = DEFAULT_AUX_LANES_OCCUPIED_MAX,
+    record_episode: bool = False,
 ) -> dict:
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
     np.random.seed(seed)
@@ -1173,6 +1184,20 @@ def run_one_episode(
     raw_env = env
     env = _wrap_for_policy(env, policy_type)
 
+    if record_episode:
+        # Shared patch: tolerate mid-episode pedestrian (and rare aux) spawns.
+        from bench.record_manager_patch import patch_record_manager_once
+        patch_record_manager_once()
+        # RecordManager reads this off global_config on reset.
+        try:
+            raw_env.config["record_episode"] = True
+        except Exception:
+            pass
+        try:
+            env.config["record_episode"] = True
+        except Exception:
+            pass
+
     policy_cls = None
     if policy_type == "idm":
         policy_cls = ModifiedIDMPolicy  # Good driving, no sign compliance
@@ -1191,6 +1216,10 @@ def run_one_episode(
                                "check _load_policy_models")
 
     try:
+        if record_episode:
+            from bench.record_manager_patch import patch_record_manager_once
+            patch_record_manager_once()
+
         env_seed = (int(row.get("sign_id", 0)) + int(row.get("var_idx", 0))) % 100000
         obs, info = env.reset(seed=env_seed)
         base_env = _unwrap_base_env(env)
@@ -1597,6 +1626,9 @@ def run_one_episode(
             except Exception:
                 crash_attribution = None
 
+        pkl_path_str: str | None = None
+        dump_error: str | None = None
+
         if replay_root is not None:
             try:
                 _sign_for_path = (row.get("_sign_code") or row.get("sign_code")
@@ -1612,6 +1644,34 @@ def run_one_episode(
                               / "by_scene" / scene_uid / expert_subdir)
                 out_replay.mkdir(parents=True, exist_ok=True)
                 sidecar_path = out_replay / "replay.json"
+                output_pkl = out_replay / "replay.pkl"
+
+                if record_episode:
+                    scenario_desc = None
+                    try:
+                        from metadrive.scenario.utils import (
+                            convert_recorded_scenario_exported,
+                        )
+                        raw_frames = base_env.engine.record_manager.episode_info
+                        scenario_desc = convert_recorded_scenario_exported(
+                            raw_frames, to_dict=True
+                        )
+                    except Exception:
+                        scenario_desc = None
+                    if scenario_desc is not None:
+                        with open(output_pkl, "wb") as f:
+                            pickle.dump(scenario_desc, f)
+                        pkl_path_str = str(output_pkl)
+                    else:
+                        try:
+                            base_env.engine.dump_episode(str(output_pkl))
+                            if output_pkl.is_file() and output_pkl.stat().st_size > 0:
+                                pkl_path_str = str(output_pkl)
+                            else:
+                                dump_error = "dump_episode wrote empty file"
+                        except Exception as exc:
+                            dump_error = f"dump_episode: {type(exc).__name__}: {exc}"
+                            pkl_path_str = None
 
                 sidecar_metrics = {
                     "arrived_dest": bool(reached_dest),
@@ -1679,10 +1739,12 @@ def run_one_episode(
                     "metrics": sidecar_metrics,
                     "ego_idm_params": (sampled_ego_params if sampled_ego_params is not None
                                         else "DEFAULT_EGO_PARAMS"),
-                    "pkl_path": None,
+                    "pkl_path": pkl_path_str,
                     "sidecar_path": str(sidecar_path),
                     "valid": True,
                 }
+                if dump_error:
+                    sidecar["dump_error"] = dump_error
                 with open(sidecar_path, "w", encoding="utf-8") as _sf:
                     json.dump(sidecar, _sf, default=str)
             except Exception:
@@ -1728,6 +1790,8 @@ def run_one_episode(
             "violations_timeline": list(violations_timeline),
             "in_zone_total_steps": int(in_zone_total_steps),
             "in_zone_by_class_step": dict(in_zone_by_class_step),
+            "pkl_path": pkl_path_str,
+            "dump_error": dump_error,
         }
     finally:
         if save_gif is not None:
