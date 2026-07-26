@@ -56,5 +56,18 @@ python eval_pipeline.py \
     --scenes-root scenes/5_15_1
 ```
 
+## Trajectory collection
+
+```bash
+cd collect_trajectories
+python build_combined_catalog.py
+python make_map_split.py --catalog ../benchmark_output/combined/real_manifest_balanced.jsonl
+
+COUNT=2 SAVE_GIFS=1 SKIP_CARL=1 SKIP_PLANT2=1 SMOKE_EXTRA_SAMPLES=0 \
+  bash collect_trajectories.sh
+```
+
+See `collect_trajectories/README.md` for full train80 / oracle flow.
+
 Crop writes `road_id`, `spawn_lane_num`, `target_lane_num`, `destination_*`,
 and `dual_path` (wrong=`turn_*`, correct=`straight_*`) into `meta.json`.
