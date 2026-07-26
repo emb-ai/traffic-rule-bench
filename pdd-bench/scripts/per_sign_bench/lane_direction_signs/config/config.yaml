@@ -34,10 +34,11 @@ scenario:
 
 simulation:
   spawn_velocity_ms: 2.5
-  traffic_density: 0.0
-  # false → use n_variations × nuPlan NPC profiles (density + IDM params);
-  # true  → expand into fixed nuPlan p25/p50/p75 density levels (_td1/_td2/_td3).
-  traffic_density_augment: false
+  traffic_density: 0.0            # Used when traffic_density_augment=false (and as profile base)
+  # Background traffic. true → fixed nuPlan td1/td2/td3 tiers. false → expand by
+  # n_variations nuPlan NPC profiles (or a single row if n_variations=1 and
+  # traffic_density=0.0 → no NPCs). Override: simulation.traffic_density_augment=false
+  traffic_density_augment: true
   # Cap for sample_one_profile when n_variations>0 (1.0 = same as sumo_space).
   nuplan_density_cap: 1.0
   horizon: 600

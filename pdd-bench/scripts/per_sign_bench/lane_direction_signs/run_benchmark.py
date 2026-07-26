@@ -5,7 +5,7 @@ import json
 import logging
 import math
 import random
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 
 import numpy as np
@@ -25,7 +25,7 @@ from scripts.per_sign_bench.factorized_space.ego_defaults import (
     sample_ego_params,
 )
 from traffic_signs.lane_allowed_direction_sign import LaneAllowedDirectionSign
-from lib.lane_keys import make_lane_key, parse_lane_key
+from lib.lane_keys import lane_edge_id, make_lane_key, parse_lane_key
 from lib.direction_sign_spec import (
     DEFAULT_PDD_CODE,
     get_direction_sign_spec,
@@ -775,13 +775,24 @@ def _force_nav_current_lane(env, lane) -> None:
 
 
 def _apply_manifest_ego_spawn_lane(
-    env, row: dict, *, refresh_navigation: bool = True
+    env,
+    row: dict,
+    *,
+    refresh_navigation: bool = True,
+    lane_num: int | None = None,
 ) -> bool:
-    """Teleport ego onto the manifest parallel lane (needed when skip_auto_signs=True)."""
+    """Teleport ego onto a parallel approach lane (needed when skip_auto_signs=True).
+
+    ``lane_num`` defaults to manifest ``spawn_lane_num`` (wrong lane — the
+    5.15.1 task requires a mid-episode peer LC onto ``target_lane_num``).
+    """
     road_id = row.get("road_id")
     if not road_id:
         return False
-    lane_num = int(row.get("spawn_lane_num", 0) or 0)
+    if lane_num is None:
+        lane_num = int(row.get("spawn_lane_num", 0) or 0)
+    else:
+        lane_num = int(lane_num)
     target_key = make_lane_key(str(road_id), lane_num)
     try:
         vehicle = env.agent
@@ -818,11 +829,13 @@ def _apply_manifest_ego_spawn_lane(
         return False
 
 
-def _install_lane_change_nav_route(env, row: dict) -> bool:
-    """Build the MetaDrive route from the *manifest spawn lane* → dest.
+def _install_lane_change_nav_route(
+    env, row: dict, *, lane_num: int | None = None
+) -> bool:
+    """Build the MetaDrive route from an approach lane → dest.
 
-    Uses ``row['spawn_lane_num']`` explicitly — not ``vehicle.lane``, which can
-    still be the stale edge-canonical lane_0 after teleport.
+    Defaults to manifest ``spawn_lane_num`` (wrong lane / injected connector).
+    Rule experts also start here and peer-LC onto ``target_lane_num`` mid-episode.
     """
     dest = row.get("destination_lane_id")
     if not dest:
@@ -833,8 +846,11 @@ def _install_lane_change_nav_route(env, row: dict) -> bool:
     road_id = row.get("road_id")
     if not road_id:
         return False
-    spawn_num = int(row.get("spawn_lane_num", 0) or 0)
-    spawn_key = make_lane_key(str(road_id), spawn_num)
+    if lane_num is None:
+        lane_num = int(row.get("spawn_lane_num", 0) or 0)
+    else:
+        lane_num = int(lane_num)
+    spawn_key = make_lane_key(str(road_id), lane_num)
     try:
         vehicle = env.agent
         nav = getattr(vehicle, "navigation", None)
@@ -846,7 +862,7 @@ def _install_lane_change_nav_route(env, row: dict) -> bool:
         if spawn_lane is None or spawn_key not in graph or dest not in graph:
             print(f"[LaneChangeNav] missing lanes spawn={spawn_key} dest={dest}")
             return False
-        # Keep physical pose on the spawn lane before routing.
+        # Keep physical pose on the chosen lane before routing.
         try:
             long, _ = spawn_lane.local_coordinates(vehicle.position)
             long = float(np.clip(long, 0.5, max(0.5, spawn_lane.length - 0.5)))
@@ -860,6 +876,32 @@ def _install_lane_change_nav_route(env, row: dict) -> bool:
             vehicle.config["destination"] = dest
         except Exception:
             pass
+
+        # Prefer expanding dual_path.straight_path (legal edges) when routing
+        # from the target lane — MetaDrive shortest_path often still picks the
+        # short wrong spur / injected connector peer.
+        dual = row.get("dual_path") or {}
+        straight_edges = [str(e) for e in (dual.get("straight_path") or [])]
+        path = None
+        method = "set_route"
+        if straight_edges and lane_num == int(row.get("target_lane_num", -1) or -1):
+            path = _expand_edge_seq_to_lane_path(
+                road_network,
+                [str(road_id), *straight_edges],
+                spawn_key,
+                dest,
+                blocked_lanes=set(),
+            )
+            if path:
+                method = "edge_expand"
+
+        if path and _apply_nav_lane_path(env, path):
+            print(
+                f"[LaneChangeNav] installed compliant {len(path)}-hop route via "
+                f"{method} from L{lane_num} → {dest}"
+            )
+            return True
+
         if hasattr(env, "_refresh_navigation_after_spawn"):
             env._refresh_navigation_after_spawn(spawn_lane)
         else:
@@ -873,18 +915,152 @@ def _install_lane_change_nav_route(env, row: dict) -> bool:
             or checkpoints[0] == checkpoints[-1]
         ):
             print(
-                f"[LaneChangeNav] no spawn-lane route {spawn_key} → {dest}: "
+                f"[LaneChangeNav] no route {spawn_key} → {dest}: "
                 f"{checkpoints[:3]}"
             )
             return False
         print(
-            f"[LaneChangeNav] installed {len(checkpoints)}-hop route from NEW spawn "
-            f"L{spawn_num} ({getattr(vehicle, 'lane_index', spawn_key)}) → {dest} "
-            f"(target L{row.get('target_lane_num')} for expert lane-change)"
+            f"[LaneChangeNav] installed {len(checkpoints)}-hop route from "
+            f"L{lane_num} ({getattr(vehicle, 'lane_index', spawn_key)}) → {dest}"
         )
         return True
     except Exception as exc:
         print(f"[LaneChangeNav] failed: {exc}")
+        return False
+
+
+def _lanes_on_edges(road_network, edges) -> set[str]:
+    want = {str(e) for e in (edges or ())}
+    if not want:
+        return set()
+    graph = getattr(road_network, "graph", None) or {}
+    out: set[str] = set()
+    for lid in graph:
+        if isinstance(lid, str) and lane_edge_id(lid) in want:
+            out.add(lid)
+    return out
+
+
+def _expand_edge_seq_to_lane_path(
+    road_network,
+    edge_seq: list[str],
+    spawn_lane_id: str,
+    dest_lane_id: str,
+    blocked_lanes,
+    *,
+    max_seg: int = 25,
+) -> list[str] | None:
+    """Follow ``straight_path`` edges through MetaDrive exit_lanes."""
+    graph = getattr(road_network, "graph", None) or {}
+    if spawn_lane_id not in graph:
+        return None
+    blocked = set(blocked_lanes or ())
+    path: list[str] = [spawn_lane_id]
+
+    def _lane_exits(lid: str) -> list[str]:
+        data = graph.get(lid)
+        if data is None:
+            return []
+        return list(set(getattr(data, "exit_lanes", None) or []))
+
+    def _prefer_live_peer(lid: str) -> str:
+        edge = lane_edge_id(lid)
+        peers = [p for p in _lanes_on_edges(road_network, [edge]) if p not in blocked]
+        if not peers:
+            return lid
+        if _lane_exits(lid):
+            return lid
+        peers_sorted = sorted(
+            peers,
+            key=lambda p: (0 if p.endswith("_0") else 1, -len(_lane_exits(p)), p),
+        )
+        return peers_sorted[0] if peers_sorted else lid
+
+    for next_edge in edge_seq[1:]:
+        cur = path[-1]
+        if lane_edge_id(cur) == next_edge:
+            continue
+        targets = _lanes_on_edges(road_network, [next_edge]) - blocked
+        if not targets:
+            return None
+        queue = deque([(cur, [cur])])
+        seen = {cur}
+        found: list[str] | None = None
+        while queue:
+            lid, seg = queue.popleft()
+            if lid in targets and lid != cur:
+                found = seg
+                break
+            if len(seg) > max_seg:
+                continue
+            exits = _lane_exits(lid)
+            exits.sort(
+                key=lambda x: (
+                    0 if lane_edge_id(x) == next_edge else 1,
+                    0 if x.endswith("_0") else 1,
+                    x,
+                )
+            )
+            for nxt in exits:
+                if nxt in seen or nxt in blocked or nxt not in graph:
+                    continue
+                seen.add(nxt)
+                queue.append((nxt, seg + [nxt]))
+        if not found:
+            return None
+        path.extend(found[1:])
+        path[-1] = _prefer_live_peer(path[-1])
+
+    if path[-1] != dest_lane_id:
+        queue = deque([(path[-1], [path[-1]])])
+        seen = {path[-1]}
+        found = None
+        while queue:
+            lid, seg = queue.popleft()
+            if lid == dest_lane_id:
+                found = seg
+                break
+            if len(seg) > max_seg:
+                continue
+            for nxt in sorted(_lane_exits(lid)):
+                if nxt in seen or nxt in blocked or nxt not in graph:
+                    continue
+                seen.add(nxt)
+                queue.append((nxt, seg + [nxt]))
+        if not found:
+            return None
+        path.extend(found[1:])
+    return path
+
+
+def _apply_nav_lane_path(env, path: list[str]) -> bool:
+    if not path or len(path) < 2:
+        return False
+    vehicle = env.agent
+    nav = getattr(vehicle, "navigation", None)
+    if nav is None:
+        return False
+    road_network = env.engine.current_map.road_network
+    try:
+        nav.checkpoints = list(path)
+        nav._target_checkpoints_index = [0, 1]
+        nav.final_lane = road_network.get_lane(path[-1])
+        if getattr(nav, "_navi_info", None) is not None:
+            nav._navi_info.fill(0.0)
+        nav.current_ref_lanes = road_network.get_peer_lanes_from_index(path[0])
+        nav.next_ref_lanes = road_network.get_peer_lanes_from_index(path[1])
+        try:
+            vehicle.config["destination"] = path[-1]
+        except Exception:
+            pass
+        try:
+            nav.update_localization(vehicle)
+        except Exception:
+            pass
+        _force_nav_current_lane(env, road_network.get_lane(path[0]))
+        return True
+    except Exception as exc:
+        print(f"[LaneChangeNav] apply path failed: {exc}")
         return False
 
 
@@ -1114,6 +1290,15 @@ def _place_direction_signs(
                 sign.target_lane_num = int(row["target_lane_num"])
             except (TypeError, ValueError):
                 pass
+        if sign is not None:
+            # Compliant edge sequence for soft post-LC replan (no body teleport).
+            dual = row.get("dual_path") or {}
+            straight = dual.get("straight_path") or row.get("straight_path")
+            if straight:
+                try:
+                    sign.compliant_edge_path = [str(e) for e in straight]
+                except Exception:
+                    pass
         spec = get_direction_sign_spec(pdd_code)
         print(
             f"[DirectionSign] Placed {pdd_code} ({spec.title}) on {ego_edge}, "
@@ -1375,23 +1560,29 @@ def run_one_episode(
         except Exception:
             pass
 
-        # 5.15.1: ego spawns on the WRONG lane (its sign-allowed direction cannot
-        # reach dest without a peer lane-change). Teleport to that manifest spawn
-        # lane, reposition ≥20 m before the junction, THEN build the planner route
-        # from this NEW spawn lane via MetaDrive's native set_route. Both baseline
-        # and expert then share one route + destination marker; the expert also
-        # lane-changes to comply while plain IDM violates.
+        # 5.15.1: EVERY policy starts on the WRONG lane (spawn_lane_num) and
+        # must peer-LC onto target_lane_num before the legal turn. Give as much
+        # approach as the cropped lane allows so soft LC has room.
         spawn_distance = float(row.get("spawn_distance_before_end", 0) or 0)
-        _apply_manifest_ego_spawn_lane(base_env, row, refresh_navigation=False)
-        # Always reposition on the *manifest* spawn lane — never vehicle.lane,
+        lane_len = float(row.get("spawn_lane_length") or 0)
+        if lane_len > 8.0:
+            spawn_distance = max(spawn_distance, min(lane_len - 5.0, 55.0))
+            spawn_distance = min(spawn_distance, lane_len - 2.0)
+        approach_lane_num = int(row.get("spawn_lane_num", 0) or 0)
+        _apply_manifest_ego_spawn_lane(
+            base_env,
+            row,
+            refresh_navigation=False,
+            lane_num=approach_lane_num,
+        )
+        # Always reposition on the chosen approach lane — never vehicle.lane,
         # which can still be edge-canonical lane_0 after teleport.
         spawn_lane_obj = None
         try:
             road_id = row.get("road_id")
-            spawn_num = int(row.get("spawn_lane_num", 0) or 0)
             if road_id is not None:
                 spawn_lane_obj = base_env.engine.current_map.road_network.get_lane(
-                    make_lane_key(str(road_id), spawn_num)
+                    make_lane_key(str(road_id), approach_lane_num)
                 )
         except Exception:
             spawn_lane_obj = None
@@ -1410,12 +1601,14 @@ def run_one_episode(
                     "scene_id": scene_id,
                 }
 
-        ok_nav = _install_lane_change_nav_route(base_env, row)
+        ok_nav = _install_lane_change_nav_route(
+            base_env, row, lane_num=approach_lane_num
+        )
         if not ok_nav:
             scene_id = row.get("scene_id", "unknown")
             return {
                 "ok": False,
-                "error": "Invalid route: spawn-lane path to destination unreachable",
+                "error": "Invalid route: approach-lane path to destination unreachable",
                 "scene_id": scene_id,
             }
 
@@ -1449,6 +1642,26 @@ def run_one_episode(
                     apply_ego_sampled(policy_obj, sampled_ego_params)
                 else:
                     apply_ego_defaults(policy_obj)
+            # Arm peer LC + hold nav immediately so the merge starts from step 0
+            # (plain IDM baseline keeps the illegal connector route).
+            tln = row.get("target_lane_num")
+            if (
+                tln is not None
+                and hasattr(policy_obj, "_begin_lane_change_by_sumo_num")
+                and hasattr(policy_obj, "_hold_on_lane_until_lc")
+            ):
+                try:
+                    policy_obj._begin_lane_change_by_sumo_num(int(tln))
+                    ego_lane = getattr(base_env.vehicle, "lane", None)
+                    if ego_lane is not None:
+                        if policy_obj._hold_on_lane_until_lc(ego_lane):
+                            policy_obj._lane_dirs_hold_applied = True
+                    print(
+                        f"[LaneChange] armed LC spawn_L{approach_lane_num}→"
+                        f"target_L{int(tln)} at spawn_d={spawn_distance:.1f}m"
+                    )
+                except Exception:
+                    pass
 
         total_reward = 0.0
         violations = 0

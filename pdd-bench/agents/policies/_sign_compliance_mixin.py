@@ -216,6 +216,10 @@ class SignComplianceMixin:
         self._direction_exit_hold_steps = 0
         # One-way first hop: slow into the short connector.
         self._direction_exit_creep = False
+        # 5.15.1: after the one post-LC compliant replan, never rewrite nav
+        # again (NN policies often oscillate across peer lanes mid-merge).
+        self._lane_dirs_nav_locked = False
+        self._lane_dirs_hold_applied = False
 
     def _reset_sign_compliance(self):
         """Call on episode reset to clear stale state."""
@@ -227,6 +231,8 @@ class SignComplianceMixin:
         self._no_overtaking_active = False
         self._direction_exit_lane = None
         self._direction_exit_source_lane = None
+        self._lane_dirs_nav_locked = False
+        self._lane_dirs_hold_applied = False
         self._direction_exit_bias = 0.0
         self._direction_exit_snapped = False
         self._direction_exit_position_snap = True
@@ -369,7 +375,12 @@ class SignComplianceMixin:
         steering = self._get_heading_pid().get_result(
             -wrap_to_pi(lane_heading - v_heading)
         )
-        steering += self._get_lateral_pid().get_result(-lat)
+        lat_term = self._get_lateral_pid().get_result(-lat)
+        # Peer LC on short 5.15.1 approaches needs a firmer lateral pull or
+        # the merge never finishes before the junction.
+        if abs(lat) > 0.35:
+            lat_term *= 1.6
+        steering += lat_term
         return float(steering)
 
     def _begin_lane_change(self, target_lane_num):
@@ -796,8 +807,136 @@ class SignComplianceMixin:
         start = getattr(self.control_object.lane, "index", None)
         if not isinstance(start, str) or not isinstance(destination, str):
             return False
+        cache_key = ("sumo_from_cur", start, destination)
+        if cache_key in self._rerouted_edges and self._rerouted_edges[cache_key]:
+            return True
         path = self._find_sumo_path_avoiding_lanes(start, destination, blocked_lanes=())
-        return bool(path) and self._apply_sumo_nav_path(nav, path)
+        ok = bool(path) and self._apply_sumo_nav_path(nav, path)
+        if ok:
+            self._rerouted_edges[cache_key] = True
+        return ok
+
+    def _install_lane_dirs_compliant_route(self, sign) -> bool:
+        """Install target-lane → dest route for 5.15.1 after a soft peer LC.
+
+        Prefers ``sign.compliant_edge_path`` (manifest ``dual_path.straight_path``)
+        when present; otherwise BFS from the current lane. Nav-only — never
+        relocates the body. Once successful, locks for the rest of the episode
+        so peer-lane oscillation cannot trigger a second replan.
+        """
+        if getattr(self, "_lane_dirs_nav_locked", False):
+            return True
+        nav = getattr(self.control_object, "navigation", None)
+        if nav is None or not self._is_sumo_edge_nav(nav):
+            return False
+        start = getattr(self.control_object.lane, "index", None)
+        checkpoints = list(getattr(nav, "checkpoints", None) or [])
+        destination = checkpoints[-1] if checkpoints else None
+        if not isinstance(start, str) or not isinstance(destination, str):
+            return False
+
+        blocked = self._lane_directions_blocked_exits(sign, self.control_object.lane)
+        edge_hint = tuple(getattr(sign, "compliant_edge_path", None) or ())
+        cache_key = (
+            "lane_dirs_compliant",
+            start,
+            destination,
+            frozenset(blocked),
+            edge_hint,
+        )
+        if cache_key in self._rerouted_edges and self._rerouted_edges[cache_key]:
+            self._lane_dirs_nav_locked = True
+            return True
+
+        path = None
+        # Prefer waypoint edges from the dual-path crop — MetaDrive BFS often
+        # still prefers a short illegal spur even after the peer LC.
+        if edge_hint:
+            path = self._find_sumo_path_via_edge_hint(
+                start, destination, edge_hint, blocked_lanes=blocked, max_len=80
+            )
+        if not path:
+            path = self._find_sumo_path_avoiding_lanes(
+                start, destination, blocked_lanes=blocked, max_len=80
+            )
+        ok = bool(path) and path[-1] == destination and self._apply_sumo_nav_path(nav, path)
+        if ok:
+            logger.info(
+                "LaneDirections compliant replan: %s → %s via %d hops",
+                start,
+                destination,
+                len(path),
+            )
+            self._rerouted_edges[cache_key] = True
+            self._lane_dirs_nav_locked = True
+            self._lane_dirs_hold_applied = False
+        else:
+            self._rerouted_edges.pop(cache_key, None)
+        return ok
+
+    def _find_sumo_path_via_edge_hint(
+        self,
+        start_lane_id: str,
+        goal_lane_id: str,
+        edge_hint,
+        blocked_lanes=None,
+        *,
+        max_len: int = 80,
+    ):
+        """BFS that prefers hops onto successive edges in ``edge_hint``."""
+        want_edges = [str(e) for e in (edge_hint or ()) if e]
+        if not want_edges:
+            return None
+        road_network = self.engine.current_map.road_network
+        graph = getattr(road_network, "graph", None) or {}
+        if start_lane_id not in graph:
+            return None
+        blocked = set(blocked_lanes or ())
+
+        def _edge_of(lid: str) -> str:
+            raw = lid[5:] if lid.startswith("lane_") else lid
+            return raw.rsplit("_", 1)[0] if "_" in raw else raw
+
+        # Progress = how many hint edges we've matched in order.
+        from collections import deque
+
+        start_prog = 0
+        se = _edge_of(start_lane_id)
+        for i, e in enumerate(want_edges):
+            if se == e:
+                start_prog = i + 1
+                break
+        queue = deque([(start_lane_id, [start_lane_id], start_prog)])
+        seen = {(start_lane_id, start_prog)}
+        while queue:
+            lid, path, prog = queue.popleft()
+            if lid == goal_lane_id and prog >= min(1, len(want_edges)):
+                return path
+            if len(path) > max_len:
+                continue
+            lane_data = graph.get(lid)
+            if lane_data is None:
+                continue
+            exits = list(set(getattr(lane_data, "exit_lanes", None) or []))
+            next_want = want_edges[prog] if prog < len(want_edges) else None
+
+            def _sort_key(x: str):
+                xe = _edge_of(x)
+                prefer = 0 if (next_want is not None and xe == next_want) else 1
+                return (prefer, 0 if x.endswith("_0") else 1, x)
+
+            for nxt in sorted(exits, key=_sort_key):
+                if nxt in blocked or nxt not in graph:
+                    continue
+                nprog = prog
+                if next_want is not None and _edge_of(nxt) == next_want:
+                    nprog = prog + 1
+                key = (nxt, nprog)
+                if key in seen:
+                    continue
+                seen.add(key)
+                queue.append((nxt, path + [nxt], nprog))
+        return None
 
     def _lane_directions_blocked_exits(self, sign, source_lane) -> set:
         """First-hop via/to targets not allowed for this approach lane (5.15.1)."""
@@ -816,13 +955,16 @@ class SignComplianceMixin:
                     blocked.add(via)
         return blocked
 
-    def _hold_on_lane_until_lc(self, source_lane, blocked) -> bool:
-        """If the next hop is forbidden, park nav on the current lane.
+    def _hold_on_lane_until_lc(self, source_lane, blocked=None) -> bool:
+        """Park nav on the current lane while a peer LC is in progress.
 
-        Used mid lane-change so IDM does not dive into an injected connector.
-        Once on the target lane, ``_reroute_sumo_from_current_lane`` installs
-        the real dest route.
+        Used mid lane-change so IDM does not dive into an injected connector
+        (or a long alternate spur). Once on the target lane,
+        ``_install_lane_dirs_compliant_route`` installs the real dest route.
+        Idempotent: does not rewrite checkpoints if already held on ``source``.
         """
+        if getattr(self, "_lane_dirs_nav_locked", False):
+            return True
         nav = getattr(self.control_object, "navigation", None)
         if nav is None or not self._is_sumo_edge_nav(nav):
             return False
@@ -830,16 +972,22 @@ class SignComplianceMixin:
         if not isinstance(source_id, str):
             return False
         checkpoints = list(getattr(nav, "checkpoints", None) or [])
-        if len(checkpoints) < 2:
+        dest = checkpoints[-1] if checkpoints else None
+        # Already holding on this source — do not reset checkpoint indices.
+        if (
+            len(checkpoints) >= 2
+            and checkpoints[0] == source_id
+            and isinstance(dest, str)
+            and checkpoints[-1] == dest
+            and len(checkpoints) <= 2
+        ):
+            return True
+        path = [source_id]
+        if isinstance(dest, str) and dest != source_id:
+            path.append(dest)
+        if len(path) < 2:
             return False
-        dest = checkpoints[-1]
-        for i, ck in enumerate(checkpoints[:-1]):
-            if ck == source_id and checkpoints[i + 1] in (blocked or ()):
-                path = [source_id]
-                if dest and dest != source_id:
-                    path.append(dest)
-                return self._apply_sumo_nav_path(nav, path)
-        return False
+        return self._apply_sumo_nav_path(nav, path)
 
     def _direction_blocked_exits_from_source(self, sign, source_lane) -> set:
         """First-hop via/to_lane targets for directions NOT allowed by the sign."""
@@ -931,6 +1079,51 @@ class SignComplianceMixin:
         # Keep _direction_exit_snapped so a loop-back onto the approach does
         # not re-snap (first-exit semantics for dual-path routes).
 
+    def _soft_cap_into_next_checkpoint_via(self) -> None:
+        """Slow before a short next-hop connector (nav-only, no body snap)."""
+        ego = self.control_object
+        nav = getattr(ego, "navigation", None)
+        lane = getattr(ego, "lane", None)
+        if nav is None or lane is None:
+            return
+        ckpts = list(getattr(nav, "checkpoints", None) or [])
+        cur_id = getattr(lane, "index", None)
+        if not isinstance(cur_id, str) or cur_id not in ckpts:
+            return
+        try:
+            i = ckpts.index(cur_id)
+        except ValueError:
+            return
+        if i + 1 >= len(ckpts):
+            return
+        next_id = ckpts[i + 1]
+        try:
+            long, _ = lane.local_coordinates(ego.position)
+            remaining = float(lane.length) - float(long)
+        except Exception:
+            return
+        next_len = None
+        try:
+            next_lane = self.engine.current_map.road_network.get_lane(next_id)
+            next_len = float(getattr(next_lane, "length", 0.0) or 0.0)
+        except Exception:
+            next_len = None
+        # Short internal vias / connectors: creep in the last metres.
+        short_via = (
+            isinstance(next_id, str)
+            and (next_id.startswith("lane_:") or (next_len is not None and next_len < 12.0))
+        )
+        if not short_via:
+            if remaining <= 15.0:
+                self._cap_speed(16.0)
+            return
+        if remaining <= 25.0:
+            self._cap_speed(14.0)
+        if remaining <= 12.0:
+            self._cap_speed(10.0)
+        if remaining <= 6.0:
+            self._cap_speed(8.0)
+
     def _arm_direction_exit_from_sign(self, sign) -> bool:
         """Remember the route's first allowed next-hop for near-junction steering."""
         return self._arm_direction_exit_from_lane(sign, getattr(sign, "lane", None))
@@ -967,12 +1160,12 @@ class SignComplianceMixin:
             return False
         self._direction_exit_lane = exit_lane
         self._direction_exit_source_lane = source_lane
-        # 5.15.2 (DirectionSign) should avoid physical teleport snap; route/nav
-        # snap is enough and removes visible "jump forward" artifacts.
+        # Direction boards (5.15.1 LaneDirectionsSign / 5.15.2 DirectionSign) and
+        # one-way (5.7.x): never physically teleport onto the via. Route/nav +
+        # steering bias are enough; body snaps read as visible "jumps" on GIFs.
         is_one_way = isinstance(sign, OneWayEntrySign)
-        self._direction_exit_position_snap = not (
-            isinstance(sign, DirectionSign) and not isinstance(sign, LaneDirectionsSign)
-        )
+        is_direction_board = isinstance(sign, DirectionSign)  # includes LaneDirectionsSign
+        self._direction_exit_position_snap = not (is_direction_board or is_one_way)
         self._direction_exit_creep = is_one_way
         # Bias derived from turn metadata (more stable than lateral chase).
         # Empirically on SUMO EdgeRoadNetwork: negative action[0] → +lane.lat
@@ -1984,37 +2177,70 @@ class SignComplianceMixin:
             return
 
         # 5.15.1: force peer lane-change onto the crop-time target lane.
+        # Always starts on the WRONG lane — the whole point of the task.
         if isinstance(sign, LaneDirectionsSign):
             target_ln = getattr(sign, "target_lane_num", None)
             if target_ln is not None:
+                # After the one post-LC compliant install, never rewrite nav
+                # again. NN policies (CaRL/Plant2) often oscillate across peers
+                # mid-merge; a second hold/replan looks like the route "jumps".
+                if getattr(self, "_lane_dirs_nav_locked", False):
+                    cur = self._cur_lane_num()
+                    if cur is not None and int(cur) != int(target_ln):
+                        # Soft recenter only — keep the locked checkpoints.
+                        self._begin_lane_change_by_sumo_num(int(target_ln))
+                        try:
+                            self._cap_speed(12.0)
+                        except Exception:
+                            pass
+                    else:
+                        self._soft_cap_into_next_checkpoint_via()
+                    return
+
                 cur = self._cur_lane_num()
                 if cur is not None and int(cur) != int(target_ln):
                     # While lane-changing, block the CURRENT lane's illegal
-                    # first-hops (injected connectors). Otherwise IDM keeps
-                    # aiming at the forbidden left/right cut and fights the LC
-                    # steering → out-of-road near the junction.
+                    # first-hops (injected connectors). Hold nav once on this
+                    # lane — re-applying every step resets checkpoint indices
+                    # and fights CaRL.
                     blocked = self._lane_directions_blocked_exits(
                         sign, self.control_object.lane
                     )
                     for lid in blocked:
                         self._blocked_lanes.add(lid)
-                    if blocked:
-                        if not self._reroute_sumo_avoiding_lanes(blocked):
-                            # Don't commit to a long "straight spur" path — that
-                            # persists after LC onto the turn lane and drives
-                            # the car straight from a left-only lane (OOR).
-                            self._hold_on_lane_until_lc(
-                                self.control_object.lane, blocked
-                            )
+                    if not getattr(self, "_lane_dirs_hold_applied", False):
+                        if self._hold_on_lane_until_lc(
+                            self.control_object.lane, blocked
+                        ):
+                            self._lane_dirs_hold_applied = True
+                    # Soft peer LC via steering only (no body teleport).
                     self._begin_lane_change_by_sumo_num(int(target_ln))
+                    # Slow enough to finish a 1-lane merge in ~20–40 m without
+                    # curb overshoot; CRE default cruise (~36) OORs mid-LC.
+                    try:
+                        self._cap_speed(12.0)
+                    except Exception:
+                        pass
                     return
-                # Already on target lane — install a route from here to dest.
-                self._reroute_sumo_from_current_lane()
-                # Arm exit from the *current* (target) lane, not sign.lane —
-                # the board is shared across peers but only this lane may turn.
-                self._arm_direction_exit_from_lane(
-                    sign, self.control_object.lane
-                )
+                # On target lane — install legal dest route once, then lock.
+                if not self._install_lane_dirs_compliant_route(sign):
+                    blocked = self._lane_directions_blocked_exits(
+                        sign, self.control_object.lane
+                    )
+                    nav = getattr(self.control_object, "navigation", None)
+                    if (
+                        blocked
+                        and nav is not None
+                        and not getattr(self, "_lane_dirs_nav_locked", False)
+                        and self._sumo_route_uses_blocked_source_exit(
+                            nav,
+                            getattr(self.control_object.lane, "index", None),
+                            blocked,
+                        )
+                    ):
+                        if self._reroute_sumo_from_current_lane():
+                            self._lane_dirs_nav_locked = True
+                self._soft_cap_into_next_checkpoint_via()
                 return
 
         nav = getattr(self.control_object, "navigation", None)

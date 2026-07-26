@@ -33,6 +33,17 @@ python generate_manifest.py gif.enabled=true gif.policy=carl_rule
 | `spawn_velocity_ms` | `2.5` | Ego initial speed |
 | `spawn_distance_before_end` | `20.0` | Ego spawn distance before junction (m) |
 
+```bash
+# Cap scenarios + no NPC density tiers (single nuPlan profile / zero density):
+python generate_manifest.py scenario.max_scenarios=10 scenario.n_variations=1 simulation.traffic_density=0.0
+
+# Fixed density tiers instead of n_variations profiles:
+python generate_manifest.py simulation.traffic_density_augment=true
+```
+
+Expert lane-change (5.15.1) is steering-only: no physical teleport onto the
+allowed via after the peer LC; nav/checkpoints are updated without body snaps.
+
 ## Output
 
 ```
