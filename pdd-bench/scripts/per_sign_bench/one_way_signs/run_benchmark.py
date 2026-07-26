@@ -4,9 +4,19 @@ import argparse
 import json
 import logging
 import math
+import pickle
 import random
-from collections import defaultdict
+import sys
+from collections import defaultdict, deque
 from pathlib import Path
+
+# per_sign_bench/ on path for shared bench.* helpers (RecordManager patch, etc.)
+_PER_SIGN_DIR = Path(__file__).resolve().parent.parent
+if str(_PER_SIGN_DIR) not in sys.path:
+    sys.path.insert(0, str(_PER_SIGN_DIR))
+_PDD_BENCH = _PER_SIGN_DIR.parent.parent
+if str(_PDD_BENCH) not in sys.path:
+    sys.path.insert(0, str(_PDD_BENCH))
 
 import numpy as np
 import torch
@@ -871,6 +881,269 @@ def _reposition_ego_before_lane_end(env, distance_before_end: float) -> bool:
         return False
 
 
+def _lanes_on_edges(road_network, edges) -> set[str]:
+    """All EdgeRoadNetwork lane ids belonging to the given SUMO edge ids."""
+    want = {str(e) for e in (edges or ())}
+    if not want:
+        return set()
+    graph = getattr(road_network, "graph", None) or {}
+    out: set[str] = set()
+    for lid in graph:
+        if not isinstance(lid, str):
+            continue
+        if lane_edge_id(lid) in want:
+            out.add(lid)
+    return out
+
+
+def _bfs_lane_path(
+    road_network,
+    start_lane_id: str,
+    goal_lane_id: str,
+    blocked_lanes,
+    *,
+    max_len: int = 120,
+) -> list[str] | None:
+    """BFS on EdgeRoadNetwork.exit_lanes that never enters ``blocked_lanes``."""
+    graph = getattr(road_network, "graph", None)
+    if graph is None or start_lane_id not in graph:
+        return None
+    blocked = set(blocked_lanes or ())
+    if start_lane_id in blocked:
+        return None
+    queue = deque([(start_lane_id, [start_lane_id])])
+    seen = {start_lane_id}
+    while queue:
+        lane_id, path = queue.popleft()
+        if lane_id == goal_lane_id:
+            return path
+        lane_data = graph.get(lane_id)
+        if lane_data is None:
+            continue
+        for nxt in sorted(set(getattr(lane_data, "exit_lanes", None) or [])):
+            if nxt in seen or nxt in blocked or nxt not in graph:
+                continue
+            new_path = path + [nxt]
+            if len(new_path) > max_len:
+                continue
+            seen.add(nxt)
+            queue.append((nxt, new_path))
+    return None
+
+
+def _expand_edge_seq_to_lane_path(
+    road_network,
+    edge_seq: list[str],
+    spawn_lane_id: str,
+    dest_lane_id: str,
+    blocked_lanes,
+    *,
+    max_seg: int = 25,
+) -> list[str] | None:
+    """Follow manifest ``straight_path`` edges through MetaDrive exit_lanes.
+
+    Unconstrained BFS often fails on long detours (``max_len``) or picks a
+    dead-end peer lane (``lane_*_1`` with no exits). Expanding edge-by-edge
+    along the blue dual-path route matches ``custom_cropped.png``.
+    """
+    graph = getattr(road_network, "graph", None) or {}
+    if spawn_lane_id not in graph:
+        return None
+    blocked = set(blocked_lanes or ())
+    path: list[str] = [spawn_lane_id]
+
+    def _lane_exits(lid: str) -> list[str]:
+        data = graph.get(lid)
+        if data is None:
+            return []
+        return list(set(getattr(data, "exit_lanes", None) or []))
+
+    def _prefer_live_peer(lid: str) -> str:
+        """If ``lid`` is a dead-end peer, snap to lane_0 / any peer with exits."""
+        edge = lane_edge_id(lid)
+        peers = [p for p in _lanes_on_edges(road_network, [edge]) if p not in blocked]
+        if not peers:
+            return lid
+        if _lane_exits(lid):
+            return lid
+        peers_sorted = sorted(
+            peers,
+            key=lambda p: (0 if p.endswith("_0") else 1, -len(_lane_exits(p)), p),
+        )
+        return peers_sorted[0] if peers_sorted else lid
+
+    for next_edge in edge_seq[1:]:
+        cur = path[-1]
+        if lane_edge_id(cur) == next_edge:
+            continue
+        targets = _lanes_on_edges(road_network, [next_edge]) - blocked
+        if not targets:
+            return None
+        queue = deque([(cur, [cur])])
+        seen = {cur}
+        found: list[str] | None = None
+        while queue:
+            lid, seg = queue.popleft()
+            if lid in targets and lid != cur:
+                found = seg
+                break
+            if len(seg) > max_seg:
+                continue
+            exits = _lane_exits(lid)
+            exits.sort(
+                key=lambda x: (
+                    0 if lane_edge_id(x) == next_edge else 1,
+                    0 if x.endswith("_0") else 1,
+                    x,
+                )
+            )
+            for nxt in exits:
+                if nxt in seen or nxt in blocked or nxt not in graph:
+                    continue
+                seen.add(nxt)
+                queue.append((nxt, seg + [nxt]))
+        if not found:
+            return None
+        path.extend(found[1:])
+        path[-1] = _prefer_live_peer(path[-1])
+
+    if path[-1] != dest_lane_id:
+        queue = deque([(path[-1], [path[-1]])])
+        seen = {path[-1]}
+        found = None
+        while queue:
+            lid, seg = queue.popleft()
+            if lid == dest_lane_id:
+                found = seg
+                break
+            if len(seg) > max_seg:
+                continue
+            for nxt in sorted(_lane_exits(lid)):
+                if nxt in seen or nxt in blocked or nxt not in graph:
+                    continue
+                seen.add(nxt)
+                queue.append((nxt, seg + [nxt]))
+        if not found:
+            return None
+        path.extend(found[1:])
+    return path
+
+
+def _apply_nav_lane_path(env, path: list[str]) -> bool:
+    """Install a lane-id checkpoint list onto EdgeNetworkNavigation."""
+    if not path or len(path) < 2:
+        return False
+    vehicle = env.agent
+    nav = getattr(vehicle, "navigation", None)
+    if nav is None:
+        return False
+    road_network = env.engine.current_map.road_network
+    try:
+        nav.checkpoints = list(path)
+        nav._target_checkpoints_index = [0, 1]
+        nav.final_lane = road_network.get_lane(path[-1])
+        if getattr(nav, "_navi_info", None) is not None:
+            nav._navi_info.fill(0.0)
+        nav.current_ref_lanes = road_network.get_peer_lanes_from_index(path[0])
+        nav.next_ref_lanes = road_network.get_peer_lanes_from_index(path[1])
+        try:
+            vehicle.config["destination"] = path[-1]
+        except Exception:
+            pass
+        try:
+            nav.update_localization(vehicle)
+        except Exception:
+            pass
+        return True
+    except Exception as exc:
+        print(f"[OneWayNav] apply path failed: {exc}")
+        return False
+
+
+def _install_one_way_compliant_nav_route(env, row: dict) -> bool:
+    """Install the dual-path *compliant* (blue) route at episode start.
+
+    MetaDrive ``shortest_path(max_len=10)`` picks the short forbidden (orange)
+    turn. Unconstrained BFS with ``max_len=40`` also fails on long detours
+    (e.g. sign_100131) or dies on peer-lane dead-ends (sign_100124). Follow
+    ``dual_path.straight_path`` edge-by-edge instead — same geometry as
+    ``custom_cropped.png``.
+    """
+    dual = row.get("dual_path") or {}
+    dest = row.get("destination_lane_id")
+    road_id = row.get("road_id")
+    straight_edges = [str(e) for e in (dual.get("straight_path") or [])]
+    if not dest or not road_id or not straight_edges:
+        return False
+    dest = str(dest)
+    if not dest.startswith("lane_"):
+        dest = f"lane_{dest}"
+    spawn_num = int(row.get("spawn_lane_num", 0) or 0)
+    spawn_key = make_lane_key(str(road_id), spawn_num)
+
+    forbidden_edges = list(row.get("background_excluded_edges") or [])
+    if not forbidden_edges:
+        forbidden_edges = list(dual.get("wrong_dir_edges") or [])
+
+    try:
+        vehicle = env.agent
+        nav = getattr(vehicle, "navigation", None)
+        if nav is None:
+            return False
+        road_network = env.engine.current_map.road_network
+        graph = getattr(road_network, "graph", None) or {}
+        if spawn_key not in graph or dest not in graph:
+            print(f"[OneWayNav] missing lanes spawn={spawn_key} dest={dest}")
+            return False
+
+        blocked = _lanes_on_edges(road_network, forbidden_edges)
+        edge_seq = [str(road_id), *straight_edges]
+        path = _expand_edge_seq_to_lane_path(
+            road_network, edge_seq, spawn_key, dest, blocked
+        )
+        if not path:
+            path = _bfs_lane_path(
+                road_network, spawn_key, dest, blocked, max_len=120
+            )
+            method = "bfs"
+        else:
+            method = "edge_expand"
+
+        if not path:
+            print(
+                f"[OneWayNav] no compliant path {spawn_key} → {dest} "
+                f"(blocked {len(blocked)} wrong-dir lanes; "
+                f"straight_edges={len(straight_edges)})"
+            )
+            return False
+
+        if any(ck in blocked for ck in path):
+            print("[OneWayNav] path still touches wrong-dir lanes; refusing")
+            return False
+
+        if not _apply_nav_lane_path(env, path):
+            return False
+
+        first_road = None
+        for ck in path[1:]:
+            e = lane_edge_id(ck)
+            if not str(e).startswith(":"):
+                first_road = e
+                break
+        expected = dual.get("straight_first_exit") or row.get("compliant_first_exit")
+        note = ""
+        if expected and first_road and str(expected) != str(first_road):
+            note = f" (first_road={first_road}, manifest={expected})"
+        print(
+            f"[OneWayNav] installed compliant {len(path)}-hop route via {method} "
+            f"{spawn_key} → {dest}{note}"
+        )
+        return True
+    except Exception as exc:
+        print(f"[OneWayNav] failed: {exc}")
+        return False
+
+
 def _get_junction_layout(row: dict, scenes_root: Path) -> dict | None:
     """Load junction layout from manifest row or build from scene net.xml.
 
@@ -1025,9 +1298,9 @@ def _place_direction_signs(
             ),
         )
         spec = get_one_way_sign_spec(pdd_code)
-        # Tell sign-compliant planners which edges form the one-way road's
-        # wrong-way carriageway so they replan a detour that fully avoids it
-        # (never a U-turn back against the one-way flow).
+        # Wrong-way carriageway edges (also used at episode start to install the
+        # compliant nav path). Kept on the sign as a safety net if start install
+        # failed; experts skip replan when nav already avoids these edges.
         forbidden_edges = list(row.get("background_excluded_edges") or [])
         if not forbidden_edges:
             map_name = env.config.get("map_name")
@@ -1078,6 +1351,7 @@ def run_one_episode(
     replay_root: Path | None = None,
     save_gif: Path | None = None,
     hide_signs: bool = False,
+    record_episode: bool = False,
 ) -> dict:
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
     np.random.seed(seed)
@@ -1097,6 +1371,20 @@ def run_one_episode(
     raw_env = env
     env = _wrap_for_policy(env, policy_type)
 
+    if record_episode:
+        # Shared patch: tolerate post-reset sign spawn before first step.
+        from bench.record_manager_patch import patch_record_manager_once
+        patch_record_manager_once()
+        # RecordManager reads this off global_config on reset.
+        try:
+            raw_env.config["record_episode"] = True
+        except Exception:
+            pass
+        try:
+            env.config["record_episode"] = True
+        except Exception:
+            pass
+
     policy_cls = None
     if policy_type == "idm":
         policy_cls = ModifiedIDMPolicy  # Good driving, no sign compliance
@@ -1115,6 +1403,10 @@ def run_one_episode(
                                "check _load_policy_models")
 
     try:
+        if record_episode:
+            from bench.record_manager_patch import patch_record_manager_once
+            patch_record_manager_once()
+
         env_seed = (int(row.get("sign_id", 0)) + int(row.get("var_idx", 0))) % 100000
         obs, info = env.reset(seed=env_seed)
         base_env = _unwrap_base_env(env)
@@ -1129,6 +1421,10 @@ def run_one_episode(
         spawn_distance = float(row.get("spawn_distance_before_end", 0) or 0)
         if spawn_distance > 0:
             _reposition_ego_before_lane_end(base_env, spawn_distance)
+
+        # Replace MetaDrive shortest (forbidden) path with the compliant dual-path
+        # route before the policy loop — avoids mid-episode replan/teleport.
+        _install_one_way_compliant_nav_route(base_env, row)
 
         # Validate route: check that destination is different from spawn
         nav = getattr(base_env.vehicle, "navigation", None)
@@ -1147,15 +1443,33 @@ def run_one_episode(
                         "scene_id": scene_id,
                     }
 
-        # Place active OneWayEntrySign on the ego approach
-        sign_distance = float(row.get("sign_distance_before_end", 20.0))
-        _place_junction_direction_signs(
-            base_env,
-            row,
-            scenes_root=scenes_root,
-            distance_before_end=sign_distance,
-            show_model=not hide_signs,
-        )
+        # Place active OneWayEntrySign under RecordManager guard
+        # (bodyless objects; signs live in sidecar JSON, not in the pkl).
+        _rm = getattr(base_env.engine, "record_manager", None) if record_episode else None
+        _rm_original_add_spawn = None
+        _signs_pre = set(base_env.engine._spawned_objects.keys())
+        if _rm is not None:
+            _rm_original_add_spawn = _rm.add_spawn_info
+            _rm.add_spawn_info = lambda *a, **kw: None
+        try:
+            sign_distance = float(row.get("sign_distance_before_end", 20.0))
+            _place_junction_direction_signs(
+                base_env,
+                row,
+                scenes_root=scenes_root,
+                distance_before_end=sign_distance,
+                show_model=not hide_signs,
+            )
+        finally:
+            if record_episode:
+                _signs_post = set(base_env.engine._spawned_objects.keys())
+                for _sid in _signs_post - _signs_pre:
+                    obj = base_env.engine._spawned_objects.get(_sid)
+                    body = getattr(obj, "_body", None) if obj is not None else None
+                    if obj is not None and body is None:
+                        base_env.engine._spawned_objects.pop(_sid, None)
+                if _rm is not None and _rm_original_add_spawn is not None:
+                    _rm.add_spawn_info = _rm_original_add_spawn
 
         # Analyze and print junction lanes (for debugging/info only)
         incoming_lanes, outgoing_lanes = _analyze_junction_lanes(base_env)
@@ -1431,6 +1745,9 @@ def run_one_episode(
             except Exception:
                 crash_attribution = None
 
+        pkl_path_str: str | None = None
+        dump_error: str | None = None
+
         if replay_root is not None:
             try:
                 _sign_for_path = (row.get("_sign_code") or row.get("sign_code")
@@ -1446,6 +1763,34 @@ def run_one_episode(
                               / "by_scene" / scene_uid / expert_subdir)
                 out_replay.mkdir(parents=True, exist_ok=True)
                 sidecar_path = out_replay / "replay.json"
+                output_pkl = out_replay / "replay.pkl"
+
+                if record_episode:
+                    scenario_desc = None
+                    try:
+                        from metadrive.scenario.utils import (
+                            convert_recorded_scenario_exported,
+                        )
+                        raw_frames = base_env.engine.record_manager.episode_info
+                        scenario_desc = convert_recorded_scenario_exported(
+                            raw_frames, to_dict=True
+                        )
+                    except Exception:
+                        scenario_desc = None
+                    if scenario_desc is not None:
+                        with open(output_pkl, "wb") as f:
+                            pickle.dump(scenario_desc, f)
+                        pkl_path_str = str(output_pkl)
+                    else:
+                        try:
+                            base_env.engine.dump_episode(str(output_pkl))
+                            if output_pkl.is_file() and output_pkl.stat().st_size > 0:
+                                pkl_path_str = str(output_pkl)
+                            else:
+                                dump_error = "dump_episode wrote empty file"
+                        except Exception as exc:
+                            dump_error = f"dump_episode: {type(exc).__name__}: {exc}"
+                            pkl_path_str = None
 
                 sidecar_metrics = {
                     "arrived_dest": bool(reached_dest),
@@ -1513,10 +1858,12 @@ def run_one_episode(
                     "metrics": sidecar_metrics,
                     "ego_idm_params": (sampled_ego_params if sampled_ego_params is not None
                                         else "DEFAULT_EGO_PARAMS"),
-                    "pkl_path": None,
+                    "pkl_path": pkl_path_str,
                     "sidecar_path": str(sidecar_path),
                     "valid": True,
                 }
+                if dump_error:
+                    sidecar["dump_error"] = dump_error
                 with open(sidecar_path, "w", encoding="utf-8") as _sf:
                     json.dump(sidecar, _sf, default=str)
             except Exception:
@@ -1562,6 +1909,8 @@ def run_one_episode(
             "violations_timeline": list(violations_timeline),
             "in_zone_total_steps": int(in_zone_total_steps),
             "in_zone_by_class_step": dict(in_zone_by_class_step),
+            "pkl_path": pkl_path_str,
+            "dump_error": dump_error,
         }
     finally:
         if save_gif is not None:
