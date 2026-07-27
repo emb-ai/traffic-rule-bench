@@ -2,9 +2,7 @@ from traffic_signs.base_traffic_sign import BaseTrafficSign
 
 
 class DirectionSign(BaseTrafficSign):
-    """Sign 5.15.2 — allowed lane directions.
-
-    """
+    """Sign 5.15.2 — allowed lane directions."""
     
     def __init__(self, lane, **kwargs):
         self.lane = lane
@@ -55,23 +53,6 @@ class DirectionSign(BaseTrafficSign):
 
         if "lane_:" in current_lane or "junction" in current_lane:
             return False
-
-        # Route-based violation for trap lane: check if the vehicle's next
-        # navigation checkpoint is not in the allowed targets of its current lane.
-        # if self._trap_lane_id is not None:
-        #     sign_lane_idx = getattr(self.lane, "index", None)
-        #     if self._same_road_direction(current_lane, sign_lane_idx):
-        #         nav = getattr(vehicle, "navigation", None)
-        #         if nav is not None:
-        #             try:
-        #                 next_ckpt = nav.next_checkpoint_lane_index
-        #             except Exception:
-        #                 next_ckpt = None
-        #             if next_ckpt is not None:
-        #                 src_lane_obj = self.engine.current_map.road_network.get_lane(current_lane)
-        #                 allowed = self._build_allowed_targets(src_lane_obj)
-        #                 if next_ckpt not in allowed:
-        #                     return True
 
         agent_id = vehicle.name
         if agent_id not in self.active_agents:

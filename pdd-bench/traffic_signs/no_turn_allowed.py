@@ -208,7 +208,53 @@ class _BaseNoTurnSign(BaseTrafficSign):
                 return True
         return False
 
+    def _collect_sumo_signed_approach_lanes(self):
+        """Lanes on the explicitly signed SUMO approach (placement edge).
+
+        Dual-path benches place the sign ON the ego approach that offers the
+        prohibited maneuver. The legacy PG ``_collect_render_lanes`` path skips
+        any lane whose turns include ``prohibited_maneuver`` and then hunts for
+        counterpart approaches — that puts icons/enforcement on the wrong road
+        and violations never arm.
+        """
+        lanes = [self.lane]
+        ids = {getattr(self.lane, "index", None)}
+        placement_road = self._road_from_lane_id(getattr(self.lane, "index", None))
+        if placement_road is None:
+            return lanes
+        try:
+            all_lanes = self._all_main_lanes(self.engine.current_map.road_network)
+        except Exception:
+            return lanes
+        for _key, lane_obj, _turns in all_lanes:
+            lid = getattr(lane_obj, "index", None)
+            if lid is None or lid in ids:
+                continue
+            if self._road_from_lane_id(lid) != placement_road:
+                continue
+            lanes.append(lane_obj)
+            ids.add(lid)
+        # Cache forbidden first-hop targets for violation checks.
+        for lane_obj in lanes:
+            lid = getattr(lane_obj, "index", None)
+            targets = set()
+            for turn in getattr(lane_obj, "turns", None) or []:
+                if self._normalize_turn_direction(turn.get("direction")) != self.prohibited_maneuver:
+                    continue
+                for key in ("to_lane", "via_lane"):
+                    tgt = turn.get(key)
+                    if tgt is not None:
+                        targets.add(tgt)
+            if targets:
+                self._semantic_forbidden_targets_by_render[lid] = targets
+            else:
+                self._semantic_forbidden_targets_by_render.pop(lid, None)
+        return lanes
+
     def _collect_render_lanes(self):
+        if self._is_sumo_network():
+            return self._collect_sumo_signed_approach_lanes()
+
         try:
             road_network = self.engine.current_map.road_network
         except Exception:
@@ -240,6 +286,8 @@ class _BaseNoTurnSign(BaseTrafficSign):
         return render if render else [self.lane]
 
     def _collect_enforcement_lanes(self):
+        if self._is_sumo_network():
+            return self._collect_sumo_signed_approach_lanes()
         return list(self.render_lanes)
 
     def get_top_down_icon_poses(self):
@@ -479,6 +527,8 @@ class NoRightTurnSign(_BaseNoTurnSign):
     """Sign 3.18.1 — right turn prohibited."""
     ICON_PATH = "3.18.1.png"
     PROHIBITED_MANEUVER = "r"
+    # Used by SignComplianceMixin SUMO replan (same helper as 4.1.x).
+    ALLOWED_DIRS = frozenset({"s", "l", "t"})
     RULE_DESCRIPTION = "Right turn prohibited (sign 3.18.1)."
     PG_FORBIDDEN_MODE = "right"
 
@@ -513,6 +563,7 @@ class NoLeftTurnSign(_BaseNoTurnSign):
     """Sign 3.18.2 — left turn prohibited."""
     ICON_PATH = "3.18.2.png"
     PROHIBITED_MANEUVER = "l"
+    ALLOWED_DIRS = frozenset({"s", "r", "t"})
     RULE_DESCRIPTION = "Left turn prohibited (sign 3.18.2)."
     PG_FORBIDDEN_MODE = "left"
 
@@ -547,6 +598,7 @@ class NoUTurnSign(_BaseNoTurnSign):
     """Sign 3.19 — U-turn prohibited."""
     ICON_PATH = "3.19.png"
     PROHIBITED_MANEUVER = "t"
+    ALLOWED_DIRS = frozenset({"s", "r", "l"})
     RULE_DESCRIPTION = "U-turn prohibited (sign 3.19)."
     PG_FORBIDDEN_MODE = "uturn"
 

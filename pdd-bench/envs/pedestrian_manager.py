@@ -122,6 +122,12 @@ class CrosswalkPedestrianManager(BaseManager):
         # 1.0 disables suppression; 0.0 never spawns on green. Default 0.05 = rarely.
         self.green_tl_spawn_probability = float(self._cfg.get("green_tl_spawn_probability", 0.05))
         self.tl_match_radius = float(self._cfg.get("tl_match_radius", 40.0))
+        self.spawn_mode = str(self._cfg.get("spawn_mode", "interval")).strip().lower()
+        self.ego_spawn_distance_m = float(self._cfg.get("ego_spawn_distance_m", 15.0))
+        self.target_pedestrian_count = max(1, int(self._cfg.get("target_pedestrian_count", 1) or 1))
+        self.pedestrian_spawn_gap_s = float(self._cfg.get("pedestrian_spawn_gap_s", 2.5))
+        self.pedestrian_spawn_chain = str(self._cfg.get("pedestrian_spawn_chain", "time_gap")).strip().lower()
+        self.crosswalk_active_tolerance_m = float(self._cfg.get("crosswalk_active_tolerance_m", 0.05))
 
         self._crosswalks: Dict[str, _CrosswalkSpec] = {}
         self._tracks: Dict[str, dict] = {}
@@ -132,6 +138,9 @@ class CrosswalkPedestrianManager(BaseManager):
         self._crosswalk_to_tl: Dict[str, object] = {}
         self._tl_mapping_resolved: bool = False
         self._counter = 0
+        self._ego_spawns_scheduled = 0
+        self._ego_trigger_crosswalk_id: Optional[str] = None
+        self._next_ego_spawn_step = 0
 
     def before_reset(self):
         super().before_reset()
@@ -144,12 +153,17 @@ class CrosswalkPedestrianManager(BaseManager):
         self._crosswalk_to_tl = {}
         self._tl_mapping_resolved = False
         self._counter = 0
+        self._ego_spawns_scheduled = 0
+        self._ego_trigger_crosswalk_id = None
+        self._next_ego_spawn_step = 0
 
     def reset(self):
         if not self.enabled:
             return
         self._crosswalks = self._collect_crosswalk_specs()
         if not self._crosswalks:
+            return
+        if self.spawn_mode == "ego_proximity":
             return
         self._init_spawn_timers()
         target = max(0, min(self.initial_pedestrians, self.max_pedestrians))
@@ -187,6 +201,11 @@ class CrosswalkPedestrianManager(BaseManager):
         for scenario_id in to_cleanup:
             self._cleanup_scenario_track(scenario_id)
 
+        if self.spawn_mode == "ego_proximity":
+            self._try_ego_proximity_spawn()
+            self._spawn_due_tracks()
+            return {"pedestrian_manager": {"pedestrians": len(self._scenario_id_to_obj_id)}}
+
         self._spawn_due_tracks()
 
         self._schedule_new_tracks()
@@ -204,8 +223,8 @@ class CrosswalkPedestrianManager(BaseManager):
             if polygon.ndim != 2 or polygon.shape[1] < 2:
                 continue
             polygon = polygon[:, :2]
-            pts = polygon[:4]
-            walk_start, walk_end, span_vec = self._extract_walk_and_span_axes(pts)
+            walk_hint = self._sumo_crossing_walk_hint(str(crosswalk_id))
+            walk_start, walk_end, span_vec = self._infer_crosswalk_axes(polygon, walk_hint)
             span_len = float(np.linalg.norm(span_vec))
             walk_len = float(np.linalg.norm(walk_end - walk_start))
             if span_len < 0.15 or walk_len < 2.0:
@@ -216,7 +235,7 @@ class CrosswalkPedestrianManager(BaseManager):
             specs[str(crosswalk_id)] = _CrosswalkSpec(
                 crosswalk_id=str(crosswalk_id),
                 polygon=polygon,
-                center=np.mean(pts, axis=0),
+                center=np.mean(polygon, axis=0),
                 walk_start=walk_start,
                 walk_end=walk_end,
                 walk_dir=walk_dir,
@@ -226,25 +245,137 @@ class CrosswalkPedestrianManager(BaseManager):
             )
         return specs
 
+    def _sumo_crossing_walk_hint(self, crosswalk_map_key: str) -> Optional[np.ndarray]:
+        """Return SUMO pedestrian crossing lane direction when available."""
+        map_mgr = getattr(self.engine, "map_manager", None)
+        graph = getattr(map_mgr, "graph", None) if map_mgr is not None else None
+        if graph is None:
+            return None
+
+        lane_name = str(crosswalk_map_key)
+        if lane_name.startswith("lane_"):
+            lane_name = lane_name[len("lane_") :]
+
+        lane_node = graph.lanes.get(lane_name)
+        if lane_node is None:
+            return None
+
+        sumo_lane = getattr(lane_node, "sumolib_obj", None)
+        if sumo_lane is None:
+            return None
+        try:
+            shape = sumo_lane.getShape()
+        except Exception:
+            return None
+        if not shape or len(shape) < 2:
+            return None
+
+        p0 = np.asarray(shape[0][:2], dtype=np.float64)
+        p1 = np.asarray(shape[-1][:2], dtype=np.float64)
+        vec = p1 - p0
+        norm = float(np.linalg.norm(vec))
+        if norm < 1e-6:
+            return None
+        return vec / norm
+
     @staticmethod
-    def _extract_walk_and_span_axes(pts: np.ndarray):
+    def _infer_crosswalk_axes(
+        polygon: np.ndarray,
+        walk_hint: Optional[np.ndarray] = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Infer crossing direction and span direction from a quadrilateral.
+        Infer pedestrian crossing direction (walk) and road-aligned span from polygon.
+
+        Pedestrians should walk across the road. When SUMO crossing lane direction is
+        available it is preferred; otherwise the shorter PCA axis is used.
         """
-        p0, p1, p2, p3 = pts
-        a_start = (p0 + p1) / 2.0
-        a_end = (p3 + p2) / 2.0
-        a_len = float(np.linalg.norm(a_end - a_start))
+        poly = np.asarray(polygon, dtype=np.float64)
+        if poly.ndim != 2 or poly.shape[1] < 2 or poly.shape[0] < 3:
+            raise ValueError("crosswalk polygon must contain at least 3 points")
+        poly = poly[:, :2]
+        if poly.shape[0] >= 2 and float(np.linalg.norm(poly[0] - poly[-1])) < 1e-6:
+            poly = poly[:-1]
 
-        b_start = (p1 + p2) / 2.0
-        b_end = (p0 + p3) / 2.0
-        b_len = float(np.linalg.norm(b_end - b_start))
+        center = np.mean(poly, axis=0)
+        centered = poly - center
+        try:
+            _, _, vh = np.linalg.svd(centered, full_matrices=False)
+        except np.linalg.LinAlgError:
+            p0, p1, p2, p3 = poly[:4]
+            a_start = (p0 + p1) / 2.0
+            a_end = (p3 + p2) / 2.0
+            b_start = (p1 + p2) / 2.0
+            b_end = (p0 + p3) / 2.0
+            if float(np.linalg.norm(a_end - a_start)) >= float(np.linalg.norm(b_end - b_start)):
+                span_vec = p1 - p0
+                return a_start, a_end, span_vec
+            span_vec = p2 - p1
+            return b_start, b_end, span_vec
 
-        if a_len >= b_len:
-            return a_start, a_end, (p1 - p0)
-        return b_start, b_end, (p2 - p1)
+        axis_long = vh[0]
+        axis_short = vh[1]
+        proj_long = centered @ axis_long
+        proj_short = centered @ axis_short
+        l_min, l_max = float(np.min(proj_long)), float(np.max(proj_long))
+        s_min, s_max = float(np.min(proj_short)), float(np.max(proj_short))
+        long_ext = l_max - l_min
+        short_ext = s_max - s_min
 
-    def _schedule_track(self, crosswalk_id: Optional[str] = None) -> bool:
+        if walk_hint is not None:
+            hint = np.asarray(walk_hint[:2], dtype=np.float64)
+            hint_norm = float(np.linalg.norm(hint))
+            if hint_norm > 1e-6:
+                hint = hint / hint_norm
+                if abs(float(np.dot(axis_long, hint))) >= abs(float(np.dot(axis_short, hint))):
+                    walk_axis, span_axis = axis_long, axis_short
+                    w_min, w_max, span_ext = l_min, l_max, short_ext
+                else:
+                    walk_axis, span_axis = axis_short, axis_long
+                    w_min, w_max, span_ext = s_min, s_max, long_ext
+                if float(np.dot(walk_axis, hint)) < 0.0:
+                    walk_axis = -walk_axis
+                    w_min, w_max = -w_max, -w_min
+            else:
+                walk_axis, span_axis, w_min, w_max, span_ext = CrosswalkPedestrianManager._pick_axes_by_extent(
+                    axis_long, axis_short, l_min, l_max, s_min, s_max, long_ext, short_ext
+                )
+        else:
+            walk_axis, span_axis, w_min, w_max, span_ext = CrosswalkPedestrianManager._pick_axes_by_extent(
+                axis_long, axis_short, l_min, l_max, s_min, s_max, long_ext, short_ext
+            )
+
+        if np.allclose(span_axis, axis_long):
+            span_mid = (l_min + l_max) / 2.0
+        else:
+            span_mid = (s_min + s_max) / 2.0
+
+        walk_start = center + span_axis * span_mid + walk_axis * w_min
+        walk_end = center + span_axis * span_mid + walk_axis * w_max
+        span_vec = span_axis * span_ext
+        return walk_start, walk_end, span_vec
+
+    @staticmethod
+    def _pick_axes_by_extent(
+        axis_long: np.ndarray,
+        axis_short: np.ndarray,
+        l_min: float,
+        l_max: float,
+        s_min: float,
+        s_max: float,
+        long_ext: float,
+        short_ext: float,
+    ) -> tuple[np.ndarray, np.ndarray, float, float, float]:
+        if short_ext <= long_ext:
+            return axis_short, axis_long, s_min, s_max, long_ext
+        return axis_long, axis_short, l_min, l_max, short_ext
+
+    def _schedule_track(
+        self,
+        crosswalk_id: Optional[str] = None,
+        *,
+        on_crosswalk: bool = False,
+        immediate: bool = False,
+    ) -> bool:
         if not self._crosswalks:
             return False
         if crosswalk_id is None:
@@ -259,6 +390,13 @@ class CrosswalkPedestrianManager(BaseManager):
         start_from_left = bool(self.np_random.rand() < 0.5)
         start = spec.walk_start + side_bias if start_from_left else spec.walk_end + side_bias
         end = spec.walk_end + side_bias if start_from_left else spec.walk_start + side_bias
+        if on_crosswalk:
+            # Place the pedestrian on the zebra, not on the curb waiting to enter.
+            inward = min(0.6, max(0.15, 0.1 * spec.walk_length))
+            start = start + spec.walk_dir * inward
+            end = end - spec.walk_dir * inward
+            start = self._snap_point_into_crosswalk(start, spec, spec.walk_dir)
+            end = self._snap_point_into_crosswalk(end, spec, -spec.walk_dir)
 
         if not self._is_position_free(start):
             return False
@@ -272,9 +410,13 @@ class CrosswalkPedestrianManager(BaseManager):
         direction = direction / dist
         heading = float(math.atan2(direction[1], direction[0]))
 
-        wait_steps = int(self.np_random.uniform(self.wait_min, self.wait_max) / max(dt, 1e-3))
+        if on_crosswalk or immediate:
+            wait_steps = 0
+            start_step = int(self.episode_step)
+        else:
+            wait_steps = int(self.np_random.uniform(self.wait_min, self.wait_max) / max(dt, 1e-3))
+            start_step = int(self.episode_step) + int(self.np_random.randint(0, max(self.spawn_jitter_steps, 1)))
         travel_steps = max(2, int(math.ceil(dist / max(speed * dt, 1e-3))))
-        start_step = int(self.episode_step) + int(self.np_random.randint(0, max(self.spawn_jitter_steps, 1)))
         track_len = start_step + wait_steps + travel_steps + 2
 
         position = np.zeros((track_len, 3), dtype=np.float32)
@@ -368,9 +510,71 @@ class CrosswalkPedestrianManager(BaseManager):
             if obj_id in self.spawned_objects:
                 self.clear_objects([obj_id])
         self._tracks.pop(scenario_id, None)
-        if crosswalk_id:
+        if crosswalk_id and self.spawn_mode != "ego_proximity":
             self._set_next_spawn_step(crosswalk_id, int(self.episode_step))
         self._pause_until_step.pop(scenario_id, None)
+
+    def _get_ego_vehicle(self) -> Optional[BaseVehicle]:
+        agent_manager = getattr(self.engine, "agent_manager", None)
+        if agent_manager is not None:
+            active_agents = getattr(agent_manager, "active_agents", None) or {}
+            if active_agents:
+                return next(iter(active_agents.values()))
+        vehicles = self.engine.get_objects(lambda o: isinstance(o, BaseVehicle))
+        if vehicles:
+            return next(iter(vehicles.values()))
+        return None
+
+    def _try_ego_proximity_spawn(self) -> None:
+        """Spawn pedestrians on the crosswalk when ego approaches, chained with gaps."""
+        if self._ego_spawns_scheduled >= self.target_pedestrian_count:
+            return
+
+        current_step = int(self.episode_step)
+        crosswalk_id = self._ego_trigger_crosswalk_id
+
+        if self._ego_spawns_scheduled == 0:
+            ego = self._get_ego_vehicle()
+            if ego is None:
+                return
+
+            ego_pos = np.asarray(ego.position[:2], dtype=np.float64)
+            best_dist = float("inf")
+            for cw_id, spec in self._crosswalks.items():
+                dist = self._distance_to_polygon(ego_pos, spec.polygon)
+                if dist <= self.ego_spawn_distance_m and dist < best_dist:
+                    best_dist = dist
+                    crosswalk_id = cw_id
+
+            if crosswalk_id is None:
+                return
+            self._ego_trigger_crosswalk_id = crosswalk_id
+        else:
+            if crosswalk_id is None:
+                return
+            if self.pedestrian_spawn_chain == "after_previous":
+                if self._count_pedestrians_on_crosswalk(crosswalk_id) > 0:
+                    return
+            elif current_step < self._next_ego_spawn_step:
+                return
+
+        if self._schedule_track(crosswalk_id, on_crosswalk=True, immediate=True):
+            self._ego_spawns_scheduled += 1
+            gap_steps = max(
+                1,
+                int(round(self.pedestrian_spawn_gap_s / max(self._sim_dt(), 1e-3))),
+            )
+            self._next_ego_spawn_step = current_step + gap_steps
+
+    def _count_pedestrians_on_crosswalk(self, crosswalk_id: str) -> int:
+        count = 0
+        for scenario_id, cw_id in self._scenario_id_to_crosswalk_id.items():
+            if str(cw_id) != str(crosswalk_id):
+                continue
+            obj_id = self._scenario_id_to_obj_id.get(scenario_id)
+            if obj_id and obj_id in self.spawned_objects:
+                count += 1
+        return count
 
     def _resolve_crosswalk_tl_mapping(self):
         """Match each crosswalk to the nearest TrafficLightSign within tl_match_radius."""
@@ -587,6 +791,42 @@ class CrosswalkPedestrianManager(BaseManager):
             return True
         return False
 
+    def _snap_point_into_crosswalk(
+        self,
+        point: np.ndarray,
+        spec: _CrosswalkSpec,
+        search_dir: np.ndarray,
+    ) -> np.ndarray:
+        """Move a point onto the crosswalk polygon along ``search_dir``."""
+        p = np.asarray(point[:2], dtype=np.float64)
+        if self._point_in_polygon(p, spec.polygon):
+            return p
+
+        direction = np.asarray(search_dir[:2], dtype=np.float64)
+        norm = float(np.linalg.norm(direction))
+        if norm > 1e-6:
+            direction = direction / norm
+        else:
+            direction = (np.asarray(spec.center[:2], dtype=np.float64) - p)
+            norm = float(np.linalg.norm(direction))
+            if norm > 1e-6:
+                direction = direction / norm
+
+        max_travel = max(spec.walk_length, float(np.linalg.norm(spec.center[:2] - p)))
+        for dist in np.linspace(0.05, max_travel, max(8, int(max_travel / 0.1))):
+            candidate = p + direction * float(dist)
+            if self._point_in_polygon(candidate, spec.polygon):
+                return candidate
+
+        return np.asarray(spec.center[:2], dtype=np.float64)
+
+    def _pedestrian_counts_as_active(self, pos: np.ndarray, polygon: np.ndarray) -> bool:
+        """True only when the pedestrian is on the crosswalk marking itself."""
+        if self._point_in_polygon(pos, polygon):
+            return True
+        tol = max(0.0, float(self.crosswalk_active_tolerance_m))
+        return tol > 0.0 and self._distance_to_polygon(pos, polygon) <= tol
+
     def get_active_crosswalk_state(self) -> Dict[str, dict]:
         """
         Returns current per-crosswalk pedestrian occupancy for external verifiers.
@@ -615,7 +855,7 @@ class CrosswalkPedestrianManager(BaseManager):
             entry["pedestrian_count"] += 1
             entry["pedestrian_positions"].append(pos.copy())
             entry["pedestrian_ids"].append(obj_id)
-            if self._point_in_polygon(pos, entry["polygon"]) or self._distance_to_polygon(pos, entry["polygon"]) <= 0.2:
+            if self._pedestrian_counts_as_active(pos, entry["polygon"]):
                 entry["active"] = True
 
         return state

@@ -2,6 +2,7 @@ import argparse
 import os
 import sys
 import subprocess
+import shutil
 import requests
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -46,6 +47,23 @@ SIGN_HIGHWAY_FILTER = {
     "5.21": {"allowed": RESIDENTIAL_WAYS, "prefer": {"living_street"}},
     "5.22": {"allowed": RESIDENTIAL_WAYS, "prefer": {"living_street"}},
 }
+
+
+def _find_netconvert() -> str:
+    """Resolve netconvert when it is not on PATH (e.g. pip install --user sumo-tools)."""
+    candidates = [
+        shutil.which("netconvert"),
+        Path.home() / ".local" / "bin" / "netconvert",
+        Path("/usr/local/bin/netconvert"),
+        Path("/usr/bin/netconvert"),
+    ]
+    for path in candidates:
+        if path and Path(path).exists():
+            return str(path)
+    raise FileNotFoundError(
+        "netconvert not found. Install SUMO or add netconvert to PATH.\n"
+        "Try: pip install sumo-tools  OR  export PATH=$PATH:$HOME/.local/bin"
+    )
 
 class AsyncOSMDownloader:
     def __init__(self, max_concurrent=5):
@@ -309,8 +327,9 @@ class BatchSignProcessor:
     
     @staticmethod
     def convert_osm_to_sumo(osm_path, net_output_path):
+        netconvert = _find_netconvert()
         subprocess.run([
-            "netconvert",
+            netconvert,
             "--osm-files", str(osm_path),
             "-o", str(net_output_path),
             "--osm.sidewalks",

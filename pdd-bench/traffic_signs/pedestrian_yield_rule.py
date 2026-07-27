@@ -67,7 +67,7 @@ class PedestrianYieldRule:
                 continue
 
             dist = self._distance_to_polygon(vehicle_pos, polygon)
-            in_crosswalk = self._point_in_polygon(vehicle_pos, polygon) or dist <= self._crosswalk_enter_tolerance
+            in_crosswalk = self._vehicle_in_crosswalk(vehicle, polygon)
             if (not in_crosswalk) and dist > monitor_distance:
                 continue
 
@@ -90,6 +90,7 @@ class PedestrianYieldRule:
                 {
                     "seen": False,
                     "stopped_before_crosswalk": False,
+                    "yielded_to_pedestrian": False,
                     "violated": False,
                     "reported_for_reward": False,
                     "reported_for_metrics": False,
@@ -98,24 +99,41 @@ class PedestrianYieldRule:
             v_state["seen"] = True
             if speed_kmh <= yield_speed_kmh:
                 v_state["stopped_before_crosswalk"] = True
+            if active and ahead and speed_kmh <= yield_speed_kmh:
+                v_state["yielded_to_pedestrian"] = True
+
+            new_violation = False
 
             # Occupied crosswalk is non-passable: entering it while pedestrian is active is a violation.
             if active and in_crosswalk:
                 v_state["violated"] = True
+                occupied_key = "reported_occupied_crosswalk_reward" if for_reward else "reported_occupied_crosswalk_metrics"
+                if not v_state.get(occupied_key, False):
+                    v_state[occupied_key] = True
+                    new_violation = True
 
-            # Standing in no-stop zone (<=8m before crosswalk) is a violation.
+            # Standing in no-stop zone is a violation unless yielding to a pedestrian on the crosswalk.
             if in_before_no_stop_zone and speed_kmh <= no_stop_speed_kmh:
-                v_state["stopped_before_crosswalk"] = True
-                v_state["violated"] = True
+                yielding_to_pedestrian = active and ahead
+                if not yielding_to_pedestrian and not v_state.get("yielded_to_pedestrian", False):
+                    v_state["stopped_before_crosswalk"] = True
+                    v_state["violated"] = True
+                    no_stop_key = "reported_no_stop_reward" if for_reward else "reported_no_stop_metrics"
+                    if not v_state.get(no_stop_key, False):
+                        v_state[no_stop_key] = True
+                        new_violation = True
 
             if bool(getattr(vehicle, "crash_human", False)):
                 v_state["violated"] = True
+                crash_key = "reported_crash_reward" if for_reward else "reported_crash_metrics"
+                if not v_state.get(crash_key, False):
+                    v_state[crash_key] = True
+                    new_violation = True
 
-            if v_state["violated"]:
+            if new_violation:
                 report_key = "reported_for_reward" if for_reward else "reported_for_metrics"
-                if not v_state[report_key]:
-                    v_state[report_key] = True
-                    return True
+                v_state[report_key] = True
+                return True
 
         return False
 
@@ -325,7 +343,7 @@ class PedestrianYieldRule:
             if not self._valid_polygon(polygon):
                 continue
             dist = self._distance_to_polygon(vehicle_pos, polygon)
-            in_crosswalk = self._point_in_polygon(vehicle_pos, polygon) or dist <= self._crosswalk_enter_tolerance
+            in_crosswalk = self._vehicle_in_crosswalk(vehicle, polygon)
             if (not in_crosswalk) and dist > monitor_distance:
                 continue
 
@@ -403,6 +421,16 @@ class PedestrianYieldRule:
     @staticmethod
     def _vehicle_pos(vehicle) -> np.ndarray:
         return np.asarray(vehicle.position[:2], dtype=np.float64)
+
+    def _vehicle_in_crosswalk(self, vehicle, polygon: np.ndarray) -> bool:
+        """Use footprint probe points so front-axle entry matches rendered stop lines."""
+        vehicle_pos = self._vehicle_pos(vehicle)
+        for point in self._vehicle_probe_points(vehicle, vehicle_pos):
+            if self._point_in_polygon(point, polygon):
+                return True
+            if self._distance_to_polygon(point, polygon) <= self._crosswalk_enter_tolerance:
+                return True
+        return False
 
     @staticmethod
     def _is_polygon_ahead(

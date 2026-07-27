@@ -364,7 +364,11 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
         "target_compliant_event": target_compliant_event if target_compliant_event is not None else "",
         "target_compliant_step": target_compliant_step if target_compliant_step is not None else "",
         # High-level compliance
-        "sign_compliant_high": (viol_high_sign == 0),
+        "sign_compliant_high": (
+            bool(target_compliant_event)
+            if target_class == "PedestrianYieldRule" and target_compliant_event is not None
+            else (viol_high_sign == 0)
+        ),
         "tl_compliant": (viol_high_tl == 0),
         "cw_compliant": (viol_high_cw == 0),
         # Recomputed dest + filter (require target_class)

@@ -1,0 +1,57 @@
+# Pedestrian Crossing Sign (5.19) Benchmark Configuration
+# See README.md for parameter descriptions
+
+defaults:
+  - _self_
+
+hydra:
+  run:
+    dir: ${paths.output_base}/${paths.experiment_name}
+  output_subdir: .hydra
+  job:
+    chdir: false
+
+paths:
+  scenes_dir: scenes
+  output_base: benchmark_output/5_19
+  experiment_name: ${now:%Y-%m-%d_%H-%M-%S}
+
+scenario:
+  n_variants: 1
+  augment: true
+  num_presets: 5              # 1..5 predefined pedestrian scenarios (see lib/pedestrian_presets.py)
+  max_scenarios_per_scene: null   # limit crosswalk approaches per scene (before expansion)
+  max_entries_per_scene: 10       # shuffle expanded combos and keep at most N per scene; null = keep all
+  respect_scene_selection: true
+  validate_metadrive_routes: true  # Drop routes MetaDrive navigation cannot follow
+
+simulation:
+  spawn_velocity_ms: 2.5
+  traffic_density: 0.0          # used when traffic_density_augment=false
+  traffic_density_augment: true # 3 nuPlan-derived levels (see lib/traffic_density_levels.py)
+  horizon: 600
+  spawn_distance_before_end: 20.0   # Ego spawn offset before crosswalk (m)
+  min_hops_after_depart: 2          # Destination lane hops past the crossing
+  max_destination_hops: 8            # Max BFS depth when searching destination
+
+pedestrian:
+  spawn_mode: ego_proximity
+  ego_spawn_distance_m: 10.0    # default trigger distance for presets 2-5
+  initial_pedestrians: 0
+  pedestrian_spawn_gap_s: 2.5   # fallback gap; presets 2-3 override in code
+  spawn_probability: 0.0
+  crossing_interval_range: [5.0, 10.0]
+  max_active_per_crosswalk: 1
+  speed_mean: 1.2
+  speed_std: 0.2
+  yield_distance: 12.0
+  no_stop_before_crosswalk_m: 3.0
+
+gif:
+  enabled: false
+  policy: idm
+  max_scenes: null
+  dry_run: false
+  hide_signs: true
+  dir: null
+  run_name: null

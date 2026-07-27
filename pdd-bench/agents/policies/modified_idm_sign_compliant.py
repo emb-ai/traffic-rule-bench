@@ -1,9 +1,4 @@
-"""Modified IDM + sign compliance (same overlay pattern as CarlSignCompliantPolicy).
-
-ModifiedIDMPolicy handles defensive driving (intersection crossing brake,
-curvature limits, stop-sign wait). SignComplianceMixin adds yield / priority
-and other traffic-sign rules as post-processing on top of each act() step.
-"""
+"""Modified IDM + sign compliance (same overlay pattern as CarlSignCompliantPolicy)."""
 
 from __future__ import annotations
 
@@ -12,6 +7,10 @@ import numpy as np
 from metadrive.policy.idm_policy import ModifiedIDMPolicy
 
 from agents.policies._sign_compliance_mixin import SignComplianceMixin
+
+
+# Keep MetaDrive submodule untouched: neutralize StopSign
+ModifiedIDMPolicy._find_relevant_stop_sign = lambda self: None  # type: ignore[method-assign]
 
 
 class ModifiedIDMSignCompliantPolicy(SignComplianceMixin, ModifiedIDMPolicy):
@@ -31,13 +30,16 @@ class ModifiedIDMSignCompliantPolicy(SignComplianceMixin, ModifiedIDMPolicy):
         return self.lateral_pid
 
     def act(self, *args, **kwargs):
+        # Process signs (incl. direction replan) BEFORE base IDM so steering
+        # follows the updated checkpoints on the same step.
+        if self.APPLY_RULE_OVERLAY:
+            self._process_signs()
+
         action = ModifiedIDMPolicy.act(self, *args, **kwargs)
         steering = float(action[0])
         throttle = float(action[1])
 
         if self.APPLY_RULE_OVERLAY:
-            self._process_signs()
-
             if self.APPLY_LANE_CHANGE_OVERRIDE:
                 self._update_lane_change()
                 if self._lc_target_lane is not None:
@@ -48,6 +50,8 @@ class ModifiedIDMSignCompliantPolicy(SignComplianceMixin, ModifiedIDMPolicy):
                             1.0,
                         )
                     )
+
+            steering = self._maybe_override_steering_for_direction_exit(steering)
 
             if self._no_overtaking_active and self._lc_target_lane is None:
                 ego = self.control_object

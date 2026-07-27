@@ -293,6 +293,9 @@ class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
         # Reset IDM target speed each step, capped by upcoming-curve limit.
         self.target_speed = min(self.NORMAL_SPEED, self._curvature_target_speed())
 
+        # Direction / no-entry replan must run before base IDM steering.
+        self._process_signs()
+
         # Base IDM action (car-following + PID steering + lane-change logic)
         action = IDMPolicy.act(self, *args, **kwargs)
         steering = float(action[0])
@@ -316,16 +319,14 @@ class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
         # Keep routing in sync
         self._sync_routing_target()
 
-        # Process all signs and rules (sets _speed_cap, _speed_floor,
-        # _blocked_lanes, triggers lane changes, etc.)
-        self._process_signs()
-
         # Update any active lane-change manoeuvre
         self._update_lane_change()
         if self._lc_target_lane is not None:
             steering = np.clip(
                 self._steering_control_for_lc(self._lc_target_lane), -1.0, 1.0
             )
+
+        steering = self._maybe_override_steering_for_direction_exit(steering)
 
         # Sync IDM target_speed with sign constraints
         if self._speed_cap is not None:

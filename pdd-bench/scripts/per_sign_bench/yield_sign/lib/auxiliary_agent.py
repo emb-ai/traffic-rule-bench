@@ -325,6 +325,12 @@ class AuxiliaryAgentsManager(BaseManager):
             used_lane = None
             used_destination = None
             for candidate_lane in candidate_lanes:
+                if candidate_lane not in road_network.graph:
+                    if candidate_lane == spawn_lane_index:
+                        logging.warning(
+                            f"[AuxAgent] Lane {candidate_lane} not found in road network; skipping"
+                        )
+                    continue
                 lane = road_network.get_lane(candidate_lane)
                 lead_spawn_long = lane.length - self._distance_from_intersection
                 if lead_spawn_long < MIN_SPAWN_LONGITUDE_M:

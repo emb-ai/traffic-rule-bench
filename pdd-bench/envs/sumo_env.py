@@ -11,9 +11,14 @@ from metadrive.constants import DEFAULT_AGENT, TerminationState
 from metadrive.component.navigation_module.edge_network_navigation import EdgeNetworkNavigation
 from metadrive.obs.top_down_obs_multi_channel import TopDownMultiChannel
 from metadrive.utils import clip, Config
+from envs.sumo_lane_node_patch import apply_sumo_lane_node_patch
+
+apply_sumo_lane_node_patch()
+
 from traffic_signs.traffic_sign_manager import TrafficSignManager
 from traffic_signs.stop_sign import StopSign
 from traffic_signs.direction_sign import DirectionSign
+from traffic_signs.lane_directions_sign import LaneDirectionsSign
 from traffic_signs.no_entry_sign import NoEntrySign
 from traffic_signs.min_speed_limit_sign import MinimumSpeedLimitSign
 from traffic_signs.no_traffic_sign import NoTrafficSign
@@ -63,6 +68,7 @@ SIGN_TYPE_TO_CLASS = {
     "3.25": EndOfSpeedLimitSign,
     "3.27": NoStoppingAllowedSign,
     "3.31": EndOfAllRestrictionsSign,
+    "5.15.1": LaneDirectionsSign,
     "5.15.2": DirectionSign,
     "5.31": ZoneSpeedLimitSign,
     "5.32": EndOfZoneSpeedLimitSign,
@@ -171,6 +177,10 @@ SUMO_DEFAULT_CONFIG = dict(
     # ===== Pedestrians & yield rule =====
     use_pedestrian_manager=True,
     use_pedestrian_yield_rule=True,
+    # NPC background traffic: metres. >0 → SumoTrajectoryIDMPolicy brakes for ego.
+    # Off by default so other benches keep realistic NPC priority; set in
+    # direction_signs (and similar skill benches) where NPC→ego crashes poison eval.
+    npc_ego_yield_radius=0.0,
     enforce_pedestrian_yield_for_traffic=True,
     pedestrian_manager=dict(
         enabled=True,
@@ -199,6 +209,12 @@ SUMO_DEFAULT_CONFIG = dict(
         # Suppress spawn on crosswalks whose adjacent TL is green for cars.
         green_tl_spawn_probability=0.05,
         tl_match_radius=40.0,
+        spawn_mode="interval",
+        ego_spawn_distance_m=15.0,
+        target_pedestrian_count=1,
+        pedestrian_spawn_gap_s=2.5,
+        pedestrian_spawn_chain="time_gap",
+        crosswalk_active_tolerance_m=0.05,
     ),
     pedestrian_yield_enforcer=dict(
         enabled=True,
@@ -449,6 +465,9 @@ class TrafficSignSumoEnv(BaseEnv):
         # reads this class attribute at __init__.
         from metadrive.utils.sumo.map_utils import LaneNode
         LaneNode.MIN_LANE_WIDTH = float(self.config.get("min_lane_width", 0.0))
+        LaneNode.TREAT_LIGHT_VEHICLE_AS_DRIVING = bool(
+            self.config.get("treat_light_vehicle_lanes_as_driving", True)
+        )
         self.engine.register_manager("map_manager", SumoMapManager(map_path))
         self.engine.register_manager("traffic_manager", SimpleTrafficManager())
         self.engine.register_manager("traffic_sign_manager", TrafficSignManager())
@@ -468,7 +487,10 @@ class TrafficSignSumoEnv(BaseEnv):
             self.engine.register_manager("pedestrian_manager", CrosswalkPedestrianManager())
             if self.config.get("enforce_pedestrian_yield_for_traffic", True):
                 self.engine.register_manager("crosswalk_yield_enforcer", CrosswalkYieldEnforcerManager())
-        print(f"[sumo_env] LaneNode.MIN_LANE_WIDTH = {LaneNode.MIN_LANE_WIDTH}")
+        print(
+            f"[sumo_env] LaneNode.MIN_LANE_WIDTH = {LaneNode.MIN_LANE_WIDTH}, "
+            f"TREAT_LIGHT_VEHICLE_AS_DRIVING = {LaneNode.TREAT_LIGHT_VEHICLE_AS_DRIVING}"
+        )
 
     @staticmethod
     def _normalize_turn_direction(raw_dir: str) -> str:
