@@ -399,6 +399,29 @@ def run_collection(args: argparse.Namespace) -> int:
     print(f"Output: {out_dir}  (multi_sign={multi_sign}, replay_root={replay_root})")
 
     n_ok = n_fail = n_skip = 0
+    total_eps = len(rows) * len(variants)
+    try:
+        from tqdm import tqdm  # type: ignore
+    except ImportError:  # pragma: no cover
+        tqdm = None  # type: ignore
+
+    pbar = None
+    if tqdm is not None:
+        pbar = tqdm(
+            total=total_eps,
+            desc=args.policy,
+            unit="ep",
+            dynamic_ncols=True,
+            mininterval=2.0,
+            file=sys.stderr,
+        )
+
+    def _pbar_update(*, status: str, variant: str, scene: str) -> None:
+        if pbar is None:
+            return
+        pbar.set_postfix_str(f"{status} {variant} {scene}", refresh=False)
+        pbar.update(1)
+
     try:
         for i, row in enumerate(rows, start=1):
             code = _sign_code(row)
@@ -425,11 +448,17 @@ def run_collection(args: argparse.Namespace) -> int:
                     )
                 ):
                     n_skip += 1
+                    _pbar_update(
+                        status="skip",
+                        variant=variant,
+                        scene=str(row.get("scene_id") or ""),
+                    )
                     continue
 
                 print(
                     f"[{i}/{len(rows)}] {args.policy}/{variant}  "
-                    f"sign={code} scene={row.get('scene_id')} uid={uid}"
+                    f"sign={code} scene={row.get('scene_id')} uid={uid}",
+                    flush=True,
                 )
                 t0 = time.time()
                 episode = rb.run_one_episode(
@@ -480,14 +509,23 @@ def run_collection(args: argparse.Namespace) -> int:
                     pkl_note = f"  pkl=NO({episode.get('dump_error')})"
                 print(f"  → {status}  steps={flat.get('final_step')}  {dt:.1f}s"
                       + pkl_note
-                      + (f"  gif={gif_path.name}" if flat.get("gif_path") else ""))
+                      + (f"  gif={gif_path.name}" if flat.get("gif_path") else ""),
+                      flush=True)
+                _pbar_update(
+                    status=status,
+                    variant=variant,
+                    scene=str(row.get("scene_id") or ""),
+                )
     finally:
+        if pbar is not None:
+            pbar.close()
         for fh, path in all_runs_files.values():
             fh.close()
             print(f"all_runs: {path}")
 
     print(
-        f"\nDone. ok={n_ok} fail={n_fail} skip={n_skip}"
+        f"\nDone. ok={n_ok} fail={n_fail} skip={n_skip}  "
+        f"({n_ok + n_fail + n_skip}/{total_eps} episodes)"
     )
     if gifs_dir is not None:
         n_gif = len(list(gifs_dir.glob("*.gif")))

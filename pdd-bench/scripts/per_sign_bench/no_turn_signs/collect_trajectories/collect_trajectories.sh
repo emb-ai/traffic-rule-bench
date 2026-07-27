@@ -317,9 +317,90 @@ if [ "$SKIP_PLANT2" != "1" ]; then
     fi
 fi
 
+# Live dashboard while policies run in parallel (progress is otherwise only in
+# $LOG_DIR/<policy>.log — easy to miss from the main terminal).
+: "${PROGRESS_EVERY_S:=30}"
+_print_collect_progress() {
+    "$PYTHON_BIN" - "$OUT_BASE" "$MANIFEST" "$EXTRA_SAMPLES_COMPREHENSIVE" "$LOG_DIR" <<'PY'
+import os, re, sys
+from pathlib import Path
+
+out_base = Path(sys.argv[1])
+manifest = Path(sys.argv[2])
+extra = int(sys.argv[3] or 0)
+log_dir = Path(sys.argv[4])
+
+n_rows = 0
+if manifest.is_file():
+    with open(manifest, encoding="utf-8") as f:
+        n_rows = sum(1 for ln in f if ln.strip())
+
+idm = {"idm", "modified_idm", "comprehensive_rule_expert"}
+print("----- progress -----", flush=True)
+any_pol = False
+for pol_dir in sorted(p for p in out_base.iterdir() if p.is_dir() and not p.name.startswith("_")):
+    any_pol = True
+    pol = pol_dir.name
+    n_var = (1 + max(0, extra)) if pol in idm else 1
+    target = n_rows * n_var if n_rows else 0
+    done = 0
+    for ar in pol_dir.glob("*/all_runs.jsonl"):
+        try:
+            with open(ar, encoding="utf-8") as f:
+                done += sum(1 for ln in f if ln.strip())
+        except OSError:
+            pass
+    pct = (100.0 * done / target) if target else 0.0
+    width = 24
+    filled = int(width * done / target) if target else 0
+    bar = "#" * filled + "-" * (width - filled)
+    # last scene line from per-policy log
+    last = ""
+    logf = log_dir / f"{pol}.log"
+    if logf.is_file():
+        try:
+            lines = logf.read_text(encoding="utf-8", errors="replace").splitlines()
+            for ln in reversed(lines[-80:]):
+                if re.match(r"^\[\d+/\d+\]", ln) or "it/s" in ln or "%|" in ln:
+                    last = ln.strip()[:100]
+                    break
+        except OSError:
+            pass
+    print(f"  {pol:<28} [{bar}] {done:>5}/{target:<5} ({pct:5.1f}%)", flush=True)
+    if last:
+        print(f"    └ {last}", flush=True)
+if not any_pol:
+    print("  (no policy dirs yet)", flush=True)
+print(
+    f"  tip: tail -f {log_dir}/<policy>.log   |   "
+    f"refresh every {os.environ.get('PROGRESS_EVERY_S', '30')}s",
+    flush=True,
+)
+print("--------------------", flush=True)
+PY
+}
+
+echo
+echo "[progress] live dashboard every ${PROGRESS_EVERY_S}s  (per-policy detail: $LOG_DIR/<policy>.log)"
+_print_collect_progress
+
+while true; do
+    alive=0
+    for pid in ${pids[@]+"${pids[@]}"}; do
+        if kill -0 "$pid" 2>/dev/null; then
+            alive=1
+            break
+        fi
+    done
+    [ "$alive" -eq 0 ] && break
+    sleep "$PROGRESS_EVERY_S"
+    _print_collect_progress
+done
+
 for pid in ${pids[@]+"${pids[@]}"}; do
     wait "$pid" || fail=$((fail + 1))
 done
+_print_collect_progress
 
 echo "=== Collection finished. failures=$fail ==="
 

@@ -17,7 +17,7 @@ Examples:
 
   # custom policies / continue after failures
   python run_test_metrics_batch.py \
-    --policies idm,comprehensive_rule_expert,carl,carl_rule,plant2,plant2_rule,ppo_lidar \
+    --policies idm,comprehensive_rule_expert,carl,carl_rule,plant2,plant2_rule,ppo_lidar,rule_compliant \
     --keep-going
 """
 from __future__ import annotations

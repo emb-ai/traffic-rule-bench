@@ -312,26 +312,48 @@ def run_collection(args: argparse.Namespace) -> int:
         return 2
 
     catalog_path = out_dir / "catalog.jsonl"
-    write_catalog(rows, catalog_path)
-    print(f"Catalog: {catalog_path} ({len(rows)} uids)")
+    # Parallel workers (--worker-id): only worker 0 writes the full catalog.
+    worker_id: Optional[int] = getattr(args, "worker_id", None)
+    if worker_id is None or worker_id == 0:
+        catalog_rows = (
+            _load_manifest(manifest, None, 0) if worker_id is not None else rows
+        )
+        write_catalog(catalog_rows, catalog_path)
+        print(f"Catalog: {catalog_path} ({len(catalog_rows)} uids)")
+    else:
+        print(f"Catalog: skip (worker_id={worker_id})")
 
     variants = _ego_variants(args.policy, args.ego_variant, args.ego_extra_samples)
     models = crb._load_policy_models(
         args.policy, args.model_path, args.plant2_action_mode
     )
 
-    all_runs_path = out_dir / "all_runs.jsonl"
-    mode = "a" if args.resume and all_runs_path.exists() else "w"
+    if worker_id is None:
+        all_runs_path = out_dir / "all_runs.jsonl"
+    else:
+        all_runs_path = out_dir / f"all_runs.w{worker_id:02d}.jsonl"
+
     done_keys: set[tuple] = set()
-    if mode == "a":
-        for line in all_runs_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
+    if args.resume:
+        for path in [out_dir / "all_runs.jsonl", *sorted(out_dir.glob("all_runs.w*.jsonl"))]:
+            if not path.is_file():
                 continue
             try:
-                r = json.loads(line)
-            except json.JSONDecodeError:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
                 continue
-            done_keys.add((r.get("scene_uid"), r.get("policy"), r.get("variant")))
+            for line in text.splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                done_keys.add(
+                    (r.get("scene_uid"), r.get("policy"), r.get("variant"))
+                )
+
+    mode = "a" if args.resume and all_runs_path.exists() else "w"
 
     any_aux = any(bool(r.get("auxiliary_agent")) for r in rows)
     print(
@@ -339,121 +361,164 @@ def run_collection(args: argparse.Namespace) -> int:
         f"aux={'ON' if any_aux else 'OFF'}  record=ON  "
         f"gifs={'yes' if args.save_gifs else 'no'}"
     )
-    print(f"Output: {out_dir}")
+    wtag = f" worker={worker_id}" if worker_id is not None else ""
+    print(
+        f"Output: {out_dir}  (start={args.start}, count={args.count}{wtag})"
+    )
 
     n_ok = n_fail = n_skip = 0
-    with open(all_runs_path, mode, encoding="utf-8") as ao:
-        for i, row in enumerate(rows, start=1):
-            for variant in variants:
-                uid = _scene_uid(row)
-                key = (uid, args.policy, variant)
-                sidecar = _expected_sidecar_path(
-                    replay_root, row, args.policy, variant
-                )
-                pkl_path = _expected_pkl_path(
-                    replay_root, row, args.policy, variant
-                )
-                gif_path = None
-                if gifs_dir is not None:
-                    gif_path = gifs_dir / f"{uid}_{args.policy}_{variant}.gif"
+    total_eps = len(rows) * len(variants)
+    try:
+        from tqdm import tqdm  # type: ignore
+    except ImportError:  # pragma: no cover
+        tqdm = None  # type: ignore
 
-                if args.resume and (
-                    key in done_keys
-                    or _episode_already_recorded(
-                        pkl_path, sidecar, gif_path, args.save_gifs
+    pbar = None
+    if tqdm is not None:
+        pbar = tqdm(
+            total=total_eps,
+            desc=args.policy,
+            unit="ep",
+            dynamic_ncols=True,
+            mininterval=2.0,
+            file=sys.stderr,
+        )
+
+    def _pbar_update(*, status: str, variant: str, scene: str) -> None:
+        if pbar is None:
+            return
+        pbar.set_postfix_str(f"{status} {variant} {scene}", refresh=False)
+        pbar.update(1)
+
+    try:
+        with open(all_runs_path, mode, encoding="utf-8") as ao:
+            for i, row in enumerate(rows, start=1):
+                for variant in variants:
+                    uid = _scene_uid(row)
+                    key = (uid, args.policy, variant)
+                    sidecar = _expected_sidecar_path(
+                        replay_root, row, args.policy, variant
                     )
-                ):
-                    n_skip += 1
-                    continue
-
-                print(
-                    f"[{i}/{len(rows)}] {args.policy}/{variant}  "
-                    f"scene={row.get('scene_id')} uid={uid}"
-                )
-                t0 = time.time()
-                # Aux OFF by default; honor rare rows that set auxiliary_agent=True.
-                # Pedestrian flags come from enrich_manifest_row / the row itself —
-                # do not force aux kwargs that would override ped setup.
-                use_aux = bool(row.get("auxiliary_agent", False))
-                episode_kwargs = dict(
-                    row=row,
-                    policy_type=args.policy,
-                    models=models,
-                    scenes_root=scenes_root,
-                    max_steps=args.max_steps,
-                    ego_variant=variant,
-                    ego_sample_seed_base=args.ego_sample_seed_base,
-                    replay_root=replay_root,
-                    save_gif=gif_path,
-                    hide_signs=args.hide_signs,
-                    auxiliary_agent=use_aux,
-                    record_episode=True,
-                )
-                if use_aux:
-                    episode_kwargs.update(
-                        aux_distance_from_intersection=float(
-                            row.get("aux_distance_from_intersection")
-                            or args.aux_distance_from_intersection
-                        ),
-                        aux_policy=args.aux_policy,
-                        aux_spawn_velocity_ms=float(
-                            row.get("aux_spawn_velocity_ms")
-                            or args.aux_spawn_velocity_ms
-                        ),
-                        aux_release_when_ego_within_m=(
-                            args.aux_release_when_ego_within_m
-                        ),
-                        aux_convoy_size=int(
-                            row.get("aux_convoy_size") or args.aux_convoy_size
-                        ),
-                        aux_convoy_gap_m=float(
-                            row.get("aux_convoy_gap_m") or args.aux_convoy_gap_m
-                        ),
-                        aux_lanes_occupied=int(
-                            row.get("aux_lanes_occupied") or args.aux_lanes_occupied
-                        ),
+                    pkl_path = _expected_pkl_path(
+                        replay_root, row, args.policy, variant
                     )
-                episode = crb.run_one_episode(**episode_kwargs)
-                dt = time.time() - t0
-                # Refresh paths after write
-                if not sidecar.is_file():
-                    sidecar = None  # type: ignore[assignment]
-                ep_pkl = episode.get("pkl_path")
-                if ep_pkl and Path(ep_pkl).is_file():
-                    pkl_resolved: Optional[Path] = Path(ep_pkl)
-                elif pkl_path.is_file():
-                    pkl_resolved = pkl_path
-                else:
-                    pkl_resolved = None
-                flat = _flat_all_runs_row(
-                    row=row,
-                    policy=args.policy,
-                    variant=variant,
-                    episode=episode,
-                    sidecar_path=sidecar if isinstance(sidecar, Path) else None,
-                    gif_path=gif_path if gif_path and gif_path.is_file() else None,
-                    pkl_path=pkl_resolved,
-                )
-                ao.write(json.dumps(flat, default=str) + "\n")
-                ao.flush()
+                    gif_path = None
+                    if gifs_dir is not None:
+                        gif_path = gifs_dir / f"{uid}_{args.policy}_{variant}.gif"
 
-                if flat.get("valid"):
-                    n_ok += 1
-                    status = "ok"
-                else:
-                    n_fail += 1
-                    status = f"FAIL({episode.get('error') or 'invalid'})"
-                pkl_note = ""
-                if flat.get("pkl_path"):
-                    pkl_note = "  pkl=yes"
-                elif episode.get("dump_error"):
-                    pkl_note = f"  pkl=NO({episode.get('dump_error')})"
-                print(f"  → {status}  steps={flat.get('final_step')}  {dt:.1f}s"
-                      + pkl_note
-                      + (f"  gif={gif_path.name}" if flat.get("gif_path") else ""))
+                    if args.resume and (
+                        key in done_keys
+                        or _episode_already_recorded(
+                            pkl_path, sidecar, gif_path, args.save_gifs
+                        )
+                    ):
+                        n_skip += 1
+                        _pbar_update(
+                            status="skip",
+                            variant=variant,
+                            scene=str(row.get("scene_id") or ""),
+                        )
+                        continue
+
+                    print(
+                        f"[{i}/{len(rows)}] {args.policy}/{variant}  "
+                        f"scene={row.get('scene_id')} uid={uid}",
+                        flush=True,
+                    )
+                    t0 = time.time()
+                    # Aux OFF by default; honor rare rows that set auxiliary_agent=True.
+                    # Pedestrian flags come from enrich_manifest_row / the row itself —
+                    # do not force aux kwargs that would override ped setup.
+                    use_aux = bool(row.get("auxiliary_agent", False))
+                    episode_kwargs = dict(
+                        row=row,
+                        policy_type=args.policy,
+                        models=models,
+                        scenes_root=scenes_root,
+                        max_steps=args.max_steps,
+                        ego_variant=variant,
+                        ego_sample_seed_base=args.ego_sample_seed_base,
+                        replay_root=replay_root,
+                        save_gif=gif_path,
+                        hide_signs=args.hide_signs,
+                        auxiliary_agent=use_aux,
+                        record_episode=True,
+                    )
+                    if use_aux:
+                        episode_kwargs.update(
+                            aux_distance_from_intersection=float(
+                                row.get("aux_distance_from_intersection")
+                                or args.aux_distance_from_intersection
+                            ),
+                            aux_policy=args.aux_policy,
+                            aux_spawn_velocity_ms=float(
+                                row.get("aux_spawn_velocity_ms")
+                                or args.aux_spawn_velocity_ms
+                            ),
+                            aux_release_when_ego_within_m=(
+                                args.aux_release_when_ego_within_m
+                            ),
+                            aux_convoy_size=int(
+                                row.get("aux_convoy_size") or args.aux_convoy_size
+                            ),
+                            aux_convoy_gap_m=float(
+                                row.get("aux_convoy_gap_m") or args.aux_convoy_gap_m
+                            ),
+                            aux_lanes_occupied=int(
+                                row.get("aux_lanes_occupied") or args.aux_lanes_occupied
+                            ),
+                        )
+                    episode = crb.run_one_episode(**episode_kwargs)
+                    dt = time.time() - t0
+                    # Refresh paths after write
+                    if not sidecar.is_file():
+                        sidecar = None  # type: ignore[assignment]
+                    ep_pkl = episode.get("pkl_path")
+                    if ep_pkl and Path(ep_pkl).is_file():
+                        pkl_resolved: Optional[Path] = Path(ep_pkl)
+                    elif pkl_path.is_file():
+                        pkl_resolved = pkl_path
+                    else:
+                        pkl_resolved = None
+                    flat = _flat_all_runs_row(
+                        row=row,
+                        policy=args.policy,
+                        variant=variant,
+                        episode=episode,
+                        sidecar_path=sidecar if isinstance(sidecar, Path) else None,
+                        gif_path=gif_path if gif_path and gif_path.is_file() else None,
+                        pkl_path=pkl_resolved,
+                    )
+                    ao.write(json.dumps(flat, default=str) + "\n")
+                    ao.flush()
+
+                    if flat.get("valid"):
+                        n_ok += 1
+                        status = "ok"
+                    else:
+                        n_fail += 1
+                        status = f"FAIL({episode.get('error') or 'invalid'})"
+                    pkl_note = ""
+                    if flat.get("pkl_path"):
+                        pkl_note = "  pkl=yes"
+                    elif episode.get("dump_error"):
+                        pkl_note = f"  pkl=NO({episode.get('dump_error')})"
+                    print(f"  → {status}  steps={flat.get('final_step')}  {dt:.1f}s"
+                          + pkl_note
+                          + (f"  gif={gif_path.name}" if flat.get("gif_path") else ""),
+                          flush=True)
+                    _pbar_update(
+                        status=status,
+                        variant=variant,
+                        scene=str(row.get("scene_id") or ""),
+                    )
+    finally:
+        if pbar is not None:
+            pbar.close()
 
     print(
         f"\nDone. ok={n_ok} fail={n_fail} skip={n_skip}  "
+        f"({n_ok + n_fail + n_skip}/{total_eps} episodes)  "
         f"all_runs={all_runs_path}"
     )
     if gifs_dir is not None:
@@ -482,6 +547,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Only first N manifest rows (smoke / visual check)")
     p.add_argument("--start", type=int, default=0,
                    help="Skip first N rows of the manifest")
+    p.add_argument(
+        "--worker-id",
+        type=int,
+        default=None,
+        help="Parallel shard id: write all_runs.wXX.jsonl (safe concurrent "
+             "collection). Use with --start/--count.",
+    )
     p.add_argument("--max-steps", type=int, default=1500)
     p.add_argument("--ego-variant", default="default",
                    help="Single ego variant when --ego-extra-samples=0")
