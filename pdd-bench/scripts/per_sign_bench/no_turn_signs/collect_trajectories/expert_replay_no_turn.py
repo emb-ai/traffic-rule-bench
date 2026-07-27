@@ -353,36 +353,64 @@ def run_collection(args: argparse.Namespace) -> int:
         return 2
 
     catalog_path = (policy_root if multi_sign else out_dir) / "catalog.jsonl"
-    write_catalog(rows, catalog_path)
-    print(f"Catalog: {catalog_path} ({len(rows)} uids)")
+    # Parallel workers (--worker-id): only worker 0 writes the full catalog.
+    worker_id: Optional[int] = getattr(args, "worker_id", None)
+    if worker_id is None or worker_id == 0:
+        catalog_rows = (
+            _load_manifest(manifest, None, 0) if worker_id is not None else rows
+        )
+        write_catalog(catalog_rows, catalog_path)
+        print(f"Catalog: {catalog_path} ({len(catalog_rows)} uids)")
+    else:
+        print(f"Catalog: skip (worker_id={worker_id})")
 
     variants = _ego_variants(args.policy, args.ego_variant, args.ego_extra_samples)
     models = rb._load_policy_models(
         args.policy, args.model_path, args.plant2_action_mode
     )
 
-    # Per-slug all_runs handles
+    # Per-slug all_runs handles. Parallel shards write all_runs.wXX.jsonl so
+    # they never race on a shared append; resume still reads every shard.
     all_runs_files: dict[str, Any] = {}
     done_keys: set[tuple] = set()
     mode_base = "a" if args.resume else "w"
 
-    def _ao_for(slug: str):
-        if slug in all_runs_files:
-            return all_runs_files[slug]
-        sign_dir = _policy_sign_dir(policy_root, slug, multi_sign, out_dir)
-        sign_dir.mkdir(parents=True, exist_ok=True)
-        path = sign_dir / "all_runs.jsonl"
-        mode = mode_base
-        if mode == "a" and path.exists():
-            for line in path.read_text(encoding="utf-8").splitlines():
+    def _all_runs_path(sign_dir: Path) -> Path:
+        if worker_id is None:
+            return sign_dir / "all_runs.jsonl"
+        return sign_dir / f"all_runs.w{worker_id:02d}.jsonl"
+
+    def _seed_done_keys(sign_dir: Path) -> None:
+        candidates = [sign_dir / "all_runs.jsonl"]
+        candidates.extend(sorted(sign_dir.glob("all_runs.w*.jsonl")))
+        for path in candidates:
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for line in text.splitlines():
                 if not line.strip():
                     continue
                 try:
                     r = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                done_keys.add((r.get("scene_uid"), r.get("policy"), r.get("variant")))
-        elif mode == "a" and not path.exists():
+                done_keys.add(
+                    (r.get("scene_uid"), r.get("policy"), r.get("variant"))
+                )
+
+    def _ao_for(slug: str):
+        if slug in all_runs_files:
+            return all_runs_files[slug]
+        sign_dir = _policy_sign_dir(policy_root, slug, multi_sign, out_dir)
+        sign_dir.mkdir(parents=True, exist_ok=True)
+        path = _all_runs_path(sign_dir)
+        mode = mode_base
+        if args.resume:
+            _seed_done_keys(sign_dir)
+        if mode == "a" and not path.exists():
             mode = "w"
         fh = open(path, mode, encoding="utf-8")
         all_runs_files[slug] = (fh, path)
@@ -399,7 +427,11 @@ def run_collection(args: argparse.Namespace) -> int:
         f"signs={dict(sign_counts)}  aux=OFF  record=ON  "
         f"gifs={'yes' if args.save_gifs else 'no'}"
     )
-    print(f"Output: {out_dir}  (multi_sign={multi_sign}, replay_root={replay_root})")
+    wtag = f" worker={worker_id}" if worker_id is not None else ""
+    print(
+        f"Output: {out_dir}  (multi_sign={multi_sign}, replay_root={replay_root}"
+        f", start={args.start}, count={args.count}{wtag})"
+    )
 
     n_ok = n_fail = n_skip = 0
     total_eps = len(rows) * len(variants)
@@ -560,6 +592,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Only first N manifest rows (smoke / visual check)")
     p.add_argument("--start", type=int, default=0,
                    help="Skip first N rows of the manifest")
+    p.add_argument(
+        "--worker-id",
+        type=int,
+        default=None,
+        help="Parallel shard id: write all_runs.wXX.jsonl (safe concurrent "
+             "collection). Use with --start/--count.",
+    )
     p.add_argument("--max-steps", type=int, default=1500)
     p.add_argument("--ego-variant", default="default",
                    help="Single ego variant when --ego-extra-samples=0")

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build oracle_metrics_summary_top2.md for a no_entry (3.1+3.2) collection OUT_BASE.
+# Build oracle_metrics_summary_top2.md for a no_turn (3.18.1+3.18.2) collection OUT_BASE.
 #
 # Usage:
 #   ./make_oracle_table.sh output/trajectories_<ts>
@@ -11,7 +11,16 @@ PER_SIGN="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 OUT_BASE="${1:?usage: $0 <OUT_BASE> [experts_dir]}"
+# Resolve before cd — relative OUT_BASE is relative to the caller's cwd.
+if [[ "$OUT_BASE" != /* ]]; then
+    OUT_BASE="$(pwd)/$OUT_BASE"
+fi
+OUT_BASE="$(cd -- "$OUT_BASE" && pwd)"
+
 EXPERTS_DIR="${2:-$OUT_BASE/experts}"
+if [[ "$EXPERTS_DIR" != /* ]]; then
+    EXPERTS_DIR="$(pwd)/$EXPERTS_DIR"
+fi
 HORIZON="${HORIZON:-1500}"
 
 ALL_RUNS="$OUT_BASE/_merged/all_runs.jsonl"
@@ -36,7 +45,7 @@ cd "$PER_SIGN"
 "$PYTHON_BIN" make_oracle_metrics_table.py \
     --jsonl "$ALL_RUNS" \
     --picks "$PICKS" \
-    --signs 3.1 3.2 \
+    --signs 3.18.1 3.18.2 \
     --horizon "$HORIZON" \
     --beta 0.25 \
     --output-dir "$TABLE_OUT"
