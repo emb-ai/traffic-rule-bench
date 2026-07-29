@@ -154,29 +154,77 @@ const SCENARIOS = [
   }
 ];
 
-/* Side-by-side comparison pairs: base planner vs rule-compliant expert (sign 5.19).
-   GIFs live at static/gifs/pairs/5.19/<id>_base.gif and <id>_expert.gif */
-const PLANNER_PAIRS = [
+/* Side-by-side comparison pairs: base planner vs rule-compliant expert.
+   GIFs live at static/gifs/pairs/<code>/<id>_base.gif and <id>_expert.gif */
+const PLANNER_PAIR_SECTIONS = [
   {
-    id: "idm",
-    title: "IDM",
-    baseLabel: "IDM (base)",
-    expertLabel: "IDMᵉ (rule expert)",
-    blurb: "Classic IDM vs. its comprehensive rule-compliant twin at the pedestrian crossing.",
+    code: "5.7.1",
+    gridId: "pairs-grid-5-7-1",
+    name: "One-way entry",
+    sign: "static/images/signs/5.7.1.png",
+    poster: "static/images/rules/5.7.1.png",
+    pairs: [
+      {
+        id: "carl",
+        title: "CaRL",
+        baseLabel: "CaRL (base)",
+        expertLabel: "CaRLᵉ (rule expert)",
+        blurb: "Learned CaRL planner vs. its rule-aware twin at the one-way entry.",
+      },
+      {
+        id: "plant2",
+        title: "PlanT-2",
+        baseLabel: "PlanT-2 (base)",
+        expertLabel: "PlanT-2ᵉ (rule expert)",
+        blurb: "PlanT-2 base checkpoint vs. the fine-tuned rule-compliant PlanT-2 expert.",
+      },
+    ],
   },
   {
-    id: "carl",
-    title: "CaRL",
-    baseLabel: "CaRL (base)",
-    expertLabel: "CaRLᵉ (rule expert)",
-    blurb: "Learned CaRL planner compared with the rule-aware CaRL expert.",
+    code: "5.15.1",
+    gridId: "pairs-grid-5-15-1",
+    name: "Lane directions",
+    sign: "static/images/signs/5.15.1.png",
+    poster: "static/images/rules/5.15.1.png",
+    pairs: [
+      {
+        id: "idm",
+        title: "IDM",
+        baseLabel: "IDM (base)",
+        expertLabel: "IDMᵉ (rule expert)",
+        blurb: "Classic IDM vs. its comprehensive rule-compliant twin at the lane-direction board.",
+      },
+      {
+        id: "plant2",
+        title: "PlanT-2",
+        baseLabel: "PlanT-2 (base)",
+        expertLabel: "PlanT-2ᵉ (rule expert)",
+        blurb: "PlanT-2 base checkpoint vs. the fine-tuned rule-compliant PlanT-2 expert.",
+      },
+    ],
   },
   {
-    id: "plant2",
-    title: "PlanT-2",
-    baseLabel: "PlanT-2 (base)",
-    expertLabel: "PlanT-2ᵉ (rule expert)",
-    blurb: "PlanT-2 base checkpoint vs. the fine-tuned rule-compliant PlanT-2 expert.",
+    code: "3.1",
+    gridId: "pairs-grid-3-1",
+    name: "No entry",
+    sign: "static/images/signs/3.1.png",
+    poster: "static/images/rules/3.1.png",
+    pairs: [
+      {
+        id: "idm",
+        title: "IDM",
+        baseLabel: "IDM (base)",
+        expertLabel: "IDMᵉ (rule expert)",
+        blurb: "Classic IDM vs. its comprehensive rule-compliant twin at the no-entry sign.",
+      },
+      {
+        id: "plant2",
+        title: "PlanT-2",
+        baseLabel: "PlanT-2 (base)",
+        expertLabel: "PlanT-2ᵉ (rule expert)",
+        blurb: "PlanT-2 base checkpoint vs. the fine-tuned rule-compliant PlanT-2 expert.",
+      },
+    ],
   },
 ];
 
@@ -326,24 +374,23 @@ if (grid) {
   });
 }
 
-/* ------------------------- planner comparison pairs (5.19) ------------------------- */
+/* ------------------------- planner comparison pairs ------------------------- */
 
-const pairsGrid = document.getElementById("pairs-grid");
-const CROSSWALK_POSTER = "static/images/rules/5.19.png";
-const CROSSWALK_SIGN = "static/images/signs/5.19.png";
+PLANNER_PAIR_SECTIONS.forEach((section) => {
+  const pairsGrid = document.getElementById(section.gridId);
+  if (!pairsGrid) return;
 
-if (pairsGrid) {
-  PLANNER_PAIRS.forEach((p) => {
+  section.pairs.forEach((p) => {
     const card = document.createElement("article");
     card.className = "planner-pair is-visible";
     card.innerHTML = `
       <div class="planner-pair-head">
-        <img class="planner-pair-sign" src="${CROSSWALK_SIGN}" alt="Pedestrian crossing sign 5.19" loading="lazy">
+        <img class="planner-pair-sign" src="${section.sign}" alt="${section.name} sign ${section.code}" loading="lazy">
         <div>
           <div class="planner-pair-title">${p.title}</div>
           <div class="planner-pair-blurb">${p.blurb}</div>
         </div>
-        <span class="planner-pair-badge">5.19</span>
+        <span class="planner-pair-badge">${section.code}</span>
       </div>
       <div class="planner-pair-media">
         <div class="pair-cell pair-cell--bad">
@@ -358,17 +405,17 @@ if (pairsGrid) {
     pairsGrid.appendChild(card);
 
     initMediaSlot(card.querySelector('[data-side="base"]'), {
-      gif: `static/gifs/pairs/5.19/${p.id}_base.gif`,
-      poster: CROSSWALK_POSTER,
-      alt: `${p.baseLabel} — crosswalk 5.19`,
+      gif: `static/gifs/pairs/${section.code}/${p.id}_base.gif`,
+      poster: section.poster,
+      alt: `${p.baseLabel} — ${section.name} ${section.code}`,
     });
     initMediaSlot(card.querySelector('[data-side="expert"]'), {
-      gif: `static/gifs/pairs/5.19/${p.id}_expert.gif`,
-      poster: CROSSWALK_POSTER,
-      alt: `${p.expertLabel} — crosswalk 5.19`,
+      gif: `static/gifs/pairs/${section.code}/${p.id}_expert.gif`,
+      poster: section.poster,
+      alt: `${p.expertLabel} — ${section.name} ${section.code}`,
     });
   });
-}
+});
 
 /* ------------------------- featured demo ------------------------- */
 

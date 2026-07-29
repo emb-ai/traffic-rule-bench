@@ -329,6 +329,16 @@ a:hover { text-decoration: underline; }
 }
 .sub-lead em { color: var(--text); font-style: normal; font-weight: 600; }
 
+.sign-note {
+  max-width: 860px;
+  margin: 10px 0 10px;
+  color: var(--text-dim);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+.sign-note strong { color: var(--text); }
+.sign-note--follow { margin-top: 18px; }
+
 /* ============================ FIGURE BLOCKS (YBmX) ============================ */
 
 .fig-block { margin-top: 56px; }
@@ -615,13 +625,16 @@ a:hover { text-decoration: underline; }
   margin-right: auto;
 }
 
-/* ============================ PLANNER PAIRS (base vs expert, 5.19) ============================ */
+/* ============================ PLANNER PAIRS (base vs expert, 3.1) ============================ */
 
 .planner-pairs {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 24px;
-  margin-top: 40px;
+  margin-top: 20px;
+}
+.planner-pairs--follow {
+  margin-top: 18px;
 }
 
 .planner-pair {
