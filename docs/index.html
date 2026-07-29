@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TrafficRuleBench — Rebuttal Supplementary Page</title>
+  <meta name="description" content="TrafficRuleBench: a large-scale, rule-centric benchmark for systematic and interpretable evaluation of traffic-rule compliance in autonomous driving. Supplementary rebuttal page with qualitative demos, enlarged figures, and extended metric analysis.">
+  <meta property="og:title" content="TrafficRuleBench">
+  <meta property="og:description" content="A rule-centric benchmark for evaluating traffic-rule compliance in autonomous driving planners.">
+  <meta property="og:image" content="static/images/teaser.png">
+  <meta property="og:type" content="website">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="static/css/style.css?v=20260729b">
+  <link rel="icon" href="static/images/signs/2.4.png" type="image/png">
+</head>
+<body>
+
+<!-- ============================ NAV ============================ -->
+<nav class="nav" id="nav">
+  <div class="nav-inner">
+    <a href="#top" class="nav-logo">
+      <span class="nav-logo-mark"></span>
+      <span class="nav-logo-text">TrafficRuleBench</span>
+    </a>
+    <div class="nav-links">
+      <a href="#reviewer-k1vn">Reviewer K1Vn</a>
+      <a href="#reviewer-ybmx">Reviewer YBmX</a>
+      <a href="#reviewer-pqwl">Reviewer pQWL</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ============================ HERO ============================ -->
+<header class="hero hero--compact" id="top">
+  <div class="hero-road" aria-hidden="true">
+    <div class="lane-line"></div>
+    <div class="lane-line lane-line--2"></div>
+    <div class="lane-line lane-line--3"></div>
+  </div>
+  <div class="hero-glow" aria-hidden="true"></div>
+
+  <div class="hero-inner">
+    <div class="hero-badge">NeurIPS 2026 · Rebuttal Supplementary Page</div>
+    <h1 class="hero-title">TrafficRuleBench</h1>
+    <p class="hero-blurb">
+      Supplementary material with visual attachments requested by the reviewers for the rebuttal. Jump to the response that addresses your review:
+    </p>
+
+    <div class="rev-nav">
+      <div class="rev-cards">
+        <a class="rev-card rev-card--k1vn" href="#reviewer-k1vn">
+          <span class="rev-card-id">Reviewer K1Vn <span class="rev-card-issue">· Minor Weakness #3</span></span>
+          <span class="rev-card-topic">Demonstration videos</span>
+          <span class="rev-card-desc">What the simulation actually looks like: closed-loop demos, compliant vs. violating rollouts</span>
+          <span class="rev-card-arrow" aria-hidden="true">&darr;</span>
+        </a>
+        <a class="rev-card rev-card--ybmx" href="#reviewer-ybmx">
+          <span class="rev-card-id">Reviewer YBmX <span class="rev-card-issue">· Weakness #2</span></span>
+          <span class="rev-card-topic">Figure readability</span>
+          <span class="rev-card-desc">Enlarged, zoomable versions of Figures 1–2, including a before/after comparison of the revised teaser</span>
+          <span class="rev-card-arrow" aria-hidden="true">&darr;</span>
+        </a>
+        <a class="rev-card rev-card--pqwl" href="#reviewer-pqwl">
+          <span class="rev-card-id">Reviewer pQWL <span class="rev-card-issue">· Question #5</span></span>
+          <span class="rev-card-topic">Correlation analysis and Bootstrap CIs</span>
+          <span class="rev-card-desc">Correlation analysis between standard metrics and proposed rule metrics; bootstrap confidence intervals for obtained results</span>
+          <span class="rev-card-arrow" aria-hidden="true">&darr;</span>
+        </a>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<!-- ################################################################
+     CHAPTER — REVIEWER K1Vn
+     ################################################################ -->
+<section class="chapter chapter--k1vn" id="reviewer-k1vn">
+  <div class="section-inner">
+    <div class="chapter-head">
+      <span class="rev-chip rev-chip--k1vn">Reviewer K1Vn · Minor Weakness #3</span>
+      <h2 class="section-title">Demonstration videos</h2>
+      <blockquote class="rev-quote">
+        &ldquo;There are no qualitative figures or demonstration videos showing what the simulation
+        actually looks like [&hellip;]. It is very difficult for a reader to gauge the visual or
+        geometric quality of the scenarios.&rdquo;
+      </blockquote>
+      <p class="section-lead">
+        In this section, we provide demonstration videos to provide the visual
+        quality of the scenarios as was suggested by the reviewer.
+      </p>
+    </div>
+  </div>
+
+  <!-- ---------- violation vs compliant pairs ---------- -->
+  <div class="section-inner" id="pairs">
+    <h3 class="sub-title">Violation vs Compliant pairs</h3>
+    <p class="sub-lead">
+      Across planners, every scene is replayed with an identical map, traffic seed, and agent
+      initialization. 
+    </p>
+    <div class="pairs-grid" id="pairs-grid"><!-- populated by main.js --></div>
+  </div>
+
+  <!-- ---------- scenario gallery ---------- -->
+  <!-- <div class="section-inner section-inner--wide" id="scenarios">
+    <h3 class="sub-title">Scenario gallery — 18 testing scenarios, 4 semantic groups</h3>
+    <p class="sub-lead">
+      From 45 formalized traffic signs we derive 18 independently testable closed-loop scenarios.
+      Each test scene is constructed so the target rule is applicable <em>and violable</em> —
+      no trivially compliant episodes.
+    </p>
+
+    <div class="tabs" id="scenario-tabs" role="tablist">
+      <button class="tab is-active" data-filter="all" role="tab">All <span class="tab-count"></span></button>
+      <button class="tab tab--priority" data-filter="priority" role="tab">Priority <span class="tab-count"></span></button>
+      <button class="tab tab--prohibitory" data-filter="prohibitory" role="tab">Prohibitory <span class="tab-count"></span></button>
+      <button class="tab tab--mandatory" data-filter="mandatory" role="tab">Mandatory <span class="tab-count"></span></button>
+      <button class="tab tab--special" data-filter="special" role="tab">Special <span class="tab-count"></span></button>
+    </div>
+
+    <div class="cards-grid" id="cards-grid"><!-- populated by main.js --></div>
+  </div>
+</section> -->
+
+<!-- ################################################################
+     CHAPTER — REVIEWER YBmX
+     ################################################################ -->
+<section class="chapter chapter--ybmx section--alt" id="reviewer-ybmx">
+  <div class="section-inner">
+    <div class="chapter-head">
+      <span class="rev-chip rev-chip--ybmx">Reviewer YBmX · Weakness #2</span>
+      <h2 class="section-title">Figure readability</h2>
+      <blockquote class="rev-quote">
+        &ldquo;Figures (especially Fig. 1, 2) are rendered with excessively small fonts, making them
+        difficult to read.&rdquo;
+      </blockquote>
+      <p class="section-lead">
+        We provide updated versions of the figures below.
+      </p>
+    </div>
+
+    <h3 class="sub-title">Figure 1 — Overview of TrafficRuleBench</h3>
+    <p class="sub-lead">
+      Submission vs. revised teaser with larger fonts for readability.
+    </p>
+    <figure class="fig-block">
+      <div class="cmp-slider" id="teaser-cmp">
+        <img class="cmp-img cmp-img--after" src="static/images/teaser-new.png" alt="Figure 1, revised version" draggable="false">
+        <div class="cmp-before">
+          <img class="cmp-img" src="static/images/teaser.png" alt="Figure 1, original version" draggable="false">
+        </div>
+        <div class="cmp-handle" aria-hidden="true"><span class="cmp-handle-grip">&#8596;</span></div>
+        <span class="cmp-label cmp-label--before">Original</span>
+        <span class="cmp-label cmp-label--after">Revised</span>
+        <input class="cmp-range" type="range" min="0" max="100" value="50"
+               aria-label="Comparison slider: original vs revised Figure 1">
+      </div>
+      <figcaption class="media-caption">
+        <strong>Figure 1 — original vs. revised.</strong> Drag the slider to compare the submission
+        version (left) with the revised version (right), re-rendered with larger fonts for readability.
+      </figcaption>
+    </figure>
+
+    <h3 class="sub-title">Figure 2 — Data-Driven Scene Diversification</h3>
+    <p class="sub-lead">
+      Distributions of scene-diversification parameters estimated on nuPlan.
+    </p>
+    <figure class="fig-block">
+      <div class="cmp-slider cmp-slider--fig2" id="fig2-cmp">
+        <img class="cmp-img cmp-img--after" src="static/images/figures/fig2_nuplan_stats_new.png"
+             alt="Figure 2, revised version" draggable="false">
+        <div class="cmp-before">
+          <img class="cmp-img" src="static/images/figures/fig2_nuplan_stats_orig.png"
+               alt="Figure 2, original version" draggable="false">
+        </div>
+        <div class="cmp-handle" aria-hidden="true"><span class="cmp-handle-grip">&#8596;</span></div>
+        <span class="cmp-label cmp-label--before">Original</span>
+        <span class="cmp-label cmp-label--after">Revised</span>
+        <input class="cmp-range" type="range" min="0" max="100" value="50"
+               aria-label="Comparison slider: original vs revised Figure 2">
+      </div>
+      <figcaption class="media-caption">
+        <strong>Figure 2 — original vs. revised.</strong> Drag the slider to compare the submission
+        version (left) with the revised version (right). Distributions of scene-diversification
+        parameters estimated on nuPlan (initial ego speed, acceleration/deceleration, traffic density,
+        route length, agent count, spawn lanes).
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ################################################################
+     CHAPTER — REVIEWER pQWL
+     ################################################################ -->
+<section class="chapter chapter--pqwl" id="reviewer-pqwl">
+  <div class="section-inner">
+    <div class="chapter-head">
+      <span class="rev-chip rev-chip--pqwl">Reviewer pQWL · Question #5</span>
+      <h2 class="section-title">Correlation analysis and Bootstrap CIs</h2>
+      <blockquote class="rev-quote">
+        &ldquo;A correlation analysis between standard metrics and rule metrics, plus confidence
+        intervals or fragment-level bootstrap estimates, would make the central benchmark claim
+        more convincing.&rdquo;
+      </blockquote>
+    </div>
+    <p class="sub-lead">
+      In this section, we provide illustrations for the tables and claims 
+      reported in our OpenReview response. 
+    </p>
+
+
+    <!-- ---------- correlation analysis ---------- -->
+    <h3 class="sub-title">Correlation analysis</h3>
+    <p class="sub-lead">
+      We conducted a correlation analysis comparing conventional metrics with our 
+      proposed compliance metrics (SCR, GCR, RCR). The results support our main claim 
+      that conventional driving metrics do not reliably reflect traffic-rule compliance.
+    </p>
+    <figure class="fig-block fig-block--reveal">
+      <div class="fig-frame fig-frame--sm fig-frame--glow">
+        <img src="static/images/figures/corr_heatmap_dark.png"
+             alt="Spearman correlation heatmap: conventional metrics vs SCR and per-group GCR"
+             class="zoomable">
+      </div>
+      <figcaption class="media-caption">
+        <strong>Spearman &rho;, conventional vs. rule-compliance metrics</strong> at the
+        (sign &times; planner) fragment level (N=224). Efficiency&harr;SCR: &rho; = &minus;0.36,
+        95% CI [&minus;0.47, &minus;0.24] &mdash; faster-looking planners comply <em>less</em>.
+        Click to zoom.
+      </figcaption>
+    </figure>
+
+    <h3 class="sub-title"></h3>
+    <p class="sub-lead">
+      Route completion stays essentially flat across every base-expert pair, while rule
+      compliance jumps by 60-70%.
+    </p>
+    <figure class="fig-block fig-block--reveal">
+      <div class="fig-frame fig-frame--glow">
+        <img src="static/images/figures/twin_gap_dark.png"
+             alt="Route completion vs SCR for base planners and their rule experts"
+             class="zoomable">
+      </div>
+      <figcaption class="media-caption">
+        <strong>Base planners vs. their rule-compliant twins.</strong> A progress-only dashboard
+        (left) cannot distinguish planners whose SCR differs by a factor of four (right).
+        Click to zoom.
+      </figcaption>
+    </figure>
+
+    <!-- ---------- bootstrap CIs ---------- -->
+    <h3 class="sub-title">Bootstrap confidence intervals</h3>
+    <p class="sub-lead">
+      For each planner and each of 1,000 replicates we resample episodes of every sign with
+      replacement. For every base&ndash;expert pair the CIs are disjoint, so the compliance gap
+      is not a point-estimate artifact.
+    </p>
+    <figure class="fig-block fig-block--reveal">
+      <div class="fig-frame fig-frame--glow">
+        <img src="static/images/figures/rcr_ci_forest_dark.png"
+             alt="Forest plot of overall RCR with 95% episode-bootstrap confidence intervals"
+             class="zoomable">
+      </div>
+      <figcaption class="media-caption">
+        <strong>Overall RCR with 95% episode-bootstrap CIs.</strong> Base planners cluster at
+        19&ndash;36% RCR; rule-compliant experts at 88&ndash;95%. Click to zoom.
+      </figcaption>
+    </figure>
+
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <p>TrafficRuleBench · NeurIPS 2026 Rebuttal Supplementary Page</p>
+  </div>
+</footer>
+
+<!-- ============================ LIGHTBOX ============================ -->
+<div class="lightbox" id="lightbox" hidden>
+  <button class="lightbox-close" id="lightbox-close" aria-label="Close">&times;</button>
+  <div class="lightbox-content" id="lightbox-content"></div>
+</div>
+
+<script src="static/js/main.js"></script>
+</body>
+</html>
