@@ -160,7 +160,7 @@ def rcr_forest():
 
     ax.set_yticks(y, labels, fontsize=9.5)
     ax.set_xlim(0, 104)
-    ax.set_xlabel("Overall RCR (%) — 95% episode-bootstrap CI (1,000 replicates)", fontsize=10)
+    ax.set_xlabel("Overall SCR (%) — 95% episode-bootstrap CI (1,000 replicates)", fontsize=10)
     ax.grid(axis="x", color=GRID, linewidth=0.6, alpha=0.5)
     ax.set_axisbelow(True)
     style_axes(ax)
