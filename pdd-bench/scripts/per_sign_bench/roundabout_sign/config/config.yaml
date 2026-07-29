@@ -16,7 +16,7 @@ hydra:
 # Path Configuration
 # =============================================================================
 paths:
-  scenes_dir: scenes
+  scenes_dir: scenes/4_3
   output_base: benchmark_output/4_3
   experiment_name: ${now:%Y-%m-%d_%H-%M-%S}
 
@@ -59,6 +59,7 @@ auxiliary:
 gif:
   enabled: false                   # Generate visualization GIFs
   policy: idm                     # Policy for rendering (good driving, no sign rules)
+  model_path: null                # optional override; carl/plant2* use checkpoints/ defaults
   max_scenes: null                # Limit GIFs (null = all)
   dry_run: false                  # Print commands without executing
   hide_signs: true                # Hide traffic signs in visualization

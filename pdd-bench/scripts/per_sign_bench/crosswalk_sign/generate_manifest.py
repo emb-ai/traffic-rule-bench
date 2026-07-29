@@ -39,9 +39,19 @@ from lib.sumo_utils import resolve_net_file
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 RUN_BENCH_SCRIPT = SCRIPT_DIR / "run_benchmark.py"
+PDD_BENCH_DIR = SCRIPT_DIR.parent.parent.parent
+CHECKPOINTS_DIR = PDD_BENCH_DIR / "checkpoints"
 
 PDD_CODE = "5.19"
 SIGN_TYPE = "crosswalk"
+
+NN_NEED_CHECKPOINT = frozenset({"carl", "carl_rule", "plant2", "plant2_rule"})
+DEFAULT_MODEL_PATHS: dict[str, Path] = {
+    "carl": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
+    "carl_rule": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
+    "plant2": CHECKPOINTS_DIR / "plant2_finetuned" / "plant2_supervised_2nd_final.pt",
+    "plant2_rule": CHECKPOINTS_DIR / "plant2_finetuned" / "plant2_supervised_2nd_final.pt",
+}
 
 
 @dataclass
@@ -92,11 +102,20 @@ class PedestrianConfig:
 class GifConfig:
     enabled: bool = False
     policy: str = "idm"
+    model_path: Optional[str] = None  # override; defaults used for carl/plant2*
     max_scenes: Optional[int] = None
     dry_run: bool = False
     hide_signs: bool = True
     dir: Optional[str] = None
     run_name: Optional[str] = None
+
+
+def resolve_gif_model_path(policy: str, model_path: Optional[str] = None) -> Optional[str]:
+    """Return checkpoint path for NN GIF policies (explicit override or repo default)."""
+    if model_path:
+        return str(model_path)
+    default = DEFAULT_MODEL_PATHS.get(policy)
+    return str(default) if default is not None else None
 
 
 @dataclass
@@ -611,6 +630,21 @@ def render_gifs_from_manifest(
             gif_cfg.policy,
             "--no-auxiliary-agent",
         ]
+        if gif_cfg.policy in NN_NEED_CHECKPOINT:
+            model_path = resolve_gif_model_path(gif_cfg.policy, gif_cfg.model_path)
+            if not model_path:
+                print(
+                    f"[GIF] No checkpoint for policy={gif_cfg.policy!r}; "
+                    f"set gif.model_path=...",
+                    file=sys.stderr,
+                )
+                failed += 1
+                continue
+            if not Path(model_path).is_file():
+                print(f"[GIF] Checkpoint not found: {model_path}", file=sys.stderr)
+                failed += 1
+                continue
+            cmd.extend(["--model-path", model_path])
         if gif_cfg.hide_signs:
             cmd.append("--hide-signs")
 
@@ -680,6 +714,7 @@ def main(cfg: DictConfig) -> None:
     gif_cfg = GifConfig(
         enabled=cfg.gif.enabled,
         policy=cfg.gif.policy,
+        model_path=cfg.gif.get("model_path"),
         max_scenes=cfg.gif.max_scenes,
         dry_run=cfg.gif.dry_run,
         hide_signs=cfg.gif.hide_signs,

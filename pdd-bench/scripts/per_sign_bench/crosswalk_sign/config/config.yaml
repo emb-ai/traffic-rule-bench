@@ -12,7 +12,7 @@ hydra:
     chdir: false
 
 paths:
-  scenes_dir: scenes
+  scenes_dir: scenes/5_19
   output_base: benchmark_output/5_19
   experiment_name: ${now:%Y-%m-%d_%H-%M-%S}
 
@@ -50,6 +50,7 @@ pedestrian:
 gif:
   enabled: false
   policy: idm
+  model_path: null   # optional override; carl/plant2* use checkpoints/ defaults
   max_scenes: null
   dry_run: false
   hide_signs: true
