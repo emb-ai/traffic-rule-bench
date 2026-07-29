@@ -58,10 +58,15 @@ class PlanT2SignCompliantPolicy(SignComplianceMixin, BasePolicy):
     # Let the mixin override steering for sign-driven lane changes
     # (5.15.2 direction signs, lane bans, etc.). Mirror RuleCompliantExpertPolicy.
     APPLY_LANE_CHANGE_OVERRIDE = True
+    # Mid-route rule-based U-turn on 3.18.1/3.18.2 compliant detours only.
+    APPLY_UTURN_ZONE_ASSIST = True
 
     # When False, skip ALL sign-compliance post-processing. Used by
     # PlainPlanT2Policy to expose raw PlanT2 behaviour without rule overlay.
     APPLY_RULE_OVERLAY = True
+
+    # 5.15.1: keep MetaDrive checkpoints during peer LC (no [spawn, dest] stub).
+    APPLY_LANE_DIRS_NAV_HOLD = False
 
     @classmethod
     def set_checkpoint(
@@ -152,12 +157,19 @@ class PlanT2SignCompliantPolicy(SignComplianceMixin, BasePolicy):
             # Steering override for sign-driven lane changes (mixin path).
             if self.APPLY_LANE_CHANGE_OVERRIDE:
                 self._update_lane_change()
-                if self._lc_target_lane is not None:
+                self._arm_uturn_from_nav()
+                uturn_armed = self._uturn_via_lane is not None
+                if self._lc_target_lane is not None and not uturn_armed:
                     steering = float(np.clip(
                         self._steering_control_for_lc(self._lc_target_lane), -1.0, 1.0
                     ))
+            else:
+                self._arm_uturn_from_nav()
+                uturn_armed = self._uturn_via_lane is not None
 
-            steering = self._maybe_override_steering_for_direction_exit(steering)
+            if not uturn_armed:
+                steering = self._maybe_override_steering_for_direction_exit(steering)
+            steering = self._maybe_override_steering_for_uturn_zone(steering)
 
             # No-overtaking steering guard (matches RuleCompliantExpertPolicy:59-71):
             # if PlanT2 is steering toward the opposite lane while overtaking is
