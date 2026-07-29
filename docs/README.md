@@ -45,7 +45,8 @@ Scenario card codes (see `SCENARIOS` in `static/js/main.js`):
 `2.4`, `2.5`, `3.1`, `3.2`, `3.20`, `3.24`, `3.27`, `4.2.1`, `4.2.2`, `4.2.3`,
 `4.6`, `5.11.1`, `5.11.2`, `5.14.1`, `5.14.2`, `5.15.2`, `5.19`, `5.31`.
 
-Comparison pair codes (see `PAIRS` in `static/js/main.js`): `2.4`, `3.24`, `5.19`.
+Comparison pairs for sign 5.19 (see `PLANNER_PAIRS` in `static/js/main.js`):
+drop GIFs at `static/gifs/pairs/5.19/{idm,carl,plant2}_{base,expert}.gif`.
 
 Tips:
 - Keep GIFs under ~5 MB each; 480–640 px wide top-down renders at 10–15 fps look great.

@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="static/css/style.css?v=20260729c">
+  <link rel="stylesheet" href="static/css/style.css?v=20260729d">
   <link rel="icon" href="static/images/signs/2.4.png" type="image/png">
 </head>
 <body>
@@ -53,7 +53,7 @@
         <a class="rev-card rev-card--k1vn" href="#reviewer-k1vn">
           <span class="rev-card-id">Reviewer K1Vn <span class="rev-card-issue">· Minor Weakness #3</span></span>
           <span class="rev-card-topic">Demonstration videos</span>
-          <span class="rev-card-desc">What the simulation actually looks like: closed-loop demos, compliant vs. violating rollouts</span>
+          <span class="rev-card-desc">Crosswalk 5.19 closed-loop GIFs: base planners vs. their rule-compliant twins</span>
           <span class="rev-card-arrow" aria-hidden="true">&darr;</span>
         </a>
         <a class="rev-card rev-card--ybmx" href="#reviewer-ybmx">
@@ -95,14 +95,14 @@
     </div>
   </div>
 
-  <!-- ---------- violation vs compliant pairs ---------- -->
-  <div class="section-inner" id="pairs">
-    <h3 class="sub-title">Violation vs Compliant pairs</h3>
+  <!-- ---------- baseline vs rule-compliant planners (5.19) ---------- -->
+  <div class="section-inner section-inner--wide" id="pairs">
+    <h3 class="sub-title">Baseline vs. rule-compliant planners · sign 5.19</h3>
     <p class="sub-lead">
-      Across planners, every scene is replayed with an identical map, traffic seed, and agent
-      initialization. 
+      Same crosswalk scene family, side-by-side: the base planner often fails to yield to pedestrians,
+      while its rule-compliant twin stops at the crossing.
     </p>
-    <div class="pairs-grid" id="pairs-grid"><!-- populated by main.js --></div>
+    <div class="planner-pairs" id="pairs-grid"><!-- populated by main.js --></div>
   </div>
 </section>
 
@@ -274,6 +274,6 @@
   <div class="lightbox-content" id="lightbox-content"></div>
 </div>
 
-<script src="static/js/main.js?v=20260729c"></script>
+<script src="static/js/main.js?v=20260729e"></script>
 </body>
 </html>

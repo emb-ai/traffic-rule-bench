@@ -154,33 +154,30 @@ const SCENARIOS = [
   }
 ];
 
-/* Side-by-side comparison pairs (violation vs. compliant).
-   GIFs expected at static/gifs/pairs/<code>_violation.gif / _compliant.gif  */
-const PAIRS = [
+/* Side-by-side comparison pairs: base planner vs rule-compliant expert (sign 5.19).
+   GIFs live at static/gifs/pairs/5.19/<id>_base.gif and <id>_expert.gif */
+const PLANNER_PAIRS = [
   {
-    code: "2.4", title: "Yield right-of-way",
-    sign: "static/images/signs/2.4.png",
-    poster: "static/images/rules/2.4.png",
-    rule: "Ego approaches an uncontrolled intersection on the minor road and must yield to crossing traffic.",
-    bad: "Base planner — cuts off the priority vehicle",
-    good: "Rule-compliant expert — yields, then proceeds"
+    id: "idm",
+    title: "IDM",
+    baseLabel: "IDM (base)",
+    expertLabel: "IDMᵉ (rule expert)",
+    blurb: "Classic IDM vs. its comprehensive rule-compliant twin at the pedestrian crossing.",
   },
   {
-    code: "3.24", title: "Speed limit",
-    sign: "static/images/signs/3.24.png",
-    poster: "static/images/rules/3.24.png",
-    rule: "Ego enters the scene above the posted limit and must slow down inside the influence zone.",
-    bad: "Base planner — keeps speeding past the sign",
-    good: "Rule-compliant expert — brakes to the posted limit"
+    id: "carl",
+    title: "CaRL",
+    baseLabel: "CaRL (base)",
+    expertLabel: "CaRLᵉ (rule expert)",
+    blurb: "Learned CaRL planner compared with the rule-aware CaRL expert.",
   },
   {
-    code: "5.19", title: "Crosswalk",
-    sign: "static/images/signs/5.19.png",
-    poster: "static/images/rules/5.19.png",
-    rule: "A pedestrian steps onto the marked crossing while ego approaches.",
-    bad: "Base planner — fails to yield to the pedestrian",
-    good: "Rule-compliant expert — stops at the crosswalk"
-  }
+    id: "plant2",
+    title: "PlanT-2",
+    baseLabel: "PlanT-2 (base)",
+    expertLabel: "PlanT-2ᵉ (rule expert)",
+    blurb: "PlanT-2 base checkpoint vs. the fine-tuned rule-compliant PlanT-2 expert.",
+  },
 ];
 
 const CAT_LABEL = {
@@ -200,42 +197,58 @@ const PLACEHOLDER_SVG = `
   </svg>`;
 
 /* Fill a .media-slot: show poster (if any) + "coming soon" badge,
-   then probe the GIF/image and swap it in when available. */
+   then probe the GIF and swap it in when available. */
 function initMediaSlot(slot, { gif, poster, alt = "", label = "Demo GIF coming soon" } = {}) {
+  if (!slot) return;
   gif = gif || slot.dataset.gif;
   poster = poster || slot.dataset.poster;
 
-  if (poster) {
-    const p = document.createElement("img");
-    p.className = "poster-img";
-    p.src = poster;
-    p.alt = alt;
-    p.loading = "lazy";
-    slot.appendChild(p);
-    const badge = document.createElement("span");
-    badge.className = "soon-badge";
-    badge.textContent = "Demo GIF soon";
-    slot.appendChild(badge);
-  } else {
-    const ph = document.createElement("div");
-    ph.className = "media-placeholder";
-    ph.innerHTML = `${PLACEHOLDER_SVG}<span>${label}</span>`;
-    slot.appendChild(ph);
-  }
+  const showPoster = () => {
+    slot.innerHTML = "";
+    if (poster) {
+      const p = document.createElement("img");
+      p.className = "poster-img";
+      p.src = poster;
+      p.alt = alt;
+      p.loading = "lazy";
+      slot.appendChild(p);
+      const badge = document.createElement("span");
+      badge.className = "soon-badge";
+      badge.textContent = "Demo GIF soon";
+      slot.appendChild(badge);
+    } else {
+      const ph = document.createElement("div");
+      ph.className = "media-placeholder";
+      ph.innerHTML = `${PLACEHOLDER_SVG}<span>${label}</span>`;
+      slot.appendChild(ph);
+    }
+  };
 
-  if (!gif) return;
-  const probe = new Image();
-  probe.onload = () => {
+  const showGif = (src) => {
     slot.innerHTML = "";
     const img = document.createElement("img");
     img.className = "gif-img";
-    img.src = gif;
+    img.src = src;
     img.alt = alt;
     img.loading = "lazy";
-    img.addEventListener("click", () => openLightbox(gif));
+    img.addEventListener("click", () => openLightbox(src));
     slot.appendChild(img);
   };
-  probe.src = gif;
+
+  showPoster();
+  if (!gif) return;
+
+  // HEAD avoids downloading multi‑MB GIFs twice (Image() would decode the full file).
+  fetch(gif, { method: "HEAD" })
+    .then((res) => {
+      if (res.ok) showGif(gif);
+    })
+    .catch(() => {
+      // Some static hosts reject HEAD — fall back to a lightweight Image probe.
+      const probe = new Image();
+      probe.onload = () => showGif(gif);
+      probe.src = gif;
+    });
 }
 
 /* ------------------------- lightbox ------------------------- */
@@ -271,91 +284,100 @@ document.querySelectorAll(".cmp-slider").forEach((slider) => {
   update();
 });
 
-/* ------------------------- scenario cards ------------------------- */
+/* ------------------------- scenario cards (optional; section may be hidden) ------------------------- */
 
 const grid = document.getElementById("cards-grid");
-
-SCENARIOS.forEach((s) => {
-  const card = document.createElement("article");
-  card.className = "card reveal";
-  card.dataset.cat = s.cat;
-  card.innerHTML = `
-    <div class="media-slot"></div>
-    <div class="card-body">
-      <div class="card-top">
-        <img class="card-sign" src="${s.sign}" alt="Traffic sign ${s.code}" loading="lazy">
-        <div>
-          <div class="card-name">${s.name}</div>
-          <div class="card-code">sign ${s.code}</div>
+if (grid) {
+  SCENARIOS.forEach((s) => {
+    const card = document.createElement("article");
+    card.className = "card reveal";
+    card.dataset.cat = s.cat;
+    card.innerHTML = `
+      <div class="media-slot"></div>
+      <div class="card-body">
+        <div class="card-top">
+          <img class="card-sign" src="${s.sign}" alt="Traffic sign ${s.code}" loading="lazy">
+          <div>
+            <div class="card-name">${s.name}</div>
+            <div class="card-code">sign ${s.code}</div>
+          </div>
         </div>
-      </div>
-      <p class="card-rule">${s.rule}</p>
-      <span class="card-cat card-cat--${s.cat}">${CAT_LABEL[s.cat]}</span>
-    </div>`;
-  grid.appendChild(card);
-  initMediaSlot(card.querySelector(".media-slot"), {
-    gif: s.gif, poster: s.poster, alt: `${s.name} scenario`
-  });
-});
-
-/* tabs / filtering */
-const tabs = document.querySelectorAll("#scenario-tabs .tab");
-tabs.forEach((tab) => {
-  const f = tab.dataset.filter;
-  const n = f === "all" ? SCENARIOS.length : SCENARIOS.filter((s) => s.cat === f).length;
-  tab.querySelector(".tab-count").textContent = n;
-  tab.addEventListener("click", () => {
-    tabs.forEach((t) => t.classList.toggle("is-active", t === tab));
-    grid.querySelectorAll(".card").forEach((card) => {
-      card.classList.toggle("is-hidden", f !== "all" && card.dataset.cat !== f);
+        <p class="card-rule">${s.rule}</p>
+        <span class="card-cat card-cat--${s.cat}">${CAT_LABEL[s.cat]}</span>
+      </div>`;
+    grid.appendChild(card);
+    initMediaSlot(card.querySelector(".media-slot"), {
+      gif: s.gif, poster: s.poster, alt: `${s.name} scenario`
     });
   });
-});
 
-/* ------------------------- comparison pairs ------------------------- */
+  const tabs = document.querySelectorAll("#scenario-tabs .tab");
+  tabs.forEach((tab) => {
+    const f = tab.dataset.filter;
+    const n = f === "all" ? SCENARIOS.length : SCENARIOS.filter((s) => s.cat === f).length;
+    const countEl = tab.querySelector(".tab-count");
+    if (countEl) countEl.textContent = n;
+    tab.addEventListener("click", () => {
+      tabs.forEach((t) => t.classList.toggle("is-active", t === tab));
+      grid.querySelectorAll(".card").forEach((card) => {
+        card.classList.toggle("is-hidden", f !== "all" && card.dataset.cat !== f);
+      });
+    });
+  });
+}
+
+/* ------------------------- planner comparison pairs (5.19) ------------------------- */
 
 const pairsGrid = document.getElementById("pairs-grid");
+const CROSSWALK_POSTER = "static/images/rules/5.19.png";
+const CROSSWALK_SIGN = "static/images/signs/5.19.png";
 
-PAIRS.forEach((p) => {
-  const row = document.createElement("div");
-  row.className = "pair-row reveal";
-  row.innerHTML = `
-    <div class="pair-head">
-      <img class="pair-sign" src="${p.sign}" alt="Traffic sign ${p.code}" loading="lazy">
-      <div>
-        <div class="pair-title">${p.title} <span class="card-code">· sign ${p.code}</span></div>
-        <div class="pair-rule">${p.rule}</div>
+if (pairsGrid) {
+  PLANNER_PAIRS.forEach((p) => {
+    const card = document.createElement("article");
+    card.className = "planner-pair is-visible";
+    card.innerHTML = `
+      <div class="planner-pair-head">
+        <img class="planner-pair-sign" src="${CROSSWALK_SIGN}" alt="Pedestrian crossing sign 5.19" loading="lazy">
+        <div>
+          <div class="planner-pair-title">${p.title}</div>
+          <div class="planner-pair-blurb">${p.blurb}</div>
+        </div>
+        <span class="planner-pair-badge">5.19</span>
       </div>
-    </div>
-    <div class="pair-media">
-      <div class="pair-cell pair-cell--bad">
-        <div class="pair-label pair-label--bad">${p.bad}</div>
-        <div class="media-slot" data-side="bad"></div>
-      </div>
-      <div class="pair-cell pair-cell--good">
-        <div class="pair-label pair-label--good">${p.good}</div>
-        <div class="media-slot" data-side="good"></div>
-      </div>
-    </div>`;
-  pairsGrid.appendChild(row);
+      <div class="planner-pair-media">
+        <div class="pair-cell pair-cell--bad">
+          <div class="pair-label pair-label--bad">${p.baseLabel}</div>
+          <div class="media-slot" data-side="base"></div>
+        </div>
+        <div class="pair-cell pair-cell--good">
+          <div class="pair-label pair-label--good">${p.expertLabel}</div>
+          <div class="media-slot" data-side="expert"></div>
+        </div>
+      </div>`;
+    pairsGrid.appendChild(card);
 
-  initMediaSlot(row.querySelector('[data-side="bad"]'), {
-    gif: `static/gifs/pairs/${p.code}_violation.gif`,
-    poster: p.poster,
-    alt: `${p.title} — violation`
+    initMediaSlot(card.querySelector('[data-side="base"]'), {
+      gif: `static/gifs/pairs/5.19/${p.id}_base.gif`,
+      poster: CROSSWALK_POSTER,
+      alt: `${p.baseLabel} — crosswalk 5.19`,
+    });
+    initMediaSlot(card.querySelector('[data-side="expert"]'), {
+      gif: `static/gifs/pairs/5.19/${p.id}_expert.gif`,
+      poster: CROSSWALK_POSTER,
+      alt: `${p.expertLabel} — crosswalk 5.19`,
+    });
   });
-  initMediaSlot(row.querySelector('[data-side="good"]'), {
-    gif: `static/gifs/pairs/${p.code}_compliant.gif`,
-    poster: p.poster,
-    alt: `${p.title} — compliant`
-  });
-});
+}
 
 /* ------------------------- featured demo ------------------------- */
 
-initMediaSlot(document.querySelector(".media-slot--hero"), {
-  alt: "TrafficRuleBench closed-loop rollout"
-});
+const heroSlot = document.querySelector(".media-slot--hero");
+if (heroSlot) {
+  initMediaSlot(heroSlot, {
+    alt: "TrafficRuleBench closed-loop rollout"
+  });
+}
 
 /* ------------------------- scroll reveal ------------------------- */
 
@@ -378,7 +400,7 @@ function observeReveal(el) {
   }
 }
 
-document.querySelectorAll(".reveal, .pipe-card, .finding, .stat, .rev-card, .pair-row, .card").forEach(observeReveal);
+document.querySelectorAll(".reveal, .pipe-card, .finding, .stat, .rev-card, .pair-row, .planner-pair, .card").forEach(observeReveal);
 
 /* ------------------------- nav shadow on scroll ------------------------- */
 
