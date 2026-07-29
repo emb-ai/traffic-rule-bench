@@ -366,17 +366,19 @@ const revealObserver = new IntersectionObserver((entries) => {
       revealObserver.unobserve(entry.target);
     }
   });
-}, { threshold: 0.08 });
+}, { threshold: 0, rootMargin: "40px 0px" });
 
-document.querySelectorAll(".reveal, .pipe-card, .finding, .stat, .rev-card").forEach((el) => {
+function observeReveal(el) {
   el.classList.add("reveal");
   revealObserver.observe(el);
-});
+  // Failsafe for hash jumps / already-on-screen elements
+  const r = el.getBoundingClientRect();
+  if (r.top < innerHeight + 40 && r.bottom > -40) {
+    el.classList.add("is-visible");
+  }
+}
 
-document.querySelectorAll(".fig-block--reveal").forEach((el, i) => {
-  el.style.transitionDelay = `${0.06 + i * 0.1}s`;
-  revealObserver.observe(el);
-});
+document.querySelectorAll(".reveal, .pipe-card, .finding, .stat, .rev-card, .pair-row, .card").forEach(observeReveal);
 
 /* ------------------------- nav shadow on scroll ------------------------- */
 

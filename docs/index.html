@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="static/css/style.css?v=20260729b">
+  <link rel="stylesheet" href="static/css/style.css?v=20260729c">
   <link rel="icon" href="static/images/signs/2.4.png" type="image/png">
 </head>
 <body>
@@ -104,27 +104,13 @@
     </p>
     <div class="pairs-grid" id="pairs-grid"><!-- populated by main.js --></div>
   </div>
+</section>
 
-  <!-- ---------- scenario gallery ---------- -->
-  <!-- <div class="section-inner section-inner--wide" id="scenarios">
-    <h3 class="sub-title">Scenario gallery — 18 testing scenarios, 4 semantic groups</h3>
-    <p class="sub-lead">
-      From 45 formalized traffic signs we derive 18 independently testable closed-loop scenarios.
-      Each test scene is constructed so the target rule is applicable <em>and violable</em> —
-      no trivially compliant episodes.
-    </p>
-
-    <div class="tabs" id="scenario-tabs" role="tablist">
-      <button class="tab is-active" data-filter="all" role="tab">All <span class="tab-count"></span></button>
-      <button class="tab tab--priority" data-filter="priority" role="tab">Priority <span class="tab-count"></span></button>
-      <button class="tab tab--prohibitory" data-filter="prohibitory" role="tab">Prohibitory <span class="tab-count"></span></button>
-      <button class="tab tab--mandatory" data-filter="mandatory" role="tab">Mandatory <span class="tab-count"></span></button>
-      <button class="tab tab--special" data-filter="special" role="tab">Special <span class="tab-count"></span></button>
-    </div>
-
-    <div class="cards-grid" id="cards-grid"><!-- populated by main.js --></div>
+<!-- Scenario gallery temporarily hidden
+  <div class="section-inner section-inner--wide" id="scenarios">
+    ...
   </div>
-</section> -->
+-->
 
 <!-- ################################################################
      CHAPTER — REVIEWER YBmX
@@ -220,7 +206,7 @@
       proposed compliance metrics (SCR, GCR, RCR). The results support our main claim 
       that conventional driving metrics do not reliably reflect traffic-rule compliance.
     </p>
-    <figure class="fig-block fig-block--reveal">
+    <figure class="fig-block">
       <div class="fig-frame fig-frame--sm fig-frame--glow">
         <img src="static/images/figures/corr_heatmap_dark.png"
              alt="Spearman correlation heatmap: conventional metrics vs SCR and per-group GCR"
@@ -234,12 +220,12 @@
       </figcaption>
     </figure>
 
-    <h3 class="sub-title"></h3>
+    <h3 class="sub-title">Same progress metric, opposite rule outcome</h3>
     <p class="sub-lead">
       Route completion stays essentially flat across every base-expert pair, while rule
       compliance jumps by 60-70%.
     </p>
-    <figure class="fig-block fig-block--reveal">
+    <figure class="fig-block">
       <div class="fig-frame fig-frame--glow">
         <img src="static/images/figures/twin_gap_dark.png"
              alt="Route completion vs SCR for base planners and their rule experts"
@@ -259,7 +245,7 @@
       replacement. For every base&ndash;expert pair the CIs are disjoint, so the compliance gap
       is not a point-estimate artifact.
     </p>
-    <figure class="fig-block fig-block--reveal">
+    <figure class="fig-block">
       <div class="fig-frame fig-frame--glow">
         <img src="static/images/figures/rcr_ci_forest_dark.png"
              alt="Forest plot of overall RCR with 95% episode-bootstrap confidence intervals"
@@ -288,6 +274,6 @@
   <div class="lightbox-content" id="lightbox-content"></div>
 </div>
 
-<script src="static/js/main.js"></script>
+<script src="static/js/main.js?v=20260729c"></script>
 </body>
 </html>
