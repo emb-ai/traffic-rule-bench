@@ -158,18 +158,18 @@ const SCENARIOS = [
    GIFs live at static/gifs/pairs/<code>/<id>_base.gif and <id>_expert.gif */
 const PLANNER_PAIR_SECTIONS = [
   {
-    code: "2.4",
-    gridId: "pairs-grid-2-4",
-    name: "Yield",
-    sign: "static/images/signs/2.4.png",
-    poster: "static/images/rules/2.4.png",
+    code: "2.1",
+    gridId: "pairs-grid-2-1",
+    name: "Main road",
+    sign: "static/images/signs/2.1.png",
+    poster: "static/images/rules/2.1.png",
     pairs: [
       {
-        id: "idm",
-        title: "IDM",
-        baseLabel: "IDM (base)",
-        expertLabel: "IDMᵉ (rule expert)",
-        blurb: "IDM vs. its rule-compliant IDM expert.",
+        id: "carl",
+        title: "CaRL",
+        baseLabel: "CaRL (base)",
+        expertLabel: "CaRLᵉ (rule expert)",
+        blurb: "CaRL vs. its rule-aware CaRL expert at the main-road intersection.",
       },
       {
         id: "plant2",
@@ -227,6 +227,29 @@ const PLANNER_PAIR_SECTIONS = [
     ],
   },
   {
+    code: "4.3",
+    gridId: "pairs-grid-4-3",
+    name: "Roundabout",
+    sign: "static/images/signs/4.3.png",
+    poster: "static/images/rules/4.3.png",
+    pairs: [
+      {
+        id: "carl",
+        title: "CaRL",
+        baseLabel: "CaRL (base)",
+        expertLabel: "CaRLᵉ (rule expert)",
+        blurb: "CaRL vs. its rule-aware CaRL expert.",
+      },
+      {
+        id: "plant2",
+        title: "PlanT-2",
+        baseLabel: "PlanT-2 (base)",
+        expertLabel: "PlanT-2ᵉ (rule expert)",
+        blurb: "PlanT-2 vs. its rule-compliant PlanT-2 expert.",
+      },
+    ],
+  },
+  {
     code: "5.7.1",
     gridId: "pairs-grid-5-7-1",
     name: "One-way entry",
@@ -238,7 +261,7 @@ const PLANNER_PAIR_SECTIONS = [
         title: "CaRL",
         baseLabel: "CaRL (base)",
         expertLabel: "CaRLᵉ (rule expert)",
-        blurb: "CaRL vs. its rule-aware CaRL expert at the one-way entry.",
+        blurb: "CaRL vs. its rule-aware CaRL expert.",
       },
       {
         id: "plant2",
