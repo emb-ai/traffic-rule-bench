@@ -339,6 +339,26 @@ a:hover { text-decoration: underline; }
 .sign-note strong { color: var(--text); }
 .sign-note--follow { margin-top: 18px; }
 
+.pair-group {
+  margin-top: 28px;
+}
+.pair-group:first-of-type {
+  margin-top: 8px;
+}
+.pair-cat {
+  margin: 0 0 8px;
+  font-family: var(--font-display);
+  font-size: 0.92rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pair-cat-color, var(--text-dim));
+}
+.pair-cat--priority    { --pair-cat-color: var(--c-priority); }
+.pair-cat--prohibitory { --pair-cat-color: var(--c-prohibitory); }
+.pair-cat--mandatory   { --pair-cat-color: var(--c-mandatory); }
+.pair-cat--special     { --pair-cat-color: var(--c-special); }
+
 /* ============================ FIGURE BLOCKS (YBmX) ============================ */
 
 .fig-block { margin-top: 56px; }

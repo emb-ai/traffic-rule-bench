@@ -158,6 +158,75 @@ const SCENARIOS = [
    GIFs live at static/gifs/pairs/<code>/<id>_base.gif and <id>_expert.gif */
 const PLANNER_PAIR_SECTIONS = [
   {
+    code: "2.4",
+    gridId: "pairs-grid-2-4",
+    name: "Yield",
+    sign: "static/images/signs/2.4.png",
+    poster: "static/images/rules/2.4.png",
+    pairs: [
+      {
+        id: "idm",
+        title: "IDM",
+        baseLabel: "IDM (base)",
+        expertLabel: "IDMᵉ (rule expert)",
+        blurb: "IDM vs. its rule-compliant IDM expert.",
+      },
+      {
+        id: "plant2",
+        title: "PlanT-2",
+        baseLabel: "PlanT-2 (base)",
+        expertLabel: "PlanT-2ᵉ (rule expert)",
+        blurb: "PlanT-2 vs. its rule-compliant PlanT-2 expert.",
+      },
+    ],
+  },
+  {
+    code: "3.1",
+    gridId: "pairs-grid-3-1",
+    name: "No entry",
+    sign: "static/images/signs/3.1.png",
+    poster: "static/images/rules/3.1.png",
+    pairs: [
+      {
+        id: "idm",
+        title: "IDM",
+        baseLabel: "IDM (base)",
+        expertLabel: "IDMᵉ (rule expert)",
+        blurb: "IDM vs. its rule-compliant IDM expert.",
+      },
+      {
+        id: "plant2",
+        title: "PlanT-2",
+        baseLabel: "PlanT-2 (base)",
+        expertLabel: "PlanT-2ᵉ (rule expert)",
+        blurb: "PlanT-2 vs. its rule-compliant PlanT-2 expert.",
+      },
+    ],
+  },
+  {
+    code: "4.2.1",
+    gridId: "pairs-grid-4-2-1",
+    name: "Pass right",
+    sign: "static/images/signs/4.2.1.png",
+    poster: "static/images/rules/4.2.1.png",
+    pairs: [
+      {
+        id: "idm",
+        title: "IDM",
+        baseLabel: "IDM (base)",
+        expertLabel: "IDMᵉ (rule expert)",
+        blurb: "IDM vs. its rule-compliant IDM expert.",
+      },
+      {
+        id: "plant2",
+        title: "PlanT-2",
+        baseLabel: "PlanT-2 (base)",
+        expertLabel: "PlanT-2ᵉ (rule expert)",
+        blurb: "PlanT-2 vs. its rule-compliant PlanT-2 expert.",
+      },
+    ],
+  },
+  {
     code: "5.7.1",
     gridId: "pairs-grid-5-7-1",
     name: "One-way entry",
@@ -186,29 +255,6 @@ const PLANNER_PAIR_SECTIONS = [
     name: "Lane directions",
     sign: "static/images/signs/5.15.1.png",
     poster: "static/images/rules/5.15.1.png",
-    pairs: [
-      {
-        id: "idm",
-        title: "IDM",
-        baseLabel: "IDM (base)",
-        expertLabel: "IDMᵉ (rule expert)",
-        blurb: "IDM vs. its rule-compliant IDM expert.",
-      },
-      {
-        id: "plant2",
-        title: "PlanT-2",
-        baseLabel: "PlanT-2 (base)",
-        expertLabel: "PlanT-2ᵉ (rule expert)",
-        blurb: "PlanT-2 vs. its rule-compliant PlanT-2 expert.",
-      },
-    ],
-  },
-  {
-    code: "3.1",
-    gridId: "pairs-grid-3-1",
-    name: "No entry",
-    sign: "static/images/signs/3.1.png",
-    poster: "static/images/rules/3.1.png",
     pairs: [
       {
         id: "idm",

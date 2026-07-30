@@ -245,8 +245,8 @@ def main():
                         help="Variation index for seed")
     parser.add_argument("--gif-duration-ms", type=int, default=40,
                         help="GIF frame duration in ms (default: 40)")
-    parser.add_argument("--scaling", type=float, default=12.0,
-                        help="Top-down view scaling (default: 12.0)")
+    parser.add_argument("--scaling", type=float, default=24.0,
+                        help="Top-down view scaling (default: 24.0)")
     parser.add_argument("--screen-size", type=int, default=800,
                         help="Screen size for GIF (default: 800)")
     parser.add_argument(
@@ -334,7 +334,7 @@ def main():
         try:
             env.render(
                 mode="top_down",
-                film_size=(2400, 2400),
+                film_size=(4800, 4800),
                 scaling=args.scaling,
                 screen_size=(args.screen_size, args.screen_size),
                 semantic_map=True,

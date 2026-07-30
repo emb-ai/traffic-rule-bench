@@ -1,0 +1,5 @@
+# Local eval artifacts (do not commit)
+output/
+work/
+__pycache__/
+*.pyc

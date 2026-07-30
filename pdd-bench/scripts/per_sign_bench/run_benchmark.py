@@ -309,24 +309,14 @@ def _run_rollout(env, base_env, policy_obj, *, max_steps: int,
             text_dict = {
                 "Step": step,
                 "Speed": f"{vehicle.speed_km_h:.2f} km/h",
-                "Current lane: ": vehicle.lane.index,
-                "Current lane width: ": vehicle.lane.width,
+                "Violations": r.sign_violations + r.crosswalk_violations,
             }
-
-        if current_violation_texts:
-            text_dict["Violation"] = current_violation_texts[0]
-            if len(current_violation_texts) > 1:
-                text_dict["Violation +"] = f"+{len(current_violation_texts) - 1} more"
-        elif r.last_violation_texts:
-            text_dict["Last violation"] = r.last_violation_texts[0]
-            if len(r.last_violation_texts) > 1:
-                text_dict["Last violation +"] = f"+{len(r.last_violation_texts) - 1} more"
 
         if save_gif:
             try:
                 base_env.render(
                     mode="top_down",
-                    film_size=(2400, 2400), scaling=12.0,
+                    film_size=(4800, 4800), scaling=24.0,
                     screen_size=(800, 800),
                     semantic_map=True,
                     semantic_broken_line=True,

@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="static/css/style.css?v=20260729i">
+  <link rel="stylesheet" href="static/css/style.css?v=20260730a">
   <link rel="icon" href="static/images/signs/2.4.png" type="image/png">
 </head>
 <body>
@@ -101,12 +101,32 @@
       Same scene family, side-by-side: the base planner often violates the active traffic rule,
       while its rule-compliant twin respects the restriction.
     </p>
-    <p class="sign-note"><strong>Sign 5.7.1.</strong> One-way entry: the ego vehicle must follow the permitted direction and avoid entering the wrong carriageway.</p>
-    <div class="planner-pairs" id="pairs-grid-5-7-1"><!-- populated by main.js --></div>
-    <p class="sign-note sign-note--follow"><strong>Sign 5.15.1.</strong> Lane directions: the ego vehicle must follow the allowed turn for its lane and not leave via a forbidden connector.</p>
-    <div class="planner-pairs planner-pairs--follow" id="pairs-grid-5-15-1"><!-- populated by main.js --></div>
-    <p class="sign-note sign-note--follow"><strong>Sign 3.1.</strong> No entry ("brick"): the ego vehicle must not continue into the prohibited road segment.</p>
-    <div class="planner-pairs planner-pairs--follow" id="pairs-grid-3-1"><!-- populated by main.js --></div>
+
+    <div class="pair-group">
+      <h4 class="pair-cat pair-cat--priority">Priority</h4>
+      <p class="sign-note"><strong>Sign 2.4.</strong></p>
+      <div class="planner-pairs" id="pairs-grid-2-4"><!-- populated by main.js --></div>
+    </div>
+
+    <div class="pair-group">
+      <h4 class="pair-cat pair-cat--prohibitory">Prohibitory</h4>
+      <p class="sign-note"><strong>Sign 3.1.</strong> No entry ("brick"): the ego vehicle must not continue into the prohibited road segment.</p>
+      <div class="planner-pairs" id="pairs-grid-3-1"><!-- populated by main.js --></div>
+    </div>
+
+    <div class="pair-group">
+      <h4 class="pair-cat pair-cat--mandatory">Mandatory</h4>
+      <p class="sign-note"><strong>Sign 4.2.1.</strong></p>
+      <div class="planner-pairs" id="pairs-grid-4-2-1"><!-- populated by main.js --></div>
+    </div>
+
+    <div class="pair-group">
+      <h4 class="pair-cat pair-cat--special">Special Regulations</h4>
+      <p class="sign-note"><strong>Sign 5.7.1.</strong> One-way entry: the ego vehicle must follow the permitted direction and avoid entering the wrong carriageway.</p>
+      <div class="planner-pairs" id="pairs-grid-5-7-1"><!-- populated by main.js --></div>
+      <p class="sign-note sign-note--follow"><strong>Sign 5.15.1.</strong> Lane directions: the ego vehicle must follow the allowed turn for its lane and not leave via a forbidden connector.</p>
+      <div class="planner-pairs planner-pairs--follow" id="pairs-grid-5-15-1"><!-- populated by main.js --></div>
+    </div>
   </div>
 </section>
 
@@ -276,6 +296,6 @@
   <div class="lightbox-content" id="lightbox-content"></div>
 </div>
 
-<script src="static/js/main.js?v=20260729i"></script>
+<script src="static/js/main.js?v=20260730a"></script>
 </body>
 </html>

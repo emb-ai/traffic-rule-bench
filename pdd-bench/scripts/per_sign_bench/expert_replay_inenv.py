@@ -59,7 +59,7 @@ for _p in (PDD_BENCH_DIR, METADRIVE_DIR, BENCHMARK_DIR):
 def _render_top_down(env, window: bool, screen_record: bool):
     env.render(
         mode="top_down",
-        film_size=(2400, 2400), scaling=12.0, screen_size=(800, 800),
+        film_size=(4800, 4800), scaling=24.0, screen_size=(800, 800),
         semantic_map=True, semantic_broken_line=True,
         draw_target_vehicle_trajectory=True,
         target_agent_heading_up=True,
