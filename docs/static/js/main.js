@@ -169,7 +169,7 @@ const PLANNER_PAIR_SECTIONS = [
         title: "CaRL",
         baseLabel: "CaRL (base)",
         expertLabel: "CaRLᵉ (rule expert)",
-        blurb: "CaRL vs. its rule-aware CaRL expert at the main-road intersection.",
+        blurb: "CaRL vs. its rule-aware CaRL expert.",
       },
       {
         id: "plant2",
