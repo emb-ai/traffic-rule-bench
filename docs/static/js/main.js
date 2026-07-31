@@ -474,12 +474,12 @@ PLANNER_PAIR_SECTIONS.forEach((section) => {
     pairsGrid.appendChild(card);
 
     initMediaSlot(card.querySelector('[data-side="base"]'), {
-      gif: `static/gifs/pairs/${section.code}/${p.id}_base.gif`,
+      gif: `static/gifs/pairs/${section.code}/${p.id}_base.gif?v=20260731b`,
       poster: section.poster,
       alt: `${p.baseLabel} — ${section.name} ${section.code}`,
     });
     initMediaSlot(card.querySelector('[data-side="expert"]'), {
-      gif: `static/gifs/pairs/${section.code}/${p.id}_expert.gif`,
+      gif: `static/gifs/pairs/${section.code}/${p.id}_expert.gif?v=20260731b`,
       poster: section.poster,
       alt: `${p.expertLabel} — ${section.name} ${section.code}`,
     });

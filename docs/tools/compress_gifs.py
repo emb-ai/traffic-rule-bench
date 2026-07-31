@@ -47,11 +47,17 @@ def compress_gif(
     max_frames: int | None = 120,
     colors: int = 128,
     duration_ms: int | None = None,
+    max_duration_ms: int = 80,
 ) -> tuple[int, int, int]:
     """Return (n_frames_out, bytes_in, bytes_out).
 
     Always writes via a temp file first so in-place overwrite cannot truncate
     the source while Pillow still has it open.
+
+    When frames are subsampled, per-frame duration is scaled by the step so
+    wall-clock length stays similar — but clamped to ``max_duration_ms`` so
+    playback never drops below ~12 FPS (avoids laggy expert dumps with 1000+ frames).
+    Pass ``duration_ms`` to force a fixed per-frame delay (no step scaling).
     """
     bytes_in = src.stat().st_size
     im = Image.open(src)
@@ -80,8 +86,11 @@ def compress_gif(
             dither=Image.Dither.FLOYDSTEINBERG,
         )
         out_frames.append(pal)
-        d = duration_ms if duration_ms is not None else int(frame.info.get("duration", 40) or 40)
-        durations.append(max(20, d * step))
+        if duration_ms is not None:
+            durations.append(max(20, int(duration_ms)))
+        else:
+            d = int(frame.info.get("duration", 40) or 40)
+            durations.append(max(20, min(int(max_duration_ms), d * step)))
 
     if not out_frames:
         raise ValueError(f"No frames in {src}")
@@ -124,6 +133,12 @@ def main() -> None:
     parser.add_argument("--max-frames", type=int, default=120, help="Cap frame count (subsample)")
     parser.add_argument("--colors", type=int, default=128, help="GIF palette size")
     parser.add_argument("--duration-ms", type=int, default=None, help="Override frame duration")
+    parser.add_argument(
+        "--max-duration-ms",
+        type=int,
+        default=80,
+        help="Cap per-frame duration after subsample scaling (default 80 ≈ 12.5 FPS)",
+    )
     parser.add_argument("--max-mb", type=float, default=None, help="Skip if already under this size")
     parser.add_argument(
         "--in-place",
@@ -158,6 +173,7 @@ def main() -> None:
                 max_frames=args.max_frames,
                 colors=args.colors,
                 duration_ms=args.duration_ms,
+                max_duration_ms=args.max_duration_ms,
             )
         except Exception as exc:
             print(f"  FAIL  {src.name}: {exc}")
