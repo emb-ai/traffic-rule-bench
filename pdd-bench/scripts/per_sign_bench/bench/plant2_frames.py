@@ -21,11 +21,14 @@ from __future__ import annotations
 import gzip
 import json
 import math
+import re
 from pathlib import Path
 
 import numpy as np
 
 _MAX_TARGET_SPEED = 20.0  # max from PlanTVariables.target_speeds (m/s)
+# Near-stop threshold (m/s): PlanTDataset zeros target_speed when brake=True.
+_BRAKE_SPEED_EPS = 0.5
 _TIMESTAMP = "2025_07_20_00_00_00"
 _LOG_SUFFIX = "_".join(_TIMESTAMP.split("_")[:2])  # "2025_07"
 # 256 so PlanTDataset crop 64:-64 yields 128 (model / CARLA convention).
@@ -45,6 +48,59 @@ def build_ego_matrix(position, heading: float) -> list:
     ]
 
 
+# MetaDrive sign class → PDD code (fallback when icon_path / attrs missing).
+_CLASS_TO_PDD = {
+    "MainRoadSign": "2.1",
+    "SecondaryRoadSign": "2.3.1",
+    "SecondaryRoadRightSign": "2.3.2",
+    "SecondaryRoadLeftSign": "2.3.3",
+    "YieldSign": "2.4",
+    "RightHandYieldSign": "2.4",
+    "StopSign": "2.5",
+    "NoEntrySign": "3.1",
+    "SpeedLimitSign": "3.24",
+    "SpeedLimitSign20": "3.24",
+    "SpeedLimitSign30": "3.24",
+    "SpeedLimitSign40": "3.24",
+    "SpeedLimitSign60": "3.24",
+    "DetourRightSign": "4.2.1",
+    "DetourLeftSign": "4.2.2",
+    "DetourEitherSign": "4.2.3",
+    "RoundaboutSign": "4.3",
+    "RoundaboutYieldSign": "4.3",
+    "MinimumSpeedLimitSign": "4.6",
+    "OneWayEntrySign": "5.7.1",
+    "OneWayEntrySignR": "5.7.1",
+    "OneWayEntrySignL": "5.7.2",
+    "LaneDirectionsSign": "5.15.1",
+    "DirectionSign": "5.15.2",
+    "ResidentialZoneSign": "5.21",
+    "ZoneSpeedLimitSign": "5.31",
+    "ZoneSpeedLimitSign20": "5.31",
+    "ZoneSpeedLimitSign30": "5.31",
+    "ZoneSpeedLimitSign40": "5.31",
+    "ZoneSpeedLimitSign60": "5.31",
+}
+
+_PDD_ICON_RE = re.compile(r"^(\d+(?:\.\d+)*)")
+
+
+def resolve_pdd_code_from_sign(sign) -> str | None:
+    """Best-effort PDD code for a MetaDrive BaseTrafficSign instance."""
+    if sign is None:
+        return None
+    for attr in ("pdd_code", "sign_code", "sign_type", "code"):
+        val = getattr(sign, attr, None)
+        if val:
+            return str(val).strip()
+    icon = getattr(sign, "icon_path", None)
+    if icon:
+        m = _PDD_ICON_RE.match(Path(str(icon)).name)
+        if m:
+            return m.group(1)
+    return _CLASS_TO_PDD.get(type(sign).__name__)
+
+
 def collect_boxes(engine, vehicle,
                   max_distance: float = 50.0,
                   range_factor_front: float = 2.0) -> list:
@@ -52,11 +108,27 @@ def collect_boxes(engine, vehicle,
 
     Ego is first (position=[0,0,0]). Positions use CARLA convention: x=forward,
     y=right. Yaw is radians relative to ego.
+
+    Traffic signs from ``traffic_sign_manager`` are written as PDD object
+    classes (``class`` / ``pdd_code`` = e.g. ``\"2.5\"``) with ``affects_ego``
+    so PlanTDataset can map them via ``PlanTVariables.class_nums``.
     """
     from metadrive.utils.math import wrap_to_pi
     from metadrive.component.vehicle.base_vehicle import BaseVehicle
     from metadrive.component.traffic_participants.pedestrian import Pedestrian
     from metadrive.component.traffic_light.base_traffic_light import BaseTrafficLight
+
+    try:
+        from traffic_signs.base_traffic_sign import BaseTrafficSign
+    except ImportError:  # pragma: no cover
+        BaseTrafficSign = ()  # type: ignore
+
+    # Known PDD codes that have a dedicated tok_emb index.
+    try:
+        from util.sign_id import SIGN_CODES as _SIGN_CODES
+        known_pdd = set(_SIGN_CODES)
+    except Exception:
+        known_pdd = set(_CLASS_TO_PDD.values())
 
     ego_pos = np.array(vehicle.position[:2])
     ego_heading = float(vehicle.heading_theta)
@@ -76,6 +148,8 @@ def collect_boxes(engine, vehicle,
     }]
 
     def _cls(obj) -> str:
+        if BaseTrafficSign and isinstance(obj, BaseTrafficSign):
+            return "_traffic_sign"  # dumped via traffic_sign_manager below
         if isinstance(obj, BaseVehicle):
             return "car"
         if isinstance(obj, Pedestrian):
@@ -87,20 +161,27 @@ def collect_boxes(engine, vehicle,
     obj_id = 1
     seen: set = set()
 
+    def _ego_xy(obj):
+        rel = np.array([obj.position[0] - ego_pos[0],
+                        obj.position[1] - ego_pos[1]])
+        local = vehicle.convert_to_local_coordinates(rel, 0.0)
+        return float(local[0]), -float(local[1])  # y=right (CARLA)
+
     def _add(obj):
         nonlocal obj_id
         oid = id(obj)
         if oid in seen or obj is vehicle:
             return
-        seen.add(oid)
         if not hasattr(obj, "position"):
             return
-        rel = np.array([obj.position[0] - ego_pos[0],
-                        obj.position[1] - ego_pos[1]])
-        local = vehicle.convert_to_local_coordinates(rel, 0.0)
-        x = float(local[0])
-        y = -float(local[1])  # y=right (CARLA; invert MetaDrive left)
         cls = _cls(obj)
+        # Do NOT mark traffic signs as seen here: they also appear in
+        # engine.get_objects(), and marking them would make the sign_mgr
+        # dump loop below skip every PDD sign (empty spatial tokens).
+        if cls == "_traffic_sign":
+            return
+        seen.add(oid)
+        x, y = _ego_xy(obj)
 
         if cls == "traffic_light":
             if x * x + y * y > 900.0:  # >30m
@@ -157,6 +238,38 @@ def collect_boxes(engine, vehicle,
         for obj in getattr(obj_mgr, "spawned_objects", {}).values():
             _add(obj)
 
+    # Explicit PDD signs (spatial tokens for PlanT tok_emb).
+    sign_mgr = getattr(engine, "traffic_sign_manager", None)
+    for sign in list(getattr(sign_mgr, "signs", []) or []):
+        if sign is None or not hasattr(sign, "position"):
+            continue
+        oid = id(sign)
+        if oid in seen:
+            continue
+        seen.add(oid)
+        pdd = resolve_pdd_code_from_sign(sign)
+        if not pdd or pdd not in known_pdd:
+            continue
+        x, y = _ego_xy(sign)
+        if x * x + y * y > 900.0:  # 30m, same as stop_sign / TL in PlanTDataset
+            continue
+        heading = float(getattr(sign, "heading_theta", getattr(sign, "_heading_theta", ego_heading)))
+        yaw = float(wrap_to_pi(heading - ego_heading))
+        w = float(getattr(sign, "WIDTH", 0.6) or 0.6)
+        l = float(getattr(sign, "DEPTH", 0.1) or 0.1)
+        boxes.append({
+            "class": pdd,
+            "position": [x, y, 0.0],
+            "yaw": yaw,
+            "speed": 0.0,
+            "extent": [max(l, 0.2) / 2.0, max(w, 0.2) / 2.0, 0.75],
+            "id": obj_id,
+            "type_id": f"traffic.sign.{pdd}",
+            "pdd_code": pdd,
+            "affects_ego": True,
+        })
+        obj_id += 1
+
     return boxes
 
 
@@ -180,18 +293,49 @@ def get_route(vehicle, num_points: int = 20, step_m: float = 1.0) -> np.ndarray:
                         dtype=np.float32)
 
 
+def row_has_speed_target(row: dict) -> bool:
+    """True when catalog row carries an explicit speed-limit target.
+
+    Priority / stop / yield / etc. dumps usually omit these fields. The old
+    default (80 km/h → capped to 20 m/s) made ``target_speed`` constantly 20
+    and broke ego-speed supervision for stops.
+    """
+    return row.get("v_target_kmh") is not None or row.get("v_target_raw_kmh") is not None
+
+
 def target_speed_mps(vehicle, engine, row: dict) -> float:
-    """Target speed m/s: v_target_kmh in sign zone, else v_target_raw_kmh."""
+    """Target speed (m/s) for PlanT ego-speed head.
+
+    * Speed-limit scenes (catalog has ``v_target_*``): ``v_target_kmh`` in the
+      sign zone, else ``v_target_raw_kmh``, capped at ``_MAX_TARGET_SPEED``.
+    * Other scenes: imitate expert ego speed so stop/yield profiles are
+      supervised (instead of the bogus constant 20 m/s default).
+    """
+    ego_speed = float(getattr(vehicle, "speed", 0.0) or 0.0) if vehicle is not None else 0.0
+    if not row_has_speed_target(row):
+        return min(max(ego_speed, 0.0), _MAX_TARGET_SPEED)
+
     from bench.sign_eval import _ego_in_sign_zone
-    v_raw = float(row.get("v_target_raw_kmh", 80)) / 3.6
-    v_sign = float(row.get("v_target_kmh", v_raw * 3.6)) / 3.6
-    sign_mgr = getattr(engine, "traffic_sign_manager", None)
+
+    v_raw = float(row["v_target_raw_kmh"] if row.get("v_target_raw_kmh") is not None else 80) / 3.6
+    v_sign = float(row["v_target_kmh"] if row.get("v_target_kmh") is not None else v_raw * 3.6) / 3.6
+    sign_mgr = getattr(engine, "traffic_sign_manager", None) if engine is not None else None
     if sign_mgr is not None and vehicle is not None:
         in_zone = any(_ego_in_sign_zone(s, vehicle) for s in sign_mgr.signs)
         target = v_sign if in_zone else v_raw
     else:
         target = v_raw
-    return min(target, _MAX_TARGET_SPEED)
+    return min(max(target, 0.0), _MAX_TARGET_SPEED)
+
+
+def expert_brake_flag(speed_mps: float, row: dict) -> bool:
+    """Set ``brake`` so PlanTDataset can force ``target_speed=0`` near stops.
+
+    Only for non-speed-limit catalogs; speed-limit scenes keep limit supervision.
+    """
+    if row_has_speed_target(row):
+        return False
+    return float(speed_mps) < _BRAKE_SPEED_EPS
 
 
 def write_gz_json(path: Path, obj) -> None:
@@ -261,26 +405,38 @@ class Plant2FrameCollector:
 
         pos = vehicle.position
         heading = float(vehicle.heading_theta)
-        speed = float(getattr(vehicle, "speed", 0.0))
+        speed = float(getattr(vehicle, "speed", 0.0) or 0.0)
 
         ego_matrix = build_ego_matrix(pos, heading)
         boxes = collect_boxes(engine, vehicle)
         route_pts = get_route(vehicle)
         target_speed = target_speed_mps(vehicle, engine, row)
+        brake = expert_brake_flag(speed, row)
 
-        v_limit_raw_kmh = float(row.get("v_target_raw_kmh", 80))
+        if row_has_speed_target(row):
+            v_limit_raw_kmh = float(
+                row["v_target_raw_kmh"] if row.get("v_target_raw_kmh") is not None else 80
+            )
+        else:
+            # No catalog limit: keep a neutral highway-ish embedding input;
+            # ego-speed supervision comes from target_speed (= expert speed).
+            v_limit_raw_kmh = 80.0
         speed_limit_mps = v_limit_raw_kmh / 3.6
 
         measurements = {
             "ego_matrix": ego_matrix,
             "pos_global": [float(pos[0]), float(pos[1])],
             "theta": heading,
+            # Always the expert/live ego speed (m/s). Kept separate from
+            # target_speed so FV catalog limits can change later without a
+            # re-dump of velocities.
             "speed": speed,
+            "ego_speed": speed,
             "target_speed": target_speed,
             "speed_limit": speed_limit_mps,
             "route": route_pts.tolist(),
             "route_original": route_pts.tolist(),
-            "brake": False,
+            "brake": brake,
             "augmentation_translation": 0.0,
             "augmentation_rotation": 0.0,
         }

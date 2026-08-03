@@ -45,6 +45,18 @@ def _f(x) -> float | None:
         return None
 
 
+def _pick_float(m: dict, *keys: str) -> float | None:
+    """First present numeric field; keep real 0.0 (do not use ``a or b``)."""
+    for k in keys:
+        if k not in m:
+            continue
+        v = m[k]
+        if v is None or v == "":
+            continue
+        return _f(v)
+    return None
+
+
 def _fmt(x: float | None) -> str:
     return "—" if x is None else f"{x:.3f}"
 
@@ -102,14 +114,17 @@ def main() -> None:
                 "n_in_zone": in_zone,
                 "success_rate": _f(m.get("success_rate")),
                 "dest_rate": _f(m.get("dest_rate")),
-                "sign_compliance_sr": _f(m.get("sign_compliance_sr") or m.get("sign_compliant_rate")),
-                "sign_compliance_in_zone": _f(
-                    m.get("sign_compliance_in_zone")
-                    or m.get("sign_compliant_in_zone_rate")
-                    or m.get("sign_compliance_x")
+                "sign_compliance_sr": _pick_float(
+                    m, "sign_compliance_sr", "sign_compliant_rate"
                 ),
-                "avg_efficiency": _f(m.get("avg_efficiency") or m.get("driving_efficiency")),
-                "avg_smoothness": _f(m.get("avg_smoothness") or m.get("comfort")),
+                "sign_compliance_in_zone": _pick_float(
+                    m,
+                    "sign_compliance_in_zone",
+                    "sign_compliant_in_zone_rate",
+                    "sign_compliance_x",
+                ),
+                "avg_efficiency": _pick_float(m, "avg_efficiency", "driving_efficiency"),
+                "avg_smoothness": _pick_float(m, "avg_smoothness", "comfort"),
                 "source": str(cum),
             }
         )

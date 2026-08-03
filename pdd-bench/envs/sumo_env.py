@@ -98,6 +98,7 @@ SIGN_TYPE_TO_CLASS = {
     "4.2.1": DetourRightSign,
     "4.2.2": DetourLeftSign,
     "4.2.3": DetourEitherSign,
+    "4.3": RoundaboutSign,
     "5.11.1": BusLaneRoadSign,
     "5.11.2": BikeLaneRoadSign,
     "5.12.1": EndBusLaneRoadSign,

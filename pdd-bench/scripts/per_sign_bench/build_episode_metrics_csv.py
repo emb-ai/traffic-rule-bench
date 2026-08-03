@@ -60,13 +60,27 @@ POLICY_DISPLAY_NAME: dict[str, str] = {
 # and in_zone steps under the SUBCLASS name (e.g. "MinimumSpeedLimit20"
 # instead of "MinimumSpeedLimitSign"). Without this mapping all speed runs
 # count target_in_zone=0 and target_compliant=True.
+#
+# Junction priority (2.3.x): scenes place SecondaryRoad* as the benchmark target,
+# but in_zone / violations are tracked on co-located YieldSign at the junction.
 TARGET_CLASS_SUBCLASSES: dict[str, list[str]] = {
     "SpeedLimitSign":         ["SpeedLimitSign15"],
     "EndOfSpeedLimitSign":    ["EndOfSpeedLimitSign15"],
     "ZoneSpeedLimitSign":     ["ZoneSpeedLimitSign15"],
     "EndOfZoneSpeedLimitSign":["EndOfZoneSpeedLimitSign15"],
     "MinimumSpeedLimitSign":  ["MinimumSpeedLimit20"],
+    "SecondaryRoadSign":      ["YieldSign"],
+    "SecondaryRoadRightSign": ["YieldSign"],
+    "SecondaryRoadLeftSign":  ["YieldSign"],
 }
+
+# For these targets, sign_compliant_high follows target-class event compliance
+# (via _resolve_target_classes) instead of the coarse viol_high_sign bucket.
+JUNCTION_PRIORITY_TARGET_CLASSES = frozenset({
+    "SecondaryRoadSign",
+    "SecondaryRoadRightSign",
+    "SecondaryRoadLeftSign",
+})
 
 
 def _resolve_target_classes(base_class: str | None) -> list[str]:
@@ -367,6 +381,9 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
         "sign_compliant_high": (
             bool(target_compliant_event)
             if target_class == "PedestrianYieldRule" and target_compliant_event is not None
+            else bool(target_compliant_event)
+            if target_class in JUNCTION_PRIORITY_TARGET_CLASSES
+            and target_compliant_event is not None
             else (viol_high_sign == 0)
         ),
         "tl_compliant": (viol_high_tl == 0),

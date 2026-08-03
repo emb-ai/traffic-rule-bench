@@ -355,6 +355,10 @@ def main() -> None:
                    help=("Run benchmark baselines in parallel (default: 1 = sequential). "
                          "Each baseline writes to its own output subdir. "
                          "Use 1-2 for NN policies on a single GPU; 4-8 is fine for IDM-only."))
+    p.add_argument("--scenes-per-job", type=int, default=1,
+                   help=("Accepted for CLI parity with the scene-sharded benches. "
+                         "This pipeline parallelizes over baselines, not scenes, so "
+                         "one process always handles the whole manifest."))
     p.add_argument("--benchmark-only", action="store_true",
                    help="Run run_benchmark.py baselines only; skip metrics/report aggregation")
     p.add_argument("--metrics-only", action="store_true",
