@@ -569,6 +569,3 @@ bash $PIPELINE_DIR/launch_ft_2p5_hyp_sweep.sh      # логи: $PIPELINE_DIR/log
 bash $PIPELINE_DIR/launch_ft_2p5_stopw_sweep.sh    # логи: $PIPELINE_DIR/logs_pipeline_2p5_stopw/
 ```
 
----
-
-*При расхождении с кодом приоритет у скриптов в `$PIPELINE_DIR`.*
