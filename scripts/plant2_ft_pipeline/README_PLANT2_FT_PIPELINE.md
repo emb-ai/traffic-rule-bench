@@ -1,8 +1,8 @@
 # PlanT2 Spatial / PDD-sign Fine-Tune: полный пайплайн
 
-Практическое руководство по данным, пересборке dump’ов, diskcache, FT и eval
-в workspace (set `SHEPELEV` to your data root; default: parent of `traffic-rule-bench`). Все пути абсолютные;
-команды рассчитаны на copy-paste.
+Практическое руководство по данным, пересборке dump’ов, diskcache, FT и eval.
+Скрипты пайплайна — в `$PIPELINE_DIR` (`traffic-rule-bench/scripts/plant2_ft_pipeline/`).
+Данные, чекпоинты и метрики — в `$SHEPELEV/` (вне репо).
 
 **Python по умолчанию:**
 
@@ -23,14 +23,14 @@ export CKPT0=$SHEPELEV/plant2_checkpoints/epoch=029_final_1.ckpt
 
 ```bash
 # 1) FT (2 LR × 2 GPU), addon = fvexp30_spatial_2p5_tsfix_lr{1e4,1e5}
-bash $TRB_ROOT/scripts/plant2_ft_pipeline/launch_ft_2p5_tsfix_only.sh
+bash $PIPELINE_DIR/launch_ft_2p5_tsfix_only.sh
 
 # либо полный пайплайн (retrofit → extract cache → FT → eval --only 2.5):
-# bash $TRB_ROOT/scripts/plant2_ft_pipeline/run_2p5_tsfix_pipeline.sh
+# bash $PIPELINE_DIR/run_2p5_tsfix_pipeline.sh
 
 # 2) Eval Sign SR только на 2.5 (после появления best_*.ckpt / epoch=029_*.ckpt)
-METRICS_ROOT=/home/jovyan/shares/SR006.nfs3/shepelev/plant2_ft_metrics/spatial_2p5_tsfix_eval_sign25 \
-  bash $TRB_ROOT/scripts/plant2_ft_pipeline/watch_eval_2p5_tsfix.sh
+METRICS_ROOT=$SHEPELEV/plant2_ft_metrics/spatial_2p5_tsfix_eval_sign25 \
+  bash $PIPELINE_DIR/watch_eval_2p5_tsfix.sh
 # или вручную по шаблону launch_2p5_sign25_eval.sh (см. §5), сменёнными путями ckpt/METRICS_ROOT
 #
 # Для полного (не 2.5-only) FT-eval пайплайн дополнительно гоняет FV-fast:
@@ -43,11 +43,11 @@ METRICS_ROOT=/home/jovyan/shares/SR006.nfs3/shepelev/plant2_ft_metrics/spatial_2
 
 | Env | Значение |
 |---|---|
-| `SPLIT` | `.../plant2_l1_fv_experts_split_signs_2.5` |
+| `SPLIT` | `$SHEPELEV/plant2_l1_fv_experts_split_signs_2.5` |
 | `DS` / `DS_VAL` | `$SPLIT/train`, `$SPLIT/val` |
 | `DS_LOCAL` | `/tmp/plant2_ds_cache_2p5_tsfix` |
 | `CACHE_SIZE_GB` | `400` (хватит с запасом на ~124 G) |
-| Resume | `$CKPT0` = `plant2_checkpoints/epoch=029_final_1.ckpt` |
+| Resume | `$CKPT0` = `$SHEPELEV/plant2_checkpoints/epoch=029_final_1.ckpt` |
 
 ---
 
@@ -57,9 +57,9 @@ METRICS_ROOT=/home/jovyan/shares/SR006.nfs3/shepelev/plant2_ft_metrics/spatial_2
 
 | Путь | Содержание |
 |---|---|
-| `/home/jovyan/shares/SR006.nfs3/shepelev/plant2_l1_from_experts_signs/` | Priority/detour experts с PDD-знаками в `boxes` (yield 2.4, stop 2.5, secondary 2.3.*, main 2.1, roundabout 4.3, detour 4.2.*) |
-| `/home/jovyan/shares/SR006.nfs3/shepelev/plant2_l1_traj_fv_nodeA_signs/` | FV speed-limit (nodeA): 3.24, 4.6, 5.21, 5.31 + каталожные `v_target_*` |
-| `/home/jovyan/shares/SR006.nfs3/shepelev/plant2_l1_lane_signs/` | Lane direction 5.15.1 |
+| `$SHEPELEV/plant2_l1_from_experts_signs/` | Priority/detour experts с PDD-знаками в `boxes` (yield 2.4, stop 2.5, secondary 2.3.*, main 2.1, roundabout 4.3, detour 4.2.*) |
+| `$SHEPELEV/plant2_l1_traj_fv_nodeA_signs/` | FV speed-limit (nodeA): 3.24, 4.6, 5.21, 5.31 + каталожные `v_target_*` |
+| `$SHEPELEV/plant2_l1_lane_signs/` | Lane direction 5.15.1 |
 
 Старые деревья без `_signs` (`plant2_l1_from_experts`, `plant2_l1_traj_fv_nodeA`, …) — предыдущие dumps без spatial sign tokens; для текущего FT не использовать.
 
@@ -78,8 +78,8 @@ Layout одного route:
 
 | Путь | Описание |
 |---|---|
-| `/home/jovyan/shares/SR006.nfs3/shepelev/plant2_l1_fv_experts_split_signs/` | Полный hardlink-split (SEED=42, fixed50 val на знак). Источники: fv + exp + lane `_signs`. |
-| `/home/jovyan/shares/SR006.nfs3/shepelev/plant2_l1_fv_experts_split_signs_2.5/` | Symlink-подмножество только знака **2.5** (644 train / 50 val). |
+| `$SHEPELEV/plant2_l1_fv_experts_split_signs/` | Полный hardlink-split (SEED=42, fixed50 val на знак). Источники: fv + exp + lane `_signs`. |
+| `$SHEPELEV/plant2_l1_fv_experts_split_signs_2.5/` | Symlink-подмножество только знака **2.5** (644 train / 50 val). |
 
 Оба содержат `split_meta.json`, `train/data/`, `val/data/`.
 
@@ -89,9 +89,9 @@ Layout одного route:
 
 | Роль | Путь |
 |---|---|
-| Base (pretrain / resume) | `/home/jovyan/shares/SR006.nfs3/shepelev/plant2_checkpoints/epoch=029_final_1.ckpt` |
-| FT outputs | `/home/jovyan/shares/SR006.nfs3/shepelev/traffic-rule-bench/plant2/PlanT/checkpoints_ft/<CHECKPOINT_ADDON>/` |
-| Lightning / wandb logs | `/home/jovyan/shares/SR006.nfs3/shepelev/traffic-rule-bench/plant2/PlanT/log/ft_<ADDON>_<SEED>/` |
+| Base (pretrain / resume) | `$SHEPELEV/plant2_checkpoints/epoch=029_final_1.ckpt` |
+| FT outputs | `$TRB_ROOT/plant2/PlanT/checkpoints_ft/<CHECKPOINT_ADDON>/` |
+| Lightning / wandb logs | `$TRB_ROOT/plant2/PlanT/log/ft_<ADDON>_<SEED>/` |
 
 Примеры addon’ов: `fvexp30_spatial_lr*`, `fvexp30_spatial_2p5_tsfix_lr*`, `fvexp30_2p5_stopw*_lr*`, `fvexp30_2p5_h1*_lr*`.
 
@@ -106,7 +106,7 @@ Layout одного route:
 
 ### 1.5 Metrics
 
-Корень: `/home/jovyan/shares/SR006.nfs3/shepelev/plant2_ft_metrics/`
+Корень: `$SHEPELEV/plant2_ft_metrics/`
 
 | Подкаталог | Назначение |
 |---|---|
@@ -115,22 +115,22 @@ Layout одного route:
 | `spatial_2p5_hyp_eval_sign25/`, `spatial_2p5_stopw_eval_sign25/` | Hyp / stop-weight sweeps |
 | `spatial_signs_eval/`, `spatial_tsfix_eval/` | Full-sign eval |
 
-На run: `plant2_ft_metrics/<root>/<tag>/{ckpt.txt,signs→symlink,logs/}` +
+На run: `$SHEPELEV/plant2_ft_metrics/<root>/<tag>/{ckpt.txt,signs→symlink,logs/}` +
 опционально `fv_fast/`, `fv_fast_detour/` (выход `run_eval_fast_plant2ft.sh`).
 
 ### 1.6 Ключевой код
 
 | Компонент | Путь |
 |---|---|
-| PlanT training | `/home/jovyan/shares/SR006.nfs3/shepelev/traffic-rule-bench/plant2/PlanT/` (`lit_finetune.py`, `lit_module.py`, `dataset.py`) |
+| PlanT training | `$TRB_ROOT/plant2/PlanT/` (`lit_finetune.py`, `lit_module.py`, `dataset.py`) |
 | FT shim (disable flash_attn) | `$PIPELINE_DIR/plant2_py_shims/run_lit_finetune.py` |
-| Dump frames | `…/per_sign_bench/bench/plant2_frames.py` |
-| Expert replay | `…/per_sign_bench/expert_replay_inenv.py` |
-| MetaDrive adapter / PID | `…/pdd-bench/agents/plant2_in_metadrive/plant2_adapter.py` |
-| Policy load | `…/per_sign_bench/bench/policy_factory.py` |
-| Eval harness (Sign SR) | `…/per_sign_bench/plant2_rule_test/eval_checkpoint_on_test.py` |
-| FV-fast eval (FT) | `$CT/run_eval_fast_plant2ft.sh` |
-| FV-fast parallel queue | `$CT/queue_plant2ft_evals_par.sh` |
+| Dump frames | `$TRB_ROOT/pdd-bench/scripts/per_sign_bench/bench/plant2_frames.py` |
+| Expert replay | `$TRB_ROOT/pdd-bench/scripts/per_sign_bench/expert_replay_inenv.py` |
+| MetaDrive adapter / PID | `$TRB_ROOT/pdd-bench/agents/plant2_in_metadrive/plant2_adapter.py` |
+| Policy load | `$TRB_ROOT/pdd-bench/scripts/per_sign_bench/bench/policy_factory.py` |
+| Eval harness (Sign SR) | `$TRB_ROOT/pdd-bench/scripts/per_sign_bench/plant2_rule_test/eval_checkpoint_on_test.py` |
+| FV-fast eval (FT) | `$PIPELINE_DIR/run_eval_fast_plant2ft.sh` |
+| FV-fast parallel queue | `$PIPELINE_DIR/queue_plant2ft_evals_par.sh` |
 
 ---
 
@@ -142,25 +142,25 @@ Layout одного route:
 
 ```bash
 # полный parallel rebuild → *_signs деревья
-bash $TRB_ROOT/scripts/plant2_ft_pipeline/dump_plant2_l1_rebuild_signs_parallel.sh
+bash $PIPELINE_DIR/dump_plant2_l1_rebuild_signs_parallel.sh
 
-DRY_RUN=1 bash .../dump_plant2_l1_rebuild_signs_parallel.sh
-MAX_WORKERS=32 JOBS="exp:stop fv:3.24" bash .../dump_plant2_l1_rebuild_signs_parallel.sh
+DRY_RUN=1 bash $PIPELINE_DIR/dump_plant2_l1_rebuild_signs_parallel.sh
+MAX_WORKERS=32 JOBS="exp:stop fv:3.24" bash $PIPELINE_DIR/dump_plant2_l1_rebuild_signs_parallel.sh
 ```
 
 Выходы (не затирает старые non-`_signs`):
 
-- `plant2_l1_from_experts_signs/`
-- `plant2_l1_traj_fv_nodeA_signs/`
-- `plant2_l1_lane_signs/`
+- `$SHEPELEV/plant2_l1_from_experts_signs/`
+- `$SHEPELEV/plant2_l1_traj_fv_nodeA_signs/`
+- `$SHEPELEV/plant2_l1_lane_signs/`
 
-Логи: `$CT/logs_dump_signs/`.
+Логи: `$PIPELINE_DIR/logs_dump_signs/`.
 
 Отдельные (более старые) обёртки по семействам:
 
-- `$CT/dump_plant2_l1_from_experts.sh` → default OUT `plant2_l1_from_experts`
-- `$CT/dump_plant2_l1_traj_fv_nodeA.sh` → default OUT `plant2_l1_traj_fv_nodeA`
-- `$CT/dump_plant2_l1_lane_parallel.sh` — lane
+- `$PIPELINE_DIR/dump_plant2_l1_from_experts.sh` → default OUT `plant2_l1_from_experts`
+- `$PIPELINE_DIR/dump_plant2_l1_traj_fv_nodeA.sh` → default OUT `plant2_l1_traj_fv_nodeA`
+- `$PIPELINE_DIR/dump_plant2_l1_lane_parallel.sh` — lane
 
 Для signs-дерева задавайте `OUT_DIR=..._signs` или используйте parallel rebuild.
 
@@ -196,25 +196,25 @@ Replay вызывает `Plant2FrameCollector` из `bench/plant2_frames.py` п�
 
 | Скрипт | Назначение |
 |---|---|
-| `$CT/retrofit_target_speed_expert.py` | In-place: non-speed-limit routes → `target_speed=min(speed,20)`, `brake=(speed<0.5)`, `ego_speed=speed`. **Не трогает** 3.24 / 4.6 / 5.21 / 5.31. Опционально `--purge-cache`. |
-| `$CT/extract_patch_2p5_cache.py` | Копирует ключи 2.5 из большого cache → `/tmp/plant2_ds_cache_2p5_tsfix` с патчем `target_speed` (brake→0). Без полного `iterkeys()` по 1.7 T. |
-| `$CT/patch_diskcache_2p5_target_speed.py` | Точечный patch cache |
-| `$CT/patch_cache_nonspeed_inplace.py` | In-place non-speed-limit keys (осторожно на full cache) |
+| `$PIPELINE_DIR/retrofit_target_speed_expert.py` | In-place: non-speed-limit routes → `target_speed=min(speed,20)`, `brake=(speed<0.5)`, `ego_speed=speed`. **Не трогает** 3.24 / 4.6 / 5.21 / 5.31. Опционально `--purge-cache`. |
+| `$PIPELINE_DIR/extract_patch_2p5_cache.py` | Копирует ключи 2.5 из большого cache → `/tmp/plant2_ds_cache_2p5_tsfix` с патчем `target_speed` (brake→0). Без полного `iterkeys()` по 1.7 T. |
+| `$PIPELINE_DIR/patch_diskcache_2p5_target_speed.py` | Точечный patch cache |
+| `$PIPELINE_DIR/patch_cache_nonspeed_inplace.py` | In-place non-speed-limit keys (осторожно на full cache) |
 
 Пример retrofit только 2.5:
 
 ```bash
-$PY -u $CT/retrofit_target_speed_expert.py --signs 2.5 --workers 32
+$PY -u $PIPELINE_DIR/retrofit_target_speed_expert.py --signs 2.5 --workers 32
 ```
 
 ### 2.5 Train/val split
 
 ```bash
 # полный signs split (hardlinks)
-$PY $CT/make_train_val_split_fv_experts_signs.py
+$PY $PIPELINE_DIR/make_train_val_split_fv_experts_signs.py
 
 # 2.5-only symlink subset
-$PY $CT/make_split_signs_2.5_subset.py
+$PY $PIPELINE_DIR/make_split_signs_2.5_subset.py
 ```
 
 Правила: SEED=42, val=`fixed50` на знак; источники `fv` / `exp` / `lane` `_signs`.
@@ -225,8 +225,8 @@ $PY $CT/make_split_signs_2.5_subset.py
 
 ### Скрипты
 
-- `$CT/prefill_plant2_diskcache.py` — один shard
-- `$CT/prefill_plant2_diskcache_parallel.sh` — шардирование train + один val job
+- `$PIPELINE_DIR/prefill_plant2_diskcache.py` — один shard
+- `$PIPELINE_DIR/prefill_plant2_diskcache_parallel.sh` — шардирование train + один val job
 
 ### Env
 
@@ -252,13 +252,13 @@ export DS_VAL=$SHEPELEV/plant2_l1_fv_experts_split_signs/val
 export DS_LOCAL=/tmp/plant2_ds_cache_spatial_aug
 export CACHE_SIZE_GB=1800
 export PREFILL_AUGMENT=1
-DRY_RUN=1 bash $CT/prefill_plant2_diskcache_parallel.sh
-MAX_WORKERS=32 bash $CT/prefill_plant2_diskcache_parallel.sh
+DRY_RUN=1 bash $PIPELINE_DIR/prefill_plant2_diskcache_parallel.sh
+MAX_WORKERS=32 bash $PIPELINE_DIR/prefill_plant2_diskcache_parallel.sh
 ```
 
 Логи: `/tmp/plant2_prefill_logs/`.
 
-Для 2.5 после retrofit предпочтительнее `$CT/extract_patch_2p5_cache.py` (быстрее и безопаснее, чем полный prefill).
+Для 2.5 после retrofit предпочтительнее `$PIPELINE_DIR/extract_patch_2p5_cache.py` (быстрее и безопаснее, чем полный prefill).
 
 ---
 
@@ -268,12 +268,12 @@ MAX_WORKERS=32 bash $CT/prefill_plant2_diskcache_parallel.sh
 
 | Скрипт | Что делает |
 |---|---|
-| `$CT/run_plant2_finetune.sh` | Один job; читает `SPLIT`, `LEARNING_RATE`, `CHECKPOINT_ADDON`, … |
+| `$PIPELINE_DIR/run_plant2_finetune.sh` | Один job; читает `SPLIT`, `LEARNING_RATE`, `CHECKPOINT_ADDON`, … |
 | `$PIPELINE_DIR/plant2_py_shims/run_lit_finetune.py` | Точка входа Hydra (`lit_finetune.py` + disable flash_attn) |
-| `$CT/launch_plant2_ft_spatial_lr_sweep.sh` | 7 GPU, full split, LR ∈ {1e-6…1e-4}, addon `fvexp30_spatial_lr*` |
-| `$CT/launch_plant2_ft_2p5_lr_sweep.sh` | 2 GPU, 2.5 split; **старые** addon `fvexp30_spatial_2p5_lr*` и `DS_LOCAL=spatial_aug` |
-| `$CT/launch_ft_2p5_tsfix_only.sh` | 2.5 + `/tmp/plant2_ds_cache_2p5_tsfix`, addon `…_tsfix_lr*` |
-| `$CT/launch_ft_2p5_stopw_sweep.sh` | `stop_speed_loss_weight` ∈ {5,10,20} × LR |
+| `$PIPELINE_DIR/launch_plant2_ft_spatial_lr_sweep.sh` | 7 GPU, full split, LR ∈ {1e-6…1e-4}, addon `fvexp30_spatial_lr*` |
+| `$PIPELINE_DIR/launch_plant2_ft_2p5_lr_sweep.sh` | 2 GPU, 2.5 split; **старые** addon `fvexp30_spatial_2p5_lr*` и `DS_LOCAL=spatial_aug` |
+| `$PIPELINE_DIR/launch_ft_2p5_tsfix_only.sh` | 2.5 + `/tmp/plant2_ds_cache_2p5_tsfix`, addon `…_tsfix_lr*` |
+| `$PIPELINE_DIR/launch_ft_2p5_stopw_sweep.sh` | `stop_speed_loss_weight` ∈ {5,10,20} × LR |
 
 ### 4.2 Env vars
 
@@ -321,7 +321,7 @@ model.training.augment=False
 `arbelyaev-ft-spatial-lr{1e6,…}` с логами `/tmp/plant2_ft_spatial_lr*.log`.
 
 Для tsfix 2.5 удобнее background subshell’ы из `launch_ft_2p5_tsfix_only.sh`
-(логи `/tmp/plant2_ft_2p5_tsfix_lr{1e4,1e5}.log` + `$CT/logs_pipeline_2p5_tsfix/`).
+(логи `/tmp/plant2_ft_2p5_tsfix_lr{1e4,1e5}.log` + `$PIPELINE_DIR/logs_pipeline_2p5_tsfix/`).
 
 Пример ручного tmux (один GPU):
 
@@ -356,7 +356,7 @@ $PLAN_T/checkpoints_ft/<ADDON>/best_NNN_<ADDON>_1.ckpt
 $PLAN_T/checkpoints_ft/<ADDON>/epoch=EEE_<ADDON>_1.ckpt
 $PLAN_T/log/ft_<ADDON>_<SEED>/
 /tmp/plant2_ft_*.log
-$CT/logs_pipeline_*/ft_*.log
+$PIPELINE_DIR/logs_pipeline_*/ft_*.log
 ```
 
 ---
@@ -366,26 +366,24 @@ $CT/logs_pipeline_*/ft_*.log
 Полный FT-eval на один ckpt обычно состоит из:
 
 1. **Sign SR** — `plant2_rule_test/eval_checkpoint_on_test.py` (+ `summarize_reports.py`);
-2. **FV-fast** — `$TRB_ROOT/scripts/plant2_ft_pipeline/run_eval_fast_plant2ft.sh`
-   → `plant2_ft_metrics/<tag>/fv_fast/` (catalog `catalog_fv_test20`);
+2. **FV-fast** — `$PIPELINE_DIR/run_eval_fast_plant2ft.sh`
+   → `$SHEPELEV/plant2_ft_metrics/<tag>/fv_fast/` (catalog `catalog_fv_test20`);
 3. **FV-fast detour** — тот же скрипт → `…/<tag>/fv_fast_detour/` (detour catalog).
 
 Параллельный аналог (несколько ckpt сразу):  
-`$TRB_ROOT/scripts/plant2_ft_pipeline/queue_plant2ft_evals_par.sh`  
+`$PIPELINE_DIR/queue_plant2ft_evals_par.sh`  
 (внутри: signs + `run_eval_fast_plant2ft.sh` ×2). Для 7-GPU spatial waves —  
-`$TRB_ROOT/scripts/plant2_ft_pipeline/launch_spatial_ft_eval_7gpu.sh`.  
-Последовательная очередь: `$CT/queue_plant2ft_evals.sh`.
+`$PIPELINE_DIR/launch_spatial_ft_eval_7gpu.sh`.  
+Последовательная очередь: `$PIPELINE_DIR/queue_plant2ft_evals.sh`.
 
-> В этом workspace **нет** файла  
-> `…/per_sign_bench/run_eval_fast.sh` — FT-обёртка того паттерна живёт как  
-> `$CT/run_eval_fast_plant2ft.sh`.
+> FT-обёртка FV-fast: `$PIPELINE_DIR/run_eval_fast_plant2ft.sh` (не путать с legacy `run_eval_fast.sh`).
 
 ### 5.1 Sign SR (`--only 2.5`)
 
 Харнесс:
 
 ```bash
-cd $SHEPELEV/traffic-rule-bench/pdd-bench/scripts/per_sign_bench/plant2_rule_test
+cd $TRB_ROOT/pdd-bench/scripts/per_sign_bench/plant2_rule_test
 $PY -u eval_checkpoint_on_test.py \
   --policies plant2 \
   --model-paths "plant2:/path/to.ckpt" \
@@ -398,13 +396,13 @@ $PY summarize_reports.py \
   --out-dir output/<TAG>/_summary
 ```
 
-Готовность: `…/output/<TAG>/_summary/summary.md`.
+Готовность: `$TRB_ROOT/pdd-bench/scripts/per_sign_bench/plant2_rule_test/output/<TAG>/_summary/summary.md`.
 
 Шаблон оркестратора (старые addon-имена — править пути ckpt):
 
 ```bash
 METRICS_ROOT=$SHEPELEV/plant2_ft_metrics/spatial_2p5_eval_sign25 \
-  bash $CT/launch_2p5_sign25_eval.sh
+  bash $PIPELINE_DIR/launch_2p5_sign25_eval.sh
 ```
 
 Для tsfix см. блок eval в `run_2p5_tsfix_pipeline.sh` /
@@ -422,7 +420,7 @@ METRICS_ROOT=$SHEPELEV/plant2_ft_metrics/spatial_2p5_eval_sign25 \
 CKPT=/path/to.ckpt \
 OUT=$SHEPELEV/plant2_ft_metrics/<tag>/fv_fast \
 GPUS="0 1 2 3 4 5 6" NSHARDS=28 CONCURRENCY=28 \
-  bash $TRB_ROOT/scripts/plant2_ft_pipeline/run_eval_fast_plant2ft.sh
+  bash $PIPELINE_DIR/run_eval_fast_plant2ft.sh
 ```
 
 Ключевые env (из шапки скрипта):
@@ -447,14 +445,14 @@ GPUS="0 1 2 3 4 5 6" NSHARDS=28 CONCURRENCY=28 \
 GPUS="0 1 2 3 4 5 6" \
 SIGNS_PARALLEL=8 SIGNS_JOBS=20 SCENES_PER_JOB=32 \
 FV_PARALLEL=4 FV_NSHARDS=28 FV_CONCURRENCY=28 \
-  bash $TRB_ROOT/scripts/plant2_ft_pipeline/queue_plant2ft_evals_par.sh
+  bash $PIPELINE_DIR/queue_plant2ft_evals_par.sh
 ```
 
 Spatial 7-GPU waves (best → ep029 → …), тоже вызывает `run_eval_fast_plant2ft.sh`:
 
 ```bash
 METRICS_ROOT=$SHEPELEV/plant2_ft_metrics/spatial_signs_eval \
-  bash $TRB_ROOT/scripts/plant2_ft_pipeline/launch_spatial_ft_eval_7gpu.sh
+  bash $PIPELINE_DIR/launch_spatial_ft_eval_7gpu.sh
 ```
 
 Готовность FV-шага: `$OUT/reports/report_cumulative.md`.
@@ -462,7 +460,7 @@ METRICS_ROOT=$SHEPELEV/plant2_ft_metrics/spatial_signs_eval \
 ### 5.3 Layout метрик
 
 ```text
-plant2_ft_metrics/<root>/<tag>/
+$SHEPELEV/plant2_ft_metrics/<root>/<tag>/
   ckpt.txt
   eval_filter.txt          # ONLY_SIGNS=… (для 2.5-only)
   signs -> symlink на plant2_rule_test/output/<tag>
@@ -472,14 +470,13 @@ plant2_ft_metrics/<root>/<tag>/
   logs/run_eval_fast_*.log
 ```
 
-Сырые отчёты Sign SR:  
-`…/plant2_rule_test/output/<tag>/` + `_summary/summary.md`.
+Сырые отчёты Sign SR: `$TRB_ROOT/pdd-bench/scripts/per_sign_bench/plant2_rule_test/output/<tag>/` + `_summary/summary.md`.
 
 ### 5.4 GIFs (опционально)
 
 Через `eval_pipeline.py --save-gifs` (прокидывается из eval-харнесса при
 явном флаге). Пример артефактов:  
-`plant2_ft_metrics/spatial_2p5_tsfix_eval_sign25/_gifs_lr1e5/gifs/`.
+`$SHEPELEV/plant2_ft_metrics/spatial_2p5_tsfix_eval_sign25/_gifs_lr1e5/gifs/`.
 
 ### 5.5 Action mode / lookahead
 
@@ -533,33 +530,33 @@ plant2_ft_metrics/<root>/<tag>/
 
 ```bash
 # A. Dump (долго)
-bash $CT/dump_plant2_l1_rebuild_signs_parallel.sh
+bash $PIPELINE_DIR/dump_plant2_l1_rebuild_signs_parallel.sh
 
 # B. Split
-$PY $CT/make_train_val_split_fv_experts_signs.py
-$PY $CT/make_split_signs_2.5_subset.py   # опционально для 2.5-only
+$PY $PIPELINE_DIR/make_train_val_split_fv_experts_signs.py
+$PY $PIPELINE_DIR/make_split_signs_2.5_subset.py   # опционально для 2.5-only
 
 # C. Prefill full cache (очень долго / много /tmp)
 export DS=$SHEPELEV/plant2_l1_fv_experts_split_signs/train
 export DS_VAL=$SHEPELEV/plant2_l1_fv_experts_split_signs/val
 export DS_LOCAL=/tmp/plant2_ds_cache_spatial_aug CACHE_SIZE_GB=1800 PREFILL_AUGMENT=1
-bash $CT/prefill_plant2_diskcache_parallel.sh
+bash $PIPELINE_DIR/prefill_plant2_diskcache_parallel.sh
 
 # D. FT LR sweep
-bash $CT/launch_plant2_ft_spatial_lr_sweep.sh
+bash $PIPELINE_DIR/launch_plant2_ft_spatial_lr_sweep.sh
 
 # E. Eval: Sign SR + FV-fast (run_eval_fast_plant2ft) / parallel queue
-bash $CT/launch_spatial_ft_eval_7gpu.sh
-# или: bash $CT/queue_plant2ft_evals_par.sh
+bash $PIPELINE_DIR/launch_spatial_ft_eval_7gpu.sh
+# или: bash $PIPELINE_DIR/queue_plant2ft_evals_par.sh
 # один ckpt FV-fast:
-#   CKPT=… OUT=$SHEPELEV/plant2_ft_metrics/<tag>/fv_fast bash $CT/run_eval_fast_plant2ft.sh
+#   CKPT=… OUT=$SHEPELEV/plant2_ft_metrics/<tag>/fv_fast bash $PIPELINE_DIR/run_eval_fast_plant2ft.sh
 ```
 
 ## Сводка 2.5 tsfix (после уже существующего full cache)
 
 ```bash
 # retrofit measurements → extract small cache → FT → eval Sign SR (--only 2.5)
-bash $CT/run_2p5_tsfix_pipeline.sh
+bash $PIPELINE_DIR/run_2p5_tsfix_pipeline.sh
 # или по стадиям: retrofit → extract_patch_2p5_cache.py → launch_ft_2p5_tsfix_only.sh → watch_eval_2p5_tsfix.sh
 # FV-fast (run_eval_fast_plant2ft / queue_plant2ft_evals_par) на 2.5-only не нужен —
 # catalog_fv_test20 без sign 2.5; включается на full spatial eval (§5.2).
@@ -568,11 +565,10 @@ bash $CT/run_2p5_tsfix_pipeline.sh
 Доп. эксперименты на том же cache:
 
 ```bash
-bash $CT/launch_ft_2p5_hyp_sweep.sh      # логи: logs_pipeline_2p5_hyp/
-bash $CT/launch_ft_2p5_stopw_sweep.sh    # логи: logs_pipeline_2p5_stopw/
+bash $PIPELINE_DIR/launch_ft_2p5_hyp_sweep.sh      # логи: $PIPELINE_DIR/logs_pipeline_2p5_hyp/
+bash $PIPELINE_DIR/launch_ft_2p5_stopw_sweep.sh    # логи: $PIPELINE_DIR/logs_pipeline_2p5_stopw/
 ```
 
 ---
 
-*Документ собран по существующим скриптам workspace (авг 2026). При расхождении
-с кодом приоритет у скриптов в `$CT` и `PLAN_2p5_tsfix_agent.md`.*
+*При расхождении с кодом приоритет у скриптов в `$PIPELINE_DIR`.*
