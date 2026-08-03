@@ -32,8 +32,8 @@ Speed / zone signs (3.24, 4.6, 5.21, 5.31) use the map-trimmed
 |---|---:|---:|
 | Local auxiliary convoy (priority / roundabout) | **4.13** | 4759 |
 | nuPlan density tiers (prohibitory / one-way / lane dirs) | **32.23** | 3504 |
-| Ego-centric speed / zone (3.24, 4.6, 5.21, 5.31) | **1.00** | 4800 |
-| Ego-centric detour (4.2.1–4.2.3) | **1.00** | 1851 |
+| Ego-centric speed / zone (3.24, 4.6, 5.21, 5.31) | **32.51** | 4800 |
+| Ego-centric detour (4.2.1–4.2.3) | **31.95** | 1851 |
 | nuPlan density + pedestrians (crosswalk) | **34.63** | 1050 |
 
 These are intentionally different designs: priority signs stress a small number of
@@ -74,18 +74,18 @@ See `tables/agents_and_duration.md` and `figures/fig_agents_per_sign.png`.
 | 2.5 | 3.84 | 3.0 | 2–7 | aux_convoy |
 | 3.1 | 32.00 | 31.0 | 21–44 | density |
 | 3.2 | 32.00 | 31.0 | 21–44 | density |
-| 3.24 | 1.00 | 1.0 | 1–1 | speed_ego |
+| 3.24 | 32.89 | 32.0 | 2–81 | speed_ego |
 | 4.3 | 5.61 | 5.0 | 2–21 | aux_convoy |
-| 4.2.1 | 1.00 | 1.0 | 1–1 | detour_ego |
-| 4.2.2 | 1.00 | 1.0 | 1–1 | detour_ego |
-| 4.2.3 | 1.00 | 1.0 | 1–1 | detour_ego |
-| 4.6 | 1.00 | 1.0 | 1–1 | speed_ego |
+| 4.2.1 | 31.52 | 31.0 | 2–81 | detour_ego |
+| 4.2.2 | 32.69 | 31.0 | 2–81 | detour_ego |
+| 4.2.3 | 31.82 | 31.0 | 2–81 | detour_ego |
+| 4.6 | 31.56 | 30.0 | 2–81 | speed_ego |
 | 5.7.1 | 32.00 | 31.0 | 21–44 | density |
 | 5.7.2 | 32.00 | 31.0 | 21–44 | density |
 | 5.15.1 | 32.89 | 31.0 | 2–81 | density |
 | 5.19 | 34.63 | 34.0 | 22–48 | density_ped |
-| 5.21 | 1.00 | 1.0 | 1–1 | speed_ego |
-| 5.31 | 1.00 | 1.0 | 1–1 | speed_ego |
+| 5.21 | 32.57 | 31.0 | 2–81 | speed_ego |
+| 5.31 | 33.01 | 31.0 | 2–81 | speed_ego |
 
 Do not average across modes naively: convoy signs and density signs answer different
 interaction questions. Prefer the per-mode means in the headline table.
@@ -148,16 +148,16 @@ multi-arm (T / X / roundabout). See `tables/map_complexity.md`,
 
 ## Coverage notes
 
-- **3.24:** Speed / zone signs from balanced run_v61_a6 catalog (map-trimmed 1.2k); ego-centric braking/accel scenarios (nominal 1 agent). Configured horizon = 1500 steps (150 s).
+- **3.24:** Speed / zone signs from balanced run_v61_a6 catalog (map-trimmed 1.2k); NPC density sampled from row seed via sample_one_profile (same as catalog-direct eval); agents ≈ 1 + density×80. Configured horizon = 1500 steps (150 s).
 - **3.24:** Local OSM crops=255; unique scenes in balanced catalog=120 (catalog count uses the balanced unique scenes).
-- **4.2.1:** Detour signs from detour_v1/catalog.jsonl; ego-centric scenarios (nominal 1 agent). Horizon = 1200 steps (120 s).
-- **4.2.2:** Detour signs from detour_v1/catalog.jsonl; ego-centric scenarios (nominal 1 agent). Horizon = 1200 steps (120 s).
-- **4.2.3:** Detour signs from detour_v1/catalog.jsonl; ego-centric scenarios (nominal 1 agent). Horizon = 1200 steps (120 s).
-- **4.6:** Speed / zone signs from balanced run_v61_a6 catalog (map-trimmed 1.2k); ego-centric braking/accel scenarios (nominal 1 agent). Configured horizon = 1500 steps (150 s).
+- **4.2.1:** Detour signs from detour_v1/catalog.jsonl; NPC density sampled from row seed via sample_one_profile (catalog-direct eval); agents ≈ 1 + density×80. Horizon = 1200 steps (120 s).
+- **4.2.2:** Detour signs from detour_v1/catalog.jsonl; NPC density sampled from row seed via sample_one_profile (catalog-direct eval); agents ≈ 1 + density×80. Horizon = 1200 steps (120 s).
+- **4.2.3:** Detour signs from detour_v1/catalog.jsonl; NPC density sampled from row seed via sample_one_profile (catalog-direct eval); agents ≈ 1 + density×80. Horizon = 1200 steps (120 s).
+- **4.6:** Speed / zone signs from balanced run_v61_a6 catalog (map-trimmed 1.2k); NPC density sampled from row seed via sample_one_profile (same as catalog-direct eval); agents ≈ 1 + density×80. Configured horizon = 1500 steps (150 s).
 - **4.6:** Local OSM crops=12; unique scenes in balanced catalog=120 (catalog count uses the balanced unique scenes).
 - **5.15.1:** No top-level OSM catalog mirror for this sign.
-- **5.21:** Speed / zone signs from balanced run_v61_a6 catalog (map-trimmed 1.2k); ego-centric braking/accel scenarios (nominal 1 agent). Configured horizon = 1500 steps (150 s).
-- **5.31:** Speed / zone signs from balanced run_v61_a6 catalog (map-trimmed 1.2k); ego-centric braking/accel scenarios (nominal 1 agent). Configured horizon = 1500 steps (150 s).
+- **5.21:** Speed / zone signs from balanced run_v61_a6 catalog (map-trimmed 1.2k); NPC density sampled from row seed via sample_one_profile (same as catalog-direct eval); agents ≈ 1 + density×80. Configured horizon = 1500 steps (150 s).
+- **5.31:** Speed / zone signs from balanced run_v61_a6 catalog (map-trimmed 1.2k); NPC density sampled from row seed via sample_one_profile (same as catalog-direct eval); agents ≈ 1 + density×80. Configured horizon = 1500 steps (150 s).
 - **5.31:** Local OSM crops=81; unique scenes in balanced catalog=120 (catalog count uses the balanced unique scenes).
 
 ## Reproducibility

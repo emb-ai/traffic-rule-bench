@@ -43,11 +43,13 @@ from lib.auxiliary_agent import (
     MIN_SPAWN_LONGITUDE_M,
     add_auxiliary_agents,
     filter_lane_keys_in_road_network,
+    ordered_ring_lane_cycle,
     resolve_aux_destination_lane_key,
     resolve_aux_spawn_plan,
     select_occupied_main_lanes,
     select_spawnable_lanes,
 )
+from lib.lane_keys import lane_num_from_key
 from lib.manifest_config import DEFAULT_AUX_LANES_OCCUPIED_MAX
 from lib.junction_sign_placement import (
     SIGN_SHOULDER_OFFSET_M,
@@ -1265,6 +1267,7 @@ def run_one_episode(
     aux_convoy_size: int = DEFAULT_CONVOY_SIZE,
     aux_convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
     aux_lanes_occupied: int = DEFAULT_AUX_LANES_OCCUPIED_MAX,
+    aux_loop_ring: bool = True,
     record_episode: bool = False,
 ) -> dict:
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
@@ -1505,6 +1508,20 @@ def run_one_episode(
                     )
 
             if aux_spawn_lanes:
+                ring_loop_lanes = None
+                if aux_loop_ring:
+                    lane_num = lane_num_from_key(str(aux_spawn_lanes[0]))
+                    ring_loop_lanes = ordered_ring_lane_cycle(
+                        row.get("junction_layout"),
+                        lane_num=lane_num,
+                    )
+                    if len(ring_loop_lanes) < 2:
+                        print(
+                            f"[AuxAgent] Ring loop requested but only "
+                            f"{len(ring_loop_lanes)} ring lane(s) resolved; "
+                            "falling back to fixed destination"
+                        )
+                        ring_loop_lanes = None
                 aux_agent_mgr = add_auxiliary_agents(
                     base_env,
                     spawn_lane_indices=aux_spawn_lanes,
@@ -1520,12 +1537,15 @@ def run_one_episode(
                     convoy_gap_m=aux_convoy_gap_m,
                     alternate_spawn_dest_map=alternate_spawn_dest_map,
                     spawn_longitudinal_by_lane=aux_spawn_longitudes,
+                    ring_loop_lanes=ring_loop_lanes,
                 )
                 if aux_agent_mgr is not None:
+                    status = aux_agent_mgr.get_status()
                     print(
                         f"[AuxAgent] lanes={len(aux_spawn_lanes)}, "
                         f"convoy_size={aux_convoy_size}, gap={aux_convoy_gap_m}m, "
-                        f"spawned={aux_agent_mgr.get_status().get('count', 0)}"
+                        f"spawned={status.get('count', 0)}, "
+                        f"ring_loop={status.get('ring_loop', False)}"
                     )
 
         total_reward = 0.0
@@ -2164,6 +2184,14 @@ def main():
         help=f"Fallback max main-road lanes to occupy when manifest row omits aux_lanes_occupied "
              f"(default: {DEFAULT_AUX_LANES_OCCUPIED_MAX})",
     )
+    parser.add_argument(
+        "--aux-loop-ring",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep aux circulating on the roundabout ring by advancing destination "
+             "to the next ring edge (default: enabled). Use --no-aux-loop-ring for "
+             "the old fixed outgoing destination.",
+    )
 
     args = parser.parse_args()
 
@@ -2210,7 +2238,10 @@ def main():
             print(f"  - Convoy size: from manifest row aux_convoy_size (CLI default {args.aux_convoy_size})")
             print(f"  - Lanes occupied: from manifest row aux_lanes_occupied (CLI default {args.aux_lanes_occupied})")
             print(f"  - Convoy gap: {args.aux_convoy_gap_m}m")
-            print(f"  - Route: incoming lane -> reachable outgoing lane")
+            if args.aux_loop_ring:
+                print("  - Route: ring loop (destination advances to next ring edge)")
+            else:
+                print("  - Route: incoming lane -> reachable outgoing lane")
 
     if args.manifest:
         manifest_path = Path(args.manifest)
@@ -2338,6 +2369,7 @@ def main():
                 aux_convoy_size=args.aux_convoy_size,
                 aux_convoy_gap_m=args.aux_convoy_gap_m,
                 aux_lanes_occupied=args.aux_lanes_occupied,
+                aux_loop_ring=args.aux_loop_ring,
             )
             episode_dt = time.time() - episode_t0
             print(f"{args.policy}  elapsed_s={episode_dt:.3f}")

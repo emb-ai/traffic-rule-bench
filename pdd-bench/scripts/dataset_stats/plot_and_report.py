@@ -236,7 +236,8 @@ def write_agents_duration_table(summaries: list[dict], overview: dict, out: Path
         "**Agent definition.** `aux_convoy`: 1 ego + `aux_convoy_size × aux_lanes_occupied`. "
         "`density`: 1 ego + nuPlan vehicles/frame (fallback: `traffic_density × 80`). "
         "`density_ped`: density agents + `pedestrian_count`. "
-        "`speed_ego` / `detour_ego`: ego-centric scenarios (1 agent).",
+        "`speed_ego` / `detour_ego`: 1 ego + `sample_one_profile(seed).traffic_density × 80` "
+        "(catalog-direct eval samples density from the row seed; not stored in catalog.jsonl).",
         "",
         "**Duration.** Configured horizon = `horizon_steps × 0.1 s` "
         "(speed: 1500/150 s; detour: 1200/120 s; others: 600/60 s). "
@@ -248,6 +249,50 @@ def write_agents_duration_table(summaries: list[dict], overview: dict, out: Path
         "",
     ]
     (out / "agents_and_duration.md").write_text("\n".join(md))
+
+
+def write_agents_by_category_table(summaries: list[dict], out: Path) -> None:
+    from collections import defaultdict
+
+    by_cat: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"wsum": 0.0, "n": 0, "signs": []}
+    )
+    for s in summaries:
+        a = s.get("agents") or {}
+        mean, n = a.get("mean"), a.get("n") or s.get("n_scenarios") or 0
+        if mean is None or not n:
+            continue
+        cat = s.get("category", "?")
+        by_cat[cat]["wsum"] += float(mean) * float(n)
+        by_cat[cat]["n"] += int(n)
+        by_cat[cat]["signs"].append(s["pdd_code"])
+
+    order = ["Priority", "Prohibitory", "Mandatory", "Special"]
+    md = [
+        "# Mean agents per scenario by sign category",
+        "",
+        "| Category | Mean agents | N scenarios | Signs |",
+        "|---|---:|---:|---|",
+    ]
+    total_w, total_n = 0.0, 0
+    for cat in order:
+        if cat not in by_cat:
+            continue
+        v = by_cat[cat]
+        mean = v["wsum"] / v["n"]
+        md.append(
+            f"| {cat} | {mean:.1f} | {v['n']} | {', '.join(v['signs'])} |"
+        )
+        total_w += v["wsum"]
+        total_n += v["n"]
+    if total_n:
+        md.append(f"| **All** | **{total_w / total_n:.1f}** | **{total_n}** |  |")
+    md += [
+        "",
+        "Weighted by number of scenarios per sign.",
+        "",
+    ]
+    (out / "agents_by_category.md").write_text("\n".join(md))
 
 
 def write_map_complexity_table(summaries: list[dict], out: Path) -> None:
@@ -691,6 +736,7 @@ def main() -> None:
     write_distribution_table(summaries, overview, tables)
     write_agents_duration_table(summaries, overview, tables)
     write_duration_by_planner_table(summaries, overview, tables)
+    write_agents_by_category_table(summaries, tables)
     write_map_complexity_table(summaries, tables)
     write_category_table(overview, tables)
 

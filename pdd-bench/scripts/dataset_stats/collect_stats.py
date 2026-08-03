@@ -195,19 +195,88 @@ def collect_package_scenes(spec: SignSpec, parse_nets: bool) -> list[dict[str, A
     return rows
 
 
+_PROFILE_DENSITY_CACHE: dict[int, float] = {}
+_SAMPLE_PROFILE_FN = None
+_SAMPLE_PROFILE_FAILED = False
+
+
+def _load_sample_one_profile():
+    """Lazy import of catalog-direct NPC profile sampler (speed/detour eval)."""
+    global _SAMPLE_PROFILE_FN, _SAMPLE_PROFILE_FAILED
+    if _SAMPLE_PROFILE_FAILED:
+        return None
+    if _SAMPLE_PROFILE_FN is not None:
+        return _SAMPLE_PROFILE_FN
+    import sys
+
+    # Same tree the speed/detour eval uses (factorized_space.agent_profile_bank).
+    roots = [
+        Path(__file__).resolve().parents[1] / "per_sign_bench",
+        Path(__file__).resolve().parents[2],  # pdd-bench
+    ]
+    for root in roots:
+        s = str(root)
+        if s not in sys.path:
+            sys.path.insert(0, s)
+    try:
+        from factorized_space.agent_profile_bank import sample_one_profile
+
+        _SAMPLE_PROFILE_FN = sample_one_profile
+        return _SAMPLE_PROFILE_FN
+    except Exception as exc:  # noqa: BLE001 — optional dependency for stats
+        _SAMPLE_PROFILE_FAILED = True
+        print(f"[collect] warning: cannot import sample_one_profile ({exc}); "
+              "speed/detour agent counts fall back to 1")
+        return None
+
+
+def _catalog_sampled_traffic_density(row: dict[str, Any]) -> Optional[float]:
+    """Reproduce eval's on-the-fly profile density for catalog-direct rows.
+
+    Speed/detour catalogs omit ``traffic_density``; ``env_builders._sample_profile_for_catalog_row``
+    samples it from the row seed via ``sample_one_profile`` at eval time.
+    """
+    for key in ("profile_traffic_density", "traffic_density"):
+        if row.get(key) is not None:
+            return float(row[key])
+    seed_raw = row.get("seed") if row.get("seed") is not None else row.get("deterministic_seed")
+    if seed_raw is None:
+        return None
+    seed = int(seed_raw)
+    if seed in _PROFILE_DENSITY_CACHE:
+        return _PROFILE_DENSITY_CACHE[seed]
+    fn = _load_sample_one_profile()
+    if fn is None:
+        return None
+    prof = fn(seed, horizon_steps=int(row.get("horizon") or row.get("horizon_steps") or 600))
+    dens = float(prof["traffic_density"])
+    _PROFILE_DENSITY_CACHE[seed] = dens
+    return dens
+
+
+def _background_vehicles(row: dict[str, Any], *, sample_if_missing: bool = False) -> Optional[float]:
+    if row.get("nuplan_vehicles_per_frame") is not None:
+        return float(row["nuplan_vehicles_per_frame"])
+    dens = row.get("traffic_density")
+    if dens is None:
+        dens = row.get("profile_traffic_density")
+    if dens is None and sample_if_missing:
+        dens = _catalog_sampled_traffic_density(row)
+    if dens is not None:
+        return float(dens) * META_DENSITY_SCALE
+    return None
+
+
 def estimate_agents(row: dict[str, Any], mode: str) -> Optional[float]:
     """Nominal agents at scenario start / target traffic level.
 
     - aux_convoy: 1 ego + convoy_size × lanes_occupied
     - density: 1 ego + nuPlan vehicles/frame (or density × 80)
     - density_ped: density agents + pedestrians
-    - speed_ego: ego-centric speed / zone compliance (1 agent)
-    - detour_ego: ego-centric detour / obstacle compliance (1 agent)
+    - speed_ego / detour_ego: same density target as eval (catalog seed → sample_one_profile)
     """
     if mode == "catalog_only":
         return None
-    if mode in {"speed_ego", "detour_ego"}:
-        return 1.0
 
     if mode == "aux_convoy":
         if not row.get("auxiliary_agent"):
@@ -219,11 +288,10 @@ def estimate_agents(row: dict[str, Any], mode: str) -> Optional[float]:
             lanes = max(lanes, len(keys))
         return float(1 + convoy * max(lanes, 1))
 
-    n_bg: Optional[float] = None
-    if row.get("nuplan_vehicles_per_frame") is not None:
-        n_bg = float(row["nuplan_vehicles_per_frame"])
-    elif row.get("traffic_density") is not None:
-        n_bg = float(row["traffic_density"]) * META_DENSITY_SCALE
+    sample = mode in {"speed_ego", "detour_ego"}
+    n_bg = _background_vehicles(row, sample_if_missing=sample)
+    if sample and n_bg is None:
+        return 1.0
 
     n = 1.0 + (n_bg or 0.0)
     if mode == "density_ped":
@@ -243,6 +311,11 @@ def _scenario_row_from_raw(spec: SignSpec, raw: dict[str, Any], pdd: str) -> dic
     dens = raw.get("traffic_density")
     if dens is None:
         dens = raw.get("profile_traffic_density")
+    if dens is None and spec.agent_mode in {"speed_ego", "detour_ego"}:
+        dens = _catalog_sampled_traffic_density(raw)
+    nuplan = raw.get("nuplan_vehicles_per_frame")
+    if nuplan is None and dens is not None:
+        nuplan = float(dens) * META_DENSITY_SCALE
     return {
         "pdd_code": pdd,
         "category": spec.category,
@@ -252,7 +325,7 @@ def _scenario_row_from_raw(spec: SignSpec, raw: dict[str, Any], pdd: str) -> dic
         "horizon_seconds": (float(horizon) * DT_SECONDS) if horizon is not None else None,
         "traffic_density": dens,
         "traffic_density_level": raw.get("traffic_density_level_name"),
-        "nuplan_vehicles_per_frame": raw.get("nuplan_vehicles_per_frame"),
+        "nuplan_vehicles_per_frame": nuplan,
         "aux_convoy_size": raw.get("aux_convoy_size"),
         "aux_lanes_occupied": raw.get("aux_lanes_occupied"),
         "pedestrian_count": raw.get("pedestrian_count"),
@@ -637,7 +710,8 @@ def _notes_for(
     if spec.agent_mode == "speed_ego":
         notes.append(
             "Speed / zone signs from balanced run_v61_a6 catalog (map-trimmed 1.2k); "
-            "ego-centric braking/accel scenarios (nominal 1 agent). "
+            "NPC density sampled from row seed via sample_one_profile "
+            "(same as catalog-direct eval); agents ≈ 1 + density×80. "
             f"Configured horizon = {spec.default_horizon_steps} steps "
             f"({(spec.default_horizon_steps or 0) * DT_SECONDS:.0f} s)."
         )
@@ -650,8 +724,10 @@ def _notes_for(
             )
     if spec.agent_mode == "detour_ego":
         notes.append(
-            "Detour signs from detour_v1/catalog.jsonl; ego-centric scenarios "
-            f"(nominal 1 agent). Horizon = {spec.default_horizon_steps} steps "
+            "Detour signs from detour_v1/catalog.jsonl; NPC density sampled from "
+            "row seed via sample_one_profile (catalog-direct eval); "
+            "agents ≈ 1 + density×80. "
+            f"Horizon = {spec.default_horizon_steps} steps "
             f"({(spec.default_horizon_steps or 0) * DT_SECONDS:.0f} s)."
         )
     if not catalog_rows and spec.catalog_dirs:
@@ -768,7 +844,7 @@ def build_overview(sign_summaries: list[dict[str, Any]]) -> dict[str, Any]:
             "package_scenes = filtered junction/crosswalk crops under per_sign_bench/*/scenes/",
             "scenarios = final_metrics_v1 rows OR speed catalog.jsonl rows",
             "agents = nominal count: ego + aux convoy×lanes OR ego + nuPlan vehicles/frame "
-            "(+ pedestrians for 5.19); speed_ego/detour_ego = 1",
+            "(+ pedestrians for 5.19); speed/detour = 1 + sample_one_profile(seed).traffic_density×80",
             "configured horizon = manifest horizon_steps × 0.1 s (MetaDrive dt); "
             "speed signs default to 1500 steps (150 s); detour to 1200 steps (120 s)",
             "realized duration = weighted avg_steps/final_step × 0.1 s "

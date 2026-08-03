@@ -30,6 +30,7 @@ python generate_manifest.py paths.experiment_name=my_experiment
 | `n_variants` | `1` | Number of variants per scene |
 | `augment` | `true` | Enable scenario augmentation |
 | `max_scenarios_per_scene` | `null` | Limit total manifest rows per scene (after convoy/lanes expansion) |
+| `max_scenarios` | `null` | Cap total manifest rows across all scenes (null = all) |
 
 ### `simulation`
 | Parameter | Default | Description |
@@ -57,6 +58,7 @@ python generate_manifest.py paths.experiment_name=my_experiment
 | `max_scenes` | `null` | Limit GIFs to generate |
 | `dry_run` | `false` | Skip actual rendering |
 | `hide_signs` | `true` | Hide traffic signs in GIFs |
+| `model_path` | `null` | Checkpoint for `carl` / `plant2` (null → default under `pdd-bench/checkpoints/`) |
 | `dir` | `null` (= `<exp>/gifs`) | GIF output directory |
 | `run_name` | `null` | Custom run name |
 

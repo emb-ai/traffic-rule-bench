@@ -65,6 +65,7 @@ FALLBACK_MIN_KMH = 5.0             # minimum speed when no safe lane found
 FALLBACK_FACTOR = 0.3              # speed multiplier when no safe lane found
 END_MAIN_ROAD_LOOKAHEAD = 30.0     # metres to start slowing before end-of-main-road
 STOP_PAST_THRESHOLD = 5.0          # metres past stop line before state resets
+YIELD_STOP_BEFORE_END_M = 5.0      # hold yield / RH-rule stop this far before lane end
 
 BRAKE_PROP_GAIN = 0.05             # proportional gain for braking
 BRAKE_BIAS = 0.15                  # constant offset for braking
@@ -2801,6 +2802,16 @@ class SignComplianceMixin:
             return
         veh_long = self._veh_long(sign.lane)
         approach = self._approach_dist(0.0)
+        # Explicit stop line (StopSign) or default: stop 5 m before the lane end /
+        # intersection entry, matching roundabout / right-hand yield behaviour.
+        stop_long = getattr(sign, "stop_line_position", None)
+        if stop_long is None:
+            stop_long = float(sign.lane.length) - YIELD_STOP_BEFORE_END_M
+        stop_long = max(
+            float(sign.zone_start),
+            min(float(stop_long), float(sign.lane.length) - 0.5),
+        )
+
         if veh_long < sign.zone_start:
             if 0 < (sign.zone_start - veh_long) < approach:
                 has_traffic, _ = sign._check_main_road_traffic(self.control_object)
@@ -2810,7 +2821,12 @@ class SignComplianceMixin:
         if not (sign.zone_start <= veh_long <= sign.zone_end):
             return
         has_traffic, _ = sign._check_main_road_traffic(self.control_object)
-        if has_traffic:
+        if not has_traffic:
+            return
+        # Brake toward / hold at the stop line; do not creep into the junction.
+        if veh_long >= stop_long - 0.35:
+            self._cap_speed(0.001)
+        elif 0 < (stop_long - veh_long) < approach:
             self._cap_speed(0.001)
 
     def _handle_main_road(self, sign):

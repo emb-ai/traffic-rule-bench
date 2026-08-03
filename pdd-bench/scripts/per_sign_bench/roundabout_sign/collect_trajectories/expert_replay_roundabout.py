@@ -396,6 +396,7 @@ def run_collection(args: argparse.Namespace) -> int:
                     aux_lanes_occupied=int(
                         row.get("aux_lanes_occupied") or args.aux_lanes_occupied
                     ),
+                    aux_loop_ring=bool(getattr(args, "aux_loop_ring", True)),
                 )
                 dt = time.time() - t0
                 # Refresh paths after write
@@ -489,6 +490,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--aux-convoy-gap-m", type=float, default=DEFAULT_CONVOY_GAP_M)
     p.add_argument("--aux-lanes-occupied", type=int,
                    default=DEFAULT_AUX_LANES_OCCUPIED_MAX)
+    p.add_argument(
+        "--aux-loop-ring",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Circulate aux on the ring by advancing destination (default on)",
+    )
     return p
 
 
