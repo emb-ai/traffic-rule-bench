@@ -1,0 +1,4 @@
+# @package _global_
+sign: main_road
+paths:
+  output_base: data/main_road/output

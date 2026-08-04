@@ -1,0 +1,93 @@
+"""Sign profiles for priority-junction benches (2.1 equal-priority, 2.4 yield)."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Literal, Optional
+
+from core.scene_augmentation import SpawnStrategy
+
+LayoutMode = Literal["main_main", "main_secondary"]
+
+
+@dataclass(frozen=True)
+class SignProfile:
+    """Thin contract describing how one PDD priority sign differs from others."""
+
+    id: str
+    pdd_code: str
+    sign_type: str
+    sign_name: str
+    layout_mode: LayoutMode
+    spawn_strategy: SpawnStrategy
+    data_subdir: str  # under priority_bench/data/
+    output_code: str  # e.g. "2_1" for paths
+
+    # Optional: ego must be on this road_class (None = any arm)
+    ego_road_class: Optional[str] = None
+
+
+MAIN_ROAD = SignProfile(
+    id="main_road",
+    pdd_code="2.1",
+    sign_type="main",
+    sign_name="Main road (equal priority)",
+    layout_mode="main_main",
+    spawn_strategy="equal_priority",
+    data_subdir="main_road",
+    output_code="2_1",
+    ego_road_class=None,
+)
+
+YIELD = SignProfile(
+    id="yield",
+    pdd_code="2.4",
+    sign_type="yield",
+    sign_name="Yield",
+    layout_mode="main_secondary",
+    spawn_strategy="yield",
+    data_subdir="yield",
+    output_code="2_4",
+    ego_road_class="secondary",
+)
+
+_REGISTRY: dict[str, SignProfile] = {
+    MAIN_ROAD.id: MAIN_ROAD,
+    YIELD.id: YIELD,
+    # aliases
+    "2.1": MAIN_ROAD,
+    "2_1": MAIN_ROAD,
+    "main": MAIN_ROAD,
+    "2.4": YIELD,
+    "2_4": YIELD,
+}
+
+
+def get_profile(sign_id: str) -> SignProfile:
+    key = str(sign_id).strip()
+    try:
+        return _REGISTRY[key]
+    except KeyError as exc:
+        known = ", ".join(sorted({p.id for p in (MAIN_ROAD, YIELD)}))
+        raise KeyError(f"Unknown sign {sign_id!r}. Expected one of: {known}") from exc
+
+
+def list_profiles() -> list[SignProfile]:
+    return [MAIN_ROAD, YIELD]
+
+
+def package_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def data_dir(profile: SignProfile) -> Path:
+    return package_root() / "data" / profile.data_subdir
+
+
+def scenes_dir(profile: SignProfile) -> Path:
+    return data_dir(profile) / "scenes"
+
+
+def output_dir(profile: SignProfile) -> Path:
+    return data_dir(profile) / "output"
