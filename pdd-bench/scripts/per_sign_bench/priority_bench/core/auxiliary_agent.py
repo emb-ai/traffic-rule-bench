@@ -14,10 +14,14 @@ from metadrive.component.navigation_module.edge_network_navigation import EdgeNe
 
 DEFAULT_DISTANCE_FROM_INTERSECTION = 20.0
 DEFAULT_SPAWN_VELOCITY_MS = 5.0
-DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END = 5.0
+# Must be >= typical ego spawn_distance_before_end so gated aux starts when ego
+# is already near the junction (avoids yield-vs-gate deadlock).
+DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END = 15.0
 DEFAULT_CONVOY_SIZE = 3
 DEFAULT_CONVOY_GAP_M = 10.0
 MIN_SPAWN_LONGITUDE_M = 3.0
+# Don't despawn for arrive_destination checks until aux has been driving a bit.
+ARRIVE_GRACE_STEPS = 10
 AuxPolicyType = Literal["idm", "stationary"]
 
 
@@ -392,12 +396,80 @@ class AuxiliaryAgentsManager(BaseManager):
                 logging.debug(f"[AuxAgent] Policy execution error: {e}")
         return {}
 
+    def _should_despawn(self, aux_vehicle) -> tuple[bool, str]:
+        """Return (True, reason) when the aux agent has left the road or arrived."""
+        if getattr(aux_vehicle, "on_lane", True) is False:
+            return True, "off_lane"
+        if bool(getattr(aux_vehicle, "out_of_route", False)):
+            return True, "out_of_route"
+        if bool(getattr(aux_vehicle, "crash_sidewalk", False)):
+            return True, "crash_sidewalk"
+
+        age = int(getattr(self.engine, "episode_step", 0) or 0)
+        if age <= ARRIVE_GRACE_STEPS:
+            return False, ""
+
+        try:
+            policy = self.engine.get_policy(aux_vehicle.name)
+            if bool(getattr(policy, "arrive_destination", False)):
+                return True, "arrived"
+        except Exception:
+            pass
+
+        navigation = getattr(aux_vehicle, "navigation", None)
+        final_lane = getattr(navigation, "final_lane", None) if navigation is not None else None
+        if final_lane is not None:
+            try:
+                long, lat = final_lane.local_coordinates(aux_vehicle.position)
+                lane_w = float(getattr(final_lane, "width", 3.5) or 3.5)
+                near_end = (final_lane.length - 5.0) < long < (final_lane.length + 5.0)
+                on_lane_lat = abs(lat) <= (lane_w / 2.0 + 1.0)
+                if near_end and on_lane_lat:
+                    return True, "arrived_final_lane"
+            except Exception:
+                pass
+
+        return False, ""
+
+    def _remove_aux_at(self, idx: int, reason: str) -> None:
+        aux_vehicle = self._aux_vehicles[idx]
+        lane = (
+            self._spawn_lane_indices[idx]
+            if idx < len(self._spawn_lane_indices)
+            else "?"
+        )
+        try:
+            self.clear_objects([aux_vehicle.id])
+        except Exception as exc:
+            logging.debug(f"[AuxAgent] clear_objects failed for {aux_vehicle.id}: {exc}")
+        for seq in (
+            self._aux_vehicles,
+            self._spawn_lane_indices,
+            self._spawn_destinations,
+            self._convoy_positions,
+            self._aux_policies,
+        ):
+            if idx < len(seq):
+                seq.pop(idx)
+        print(f"[AuxAgent] Despawned {lane} ({reason})")
+
     def after_step(self, *args, **kwargs):
-        for aux_vehicle in self._aux_vehicles:
+        if not self._aux_vehicles:
+            return {}
+
+        to_remove: list[tuple[int, str]] = []
+        for idx, aux_vehicle in enumerate(self._aux_vehicles):
             try:
                 aux_vehicle.after_step()
             except Exception:
-                pass
+                to_remove.append((idx, "after_step_error"))
+                continue
+            should, reason = self._should_despawn(aux_vehicle)
+            if should:
+                to_remove.append((idx, reason))
+
+        for idx, reason in reversed(to_remove):
+            self._remove_aux_at(idx, reason)
         return {}
 
     @property

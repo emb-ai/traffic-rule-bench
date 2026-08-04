@@ -28,7 +28,8 @@ simulation:
   traffic_density: 0.0
   horizon: 600
   sign_distance_before_end: 0.0
-  spawn_distance_before_end: 20.0
+  # Closer spawn so ego approaches the yield stop (~5 m) without a long idle.
+  spawn_distance_before_end: 12.0
 
 auxiliary:
   enabled: true
@@ -36,6 +37,9 @@ auxiliary:
   convoy_size: 3
   lanes_occupied: 4
   convoy_gap_m: 10.0
+  # Release as soon as ego is at/near spawn (must be >= spawn_distance_before_end
+  # or gated aux and a yielding ego deadlock far from the junction).
+  release_when_ego_within_m: 15.0
 
 gif:
   enabled: false
@@ -45,3 +49,4 @@ gif:
   hide_signs: true
   dir: null
   run_name: null
+  scaling: 12.0   # pixels per meter (higher = more zoomed in)

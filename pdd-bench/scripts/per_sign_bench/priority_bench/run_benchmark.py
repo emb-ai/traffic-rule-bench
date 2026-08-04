@@ -44,6 +44,7 @@ from core.junction_priority_layout import right_arm_edge_id
 from core.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
     DEFAULT_CONVOY_SIZE,
+    DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END,
     DEFAULT_SPAWN_VELOCITY_MS,
     add_auxiliary_agents,
     resolve_aux_spawn_plan,
@@ -1228,12 +1229,13 @@ def run_one_episode(
     ego_sample_seed_base: int,
     replay_root: Path | None = None,
     save_gif: Path | None = None,
+    gif_scaling: float = 24.0,
     hide_signs: bool = False,
     auxiliary_agent: bool = False,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     aux_policy: str = "idm",
     aux_spawn_velocity_ms: float = DEFAULT_SPAWN_VELOCITY_MS,
-    aux_release_when_ego_within_m: float = 20.0,
+    aux_release_when_ego_within_m: float = DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END,
     aux_convoy_size: int = DEFAULT_CONVOY_SIZE,
     aux_convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
     aux_lanes_occupied: int = DEFAULT_AUX_LANES_OCCUPIED_MAX,
@@ -1428,6 +1430,13 @@ def run_one_episode(
                 dest or None for dest in aux_destination_lanes
             ]
 
+            # Keep release distance >= ego spawn offset so aux is not held while a
+            # yielding ego freezes outside the release radius.
+            ego_spawn_before_end = float(row.get("spawn_distance_before_end", 0) or 0)
+            release_before_end = float(aux_release_when_ego_within_m)
+            if release_before_end > 0 and ego_spawn_before_end > 0:
+                release_before_end = max(release_before_end, ego_spawn_before_end)
+
             if aux_spawn_lanes:
                 aux_agent_mgr = add_auxiliary_agents(
                     base_env,
@@ -1439,7 +1448,7 @@ def run_one_episode(
                     destination_lanes=aux_destination_lanes,
                     ego_vehicle=base_env.vehicle,
                     ego_spawn_lane_index=ego_lane_index,
-                    ego_release_distance_before_end=aux_release_when_ego_within_m,
+                    ego_release_distance_before_end=release_before_end,
                     convoy_size=aux_convoy_size,
                     convoy_gap_m=aux_convoy_gap_m,
                     alternate_spawn_dest_map=alternate_spawn_dest_map,
@@ -1651,7 +1660,8 @@ def run_one_episode(
                 try:
                     base_env.render(
                         mode="top_down",
-                        film_size=(4800, 4800), scaling=24.0,
+                        film_size=(4800, 4800),
+                        scaling=float(gif_scaling),
                         screen_size=(800, 800),
                         semantic_map=True,
                         semantic_broken_line=True,
@@ -2037,6 +2047,12 @@ def main():
                         help="Record top-down GIF per episode")
     parser.add_argument("--gif-dir", type=str, default=None,
                         help="Directory for GIFs")
+    parser.add_argument(
+        "--gif-scaling",
+        type=float,
+        default=24.0,
+        help="Top-down GIF zoom: pixels per meter (higher = more zoomed in, default: 24)",
+    )
     parser.add_argument("--output-dir", type=str, default=None,
                         help="Write episodes/summary/gifs here directly "
                              "(skips <benchmark-output>/<preset>/policy_eval/<run-name>)")
@@ -2065,8 +2081,16 @@ def main():
         default=DEFAULT_SPAWN_VELOCITY_MS,
         help=f"Aux IDM cruise/release speed in m/s (default: {DEFAULT_SPAWN_VELOCITY_MS})",
     )
-    parser.add_argument("--aux-release-when-ego-within-m", type=float, default=20.0,
-                        help="Release gated IDM aux when ego is within this distance of spawn lane end (m); 0 = immediate")
+    parser.add_argument(
+        "--aux-release-when-ego-within-m",
+        type=float,
+        default=DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END,
+        help=(
+            "Release gated IDM aux when ego is within this distance of spawn lane end (m); "
+            f"0 = immediate (default: {DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END}). "
+            "Clamped up to spawn_distance_before_end so aux is not held while ego yields."
+        ),
+    )
     parser.add_argument(
         "--aux-convoy-size",
         type=int,
@@ -2252,6 +2276,7 @@ def main():
                 ego_sample_seed_base=args.ego_sample_seed_base,
                 replay_root=replay_root,
                 save_gif=gif_path,
+                gif_scaling=args.gif_scaling,
                 hide_signs=args.hide_signs,
                 auxiliary_agent=args.auxiliary_agent,
                 aux_distance_from_intersection=args.aux_distance_from_intersection,

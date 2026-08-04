@@ -106,6 +106,7 @@ class AuxiliaryConfig:
     convoy_size: int = 1
     convoy_gap_m: float = DEFAULT_CONVOY_GAP_M
     lanes_occupied: int = 1
+    release_when_ego_within_m: float = 15.0
 
 
 @dataclass
@@ -117,6 +118,7 @@ class GifConfig:
     hide_signs: bool = True
     dir: Optional[str] = None
     run_name: Optional[str] = None
+    scaling: float = 24.0
 
 
 @dataclass
@@ -857,10 +859,15 @@ def render_gifs_from_manifest(
         ]
         if gif_cfg.hide_signs:
             cmd.append("--hide-signs")
+        if gif_cfg.scaling:
+            cmd.extend(["--gif-scaling", str(float(gif_cfg.scaling))])
         
         if aux_cfg.enabled:
             cmd.append("--auxiliary-agent")
             cmd.extend(["--aux-distance-from-intersection", str(aux_cfg.distance_from_intersection)])
+            release_m = getattr(aux_cfg, "release_when_ego_within_m", None)
+            if release_m is not None:
+                cmd.extend(["--aux-release-when-ego-within-m", str(float(release_m))])
         
         print(f"\n[GIF {i}/{len(rows)}] {scene_uid}")
         print("  " + " ".join(cmd))
@@ -940,6 +947,7 @@ def main(cfg: DictConfig) -> None:
         hide_signs=cfg.gif.hide_signs,
         dir=cfg.gif.dir,
         run_name=cfg.gif.run_name,
+        scaling=float(getattr(cfg.gif, "scaling", 24.0) or 24.0),
     )
     
     entries = generate_manifest(
