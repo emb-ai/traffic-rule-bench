@@ -253,7 +253,10 @@ def collect_boxes(engine, vehicle,
         x, y = _ego_xy(sign)
         if x * x + y * y > 900.0:  # 30m, same as stop_sign / TL in PlanTDataset
             continue
-        heading = float(getattr(sign, "heading_theta", getattr(sign, "_heading_theta", ego_heading)))
+        if hasattr(sign, "_fallback_heading"):
+            heading = float(sign._fallback_heading())
+        else:
+            heading = float(getattr(sign, "heading_theta", getattr(sign, "_heading_theta", ego_heading)))
         yaw = float(wrap_to_pi(heading - ego_heading))
         w = float(getattr(sign, "WIDTH", 0.6) or 0.6)
         l = float(getattr(sign, "DEPTH", 0.1) or 0.1)

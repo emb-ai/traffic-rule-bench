@@ -14,6 +14,7 @@
 : "${REPO:=$TRB_ROOT}"
 
 export PIPELINE_DIR TRB_ROOT SHEPELEV CT REPO
+export INSPECT_BOXES="$PIPELINE_DIR/inspect_boxes.py"
 export PLAN_T="${PLAN_T:-$TRB_ROOT/plant2/PlanT}"
 export PLANT="${PLANT:-$TRB_ROOT/plant2}"
 export CKPT0="${CKPT0:-$SHEPELEV/plant2_checkpoints/epoch=029_final_1.ckpt}"

@@ -23,20 +23,18 @@ export CKPT0=$SHEPELEV/plant2_checkpoints/epoch=029_final_1.ckpt
 
 ```bash
 # 1) FT (2 LR × 2 GPU), addon = fvexp30_spatial_2p5_tsfix_lr{1e4,1e5}
-bash $PIPELINE_DIR/launch_ft_2p5_tsfix_only.sh
-
-# либо полный пайплайн (retrofit → extract cache → FT → eval --only 2.5):
-# bash $PIPELINE_DIR/run_2p5_tsfix_pipeline.sh
+python $PIPELINE_DIR/launch_ft.py 2p5-tsfix
 
 # 2) Eval Sign SR только на 2.5 (после появления best_*.ckpt / epoch=029_*.ckpt)
-METRICS_ROOT=$SHEPELEV/plant2_ft_metrics/spatial_2p5_tsfix_eval_sign25 \
-  bash $PIPELINE_DIR/watch_eval_2p5_tsfix.sh
-# или вручную по шаблону launch_2p5_sign25_eval.sh (см. §5), сменёнными путями ckpt/METRICS_ROOT
+python $PIPELINE_DIR/eval_sign25.py \
+  --addon fvexp30_spatial_2p5_tsfix_lr1e5 --slot best --gpu 0
+# или batch по ckpt:
+#   python eval_sign25.py --ckpt /path/to.ckpt --tag my_tag --gpu 1
 #
-# Для полного (не 2.5-only) FT-eval пайплайн дополнительно гоняет FV-fast:
-#   run_eval_fast_plant2ft.sh  (fv_fast + fv_fast_detour)
-# или параллельную очередь queue_plant2ft_evals_par.sh / launch_spatial_ft_eval_7gpu.sh
-# (на 2.5-only эти шаги пропускаются — в catalog_fv_test20 нет sign 2.5).
+# Для полного FT-eval:
+#   python eval_full.py spatial
+#   python eval_full.py queue
+#   python eval_full.py fv --ckpt … --out …/fv_fast
 ```
 
 Ключевые переменные для 2.5:
@@ -129,40 +127,37 @@ Layout одного route:
 | MetaDrive adapter / PID | `$TRB_ROOT/pdd-bench/agents/plant2_in_metadrive/plant2_adapter.py` |
 | Policy load | `$TRB_ROOT/pdd-bench/scripts/per_sign_bench/bench/policy_factory.py` |
 | Eval harness (Sign SR) | `$TRB_ROOT/pdd-bench/scripts/per_sign_bench/plant2_rule_test/eval_checkpoint_on_test.py` |
-| FV-fast eval (FT) | `$PIPELINE_DIR/run_eval_fast_plant2ft.sh` |
-| FV-fast parallel queue | `$PIPELINE_DIR/queue_plant2ft_evals_par.sh` |
+| FV-fast eval (FT) | `$PIPELINE_DIR/eval_full.py fv` |
+| FV-fast parallel queue | `$PIPELINE_DIR/eval_full.py queue` |
 
 ---
 
 ## 2. Скрипты пересбора данных
 
-### 2.1 Параллельный rebuild со знаками
+### 2.1 Dump данных
 
-Главный скрипт:
+Единый скрипт: **`dump_plant2_l1.py`** (subcommands, argparse).
 
 ```bash
-# полный parallel rebuild → *_signs деревья
-bash $PIPELINE_DIR/dump_plant2_l1_rebuild_signs_parallel.sh
+# полный parallel rebuild → *_signs деревья (default)
+python $PIPELINE_DIR/dump_plant2_l1.py rebuild-signs
 
-DRY_RUN=1 bash $PIPELINE_DIR/dump_plant2_l1_rebuild_signs_parallel.sh
-MAX_WORKERS=32 JOBS="exp:stop fv:3.24" bash $PIPELINE_DIR/dump_plant2_l1_rebuild_signs_parallel.sh
+python $PIPELINE_DIR/dump_plant2_l1.py rebuild-signs --dry-run
+python $PIPELINE_DIR/dump_plant2_l1.py rebuild-signs --jobs exp:stop fv:3.24 --max-workers 32
+
+# legacy-подмножества (если нужен только один источник):
+python $PIPELINE_DIR/dump_plant2_l1.py experts --out-dir .../plant2_l1_from_experts_signs
+python $PIPELINE_DIR/dump_plant2_l1.py fv --out-dir .../plant2_l1_traj_fv_nodeA_signs
+python $PIPELINE_DIR/dump_plant2_l1.py lane --out-dir .../plant2_l1_lane_signs
 ```
 
-Выходы (не затирает старые non-`_signs`):
+Выходы rebuild-signs:
 
 - `$SHEPELEV/plant2_l1_from_experts_signs/`
 - `$SHEPELEV/plant2_l1_traj_fv_nodeA_signs/`
 - `$SHEPELEV/plant2_l1_lane_signs/`
 
-Логи: `$PIPELINE_DIR/logs_dump_signs/`.
-
-Отдельные (более старые) обёртки по семействам:
-
-- `$PIPELINE_DIR/dump_plant2_l1_from_experts.sh` → default OUT `plant2_l1_from_experts`
-- `$PIPELINE_DIR/dump_plant2_l1_traj_fv_nodeA.sh` → default OUT `plant2_l1_traj_fv_nodeA`
-- `$PIPELINE_DIR/dump_plant2_l1_lane_parallel.sh` — lane
-
-Для signs-дерева задавайте `OUT_DIR=..._signs` или используйте parallel rebuild.
+Логи: `$SHEPELEV/collected_trajectories/logs_dump_signs/`.
 
 ### 2.2 `expert_replay_inenv.py` + `plant2_frames.py`
 
@@ -225,8 +220,9 @@ $PY $PIPELINE_DIR/make_split_signs_2.5_subset.py
 
 ### Скрипты
 
-- `$PIPELINE_DIR/prefill_plant2_diskcache.py` — один shard
-- `$PIPELINE_DIR/prefill_plant2_diskcache_parallel.sh` — шардирование train + один val job
+- **`prefill_diskcache.py shard`** — один worker / index range
+- **`prefill_diskcache.py parallel`** — шардирование train + val (вызывает `shard`)
+- **`prefill_diskcache.py 2p5`** — extract+patch 2.5 keys из большого cache (быстрый путь для 2.5 FT)
 
 ### Env
 
@@ -249,16 +245,24 @@ $PY $PIPELINE_DIR/make_split_signs_2.5_subset.py
 ```bash
 export DS=$SHEPELEV/plant2_l1_fv_experts_split_signs/train
 export DS_VAL=$SHEPELEV/plant2_l1_fv_experts_split_signs/val
-export DS_LOCAL=/tmp/plant2_ds_cache_spatial_aug
-export CACHE_SIZE_GB=1800
-export PREFILL_AUGMENT=1
-DRY_RUN=1 bash $PIPELINE_DIR/prefill_plant2_diskcache_parallel.sh
-MAX_WORKERS=32 bash $PIPELINE_DIR/prefill_plant2_diskcache_parallel.sh
+python $PIPELINE_DIR/prefill_diskcache.py parallel \
+  --ds $DS --ds-val $DS_VAL \
+  --ds-local /tmp/plant2_ds_cache_spatial_aug \
+  --cache-size-gb 1800
+
+# dry-run:
+python $PIPELINE_DIR/prefill_diskcache.py parallel --dry-run ...
+
+# 2.5 tsfix cache (после retrofit measurements):
+python $PIPELINE_DIR/prefill_diskcache.py 2p5 \
+  --src /tmp/plant2_ds_cache_spatial_aug \
+  --dst /tmp/plant2_ds_cache_2p5_tsfix \
+  --reset-dst --materialize-missing
 ```
 
 Логи: `/tmp/plant2_prefill_logs/`.
 
-Для 2.5 после retrofit предпочтительнее `$PIPELINE_DIR/extract_patch_2p5_cache.py` (быстрее и безопаснее, чем полный prefill).
+Для 2.5 после retrofit предпочтительнее `prefill_diskcache.py 2p5` (быстрее и безопаснее, чем полный prefill).
 
 ---
 
@@ -268,12 +272,16 @@ MAX_WORKERS=32 bash $PIPELINE_DIR/prefill_plant2_diskcache_parallel.sh
 
 | Скрипт | Что делает |
 |---|---|
-| `$PIPELINE_DIR/run_plant2_finetune.sh` | Один job; читает `SPLIT`, `LEARNING_RATE`, `CHECKPOINT_ADDON`, … |
-| `$PIPELINE_DIR/plant2_py_shims/run_lit_finetune.py` | Точка входа Hydra (`lit_finetune.py` + disable flash_attn) |
-| `$PIPELINE_DIR/launch_plant2_ft_spatial_lr_sweep.sh` | 7 GPU, full split, LR ∈ {1e-6…1e-4}, addon `fvexp30_spatial_lr*` |
-| `$PIPELINE_DIR/launch_plant2_ft_2p5_lr_sweep.sh` | 2 GPU, 2.5 split; **старые** addon `fvexp30_spatial_2p5_lr*` и `DS_LOCAL=spatial_aug` |
-| `$PIPELINE_DIR/launch_ft_2p5_tsfix_only.sh` | 2.5 + `/tmp/plant2_ds_cache_2p5_tsfix`, addon `…_tsfix_lr*` |
-| `$PIPELINE_DIR/launch_ft_2p5_stopw_sweep.sh` | `stop_speed_loss_weight` ∈ {5,10,20} × LR |
+| `run_plant2_finetune.py` | Один FT job (argparse) |
+| `launch_ft.py` / `launch_ft.sh` | Sweeps: `spatial-lr`, `2p5-tsfix`, `2p5-stopw`, `2p5-hyp` |
+| `plant2_py_shims/run_lit_finetune.py` | Hydra entry (flash_attn disabled) |
+
+```bash
+python launch_ft.py spatial-lr          # 7 GPU tmux
+python launch_ft.py 2p5-tsfix            # 2 background jobs
+python launch_ft.py 2p5-stopw --wait
+python launch_ft.py 2p5-hyp --wait
+```
 
 ### 4.2 Env vars
 
@@ -380,7 +388,20 @@ $PIPELINE_DIR/logs_pipeline_*/ft_*.log
 
 ### 5.1 Sign SR (`--only 2.5`)
 
-Харнесс:
+**`eval_sign25.py`** — простой запуск одного ckpt (argparse, расширяемый):
+
+```bash
+python $PIPELINE_DIR/eval_sign25.py \
+  --ckpt /path/to.ckpt \
+  --tag fvexp30_spatial_2p5_tsfix_lr1e5_best023_sign25 \
+  --gpu 0 --only 2.5 --jobs 8 --scenes-per-job 20
+
+# или по addon + slot:
+python $PIPELINE_DIR/eval_sign25.py \
+  --addon fvexp30_spatial_2p5_tsfix_lr1e5 --slot best --gpu 1
+```
+
+Харнесс (низкий уровень):
 
 ```bash
 cd $TRB_ROOT/pdd-bench/scripts/per_sign_bench/plant2_rule_test
@@ -412,47 +433,22 @@ METRICS_ROOT=$SHEPELEV/plant2_ft_metrics/spatial_2p5_eval_sign25 \
 `fv_fast` / `fv_fast_detour` (`run_eval_fast_plant2ft.sh`) для 2.5-only
 **пропускаются**. На полном split их запускают очереди ниже (§5.2).
 
-### 5.2 FV-fast: `run_eval_fast_plant2ft.sh` и параллель
+### 5.2 FV-fast и full eval
 
-Один ckpt (ручной вызов):
-
-```bash
-CKPT=/path/to.ckpt \
-OUT=$SHEPELEV/plant2_ft_metrics/<tag>/fv_fast \
-GPUS="0 1 2 3 4 5 6" NSHARDS=28 CONCURRENCY=28 \
-  bash $PIPELINE_DIR/run_eval_fast_plant2ft.sh
-```
-
-Ключевые env (из шапки скрипта):
-
-| Env | Default / смысл |
-|---|---|
-| `CKPT` | **обязателен** — путь к plant2-ft `.ckpt` |
-| `OUT` | **обязателен** — каталог метрик этого ckpt |
-| `MANIFEST` | `…/catalog_fv_test20.jsonl` (только test20; guard падает иначе) |
-| `SCENES` | `…/scenes_balanced` |
-| `GPUS` | `"0 1 2 3 4 5 6"` |
-| `NSHARDS` / `CONCURRENCY` | `28` / `28` |
-| `NN_POLICIES` | `plant2` |
-| `EXCLUDE_CODES` | `"3.25 5.22 5.32"` |
-| `PLANT2_ACTION_MODE` | `pid` |
-| `PY` | `$SHEPELEV/conda_envs/arbelyaev-sdc/bin/python` |
-
-Параллельная очередь по многим ckpt:
+**`eval_full.py`** / **`eval_full.sh`** (вся логика в Python):
 
 ```bash
-# signs + fv_fast + fv_fast_detour; GPU round-robin
-GPUS="0 1 2 3 4 5 6" \
-SIGNS_PARALLEL=8 SIGNS_JOBS=20 SCENES_PER_JOB=32 \
-FV_PARALLEL=4 FV_NSHARDS=28 FV_CONCURRENCY=28 \
-  bash $PIPELINE_DIR/queue_plant2ft_evals_par.sh
-```
+# один ckpt FV-fast
+python $PIPELINE_DIR/eval_full.py fv \
+  --ckpt /path/to.ckpt \
+  --out $SHEPELEV/plant2_ft_metrics/<tag>/fv_fast
 
-Spatial 7-GPU waves (best → ep029 → …), тоже вызывает `run_eval_fast_plant2ft.sh`:
+# parallel queue (signs + fv_fast + fv_detour)
+python $PIPELINE_DIR/eval_full.py queue
 
-```bash
-METRICS_ROOT=$SHEPELEV/plant2_ft_metrics/spatial_signs_eval \
-  bash $PIPELINE_DIR/launch_spatial_ft_eval_7gpu.sh
+# spatial 7-GPU waves
+python $PIPELINE_DIR/eval_full.py spatial \
+  --metrics-root $SHEPELEV/plant2_ft_metrics/spatial_signs_eval
 ```
 
 Готовность FV-шага: `$OUT/reports/report_cumulative.md`.
@@ -529,43 +525,39 @@ $SHEPELEV/plant2_ft_metrics/<root>/<tag>/
 ## Сводка команд end-to-end (full spatial)
 
 ```bash
-# A. Dump (долго)
-bash $PIPELINE_DIR/dump_plant2_l1_rebuild_signs_parallel.sh
+# A. Dump
+python $PIPELINE_DIR/dump_plant2_l1.py rebuild-signs
 
 # B. Split
 $PY $PIPELINE_DIR/make_train_val_split_fv_experts_signs.py
-$PY $PIPELINE_DIR/make_split_signs_2.5_subset.py   # опционально для 2.5-only
+$PY $PIPELINE_DIR/make_split_signs_2.5_subset.py
 
-# C. Prefill full cache (очень долго / много /tmp)
-export DS=$SHEPELEV/plant2_l1_fv_experts_split_signs/train
-export DS_VAL=$SHEPELEV/plant2_l1_fv_experts_split_signs/val
-export DS_LOCAL=/tmp/plant2_ds_cache_spatial_aug CACHE_SIZE_GB=1800 PREFILL_AUGMENT=1
-bash $PIPELINE_DIR/prefill_plant2_diskcache_parallel.sh
+# C. Prefill
+python $PIPELINE_DIR/prefill_diskcache.py parallel --ds ... --ds-val ... \
+  --ds-local /tmp/plant2_ds_cache_spatial_aug --cache-size-gb 1800
 
-# D. FT LR sweep
-bash $PIPELINE_DIR/launch_plant2_ft_spatial_lr_sweep.sh
+# D. FT
+python $PIPELINE_DIR/launch_ft.py spatial-lr
 
-# E. Eval: Sign SR + FV-fast (run_eval_fast_plant2ft) / parallel queue
-bash $PIPELINE_DIR/launch_spatial_ft_eval_7gpu.sh
-# или: bash $PIPELINE_DIR/queue_plant2ft_evals_par.sh
-# один ckpt FV-fast:
-#   CKPT=… OUT=$SHEPELEV/plant2_ft_metrics/<tag>/fv_fast bash $PIPELINE_DIR/run_eval_fast_plant2ft.sh
+# E. Eval
+python $PIPELINE_DIR/eval_full.py spatial
 ```
 
 ## Сводка 2.5 tsfix (после уже существующего full cache)
 
 ```bash
-# retrofit measurements → extract small cache → FT → eval Sign SR (--only 2.5)
-bash $PIPELINE_DIR/run_2p5_tsfix_pipeline.sh
-# или по стадиям: retrofit → extract_patch_2p5_cache.py → launch_ft_2p5_tsfix_only.sh → watch_eval_2p5_tsfix.sh
-# FV-fast (run_eval_fast_plant2ft / queue_plant2ft_evals_par) на 2.5-only не нужен —
-# catalog_fv_test20 без sign 2.5; включается на full spatial eval (§5.2).
+# retrofit → prefill 2p5 → FT → eval
+$PY $PIPELINE_DIR/retrofit_target_speed_expert.py --signs 2.5 --workers 32
+python $PIPELINE_DIR/prefill_diskcache.py 2p5 --reset-dst --materialize-missing
+python $PIPELINE_DIR/launch_ft.py 2p5-tsfix --wait
+python $PIPELINE_DIR/eval_sign25.py --addon fvexp30_spatial_2p5_tsfix_lr1e5 --slot best --gpu 0
+# FV-fast на 2.5-only не нужен — catalog_fv_test20 без sign 2.5
 ```
 
 Доп. эксперименты на том же cache:
 
 ```bash
-bash $PIPELINE_DIR/launch_ft_2p5_hyp_sweep.sh      # логи: $PIPELINE_DIR/logs_pipeline_2p5_hyp/
-bash $PIPELINE_DIR/launch_ft_2p5_stopw_sweep.sh    # логи: $PIPELINE_DIR/logs_pipeline_2p5_stopw/
+python $PIPELINE_DIR/launch_ft.py 2p5-hyp --wait
+python $PIPELINE_DIR/launch_ft.py 2p5-stopw --wait
 ```
 
