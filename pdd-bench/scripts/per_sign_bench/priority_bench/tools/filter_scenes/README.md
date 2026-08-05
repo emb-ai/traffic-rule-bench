@@ -44,7 +44,7 @@ ls -1d sign*/ 2>/dev/null | wc -l
 ```
 
 
-4. Generate manifest (rejected scenes in scene_selection.json are skipped automatically)
+4. Generate manifest (fails if rejects were not moved with `--apply`)
 ```
 python generate_manifest.py
 ```

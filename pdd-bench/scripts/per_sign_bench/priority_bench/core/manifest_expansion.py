@@ -42,7 +42,7 @@ class ExpansionConfig:
     enabled: bool = True
     layout: bool = False
     auxiliary: bool = False
-    max_scenarios_per_scene: Optional[int] = None
+    max_scenarios: Optional[int] = None
     aux: Optional[AuxiliaryParams] = None
 
     @property
@@ -335,7 +335,7 @@ def expand_scene_entries(
             f"(same ego path + occupied aux lanes + convoy)"
         )
 
-    cap = expansion.max_scenarios_per_scene
+    cap = expansion.max_scenarios
     if cap is not None and len(scene_entries) > cap:
         print(
             f"  Retained {cap} of {len(scene_entries)} manifest entries for {scene_name}"

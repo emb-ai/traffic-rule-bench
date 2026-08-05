@@ -67,3 +67,19 @@ def is_scene_rejected(scenes_root: Path, scene_name: str) -> bool:
 def rejected_scene_names(scenes_root: Path) -> list[str]:
     verdicts = load_scene_selection(scenes_root).get("scenes", {})
     return sorted(name for name, verdict in verdicts.items() if verdict == VERDICT_REJECT)
+
+
+def unapplied_rejected_scenes(scenes_root: Path) -> list[str]:
+    """Rejects in scene_selection.json that still exist as top-level scene dirs.
+
+    After review, ``review_junction_scenes.py --apply`` should move these under
+    ``_rejected/``. If any remain, manifest generation would still pick them up.
+    """
+    pending: list[str] = []
+    for name in rejected_scene_names(scenes_root):
+        if is_reserved_scene_dir(name):
+            continue
+        path = scenes_root / name
+        if path.is_dir():
+            pending.append(name)
+    return pending

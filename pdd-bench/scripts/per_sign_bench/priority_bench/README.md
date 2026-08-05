@@ -109,8 +109,13 @@ does not duplicate a smaller-convoy scenario. Rows that differ only by which
 aux lane is listed first but occupy the same set of lanes (common with
 `lanes_occupied >=` number of main arms) are also deduplicated.
 
-After review, apply rejects and generate a manifest (rejected scenes in
-`scene_selection.json` are skipped automatically).
+After review, apply rejects and generate a manifest. If `scene_selection.json`
+still lists `reject` for scenes that remain on disk, `generate_manifest.py`
+exits with an error until you run:
+
+```bash
+python tools/filter_scenes/review_junction_scenes.py --apply
+```
 
 ### Step 1B: Build a single scene from OSM
 
@@ -196,7 +201,7 @@ See `configs/config.yaml` and `configs/sign/{main_road,yield}.yaml`.
 | Group | Key examples |
 |-------|----------------|
 | `paths.*` | `scenes_dir`, `output_base` (`data/<sign>/output`), `experiment_name` |
-| `scenario.*` | `n_variants`, `max_scenarios_per_scene`, `respect_scene_selection` |
+| `scenario.*` | `max_scenarios` (cap **after** all axes) |
 | `augmentation.*` | `enabled`, `layout`, `auxiliary` — which axes run (per sign yaml) |
 | `simulation.*` | `spawn_velocity_ms`, `horizon`, `spawn_distance_before_end` (default **15 m**) |
 | `auxiliary.*` | Params when `augmentation.auxiliary` is on: `enabled`, `distance_from_intersection`, `convoy_size`, `lanes_occupied`, `convoy_gap_m`, `release_when_ego_within_m` |
@@ -207,11 +212,15 @@ Override on the CLI:
 ```bash
 python generate_manifest.py sign=yield simulation.horizon=800 auxiliary.convoy_size=3
 python generate_manifest.py sign=yield augmentation.auxiliary=false  # layout only
+python generate_manifest.py sign=yield scenario.max_scenarios=5
 ```
 
-Notes on timing:
+Notes on timing / caps:
 
-- Ego spawns `spawn_distance_before_end` meters before the approach lane end
-  (default 15 m) so a rule expert can creep to a ~5 m yield stop.
-- Gated aux release distance is clamped up to that spawn offset so aux is not
-  held while a yielding ego waits outside the release radius.
+- `simulation.spawn_distance_before_end` — where **ego** is placed on its approach
+  (meters before lane end / junction). Default 15 m.
+- `auxiliary.release_when_ego_within_m` — when **gated aux** starts: ego's remaining
+  distance to lane end ≤ this value. Keep ≥ spawn distance so aux is not held while
+  a yielding ego waits outside the release radius.
+- `scenario.max_scenarios` — after layout × convoy × lanes, short-road skips, and
+  geometry dedupe, randomly keep at most this many rows **per scene**.

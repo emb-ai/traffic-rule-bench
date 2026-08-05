@@ -18,9 +18,7 @@ paths:
   experiment_name: ${now:%Y-%m-%d_%H-%M-%S}
 
 scenario:
-  n_variants: 1
-  max_scenarios_per_scene: 15
-  respect_scene_selection: true
+  max_scenarios: 15
 
 augmentation:
   enabled: true
@@ -40,7 +38,6 @@ simulation:
   traffic_density: 0.0
   horizon: 600
   sign_distance_before_end: 0.0
-  # Closer spawn so ego approaches the yield stop (~5 m) without a long idle.
   spawn_distance_before_end: 15.0
 
 gif:

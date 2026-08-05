@@ -45,6 +45,7 @@ from core.scene_augmentation import (
     pick_default_main_spawn_meta_for_net,
     pick_default_yield_spawn_meta_for_net,
 )
+from core.scene_selection import is_reserved_scene_dir, unapplied_rejected_scenes
 from core.sumo_utils import is_vehicle_drivable_lane
 from signs import SignProfile, get_profile, scenes_dir as profile_scenes_dir, output_dir as profile_output_dir
 
@@ -86,8 +87,7 @@ class PathsConfig:
 
 @dataclass
 class ScenarioConfig:
-    n_variants: int = 1
-    max_scenarios_per_scene: Optional[int] = None
+    max_scenarios: Optional[int] = None
 
 
 @dataclass
@@ -308,7 +308,7 @@ def discover_scenes(scenes_dir: Path) -> List[Path]:
     """Find all valid scene directories containing meta.json and map.net.xml."""
     scenes = []
     for entry in sorted(scenes_dir.iterdir()):
-        if not entry.is_dir():
+        if not entry.is_dir() or is_reserved_scene_dir(entry.name):
             continue
         meta_path = entry / "meta.json"
         if not meta_path.exists():
@@ -320,6 +320,21 @@ def discover_scenes(scenes_dir: Path) -> List[Path]:
         if net_path.exists():
             scenes.append(entry)
     return scenes
+
+
+def assert_rejected_scenes_applied(scenes_dir: Path) -> None:
+    """Fail if review rejects were not moved aside with ``--apply``."""
+    pending = unapplied_rejected_scenes(scenes_dir)
+    if not pending:
+        return
+    preview = ", ".join(pending[:8])
+    more = f" (+{len(pending) - 8} more)" if len(pending) > 8 else ""
+    raise SystemExit(
+        f"[error] {len(pending)} scene(s) are marked reject in scene_selection.json "
+        f"but still live under {scenes_dir.resolve()}.\n"
+        f"  Run: python tools/filter_scenes/review_junction_scenes.py --apply\n"
+        f"  Pending: {preview}{more}"
+    )
 
 
 def load_scene_metadata(scene_dir: Path) -> Dict:
@@ -598,6 +613,7 @@ def generate_manifest(
     expansion_cfg: ExpansionConfig,
 ) -> List[Dict]:
     """Generate real_manifest.jsonl from discovered scenes."""
+    assert_rejected_scenes_applied(scenes_dir)
     scenes = discover_scenes(scenes_dir)
     print(f"Scenes root: {scenes_dir.resolve()}")
     print(f"Discovered {len(scenes)} scene(s)")
@@ -673,10 +689,9 @@ def generate_manifest(
         "sign_name": SIGN_NAME,
         "total_scenes": len(scenes),
         "total_entries": len(entries),
-        "variants_per_scene": scenario_cfg.n_variants,
         "augmentation_layout": expansion_cfg.layout_on,
         "augmentation_auxiliary": expansion_cfg.auxiliary_on,
-        "max_scenarios_per_scene": scenario_cfg.max_scenarios_per_scene,
+        "max_scenarios": scenario_cfg.max_scenarios,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
         "traffic_density": sim_cfg.traffic_density,
         "horizon": sim_cfg.horizon,
@@ -812,6 +827,16 @@ def render_gifs_from_manifest(
 # -----------------------------------------------------------------------------
 # Hydra entry point
 # -----------------------------------------------------------------------------
+def _resolve_max_scenarios(scenario_cfg) -> Optional[int]:
+    """Prefer ``max_scenarios``; accept legacy ``max_scenarios_per_scene``."""
+    raw = getattr(scenario_cfg, "max_scenarios", None)
+    if raw is None:
+        raw = getattr(scenario_cfg, "max_scenarios_per_scene", None)
+    if raw is None:
+        return None
+    return int(raw)
+
+
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(cfg: DictConfig) -> None:
     """Main entry point with Hydra configuration."""
@@ -844,8 +869,7 @@ def main(cfg: DictConfig) -> None:
         f.write(OmegaConf.to_yaml(cfg))
     
     scenario_cfg = ScenarioConfig(
-        n_variants=cfg.scenario.n_variants,
-        max_scenarios_per_scene=cfg.scenario.max_scenarios_per_scene,
+        max_scenarios=_resolve_max_scenarios(cfg.scenario),
     )
     sim_cfg = SimulationConfig(
         spawn_velocity_ms=cfg.simulation.spawn_velocity_ms,
@@ -874,7 +898,7 @@ def main(cfg: DictConfig) -> None:
         enabled=bool(getattr(aug_cfg, "enabled", True)),
         layout=layout_flag,
         auxiliary=bool(getattr(aug_cfg, "auxiliary", False)),
-        max_scenarios_per_scene=scenario_cfg.max_scenarios_per_scene,
+        max_scenarios=scenario_cfg.max_scenarios,
         aux=AuxiliaryParams(
             enabled=aux_cfg.enabled,
             distance_from_intersection=aux_cfg.distance_from_intersection,
