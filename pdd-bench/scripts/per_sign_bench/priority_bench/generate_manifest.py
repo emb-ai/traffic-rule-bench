@@ -25,22 +25,23 @@ from core.junction_priority_layout import JunctionLayoutError, build_junction_pr
 from core.lane_keys import lane_edge_id, lane_num_from_key, make_lane_key
 from core.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
-    DEFAULT_CONVOY_SIZE,
-    has_viable_aux_lanes,
-    main_lane_keys_for_aux,
     resolve_aux_destination_lane_key,
     right_lane_keys_for_aux,
     select_occupied_main_lanes,
     viable_aux_lane_keys,
+    viable_right_aux_lane_keys,
 )
 from core.manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
-    DEFAULT_AUX_LANES_OCCUPIED_MAX,
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+)
+from core.manifest_expansion import (
+    AuxiliaryParams,
+    ExpansionConfig,
+    expand_scene_entries,
 )
 from core.scene_augmentation import (
     SpawnScenario,
-    augment_layout_for_scene,
     pick_default_main_spawn_meta_for_net,
     pick_default_yield_spawn_meta_for_net,
 )
@@ -86,8 +87,16 @@ class PathsConfig:
 @dataclass
 class ScenarioConfig:
     n_variants: int = 1
-    augment: bool = True
     max_scenarios_per_scene: Optional[int] = None
+
+
+@dataclass
+class AugmentationAxesConfig:
+    """Which augmentation axes are active (see configs/sign/*.yaml)."""
+
+    enabled: bool = True
+    layout: bool = False
+    auxiliary: bool = False
 
 
 @dataclass
@@ -125,6 +134,7 @@ class GifConfig:
 class ManifestConfig:
     paths: PathsConfig = field(default_factory=PathsConfig)
     scenario: ScenarioConfig = field(default_factory=ScenarioConfig)
+    augmentation: AugmentationAxesConfig = field(default_factory=AugmentationAxesConfig)
     simulation: SimulationConfig = field(default_factory=SimulationConfig)
     auxiliary: AuxiliaryConfig = field(default_factory=AuxiliaryConfig)
     gif: GifConfig = field(default_factory=GifConfig)
@@ -289,26 +299,6 @@ def _stable_seed(
         h.update(b"|lanes")
         h.update(str(lanes_occupied).encode("utf-8"))
     return int.from_bytes(h.digest()[:4], "big")
-
-
-# -----------------------------------------------------------------------------
-# Auxiliary agent dimension expansion
-# -----------------------------------------------------------------------------
-def sizes_up_to(
-    max_value: int,
-    *,
-    auxiliary_enabled: bool = True,
-    available: Optional[int] = None,
-) -> List[int]:
-    """Return values to materialize: {1, 2, ..., cap} for aux manifest expansion."""
-    if not auxiliary_enabled:
-        return [1]
-    if available is not None and available <= 0:
-        return [1]
-    cap = max(1, int(max_value))
-    if available is not None:
-        cap = min(cap, int(available))
-    return list(range(1, cap + 1))
 
 
 # -----------------------------------------------------------------------------
@@ -533,6 +523,8 @@ def build_manifest_entry(
                     junction_layout_cache,
                     aux_cfg.distance_from_intersection,
                     ego_edge,
+                    convoy_size=aux_convoy_size,
+                    convoy_gap_m=aux_cfg.convoy_gap_m,
                 )
                 if not available_main:
                     entry["valid"] = False
@@ -569,7 +561,13 @@ def build_manifest_entry(
                 junction_layout_cache, ego_edge
             )
             if aux_cfg.enabled:
-                available_right = entry["right_lane_keys"]
+                available_right = viable_right_aux_lane_keys(
+                    junction_layout_cache,
+                    aux_cfg.distance_from_intersection,
+                    ego_edge,
+                    convoy_size=aux_convoy_size,
+                    convoy_gap_m=aux_cfg.convoy_gap_m,
+                )
                 prefer_aux = None
                 if spawn_scenario is not None:
                     prefer_aux = make_lane_key(
@@ -597,24 +595,41 @@ def generate_manifest(
     scenario_cfg: ScenarioConfig,
     sim_cfg: SimulationConfig,
     aux_cfg: AuxiliaryConfig,
+    expansion_cfg: ExpansionConfig,
 ) -> List[Dict]:
     """Generate real_manifest.jsonl from discovered scenes."""
     scenes = discover_scenes(scenes_dir)
     print(f"Scenes root: {scenes_dir.resolve()}")
     print(f"Discovered {len(scenes)} scene(s)")
+    print(
+        f"Augmentation axes: layout={expansion_cfg.layout_on}, "
+        f"auxiliary={expansion_cfg.auxiliary_on}"
+    )
     if not scenes:
         print(
             f"[warn] No scenes with meta.json + net found under {scenes_dir}. "
             "Check data/<sign>/scenes symlink / paths.scenes_dir."
         )
     entries = []
-    
+
+    # When the auxiliary axis is off, force aux disabled in row fields.
+    aux_for_entry = aux_cfg
+    if not expansion_cfg.auxiliary_on:
+        aux_for_entry = AuxiliaryConfig(
+            enabled=False,
+            distance_from_intersection=aux_cfg.distance_from_intersection,
+            convoy_size=aux_cfg.convoy_size,
+            convoy_gap_m=aux_cfg.convoy_gap_m,
+            lanes_occupied=aux_cfg.lanes_occupied,
+            release_when_ego_within_m=aux_cfg.release_when_ego_within_m,
+        )
+
     for scene_dir in scenes:
         meta = load_scene_metadata(scene_dir)
         scene_name = meta.get("scene_name", scene_dir.name)
         net_file = meta.get("net_file", "map.net.xml")
         net_full_path = scene_dir / net_file
-        
+
         spawn_lanes = parse_sumo_net_for_spawn_lanes(net_full_path)
         print(f"  Found {len(spawn_lanes)} intersection-approaching lane(s)")
 
@@ -629,122 +644,29 @@ def generate_manifest(
         if junction_layout is None:
             print(f"  Skipping {scene_name}: no junction layout")
             continue
-        if _profile().spawn_strategy == "yield":
-            print(
-                f"  Junction layout: {junction_layout['shape']} @ {junction_layout['junction_id']} "
-                f"(main={len(junction_layout.get('main_edge_ids', []))}, "
-                f"secondary={len(junction_layout.get('secondary_edge_ids', []))})"
-            )
-        else:
-            print(
-                f"  Junction layout: {junction_layout['shape']} @ {junction_layout['junction_id']} "
-                f"(equal-priority arms={len(junction_layout.get('main_edge_ids', []))})"
-            )
 
-        if _profile().spawn_strategy == "yield":
-            available_aux_lane_count = len(
-                viable_aux_lane_keys(junction_layout, aux_cfg.distance_from_intersection)
-                if aux_cfg.enabled
-                else main_lane_keys_for_aux(junction_layout)
-            )
-            print(f"  Main-road lane slots for aux: {available_aux_lane_count}")
-            if aux_cfg.enabled and not has_viable_aux_lanes(
-                junction_layout, aux_cfg.distance_from_intersection
-            ):
-                print(
-                    f"  [aux] No main-road lanes long enough for aux spawning "
-                    f"(need >{aux_cfg.distance_from_intersection}m); skipping {scene_name}"
-                )
-                continue
-        else:
-            available_aux_lane_count = 0
-            if junction_layout.get("arms"):
-                from core.junction_priority_layout import right_arm_edge_id
-
-                sample_ego = junction_layout["arms"][0].get("edge_id")
-                if sample_ego:
-                    right_edge = right_arm_edge_id(junction_layout, sample_ego)
-                    if right_edge:
-                        available_aux_lane_count = sum(
-                            len(arm.get("lane_keys", []))
-                            for arm in junction_layout["arms"]
-                            if arm.get("edge_id") == right_edge
-                        )
-            print(f"  Right-arm lane slots for aux (example): {available_aux_lane_count}")
-
-        scenarios: List[SpawnScenario] = []
-        if scenario_cfg.augment:
-            _, scenarios = augment_layout_for_scene(
-                net_full_path,
-                spawn_lanes,
-                strategy=_profile().spawn_strategy,
-                aux_distance_from_intersection=aux_cfg.distance_from_intersection,
-                sign_lat=float(sign_lat) if sign_lat is not None else None,
-                sign_lon=float(sign_lon) if sign_lon is not None else None,
-            )
-            if not scenarios:
-                print(f"  [augment] No valid scenarios for {scene_name}; skipping scene")
-                continue
-            print(f"  Augmented spawn scenarios: {len(scenarios)}")
-
-        convoy_sizes = sizes_up_to(aux_cfg.convoy_size, auxiliary_enabled=aux_cfg.enabled)
-        scene_entries: List[Dict] = []
-        for variant, scenario in enumerate(scenarios):
-            ego_edge = scenario.ego_edge_id
-            if _profile().spawn_strategy == "yield":
-                scene_aux_lanes = (
-                    viable_aux_lane_keys(
-                        junction_layout,
-                        aux_cfg.distance_from_intersection,
-                        ego_edge,
-                    )
-                    if aux_cfg.enabled
-                    else main_lane_keys_for_aux(junction_layout, ego_edge)
-                )
-            else:
-                scene_aux_lanes = right_lane_keys_for_aux(junction_layout, ego_edge)
-            scene_lane_counts = sizes_up_to(
-                aux_cfg.lanes_occupied,
-                auxiliary_enabled=aux_cfg.enabled,
-                available=len(scene_aux_lanes),
-            )
-            for lanes_n in scene_lane_counts:
-                for convoy_n in convoy_sizes:
-                    entry = build_manifest_entry(
-                        scene_dir=scene_dir,
-                        scenes_root=scenes_dir,
-                        meta=meta,
-                        variant=variant,
-                        sim_cfg=sim_cfg,
-                        aux_cfg=aux_cfg,
-                        aux_convoy_size=convoy_n,
-                        aux_lanes_occupied=lanes_n,
-                        spawn_lanes_cache=spawn_lanes,
-                        junction_layout_cache=junction_layout,
-                        spawn_scenario=scenario,
-                    )
-                    scene_entries.append(entry)
-
-        # Cap AFTER convoy×lanes expansion (main_sign improvement vs yield).
-        if scenario_cfg.max_scenarios_per_scene is not None and len(scene_entries) > scenario_cfg.max_scenarios_per_scene:
-            print(
-                f"  Retained {scenario_cfg.max_scenarios_per_scene} of "
-                f"{len(scene_entries)} manifest entries for {scene_name}"
-            )
-            random.shuffle(scene_entries)
-            scene_entries = scene_entries[:scenario_cfg.max_scenarios_per_scene]
-        else:
-            print(f"  Manifest entries for {scene_name}: {len(scene_entries)}")
-
+        scene_entries = expand_scene_entries(
+            scene_dir=scene_dir,
+            scenes_root=scenes_dir,
+            meta=meta,
+            net_path=net_full_path,
+            spawn_lanes=spawn_lanes,
+            junction_layout=junction_layout,
+            spawn_strategy=_profile().spawn_strategy,
+            sim_cfg=sim_cfg,
+            expansion=expansion_cfg,
+            build_entry=build_manifest_entry,
+            aux_cfg_for_entry=aux_for_entry,
+        )
         entries.extend(scene_entries)
-    
+
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "real_manifest.jsonl"
-    
+
     with open(manifest_path, "w", encoding="utf-8") as f:
         for entry in entries:
             f.write(json.dumps(entry, default=str) + "\n")
-    
+
     summary = {
         "pdd_code": PDD_CODE,
         "sign_type": SIGN_TYPE,
@@ -752,14 +674,15 @@ def generate_manifest(
         "total_scenes": len(scenes),
         "total_entries": len(entries),
         "variants_per_scene": scenario_cfg.n_variants,
-        "augment": scenario_cfg.augment,
+        "augmentation_layout": expansion_cfg.layout_on,
+        "augmentation_auxiliary": expansion_cfg.auxiliary_on,
         "max_scenarios_per_scene": scenario_cfg.max_scenarios_per_scene,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
         "traffic_density": sim_cfg.traffic_density,
         "horizon": sim_cfg.horizon,
         "sign_distance_before_end": sim_cfg.sign_distance_before_end,
         "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
-        "auxiliary_agent": aux_cfg.enabled,
+        "auxiliary_agent": aux_for_entry.enabled,
         "aux_distance_from_intersection": aux_cfg.distance_from_intersection,
         "aux_convoy_size_max": aux_cfg.convoy_size,
         "aux_convoy_gap_m": aux_cfg.convoy_gap_m,
@@ -767,7 +690,7 @@ def generate_manifest(
         "generated_at": datetime.now().isoformat(),
         "scenes": [s.name for s in scenes],
     }
-    
+
     summary_path = output_dir / "real_manifest_summary.json"
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
@@ -776,7 +699,7 @@ def generate_manifest(
     manifest_meta = {"entries_file": "real_manifest.jsonl", **summary}
     with open(manifest_meta_path, "w", encoding="utf-8") as f:
         json.dump(manifest_meta, f, indent=2, ensure_ascii=False)
-    
+
     return entries
 
 # -----------------------------------------------------------------------------
@@ -922,7 +845,6 @@ def main(cfg: DictConfig) -> None:
     
     scenario_cfg = ScenarioConfig(
         n_variants=cfg.scenario.n_variants,
-        augment=cfg.scenario.augment,
         max_scenarios_per_scene=cfg.scenario.max_scenarios_per_scene,
     )
     sim_cfg = SimulationConfig(
@@ -933,11 +855,34 @@ def main(cfg: DictConfig) -> None:
         spawn_distance_before_end=cfg.simulation.spawn_distance_before_end,
     )
     aux_cfg = AuxiliaryConfig(
-        enabled=cfg.auxiliary.enabled,
-        distance_from_intersection=cfg.auxiliary.distance_from_intersection,
-        convoy_size=cfg.auxiliary.convoy_size,
-        convoy_gap_m=cfg.auxiliary.convoy_gap_m,
-        lanes_occupied=cfg.auxiliary.lanes_occupied,
+        enabled=bool(cfg.auxiliary.enabled),
+        distance_from_intersection=float(cfg.auxiliary.distance_from_intersection),
+        convoy_size=int(cfg.auxiliary.convoy_size),
+        convoy_gap_m=float(cfg.auxiliary.convoy_gap_m),
+        lanes_occupied=int(cfg.auxiliary.lanes_occupied),
+        release_when_ego_within_m=float(
+            getattr(cfg.auxiliary, "release_when_ego_within_m", 15.0) or 15.0
+        ),
+    )
+    aug_cfg = cfg.augmentation
+    layout_flag = bool(getattr(aug_cfg, "layout", False))
+    # Backward compat: scenario.augment → layout axis if still present in overrides.
+    legacy_augment = getattr(cfg.scenario, "augment", None)
+    if legacy_augment is not None and not layout_flag and bool(legacy_augment):
+        layout_flag = True
+    expansion_cfg = ExpansionConfig(
+        enabled=bool(getattr(aug_cfg, "enabled", True)),
+        layout=layout_flag,
+        auxiliary=bool(getattr(aug_cfg, "auxiliary", False)),
+        max_scenarios_per_scene=scenario_cfg.max_scenarios_per_scene,
+        aux=AuxiliaryParams(
+            enabled=aux_cfg.enabled,
+            distance_from_intersection=aux_cfg.distance_from_intersection,
+            convoy_size=aux_cfg.convoy_size,
+            convoy_gap_m=aux_cfg.convoy_gap_m,
+            lanes_occupied=aux_cfg.lanes_occupied,
+            release_when_ego_within_m=aux_cfg.release_when_ego_within_m,
+        ),
     )
     gif_cfg = GifConfig(
         enabled=cfg.gif.enabled,
@@ -949,13 +894,14 @@ def main(cfg: DictConfig) -> None:
         run_name=cfg.gif.run_name,
         scaling=float(getattr(cfg.gif, "scaling", 24.0) or 24.0),
     )
-    
+
     entries = generate_manifest(
         scenes_dir=scenes_dir,
         output_dir=experiment_dir,
         scenario_cfg=scenario_cfg,
         sim_cfg=sim_cfg,
         aux_cfg=aux_cfg,
+        expansion_cfg=expansion_cfg,
     )
     
     if gif_cfg.enabled and entries:

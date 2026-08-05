@@ -25,16 +25,58 @@ ARRIVE_GRACE_STEPS = 10
 AuxPolicyType = Literal["idm", "stationary"]
 
 
-def min_aux_spawn_lane_length(aux_distance_from_intersection: float) -> float:
-    """Minimum incoming lane length required to place an aux convoy."""
-    return float(aux_distance_from_intersection) + MIN_SPAWN_LONGITUDE_M
+def min_aux_spawn_lane_length(
+    aux_distance_from_intersection: float,
+    convoy_size: int = 1,
+    convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
+) -> float:
+    """Minimum incoming lane length to place a full aux convoy.
+
+    Lead spawns at ``length - aux_distance``; slot ``i`` at
+    ``lead - i * gap``. The last slot must stay ``>= MIN_SPAWN_LONGITUDE_M``, so::
+
+        length >= aux_distance + (convoy_size - 1) * gap + MIN_SPAWN_LONGITUDE_M
+    """
+    n = max(1, int(convoy_size))
+    gap = max(0.0, float(convoy_gap_m))
+    return (
+        float(aux_distance_from_intersection)
+        + float(n - 1) * gap
+        + MIN_SPAWN_LONGITUDE_M
+    )
 
 
 def is_viable_aux_lane_length(
     lane_length: float,
     aux_distance_from_intersection: float,
+    convoy_size: int = 1,
+    convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
 ) -> bool:
-    return float(lane_length) >= min_aux_spawn_lane_length(aux_distance_from_intersection)
+    return float(lane_length) >= min_aux_spawn_lane_length(
+        aux_distance_from_intersection,
+        convoy_size=convoy_size,
+        convoy_gap_m=convoy_gap_m,
+    )
+
+
+def max_convoy_size_for_lane_length(
+    lane_length: float,
+    aux_distance_from_intersection: float,
+    convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
+    convoy_size_cap: int = DEFAULT_CONVOY_SIZE,
+) -> int:
+    """Largest convoy that fully fits on a lane of the given length (0 if none)."""
+    gap = max(0.0, float(convoy_gap_m))
+    cap = max(1, int(convoy_size_cap))
+    best = 0
+    for n in range(1, cap + 1):
+        if is_viable_aux_lane_length(
+            lane_length, aux_distance_from_intersection, n, gap
+        ):
+            best = n
+        else:
+            break
+    return best
 
 
 def apply_aux_cruise_speed(aux_policy, speed_ms: float) -> None:
@@ -588,14 +630,20 @@ def viable_right_aux_lane_keys(
     junction_layout: Optional[dict],
     aux_distance_from_intersection: float,
     ego_edge_id: Optional[str] = None,
+    convoy_size: int = 1,
+    convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
 ) -> List[str]:
-    """Right-arm lane keys with enough length for aux spawning."""
+    """Right-arm lane keys with enough length for a full aux convoy."""
     if not junction_layout or not ego_edge_id:
         return []
     right_edge = right_arm_edge_id(junction_layout, ego_edge_id)
     if not right_edge:
         return []
-    min_required = min_aux_spawn_lane_length(aux_distance_from_intersection)
+    min_required = min_aux_spawn_lane_length(
+        aux_distance_from_intersection,
+        convoy_size=convoy_size,
+        convoy_gap_m=convoy_gap_m,
+    )
     for arm in junction_layout.get("arms", []):
         if arm.get("edge_id") != right_edge:
             continue
@@ -610,10 +658,16 @@ def has_viable_right_aux_lanes(
     junction_layout: Optional[dict],
     aux_distance_from_intersection: float,
     ego_edge_id: Optional[str] = None,
+    convoy_size: int = 1,
+    convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
 ) -> bool:
     return bool(
         viable_right_aux_lane_keys(
-            junction_layout, aux_distance_from_intersection, ego_edge_id
+            junction_layout,
+            aux_distance_from_intersection,
+            ego_edge_id,
+            convoy_size=convoy_size,
+            convoy_gap_m=convoy_gap_m,
         )
     )
 
@@ -622,14 +676,21 @@ def viable_aux_arms(
     junction_layout: Optional[dict],
     aux_distance_from_intersection: float,
     ego_edge_id: Optional[str] = None,
+    convoy_size: int = 1,
+    convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
 ) -> List[dict]:
-    """Return main-road arms with lanes long enough for aux spawning.
-    
-    A lane is viable if ``min_lane_length >= aux_distance + MIN_SPAWN_LONGITUDE_M``.
+    """Return main-road arms with lanes long enough for a full aux convoy.
+
+    A lane is viable if
+    ``min_lane_length >= aux_distance + (convoy_size-1)*gap + MIN_SPAWN_LONGITUDE_M``.
     """
     if not junction_layout:
         return []
-    min_required = min_aux_spawn_lane_length(aux_distance_from_intersection)
+    min_required = min_aux_spawn_lane_length(
+        aux_distance_from_intersection,
+        convoy_size=convoy_size,
+        convoy_gap_m=convoy_gap_m,
+    )
     viable: List[dict] = []
     for arm in junction_layout.get("arms", []):
         if arm.get("road_class") != "main":
@@ -646,10 +707,18 @@ def viable_aux_lane_keys(
     junction_layout: Optional[dict],
     aux_distance_from_intersection: float,
     ego_edge_id: Optional[str] = None,
+    convoy_size: int = 1,
+    convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
 ) -> List[str]:
-    """Lane keys on main-road arms with enough length for aux spawning."""
+    """Lane keys on main-road arms with enough length for a full aux convoy."""
     keys: List[str] = []
-    for arm in viable_aux_arms(junction_layout, aux_distance_from_intersection, ego_edge_id):
+    for arm in viable_aux_arms(
+        junction_layout,
+        aux_distance_from_intersection,
+        ego_edge_id,
+        convoy_size=convoy_size,
+        convoy_gap_m=convoy_gap_m,
+    ):
         keys.extend(arm.get("lane_keys", []))
     return sorted(keys)
 
@@ -687,6 +756,8 @@ def resolve_aux_spawn_lanes(
     aux_distance = float(
         row.get("aux_distance_from_intersection", aux_distance_from_intersection)
     )
+    convoy_size = int(row.get("aux_convoy_size", 1) or 1)
+    convoy_gap_m = float(row.get("aux_convoy_gap_m", DEFAULT_CONVOY_GAP_M) or DEFAULT_CONVOY_GAP_M)
 
     ego_edge = lane_edge_id(str(ego_lane_index)) if ego_lane_index else None
     if row.get("road_id"):
@@ -695,7 +766,11 @@ def resolve_aux_spawn_lanes(
     junction_layout = row.get("junction_layout")
     if junction_layout and junction_layout.get("mode") == "main_main":
         right_keys = viable_right_aux_lane_keys(
-            junction_layout, aux_distance, ego_edge
+            junction_layout,
+            aux_distance,
+            ego_edge,
+            convoy_size=convoy_size,
+            convoy_gap_m=convoy_gap_m,
         )
         if not right_keys:
             right_keys = row.get("right_lane_keys") or right_lane_keys_for_aux(
@@ -710,7 +785,13 @@ def resolve_aux_spawn_lanes(
             return select_occupied_main_lanes(right_keys, lanes_n)
         return []
 
-    viable_keys = viable_aux_lane_keys(junction_layout, aux_distance, ego_edge)
+    viable_keys = viable_aux_lane_keys(
+        junction_layout,
+        aux_distance,
+        ego_edge,
+        convoy_size=convoy_size,
+        convoy_gap_m=convoy_gap_m,
+    )
     viable_set = set(viable_keys)
 
     def _filter_viable(keys: List[str]) -> List[str]:
@@ -828,6 +909,10 @@ def resolve_aux_spawn_plan(
         junction_layout,
         float(row.get("aux_distance_from_intersection", aux_distance_from_intersection)),
         ego_edge,
+        convoy_size=int(row.get("aux_convoy_size", 1) or 1),
+        convoy_gap_m=float(
+            row.get("aux_convoy_gap_m", DEFAULT_CONVOY_GAP_M) or DEFAULT_CONVOY_GAP_M
+        ),
     )
     alternate_spawn_dest_map: dict = {}
     for lane_key in viable_keys:

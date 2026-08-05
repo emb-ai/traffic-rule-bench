@@ -3,8 +3,8 @@
 #   python generate_manifest.py sign=yield
 
 defaults:
-  - sign: main_road
   - _self_
+  - sign: main_road
 
 hydra:
   run:
@@ -19,9 +19,21 @@ paths:
 
 scenario:
   n_variants: 1
-  augment: true
   max_scenarios_per_scene: 15
   respect_scene_selection: true
+
+augmentation:
+  enabled: true
+  layout: false
+  auxiliary: false
+
+auxiliary:
+  enabled: false
+  distance_from_intersection: 20.0
+  convoy_size: 1
+  lanes_occupied: 1
+  convoy_gap_m: 10.0
+  release_when_ego_within_m: 15.0
 
 simulation:
   spawn_velocity_ms: 2.5
@@ -30,16 +42,6 @@ simulation:
   sign_distance_before_end: 0.0
   # Closer spawn so ego approaches the yield stop (~5 m) without a long idle.
   spawn_distance_before_end: 15.0
-
-auxiliary:
-  enabled: true
-  distance_from_intersection: 20.0
-  convoy_size: 3
-  lanes_occupied: 4
-  convoy_gap_m: 10.0
-  # Release as soon as ego is at/near spawn (must be >= spawn_distance_before_end
-  # or gated aux and a yielding ego deadlock far from the junction).
-  release_when_ego_within_m: 15.0
 
 gif:
   enabled: false

@@ -82,8 +82,32 @@ python tools/analyze_manifest_drops.py
 ```
 
 Cropping runs the same viability checks as `generate_manifest.py` (junction
-layout, aux lane length, routable ego/aux). Invalid junctions are skipped before
-review. Disable with `--no-require-manifest-viable` if needed.
+layout, aux lane length for at least one lead vehicle, routable ego/aux).
+Invalid junctions are skipped before review. Disable with
+`--no-require-manifest-viable` if needed.
+
+### Augmentation axes
+
+Axes are declared in `configs/sign/*.yaml` under `augmentation:` (defaults off
+in the root config). Priority signs enable both:
+
+| Axis | Meaning |
+|------|---------|
+| `layout` | Ego × aux arm/lane/destination scenarios (`core/scene_augmentation.py`) |
+| `auxiliary` | Cartesian product of convoy `1..N` and occupied lanes `1..M` |
+
+Expansion (product, short-road skip, geometry dedupe, cap) lives in
+[`core/manifest_expansion.py`](core/manifest_expansion.py); `generate_manifest.py`
+only discovers scenes and writes the jsonl.
+
+A future sign without crossing traffic (e.g. 5.19) would set
+`augmentation.auxiliary: false` and omit / disable the `auxiliary:` block.
+
+When expanding convoy sizes, rows whose aux approach is too short for the full
+convoy (`length < distance + (N-1)*gap + 3m`) are dropped so a truncated spawn
+does not duplicate a smaller-convoy scenario. Rows that differ only by which
+aux lane is listed first but occupy the same set of lanes (common with
+`lanes_occupied >=` number of main arms) are also deduplicated.
 
 After review, apply rejects and generate a manifest (rejected scenes in
 `scene_selection.json` are skipped automatically).
@@ -172,20 +196,22 @@ See `configs/config.yaml` and `configs/sign/{main_road,yield}.yaml`.
 | Group | Key examples |
 |-------|----------------|
 | `paths.*` | `scenes_dir`, `output_base` (`data/<sign>/output`), `experiment_name` |
-| `scenario.*` | `n_variants`, `augment`, `max_scenarios_per_scene`, `respect_scene_selection` |
-| `simulation.*` | `spawn_velocity_ms`, `horizon`, `spawn_distance_before_end` (default **12 m**) |
-| `auxiliary.*` | `enabled`, `distance_from_intersection`, `convoy_size`, `lanes_occupied`, `convoy_gap_m`, `release_when_ego_within_m` |
+| `scenario.*` | `n_variants`, `max_scenarios_per_scene`, `respect_scene_selection` |
+| `augmentation.*` | `enabled`, `layout`, `auxiliary` — which axes run (per sign yaml) |
+| `simulation.*` | `spawn_velocity_ms`, `horizon`, `spawn_distance_before_end` (default **15 m**) |
+| `auxiliary.*` | Params when `augmentation.auxiliary` is on: `enabled`, `distance_from_intersection`, `convoy_size`, `lanes_occupied`, `convoy_gap_m`, `release_when_ego_within_m` |
 | `gif.*` | `enabled`, `policy`, `scaling` (px/m; higher = more zoomed in), `hide_signs` |
 
 Override on the CLI:
 
 ```bash
 python generate_manifest.py sign=yield simulation.horizon=800 auxiliary.convoy_size=3
+python generate_manifest.py sign=yield augmentation.auxiliary=false  # layout only
 ```
 
 Notes on timing:
 
 - Ego spawns `spawn_distance_before_end` meters before the approach lane end
-  (default 12 m) so a rule expert can creep to a ~5 m yield stop.
+  (default 15 m) so a rule expert can creep to a ~5 m yield stop.
 - Gated aux release distance is clamped up to that spawn offset so aux is not
   held while a yielding ego waits outside the release radius.

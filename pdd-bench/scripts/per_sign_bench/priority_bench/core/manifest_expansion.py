@@ -1,0 +1,348 @@
+"""Cartesian expansion of layout/aux axes into manifest rows.
+
+Layout scenarios come from ``scene_augmentation``; this module owns the
+product over convoy × lanes, short-road skips, geometry dedupe, and caps.
+"""
+
+from __future__ import annotations
+
+import random
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+
+from .auxiliary_agent import (
+    has_viable_aux_lanes,
+    main_lane_keys_for_aux,
+    min_aux_spawn_lane_length,
+    right_lane_keys_for_aux,
+    viable_aux_lane_keys,
+    viable_right_aux_lane_keys,
+)
+from .lane_keys import make_lane_key
+from .scene_augmentation import SpawnScenario, SpawnStrategy, augment_layout_for_scene
+
+
+@dataclass(frozen=True)
+class AuxiliaryParams:
+    """Aux spawn parameters (ignored when the auxiliary axis is off)."""
+
+    enabled: bool = True
+    distance_from_intersection: float = 20.0
+    convoy_size: int = 1
+    convoy_gap_m: float = 10.0
+    lanes_occupied: int = 1
+    release_when_ego_within_m: float = 15.0
+
+
+@dataclass(frozen=True)
+class ExpansionConfig:
+    """Which augmentation axes to run for the current sign."""
+
+    enabled: bool = True
+    layout: bool = False
+    auxiliary: bool = False
+    max_scenarios_per_scene: Optional[int] = None
+    aux: Optional[AuxiliaryParams] = None
+
+    @property
+    def layout_on(self) -> bool:
+        return bool(self.enabled) and bool(self.layout)
+
+    @property
+    def auxiliary_on(self) -> bool:
+        """True when the auxiliary axis is enabled and aux agents are on."""
+        if not (self.enabled and self.auxiliary and self.aux is not None):
+            return False
+        return bool(self.aux.enabled)
+
+
+BuildEntryFn = Callable[..., Dict]
+
+
+def sizes_up_to(
+    max_value: int,
+    *,
+    auxiliary_enabled: bool = True,
+    available: Optional[int] = None,
+) -> List[int]:
+    """Return values to materialize: {1, 2, ..., cap} for aux manifest expansion."""
+    if not auxiliary_enabled:
+        return [1]
+    if available is not None and available <= 0:
+        return [1]
+    cap = max(1, int(max_value))
+    if available is not None:
+        cap = min(cap, int(available))
+    return list(range(1, cap + 1))
+
+
+def entry_geometry_key(entry: Dict) -> Tuple:
+    """Identity of what appears on the map (order of aux lanes ignored)."""
+    return (
+        entry.get("road_id"),
+        entry.get("spawn_lane_num"),
+        entry.get("destination_lane_id"),
+        frozenset(entry.get("aux_occupied_lane_keys") or []),
+        int(entry.get("aux_convoy_size") or 1),
+    )
+
+
+def _fit_aux_lane_keys(
+    *,
+    junction_layout: dict,
+    spawn_strategy: str,
+    aux: AuxiliaryParams,
+    ego_edge: Optional[str],
+    convoy_size: int,
+) -> List[str]:
+    if spawn_strategy == "yield":
+        return viable_aux_lane_keys(
+            junction_layout,
+            aux.distance_from_intersection,
+            ego_edge,
+            convoy_size=convoy_size,
+            convoy_gap_m=aux.convoy_gap_m,
+        )
+    return viable_right_aux_lane_keys(
+        junction_layout,
+        aux.distance_from_intersection,
+        ego_edge,
+        convoy_size=convoy_size,
+        convoy_gap_m=aux.convoy_gap_m,
+    )
+
+
+def _scene_aux_lane_keys_for_lane_axis(
+    *,
+    junction_layout: dict,
+    spawn_strategy: str,
+    auxiliary_on: bool,
+    aux: Optional[AuxiliaryParams],
+    ego_edge: Optional[str],
+) -> List[str]:
+    """Lane pool for the lanes-occupied axis (lead-only length when aux on)."""
+    if not auxiliary_on or aux is None:
+        if spawn_strategy == "yield":
+            return main_lane_keys_for_aux(junction_layout, ego_edge)
+        return right_lane_keys_for_aux(junction_layout, ego_edge)
+    return _fit_aux_lane_keys(
+        junction_layout=junction_layout,
+        spawn_strategy=spawn_strategy,
+        aux=aux,
+        ego_edge=ego_edge,
+        convoy_size=1,
+    )
+
+
+def _print_aux_lane_availability(
+    *,
+    scene_name: str,
+    junction_layout: dict,
+    spawn_strategy: str,
+    expansion: ExpansionConfig,
+) -> bool:
+    """Log aux slot counts. Return False if the scene should be skipped."""
+    aux = expansion.aux
+    if not expansion.auxiliary_on or aux is None:
+        if spawn_strategy == "yield":
+            print(
+                f"  Main-road lane slots for aux: "
+                f"{len(main_lane_keys_for_aux(junction_layout))} (aux axis off)"
+            )
+        return True
+
+    min_lane_for_lead = min_aux_spawn_lane_length(
+        aux.distance_from_intersection,
+        convoy_size=1,
+        convoy_gap_m=aux.convoy_gap_m,
+    )
+    if spawn_strategy == "yield":
+        available = len(
+            viable_aux_lane_keys(junction_layout, aux.distance_from_intersection)
+        )
+        print(f"  Main-road lane slots for aux: {available}")
+        if not has_viable_aux_lanes(junction_layout, aux.distance_from_intersection):
+            print(
+                f"  [aux] No main-road lanes long enough for aux spawning "
+                f"(need >={min_lane_for_lead:.0f}m); skipping {scene_name}"
+            )
+            return False
+        return True
+
+    available = 0
+    if junction_layout.get("arms"):
+        from .junction_priority_layout import right_arm_edge_id
+
+        sample_ego = junction_layout["arms"][0].get("edge_id")
+        if sample_ego:
+            right_edge = right_arm_edge_id(junction_layout, sample_ego)
+            if right_edge:
+                available = sum(
+                    len(arm.get("lane_keys", []))
+                    for arm in junction_layout["arms"]
+                    if arm.get("edge_id") == right_edge
+                )
+    print(f"  Right-arm lane slots for aux (example): {available}")
+    return True
+
+
+def expand_scene_entries(
+    *,
+    scene_dir: Path,
+    scenes_root: Path,
+    meta: Dict,
+    net_path: Path,
+    spawn_lanes: Sequence[Any],
+    junction_layout: dict,
+    spawn_strategy: SpawnStrategy,
+    sim_cfg: Any,
+    expansion: ExpansionConfig,
+    build_entry: BuildEntryFn,
+    aux_cfg_for_entry: Any,
+) -> List[Dict]:
+    """Expand one scene into manifest rows (layout × aux axes + filters).
+
+    ``aux_cfg_for_entry`` is the dataclass passed through to ``build_entry``
+    (typically ``AuxiliaryConfig``); when the auxiliary axis is off the caller
+    should pass a copy with ``enabled=False``.
+    """
+    scene_name = meta.get("scene_name", scene_dir.name)
+    if spawn_strategy == "yield":
+        print(
+            f"  Junction layout: {junction_layout['shape']} @ {junction_layout['junction_id']} "
+            f"(main={len(junction_layout.get('main_edge_ids', []))}, "
+            f"secondary={len(junction_layout.get('secondary_edge_ids', []))})"
+        )
+    else:
+        print(
+            f"  Junction layout: {junction_layout['shape']} @ {junction_layout['junction_id']} "
+            f"(equal-priority arms={len(junction_layout.get('main_edge_ids', []))})"
+        )
+
+    if not _print_aux_lane_availability(
+        scene_name=scene_name,
+        junction_layout=junction_layout,
+        spawn_strategy=spawn_strategy,
+        expansion=expansion,
+    ):
+        return []
+
+    sign_lat = meta.get("latitude") or meta.get("center_lat")
+    sign_lon = meta.get("longitude") or meta.get("center_lon")
+    aux = expansion.aux
+    aux_distance = (
+        float(aux.distance_from_intersection) if aux is not None else 20.0
+    )
+
+    scenarios: List[Optional[SpawnScenario]] = []
+    if expansion.layout_on:
+        _, layout_scenarios = augment_layout_for_scene(
+            net_path,
+            list(spawn_lanes),
+            strategy=spawn_strategy,
+            aux_distance_from_intersection=aux_distance,
+            sign_lat=float(sign_lat) if sign_lat is not None else None,
+            sign_lon=float(sign_lon) if sign_lon is not None else None,
+        )
+        if not layout_scenarios:
+            print(f"  [augment] No valid scenarios for {scene_name}; skipping scene")
+            return []
+        scenarios = list(layout_scenarios)
+        print(f"  Augmented spawn scenarios: {len(scenarios)}")
+    else:
+        # Single default row (no layout cartesian product).
+        scenarios = [None]
+        print("  Layout axis off: one default spawn per scene")
+
+    auxiliary_on = expansion.auxiliary_on
+    convoy_sizes = sizes_up_to(
+        aux.convoy_size if aux is not None else 1,
+        auxiliary_enabled=auxiliary_on,
+    )
+
+    scene_entries: List[Dict] = []
+    skipped_short_aux = 0
+    skipped_dup_geometry = 0
+    seen_geometries: set = set()
+
+    for variant, scenario in enumerate(scenarios):
+        ego_edge = scenario.ego_edge_id if scenario is not None else None
+        prefer_aux = (
+            make_lane_key(scenario.aux_edge_id, scenario.aux_lane_num)
+            if scenario is not None
+            else None
+        )
+        scene_aux_lanes = _scene_aux_lane_keys_for_lane_axis(
+            junction_layout=junction_layout,
+            spawn_strategy=spawn_strategy,
+            auxiliary_on=auxiliary_on,
+            aux=aux,
+            ego_edge=ego_edge,
+        )
+        scene_lane_counts = sizes_up_to(
+            aux.lanes_occupied if aux is not None else 1,
+            auxiliary_enabled=auxiliary_on,
+            available=len(scene_aux_lanes),
+        )
+        for lanes_n in scene_lane_counts:
+            for convoy_n in convoy_sizes:
+                if auxiliary_on and aux is not None:
+                    fit_lanes = _fit_aux_lane_keys(
+                        junction_layout=junction_layout,
+                        spawn_strategy=spawn_strategy,
+                        aux=aux,
+                        ego_edge=ego_edge,
+                        convoy_size=convoy_n,
+                    )
+                    # Skip when the scenario aux lane (or enough lanes) cannot
+                    # hold the full convoy — otherwise convoy=N collapses to
+                    # fewer cars and duplicates a smaller convoy row.
+                    if prefer_aux is not None and prefer_aux not in fit_lanes:
+                        skipped_short_aux += 1
+                        continue
+                    if len(fit_lanes) < lanes_n:
+                        skipped_short_aux += 1
+                        continue
+                entry = build_entry(
+                    scene_dir=scene_dir,
+                    scenes_root=scenes_root,
+                    meta=meta,
+                    variant=variant,
+                    sim_cfg=sim_cfg,
+                    aux_cfg=aux_cfg_for_entry,
+                    aux_convoy_size=convoy_n,
+                    aux_lanes_occupied=lanes_n,
+                    spawn_lanes_cache=list(spawn_lanes),
+                    junction_layout_cache=junction_layout,
+                    spawn_scenario=scenario,
+                )
+                geom_key = entry_geometry_key(entry)
+                if geom_key in seen_geometries:
+                    skipped_dup_geometry += 1
+                    continue
+                seen_geometries.add(geom_key)
+                scene_entries.append(entry)
+
+    if skipped_short_aux:
+        print(
+            f"  [aux] Skipped {skipped_short_aux} convoy×lanes combo(s) "
+            f"(aux approach too short for full convoy)"
+        )
+    if skipped_dup_geometry:
+        print(
+            f"  [aux] Skipped {skipped_dup_geometry} duplicate combo(s) "
+            f"(same ego path + occupied aux lanes + convoy)"
+        )
+
+    cap = expansion.max_scenarios_per_scene
+    if cap is not None and len(scene_entries) > cap:
+        print(
+            f"  Retained {cap} of {len(scene_entries)} manifest entries for {scene_name}"
+        )
+        random.shuffle(scene_entries)
+        scene_entries = scene_entries[:cap]
+    else:
+        print(f"  Manifest entries for {scene_name}: {len(scene_entries)}")
+
+    return scene_entries
