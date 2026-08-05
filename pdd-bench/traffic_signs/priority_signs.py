@@ -69,12 +69,13 @@ class EndMainRoadSign(BaseTrafficSign):
 class YieldSign(BaseTrafficSign):
 
     EGO_ZONE_BEFORE = 30.0
+    YIELD_STOP_BEFORE_END = 5.0
     # Treat yield obligation as cleared when the vehicle center passes this far before
     # the lane end (~half car length), so a junction entry/crash is not missed while
     # the rear is still geometrically on the approach lane.
     EGO_ZONE_END_CENTER_INSET = 4.0
-    MAIN_ROAD_ZONE_BEFORE = 20.0
-    MAIN_ROAD_ZONE_AFTER = 15.0     
+    MAIN_ROAD_ZONE_BEFORE = 15.0
+    MAIN_ROAD_ZONE_AFTER = 5.0
 
     def __init__(
         self,
@@ -84,6 +85,9 @@ class YieldSign(BaseTrafficSign):
         auto_detect_main_roads: bool = True,
         **kwargs,
     ):
+        # Explicit deny-list of outgoing / post-junction lane keys or edge ids.
+        outgoing_lane_keys = kwargs.pop("outgoing_lane_keys", None)
+        outgoing_edge_ids = kwargs.pop("outgoing_edge_ids", None)
         icon_path = kwargs.pop("icon_path", "2.4.png")
         super().__init__(
             lane, 
@@ -98,9 +102,17 @@ class YieldSign(BaseTrafficSign):
 
         self.main_road_lanes = main_road_lanes or []
         self._main_road_node_set: set[str] | None = None
+        self._main_approach_lane_ids: set = set()
+        self._main_approach_edge_ids: set[str] = set()
+        self._outgoing_lane_ids: set = set(outgoing_lane_keys or [])
+        self._outgoing_edge_ids: set[str] = set(str(e) for e in (outgoing_edge_ids or []))
+        self._refresh_main_approach_index()
 
         self.zone_start = max(0.0, self.lane.length - self.EGO_ZONE_BEFORE)
         self.zone_end = self.lane.length
+        self.stop_line_position = max(
+            0.0, float(self.lane.length) - float(self.YIELD_STOP_BEFORE_END)
+        )
         
         # PG intersection topology cache
         self._intersection_type = None  # "X" or "T"
@@ -114,7 +126,63 @@ class YieldSign(BaseTrafficSign):
     def set_main_road_lanes(self, lanes: list):
         self.main_road_lanes = lanes
         self._main_road_node_set = None
-        
+        self._refresh_main_approach_index()
+
+    def set_outgoing_exclusions(
+        self,
+        outgoing_lane_keys: list | None = None,
+        outgoing_edge_ids: list | None = None,
+    ) -> None:
+        """Record post-junction / outgoing edges that must never trigger yield."""
+        if outgoing_lane_keys is not None:
+            self._outgoing_lane_ids = set(outgoing_lane_keys)
+        if outgoing_edge_ids is not None:
+            self._outgoing_edge_ids = set(str(e) for e in outgoing_edge_ids)
+
+    @staticmethod
+    def _edge_id_from_lane_index(lane_index) -> str | None:
+        if lane_index is None:
+            return None
+        if isinstance(lane_index, str):
+            raw = lane_index[5:] if lane_index.startswith("lane_") else lane_index
+            return raw.rsplit("_", 1)[0] if "_" in raw else raw
+        if isinstance(lane_index, (tuple, list)) and len(lane_index) >= 2:
+            return f"{lane_index[0]}->{lane_index[1]}"
+        return str(lane_index)
+
+    def _refresh_main_approach_index(self) -> None:
+        """Cache lane-id / edge-id allowlists for incoming main approaches only."""
+        self._main_approach_lane_ids = set()
+        self._main_approach_edge_ids = set()
+        for lane in self.main_road_lanes or []:
+            idx = getattr(lane, "index", None)
+            if idx is None:
+                continue
+            self._main_approach_lane_ids.add(idx)
+            edge = self._edge_id_from_lane_index(idx)
+            if edge is not None:
+                self._main_approach_edge_ids.add(str(edge))
+
+    def _is_outgoing_lane_index(self, lane_index) -> bool:
+        """True for explicit outgoing exclusions (never a yield-conflict lane)."""
+        if lane_index is None:
+            return False
+        if lane_index in self._outgoing_lane_ids:
+            return True
+        edge = self._edge_id_from_lane_index(lane_index)
+        return edge is not None and str(edge) in self._outgoing_edge_ids
+
+    def _is_on_main_approach(self, lane_index) -> bool:
+        """Vehicle lane must be one of the monitored incoming main approaches."""
+        if lane_index is None:
+            return False
+        if self._is_outgoing_lane_index(lane_index):
+            return False
+        if lane_index in self._main_approach_lane_ids:
+            return True
+        edge = self._edge_id_from_lane_index(lane_index)
+        return edge is not None and str(edge) in self._main_approach_edge_ids
+
     # =========================================================================
     # PG Intersection Topology Detection (similar to no_turn_allowed.py)
     # =========================================================================
@@ -345,47 +413,41 @@ class YieldSign(BaseTrafficSign):
         )
 
     def _is_vehicle_in_main_road_conflict_zone(self, vehicle) -> bool:
-        """Check if vehicle is in the conflict zone on/near a main road lane."""
+        """True only while the vehicle is still on a main *incoming approach*.
+
+        Outgoing edges and junction connectors never count — even if an aux is
+        on them after clearing the intersection.
+        """
         if not self.main_road_lanes:
             return False
-            
+
         try:
             vehicle_pos = vehicle.position
-            vehicle_heading = vehicle.heading_theta
-            vehicle_lane_idx = getattr(vehicle.lane, 'index', None)
+            vehicle_lane_idx = getattr(vehicle.lane, "index", None)
             if vehicle_lane_idx is None:
                 return False
-            v_segment = (vehicle_lane_idx[0], vehicle_lane_idx[1])
         except Exception:
             return False
-        
-        main_segments = set()
-        for ln in self.main_road_lanes:
-            ln_idx = getattr(ln, 'index', None)
-            if ln_idx and len(ln_idx) >= 2:
-                main_segments.add((ln_idx[0], ln_idx[1]))
-        
+
+        # Hard reject: outgoing / post-junction pieces.
+        if self._is_outgoing_lane_index(vehicle_lane_idx):
+            return False
+        if not self._is_on_main_approach(vehicle_lane_idx):
+            return False
+
         for lane in self.main_road_lanes:
             try:
-                lane_idx = getattr(lane, 'index', None)
-                if lane_idx is None or len(lane_idx) < 2:
+                lane_idx = getattr(lane, "index", None)
+                if lane_idx is None:
                     continue
-                lane_segment = (lane_idx[0], lane_idx[1])
+                if not same_road_check(vehicle_lane_idx, lane_idx):
+                    continue
                 long_pos, lat_pos = lane.local_coordinates(vehicle_pos)
-                
-                zone_start = max(0.0, lane.length - self.MAIN_ROAD_ZONE_BEFORE)
-                zone_end = lane.length + self.MAIN_ROAD_ZONE_AFTER
-                
-                if zone_start <= long_pos <= zone_end:
-                    if abs(lat_pos) <= lane.width * 1.5:  # Allow some lateral tolerance
-                        if v_segment == lane_segment:
-                            return True
-                        if v_segment not in main_segments:
-                            lane_heading = lane.heading_theta_at(min(long_pos, lane.length))
-                            heading_diff = abs(vehicle_heading - lane_heading)
-                            heading_diff = min(heading_diff, 2 * np.pi - heading_diff)
-                            if heading_diff < np.pi / 2:
-                                return True
+                zone_start = max(0.0, float(lane.length) - float(self.MAIN_ROAD_ZONE_BEFORE))
+                zone_end = float(lane.length) + float(self.MAIN_ROAD_ZONE_AFTER)
+                # Still on the approach geometry (not past the lane end).
+                if zone_start <= long_pos <= zone_end and abs(lat_pos) <= lane.width * 1.5:
+                    return True
             except Exception:
                 continue
         return False
@@ -416,10 +478,33 @@ class YieldSign(BaseTrafficSign):
         for v in self._get_all_vehicles():
             if exclude_vehicle is not None and v.id == exclude_vehicle.id:
                 continue
+            if self._is_waiting_gated_aux(v):
+                continue
             if self._is_vehicle_in_main_road_conflict_zone(v):
                 conflicting.append(v)
         
         return len(conflicting) > 0, conflicting
+
+    def _is_waiting_gated_aux(self, vehicle) -> bool:
+        """True for gated aux that has not been released yet (still held at spawn).
+
+        Such vehicles must not count as conflicting main-road traffic: otherwise a
+        yielding ego stops far from the junction while aux waits for ego to get
+        closer — a deadlock.
+        """
+        try:
+            engine = getattr(self, "engine", None)
+            if engine is None:
+                return False
+            policy = engine.get_policy(getattr(vehicle, "id", None))
+        except Exception:
+            return False
+        if policy is None:
+            return False
+        # GatedAuxiliaryIDMPolicy exposes ``released``; default True = treat as traffic.
+        if not hasattr(policy, "ego_distance_to_spawn_lane_end"):
+            return False
+        return not bool(getattr(policy, "released", True))
 
     def _check_main_road_traffic(self, ego_vehicle) -> tuple:
         """Check if there are vehicles on the main road in the conflict zone."""
@@ -433,6 +518,8 @@ class YieldSign(BaseTrafficSign):
         conflicting = []
         for v in self._get_all_vehicles():
             if v.id == ego_vehicle.id:
+                continue
+            if self._is_waiting_gated_aux(v):
                 continue
             if self._is_vehicle_in_main_road_conflict_zone(v):
                 conflicting.append(v)

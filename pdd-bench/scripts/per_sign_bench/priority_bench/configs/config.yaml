@@ -29,7 +29,7 @@ simulation:
   horizon: 600
   sign_distance_before_end: 0.0
   # Closer spawn so ego approaches the yield stop (~5 m) without a long idle.
-  spawn_distance_before_end: 12.0
+  spawn_distance_before_end: 15.0
 
 auxiliary:
   enabled: true

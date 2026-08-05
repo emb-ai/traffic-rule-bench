@@ -1125,8 +1125,17 @@ def _place_yield_junction_signs(
         )
 
     main_lanes = []
+    outgoing_edge_ids: set[str] = set()
     for arm in main_arms:
         main_lanes.extend(collect_lanes_for_keys(env, arm.get("lane_keys", [])))
+        for out_edge in arm.get("outgoing_to") or arm.get("straight_to") or []:
+            outgoing_edge_ids.add(str(out_edge))
+    for arm in secondary_arms:
+        for out_edge in arm.get("outgoing_to") or arm.get("straight_to") or []:
+            outgoing_edge_ids.add(str(out_edge))
+    # Never treat a monitored main approach as outgoing.
+    main_approach_edges = {str(arm.get("edge_id")) for arm in main_arms if arm.get("edge_id")}
+    outgoing_edge_ids -= main_approach_edges
 
     if not main_lanes:
         print("[JunctionSigns] Could not resolve main lanes, falling back to ego-only yield sign")
@@ -1178,6 +1187,7 @@ def _place_yield_junction_signs(
                 use_random_lane=False,
                 intersection_name=junction_id,
                 main_road_lanes=main_lanes,
+                outgoing_edge_ids=sorted(outgoing_edge_ids),
                 auto_detect_main_roads=False,
             )
             if sign is not None:

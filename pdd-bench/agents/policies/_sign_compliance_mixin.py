@@ -2797,21 +2797,136 @@ class SignComplianceMixin:
     # ------------------------------------------------------------------
 
     def _handle_yield_sign(self, sign):
+        """Yield / right-hand rule: creep to a stop near the junction.
+
+        Hard-stop only near ``stop_line_position`` (YieldSign.YIELD_STOP_BEFORE_END)
+        when main-road traffic is present. Conflict traffic itself is gated by
+        YieldSign.MAIN_ROAD_ZONE_{BEFORE,AFTER} inside ``_check_main_road_traffic``.
+        """
         if not on_same_road(self.control_object.lane, sign.lane):
             return
         veh_long = self._veh_long(sign.lane)
-        approach = self._approach_dist(0.0)
-        if veh_long < sign.zone_start:
-            if 0 < (sign.zone_start - veh_long) < approach:
+        stop_before = float(
+            getattr(sign, "YIELD_STOP_BEFORE_END", YieldSign.YIELD_STOP_BEFORE_END)
+        )
+        main_before = float(
+            getattr(sign, "MAIN_ROAD_ZONE_BEFORE", YieldSign.MAIN_ROAD_ZONE_BEFORE)
+        )
+        stop_long = float(
+            getattr(
+                sign,
+                "stop_line_position",
+                max(0.0, float(sign.lane.length) - stop_before),
+            )
+        )
+        # Past the stop line: keep blocking while still in the obligation zone.
+        if veh_long >= stop_long:
+            if veh_long <= float(getattr(sign, "zone_end", sign.lane.length)):
                 has_traffic, _ = sign._check_main_road_traffic(self.control_object)
                 if has_traffic:
                     self._cap_speed(0.001)
             return
-        if not (sign.zone_start <= veh_long <= sign.zone_end):
+
+        dist_to_stop = stop_long - veh_long
+        approach = self._approach_dist(0.0)
+        # Ignore until within braking range or the main-road watch window.
+        if dist_to_stop > max(approach, main_before):
             return
+
         has_traffic, _ = sign._check_main_road_traffic(self.control_object)
-        if has_traffic:
+        if not has_traffic:
+            return
+
+        # At / past the preferential stop: full stop.
+        if dist_to_stop <= 1.5 or self.control_object.speed < 0.15:
             self._cap_speed(0.001)
+            return
+
+        # Soft approach toward the stop line (do not freeze far from the junction).
+        creep_kmh = max(8.0, min(SLOW_APPROACH_MIN_KMH, dist_to_stop * 1.5))
+        self._cap_speed(creep_kmh)
+
+    def _yield_conflict_window_m(self, sign=None):
+        """(before, after) metres for main-road foe proximity, from YieldSign."""
+        before = float(
+            getattr(sign, "MAIN_ROAD_ZONE_BEFORE", YieldSign.MAIN_ROAD_ZONE_BEFORE)
+            if sign is not None
+            else YieldSign.MAIN_ROAD_ZONE_BEFORE
+        )
+        after = float(
+            getattr(sign, "MAIN_ROAD_ZONE_AFTER", YieldSign.MAIN_ROAD_ZONE_AFTER)
+            if sign is not None
+            else YieldSign.MAIN_ROAD_ZONE_AFTER
+        )
+        return before, after
+
+    def _foe_in_main_conflict_window(self, other_dist_to_end: float, sign=None) -> bool:
+        """True if foe distance-to-lane-end falls in MAIN_ROAD_ZONE_BEFORE/AFTER."""
+        before, after = self._yield_conflict_window_m(sign)
+        return -after <= float(other_dist_to_end) <= before
+
+    @staticmethod
+    def _is_junction_internal_lane(lane) -> bool:
+        """SUMO junction connectors / vias — not main approaches."""
+        idx = getattr(lane, "index", None)
+        if idx is None:
+            return True
+        s = str(idx).lower()
+        return (
+            s.startswith("junction")
+            or ":_:" in s
+            or "junction" in s
+        )
+
+    def _is_outgoing_sumo_lane(self, lane) -> bool:
+        """True for post-junction outgoing edges (enter from junction, leave road)."""
+        if self._is_junction_internal_lane(lane):
+            return True
+        try:
+            engine = getattr(self, "engine", None)
+            graph = getattr(
+                getattr(getattr(engine, "current_map", None), "road_network", None),
+                "graph",
+                None,
+            )
+            if graph is None:
+                return False
+            info = graph.get(getattr(lane, "index", None))
+            if info is None:
+                return False
+            entry = list(getattr(info, "entry_lanes", None) or [])
+            exit_ = list(getattr(info, "exit_lanes", None) or [])
+            from_junction = any(str(e).lower().startswith("junction") for e in entry)
+            to_junction = any(str(e).lower().startswith("junction") for e in exit_)
+            return bool(from_junction and not to_junction)
+        except Exception:
+            return False
+
+    def _foe_on_yield_main_approach(self, other_lane) -> bool | None:
+        """Filter foes using YieldSign allow/deny lists.
+
+        Returns:
+          True  — foe is on a monitored main *incoming* approach
+          False — foe is on outgoing / non-approach (must not trigger yield)
+          None  — no YieldSign with main_road_lanes; caller uses fallback
+        """
+        decided = False
+        for sign in self._get_signs():
+            if not isinstance(sign, YieldSign):
+                continue
+            if isinstance(sign, StopSign):
+                continue
+            if not getattr(sign, "main_road_lanes", None):
+                continue
+            decided = True
+            idx = getattr(other_lane, "index", None)
+            if sign._is_outgoing_lane_index(idx):
+                return False
+            if sign._is_on_main_approach(idx):
+                return True
+        if decided:
+            return False
+        return None
 
     def _handle_main_road(self, sign):
         if on_same_road(self.control_object.lane, sign.lane):
@@ -3221,7 +3336,7 @@ class SignComplianceMixin:
         # Check if we're close enough to the intersection to care
         veh_long = ego_lane.local_coordinates(self.control_object.position)[0]
         dist_to_end = ego_lane.length - veh_long
-        if dist_to_end > LANE_CHANGE_LOOKAHEAD:
+        if dist_to_end > YieldSign.EGO_ZONE_BEFORE:
             return
         # Find our approach
         ego_approach = None
@@ -3241,11 +3356,29 @@ class SignComplianceMixin:
         engine = getattr(self, "engine", None)
         if engine is None:
             return
+        stop_before = YieldSign.YIELD_STOP_BEFORE_END
         for obj in engine.get_objects(filter=lambda o: isinstance(o, BaseVehicle)).values():
             if getattr(obj, "id", None) == getattr(self.control_object, "id", None):
                 continue
+            try:
+                other_policy = engine.get_policy(getattr(obj, "id", None))
+            except Exception:
+                other_policy = None
+            if (
+                other_policy is not None
+                and hasattr(other_policy, "ego_distance_to_spawn_lane_end")
+                and not bool(getattr(other_policy, "released", True))
+            ):
+                continue
             other_lane = getattr(obj, "lane", None)
             if other_lane is None:
+                continue
+            if self._is_junction_internal_lane(other_lane):
+                continue
+            if self._is_outgoing_sumo_lane(other_lane):
+                continue
+            yield_filter = self._foe_on_yield_main_approach(other_lane)
+            if yield_filter is False:
                 continue
             # Check if this vehicle is on a different approach of the same intersection
             other_approach = None
@@ -3261,10 +3394,10 @@ class SignComplianceMixin:
                     break
             if other_approach is None:
                 continue
-            # Check if other vehicle is close enough to the intersection
+            # Same MAIN_ROAD_ZONE_BEFORE/AFTER window as YieldSign.
             other_long = other_lane.local_coordinates(obj.position)[0]
             other_dist = other_lane.length - other_long
-            if other_dist > LANE_CHANGE_LOOKAHEAD:
+            if not self._foe_in_main_conflict_window(other_dist):
                 continue
             # Is the other vehicle on our right?
             heading_diff = other_approach.heading - ego_heading
@@ -3272,7 +3405,11 @@ class SignComplianceMixin:
             # Vehicle from the right means its approach heading is roughly
             # 90° clockwise (≈ π/2) from ours.
             if 0.3 < heading_diff < np.pi:
-                self._cap_speed(0.001)
+                if dist_to_end > stop_before:
+                    creep_kmh = max(8.0, min(SLOW_APPROACH_MIN_KMH, dist_to_end * 1.2))
+                    self._cap_speed(creep_kmh)
+                else:
+                    self._cap_speed(0.001)
                 return
 
     def _handle_intersection_priority_sumo(self):
@@ -3302,13 +3439,13 @@ class SignComplianceMixin:
             return
 
         # Approach distance: only act when ego is near the end of its current
-        # lane (close to the junction).
+        # lane (close to the junction) — same window as YieldSign.EGO_ZONE_BEFORE.
         try:
             veh_long = self._veh_long(ego_lane)
             dist_to_end = float(ego_lane.length) - veh_long
         except Exception:
             return
-        if dist_to_end > LANE_CHANGE_LOOKAHEAD:
+        if dist_to_end > YieldSign.EGO_ZONE_BEFORE:
             return
 
         jt = info["junction_type"]
@@ -3336,24 +3473,43 @@ class SignComplianceMixin:
         if engine is None:
             return
 
+        stop_before = YieldSign.YIELD_STOP_BEFORE_END
         # Scan surrounding vehicles for priority conflict.
         ego_id = getattr(ego, "id", None)
         for obj in engine.get_objects(filter=lambda o: isinstance(o, BaseVehicle)).values():
             if getattr(obj, "id", None) == ego_id:
                 continue
+            # Gated aux still held at spawn must not freeze a yielding ego.
+            try:
+                other_policy = engine.get_policy(getattr(obj, "id", None))
+            except Exception:
+                other_policy = None
+            if (
+                other_policy is not None
+                and hasattr(other_policy, "ego_distance_to_spawn_lane_end")
+                and not bool(getattr(other_policy, "released", True))
+            ):
+                continue
             other_lane = getattr(obj, "lane", None)
             if other_lane is None:
+                continue
+            if self._is_junction_internal_lane(other_lane):
+                continue
+            if self._is_outgoing_sumo_lane(other_lane):
+                continue
+            yield_filter = self._foe_on_yield_main_approach(other_lane)
+            if yield_filter is False:
                 continue
             other_idx = getattr(other_lane, "index", None)
             if other_idx not in watch_lanes:
                 continue
-            # Other vehicle must also be close to the junction (entering).
+            # Same MAIN_ROAD_ZONE_BEFORE/AFTER window as YieldSign.
             try:
                 other_long = other_lane.local_coordinates(obj.position)[0]
                 other_dist_to_end = float(other_lane.length) - other_long
             except Exception:
                 continue
-            if other_dist_to_end > LANE_CHANGE_LOOKAHEAD:
+            if not self._foe_in_main_conflict_window(other_dist_to_end):
                 continue
             # Right-hand rule: additionally require NPC to be on ego's right.
             if check_right:
@@ -3370,8 +3526,12 @@ class SignComplianceMixin:
                         continue
                 except Exception:
                     continue
-            # Priority conflict detected → yield.
-            self._cap_speed(0.001)
+            # Priority conflict → hard stop only near the yield stop line.
+            if dist_to_end > stop_before:
+                creep_kmh = max(8.0, min(SLOW_APPROACH_MIN_KMH, dist_to_end * 1.2))
+                self._cap_speed(creep_kmh)
+            else:
+                self._cap_speed(0.001)
             return
 
     # ------------------------------------------------------------------
