@@ -93,7 +93,7 @@ in the root config). Priority signs enable both:
 
 | Axis | Meaning |
 |------|---------|
-| `layout` | Ego × aux arm/lane/destination scenarios (`core/scene_augmentation.py`) |
+| `layout` | Ego × aux arm/lane/destination scenarios (`core/scene_augmentation.py`). Default ego dest: T→left, X→straight; if aux is on ego's **left** arm, also allow a **right-turn** dest (`arm.right_to`) |
 | `auxiliary` | Cartesian product of convoy `1..N` and occupied lanes `1..M` |
 
 Expansion (product, short-road skip, geometry dedupe, cap) lives in

@@ -54,6 +54,7 @@ class ApproachArm:
     straight_to: List[str] = field(default_factory=list)
     outgoing_to: List[str] = field(default_factory=list)
     left_to: List[str] = field(default_factory=list)
+    right_to: List[str] = field(default_factory=list)
     from_node: str = ""
     min_lane_length: float = 0.0
 
@@ -68,6 +69,7 @@ class ApproachArm:
             "straight_to": list(self.straight_to),
             "outgoing_to": list(self.outgoing_to),
             "left_to": list(self.left_to),
+            "right_to": list(self.right_to),
             "from_node": self.from_node,
             "min_lane_length": float(self.min_lane_length),
         }
@@ -400,6 +402,17 @@ def _left_targets(incoming_edge_id: str, connections: list) -> Set[str]:
     return targets
 
 
+def _right_targets(incoming_edge_id: str, connections: list) -> Set[str]:
+    """Outgoing edges via a right turn (SUMO dir=r) from an incoming arm."""
+    targets: Set[str] = set()
+    for conn in connections:
+        if conn["from"] != incoming_edge_id:
+            continue
+        if conn.get("dir") == "r" and conn.get("to"):
+            targets.add(conn["to"])
+    return targets
+
+
 def _are_through_partners(
     left: SumoEdge,
     right: SumoEdge,
@@ -437,6 +450,7 @@ def _build_arms(
     straight_map: Dict[str, Set[str]],
     outgoing_map: Dict[str, Set[str]],
     left_map: Dict[str, Set[str]],
+    right_map: Dict[str, Set[str]],
 ) -> List[ApproachArm]:
     center = junctions[junction_id]["center"]
     arms: List[ApproachArm] = []
@@ -455,6 +469,7 @@ def _build_arms(
                 straight_to=sorted(straight_map.get(edge.edge_id, set())),
                 outgoing_to=sorted(outgoing_map.get(edge.edge_id, set())),
                 left_to=sorted(left_map.get(edge.edge_id, set())),
+                right_to=sorted(right_map.get(edge.edge_id, set())),
                 from_node=edge.from_node,
                 min_lane_length=min_lane_length,
             )
@@ -644,7 +659,10 @@ def build_junction_priority_layout(
     straight_map = {edge.edge_id: _straight_targets(edge.edge_id, connections) for edge in incoming}
     outgoing_map = {edge.edge_id: _outgoing_targets(edge.edge_id, connections) for edge in incoming}
     left_map = {edge.edge_id: _left_targets(edge.edge_id, connections) for edge in incoming}
-    arms = _build_arms(junction_id, junctions, incoming, straight_map, outgoing_map, left_map)
+    right_map = {edge.edge_id: _right_targets(edge.edge_id, connections) for edge in incoming}
+    arms = _build_arms(
+        junction_id, junctions, incoming, straight_map, outgoing_map, left_map, right_map
+    )
 
     if mode == "main_main":
         all_ids = {arm.edge_id for arm in arms}
@@ -717,11 +735,42 @@ def right_arm_edge_id(junction_layout: dict, ego_edge_id: str) -> Optional[str]:
     return best_edge
 
 
+def left_arm_edge_id(junction_layout: dict, ego_edge_id: str) -> Optional[str]:
+    """Incoming edge on ego's left (mirror of ``right_arm_edge_id``)."""
+    arms = junction_layout.get("arms", [])
+    ego_arm = next((arm for arm in arms if arm.get("edge_id") == ego_edge_id), None)
+    if ego_arm is None:
+        return None
+
+    ego_angle = float(ego_arm["entry_angle"])
+    best_edge: Optional[str] = None
+    best_diff = float("inf")
+    for arm in arms:
+        edge_id = arm.get("edge_id")
+        if not edge_id or edge_id == ego_edge_id:
+            continue
+        diff = (ego_angle - float(arm["entry_angle"])) % (2.0 * math.pi)
+        if 0.3 < diff < math.pi and diff < best_diff:
+            best_edge = edge_id
+            best_diff = diff
+    return best_edge
+
+
 def right_arm_for_layout(
     layout: JunctionPriorityLayout,
     ego_edge_id: str,
 ) -> Optional[ApproachArm]:
     edge_id = right_arm_edge_id(layout.to_dict(), ego_edge_id)
+    if edge_id is None:
+        return None
+    return layout.arm_for_edge(edge_id)
+
+
+def left_arm_for_layout(
+    layout: JunctionPriorityLayout,
+    ego_edge_id: str,
+) -> Optional[ApproachArm]:
+    edge_id = left_arm_edge_id(layout.to_dict(), ego_edge_id)
     if edge_id is None:
         return None
     return layout.arm_for_edge(edge_id)
@@ -746,6 +795,7 @@ def load_junction_priority_layout(path: Path | str) -> JunctionPriorityLayout:
             straight_to=list(arm.get("straight_to", [])),
             outgoing_to=list(arm.get("outgoing_to", arm.get("straight_to", []))),
             left_to=list(arm.get("left_to", [])),
+            right_to=list(arm.get("right_to", [])),
             from_node=arm.get("from_node", ""),
             min_lane_length=float(arm.get("min_lane_length", 0.0) or 0.0),
         )

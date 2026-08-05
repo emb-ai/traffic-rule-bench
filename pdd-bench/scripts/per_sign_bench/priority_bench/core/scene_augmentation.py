@@ -11,6 +11,7 @@ from .junction_priority_layout import (
     INTERSECTION_JUNCTION_TYPES,
     JunctionPriorityLayout,
     build_junction_priority_layout,
+    left_arm_for_layout,
     right_arm_for_layout,
 )
 from .lane_keys import lane_num_from_key, make_lane_key
@@ -83,8 +84,17 @@ def _filter_real_destination_edges(edge_ids: Iterable[str]) -> List[str]:
     return [edge_id for edge_id in edge_ids if _is_real_edge_id(edge_id)]
 
 
-def _ego_destination_edges(layout: JunctionPriorityLayout, ego_edge_id: str) -> List[str]:
+def _ego_destination_edges(
+    layout: JunctionPriorityLayout,
+    ego_edge_id: str,
+    *,
+    aux_edge_id: Optional[str] = None,
+) -> List[str]:
     """Ego destinations by shape: T→left, X→straight, 2→straight/outgoing.
+
+    When ``aux_edge_id`` is the incoming arm on ego's **left**, also allow a
+    right-turn destination (SUMO ``dir=r`` / ``arm.right_to``) — the outgoing
+    road on the right arm — so ego dest is not stuck on a single left turn.
 
     Filters internal ':' edges and excludes the ego spawn edge.
     """
@@ -103,6 +113,15 @@ def _ego_destination_edges(layout: JunctionPriorityLayout, ego_edge_id: str) -> 
         candidates = _filter_real_destination_edges(
             list(arm.straight_to) or list(arm.left_to)
         )
+
+    if aux_edge_id is not None:
+        left_arm = left_arm_for_layout(layout, ego_edge_id)
+        if left_arm is not None and left_arm.edge_id == aux_edge_id:
+            right_dests = _filter_real_destination_edges(arm.right_to)
+            for edge_id in right_dests:
+                if edge_id not in candidates:
+                    candidates.append(edge_id)
+
     return [edge_id for edge_id in candidates if edge_id != ego_edge_id]
 
 
@@ -345,12 +364,15 @@ def enumerate_spawn_scenarios_yield(
         if not ego_lane_nums:
             continue
 
-        ego_dest_edges = _ego_destination_edges(layout, ego_edge)
-        if not ego_dest_edges:
-            continue
-
         for aux_edge in main_edges:
             if aux_edge == ego_edge:
+                continue
+
+            # Destinations depend on which arm aux occupies (left → also right turn).
+            ego_dest_edges = _ego_destination_edges(
+                layout, ego_edge, aux_edge_id=aux_edge
+            )
+            if not ego_dest_edges:
                 continue
 
             aux_dest_edge = _aux_straight_destination(layout, aux_edge)
