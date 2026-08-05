@@ -13,6 +13,7 @@ from .junction_priority_layout import (
     build_junction_priority_layout,
     left_arm_for_layout,
     right_arm_for_layout,
+    straight_arm_for_layout,
 )
 from .lane_keys import lane_num_from_key, make_lane_key
 from .sumo_utils import VehicleRouteIndex, is_vehicle_drivable_lane, load_vehicle_route_index
@@ -20,6 +21,8 @@ from .sumo_utils import VehicleRouteIndex, is_vehicle_drivable_lane, load_vehicl
 DEFAULT_AUX_DISTANCE_FROM_INTERSECTION = 20.0
 
 SpawnStrategy = Literal["equal_priority", "yield"]
+EgoManeuver = Literal["left", "right", "straight"]
+AuxSide = Literal["left", "right", "straight", "other"]
 
 
 @dataclass(frozen=True)
@@ -90,47 +93,159 @@ def _ego_destination_edges(
     *,
     aux_edge_id: Optional[str] = None,
 ) -> List[str]:
-    """Ego destinations by shape: T→left, X→straight, 2→straight/outgoing.
+    """Ego destinations allowed for this ego(+optional aux) conflict.
 
-    When ``aux_edge_id`` is the incoming arm on ego's **left**, also allow a
-    right-turn destination (SUMO ``dir=r`` / ``arm.right_to``) — the outgoing
-    road on the right arm — so ego dest is not stuck on a single left turn.
-
-    Filters internal ':' edges and excludes the ego spawn edge.
+    Base set by junction shape; with ``aux_edge_id`` the allow-list follows the
+    yield/main conflict table (no ego-right when aux is only on the right;
+    no aux on the opposite/straight arm).
     """
     arm = layout.arm_for_edge(ego_edge_id)
     if arm is None:
         return []
-    if layout.shape == "T":
+
+    if aux_edge_id is None:
+        # Defaults for pickers / viability without a chosen aux.
+        if layout.shape == "T":
+            candidates = _filter_real_destination_edges(arm.left_to)
+        elif layout.shape == "X":
+            candidates = _filter_real_destination_edges(
+                list(arm.straight_to) + list(arm.left_to)
+            )
+        elif layout.shape == "2":
+            candidates = _filter_real_destination_edges(
+                list(arm.straight_to) or list(arm.outgoing_to)
+            )
+        else:
+            candidates = _filter_real_destination_edges(
+                list(arm.straight_to) or list(arm.left_to)
+            )
+        return [e for e in candidates if e != ego_edge_id]
+
+    side = _aux_side_relative_to_ego(layout, ego_edge_id, aux_edge_id)
+    if side == "straight" or side == "other":
+        return []
+    if side == "right":
+        # Ego may not turn into the right arm when the only conflict is also
+        # on the right (nobody to yield to on that path).
         candidates = _filter_real_destination_edges(arm.left_to)
-    elif layout.shape == "X":
-        candidates = _filter_real_destination_edges(arm.straight_to)
-    elif layout.shape == "2":
-        candidates = _filter_real_destination_edges(
-            list(arm.straight_to) or list(arm.outgoing_to)
-        )
+        if layout.shape == "X":
+            for e in _filter_real_destination_edges(arm.straight_to):
+                if e not in candidates:
+                    candidates.append(e)
+    else:  # aux on left — ego may turn left, right, and (on X) go straight
+        candidates = _filter_real_destination_edges(arm.left_to)
+        for e in _filter_real_destination_edges(arm.right_to):
+            if e not in candidates:
+                candidates.append(e)
+        if layout.shape == "X":
+            for e in _filter_real_destination_edges(arm.straight_to):
+                if e not in candidates:
+                    candidates.append(e)
+    return [e for e in candidates if e != ego_edge_id]
+
+
+def _aux_side_relative_to_ego(
+    layout: JunctionPriorityLayout,
+    ego_edge_id: str,
+    aux_edge_id: str,
+) -> AuxSide:
+    left = left_arm_for_layout(layout, ego_edge_id)
+    right = right_arm_for_layout(layout, ego_edge_id)
+    straight = straight_arm_for_layout(layout, ego_edge_id)
+    if left is not None and left.edge_id == aux_edge_id:
+        return "left"
+    if right is not None and right.edge_id == aux_edge_id:
+        return "right"
+    if straight is not None and straight.edge_id == aux_edge_id:
+        return "straight"
+    return "other"
+
+
+def _ego_maneuver_for_destination(
+    layout: JunctionPriorityLayout,
+    ego_edge_id: str,
+    ego_dest_edge: str,
+) -> Optional[EgoManeuver]:
+    arm = layout.arm_for_edge(ego_edge_id)
+    if arm is None:
+        return None
+    if ego_dest_edge in set(arm.right_to):
+        return "right"
+    if ego_dest_edge in set(arm.left_to):
+        return "left"
+    if ego_dest_edge in set(arm.straight_to):
+        return "straight"
+    return None
+
+
+def _aux_turn_destination_edges(
+    layout: JunctionPriorityLayout,
+    aux_edge_id: str,
+    turn: EgoManeuver,
+) -> List[str]:
+    arm = layout.arm_for_edge(aux_edge_id)
+    if arm is None:
+        return []
+    if turn == "straight":
+        raw = arm.straight_to
+    elif turn == "left":
+        raw = arm.left_to
     else:
-        candidates = _filter_real_destination_edges(
-            list(arm.straight_to) or list(arm.left_to)
-        )
+        raw = arm.right_to
+    return _filter_real_destination_edges(raw)
 
-    if aux_edge_id is not None:
-        left_arm = left_arm_for_layout(layout, ego_edge_id)
-        if left_arm is not None and left_arm.edge_id == aux_edge_id:
-            right_dests = _filter_real_destination_edges(arm.right_to)
-            for edge_id in right_dests:
-                if edge_id not in candidates:
-                    candidates.append(edge_id)
 
-    return [edge_id for edge_id in candidates if edge_id != ego_edge_id]
+def _allowed_aux_destination_edges(
+    layout: JunctionPriorityLayout,
+    ego_edge_id: str,
+    ego_dest_edge: str,
+    aux_edge_id: str,
+) -> List[str]:
+    """Aux exit edges allowed for this (ego maneuver × aux side) conflict.
+
+    T / X conflict table (aux never on the opposite/straight arm)::
+
+    - Ego right → aux must be on left, aux goes straight only.
+    - Ego left → aux on right: straight or left; aux on left: straight only.
+    - Ego straight (X) → aux on right: straight/left/right; aux on left: straight/left.
+    """
+    side = _aux_side_relative_to_ego(layout, ego_edge_id, aux_edge_id)
+    maneuver = _ego_maneuver_for_destination(layout, ego_edge_id, ego_dest_edge)
+    if maneuver is None or side in ("straight", "other"):
+        return []
+
+    turns: List[EgoManeuver] = []
+    if maneuver == "right":
+        if side != "left":
+            return []
+        turns = ["straight"]
+    elif maneuver == "left":
+        if side == "right":
+            turns = ["straight", "left"]
+        elif side == "left":
+            turns = ["straight"]
+        else:
+            return []
+    elif maneuver == "straight":
+        if side == "right":
+            turns = ["straight", "left", "right"]
+        elif side == "left":
+            turns = ["straight", "left"]
+        else:
+            return []
+
+    out: List[str] = []
+    for turn in turns:
+        for edge_id in _aux_turn_destination_edges(layout, aux_edge_id, turn):
+            if edge_id != aux_edge_id and edge_id not in out:
+                out.append(edge_id)
+    return out
 
 
 def _aux_straight_destination(layout: JunctionPriorityLayout, aux_edge_id: str) -> Optional[str]:
-    arm = layout.arm_for_edge(aux_edge_id)
-    if arm is None or not arm.straight_to:
-        return None
-    real = _filter_real_destination_edges(arm.straight_to)
-    return real[0] if real else None
+    """Legacy helper: first straight-through exit (used by viability diagnostics)."""
+    dests = _aux_turn_destination_edges(layout, aux_edge_id, "straight")
+    return dests[0] if dests else None
 
 
 def _is_valid_departure(
@@ -241,6 +356,7 @@ def _append_scenario(
         f"ego_{ego_edge}_L{ego_lane}"
         f"_to_{ego_dest_edge}"
         f"_aux_{aux_edge}_L{aux_lane}"
+        f"_to_{aux_dest_edge}"
     )
     scenarios.append(
         SpawnScenario(
@@ -257,6 +373,45 @@ def _append_scenario(
     )
 
 
+def _append_valid_conflict_scenarios(
+    scenarios: List[SpawnScenario],
+    *,
+    layout: JunctionPriorityLayout,
+    ego_edge: str,
+    ego_lane: int,
+    ego_dest_edge: str,
+    ego_dest_lane_key: str,
+    aux_edge: str,
+    aux_lane: int,
+    lane_keys_by_edge: Dict[str, List[str]],
+    route_index: Optional[VehicleRouteIndex],
+) -> None:
+    """Expand one ego/aux lane pair across allowed aux destinations."""
+    for aux_dest_edge in _allowed_aux_destination_edges(
+        layout, ego_edge, ego_dest_edge, aux_edge
+    ):
+        aux_dest_lane_key = _pick_outgoing_lane_key(
+            aux_dest_edge, aux_lane, lane_keys_by_edge
+        )
+        if not _is_valid_departure(aux_edge, aux_lane, aux_dest_edge, aux_dest_lane_key):
+            continue
+        if route_index is not None and not route_index.can_reach_edge(
+            aux_edge, aux_lane, aux_dest_edge
+        ):
+            continue
+        _append_scenario(
+            scenarios,
+            ego_edge=ego_edge,
+            ego_lane=ego_lane,
+            ego_dest_edge=ego_dest_edge,
+            ego_dest_lane_key=ego_dest_lane_key,
+            aux_edge=aux_edge,
+            aux_lane=aux_lane,
+            aux_dest_edge=aux_dest_edge,
+            lane_keys_by_edge=lane_keys_by_edge,
+        )
+
+
 def enumerate_spawn_scenarios_equal_priority(
     layout: JunctionPriorityLayout,
     spawn_lanes_by_edge: Dict[str, List[int]],
@@ -266,7 +421,11 @@ def enumerate_spawn_scenarios_equal_priority(
     route_index: Optional[VehicleRouteIndex] = None,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 ) -> List[SpawnScenario]:
-    """Ego on any arm; aux only on the right-hand conflicting arm."""
+    """Ego on any arm; aux only on the right-hand conflicting arm.
+
+    Same ego/aux destination table as yield, but aux cannot sit on the left
+    (so ego-right cases are dropped — no meaningful yield target).
+    """
     from .auxiliary_agent import min_aux_spawn_lane_length
 
     lane_lengths = lane_lengths or {}
@@ -288,12 +447,10 @@ def enumerate_spawn_scenarios_equal_priority(
         if not ego_lane_nums:
             continue
 
-        ego_dest_edges = _ego_destination_edges(layout, ego_edge)
+        ego_dest_edges = _ego_destination_edges(
+            layout, ego_edge, aux_edge_id=aux_edge
+        )
         if not ego_dest_edges:
-            continue
-
-        aux_dest_edge = _aux_straight_destination(layout, aux_edge)
-        if aux_dest_edge is None:
             continue
 
         aux_lane_nums = [
@@ -322,16 +479,17 @@ def enumerate_spawn_scenarios_equal_priority(
                     continue
 
                 for aux_lane in aux_lane_nums:
-                    _append_scenario(
+                    _append_valid_conflict_scenarios(
                         scenarios,
+                        layout=layout,
                         ego_edge=ego_edge,
                         ego_lane=ego_lane,
                         ego_dest_edge=ego_dest_edge,
                         ego_dest_lane_key=ego_dest_lane_key,
                         aux_edge=aux_edge,
                         aux_lane=aux_lane,
-                        aux_dest_edge=aux_dest_edge,
                         lane_keys_by_edge=lane_keys_by_edge,
+                        route_index=route_index,
                     )
 
     return scenarios
@@ -346,7 +504,7 @@ def enumerate_spawn_scenarios_yield(
     route_index: Optional[VehicleRouteIndex] = None,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 ) -> List[SpawnScenario]:
-    """Ego on secondary arms; aux on main-road arms."""
+    """Ego on secondary arms; aux on main-road left/right arms (not opposite)."""
     from .auxiliary_agent import min_aux_spawn_lane_length
 
     lane_lengths = lane_lengths or {}
@@ -367,16 +525,15 @@ def enumerate_spawn_scenarios_yield(
         for aux_edge in main_edges:
             if aux_edge == ego_edge:
                 continue
+            side = _aux_side_relative_to_ego(layout, ego_edge, aux_edge)
+            # Opposite (straight) main arm is never a conflict agent for these rules.
+            if side in ("straight", "other"):
+                continue
 
-            # Destinations depend on which arm aux occupies (left → also right turn).
             ego_dest_edges = _ego_destination_edges(
                 layout, ego_edge, aux_edge_id=aux_edge
             )
             if not ego_dest_edges:
-                continue
-
-            aux_dest_edge = _aux_straight_destination(layout, aux_edge)
-            if aux_dest_edge is None:
                 continue
 
             aux_lane_nums = [
@@ -408,16 +565,17 @@ def enumerate_spawn_scenarios_yield(
                         continue
 
                     for aux_lane in aux_lane_nums:
-                        _append_scenario(
+                        _append_valid_conflict_scenarios(
                             scenarios,
+                            layout=layout,
                             ego_edge=ego_edge,
                             ego_lane=ego_lane,
                             ego_dest_edge=ego_dest_edge,
                             ego_dest_lane_key=ego_dest_lane_key,
                             aux_edge=aux_edge,
                             aux_lane=aux_lane,
-                            aux_dest_edge=aux_dest_edge,
                             lane_keys_by_edge=lane_keys_by_edge,
+                            route_index=route_index,
                         )
 
     return scenarios

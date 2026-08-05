@@ -21,7 +21,11 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from core.junction_priority_layout import JunctionLayoutError, build_junction_priority_layout
+from core.junction_priority_layout import (
+    ALLOWED_PRIORITY_JUNCTION_SHAPES,
+    JunctionLayoutError,
+    build_junction_priority_layout,
+)
 from core.lane_keys import lane_edge_id, lane_num_from_key, make_lane_key
 from core.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
@@ -283,6 +287,7 @@ def _stable_seed(
     scenario_id: str = "",
     convoy_size: int = 0,
     lanes_occupied: int = 0,
+    convoy_gap_m: float = 0.0,
 ) -> int:
     """Generate deterministic 32-bit seed from scene name, variant, scenario, and aux dims."""
     h = hashlib.sha256()
@@ -298,6 +303,9 @@ def _stable_seed(
     if lanes_occupied > 0:
         h.update(b"|lanes")
         h.update(str(lanes_occupied).encode("utf-8"))
+    if convoy_gap_m > 0:
+        h.update(b"|gap")
+        h.update(f"{float(convoy_gap_m):.3f}".encode("utf-8"))
     return int.from_bytes(h.digest()[:4], "big")
 
 
@@ -383,6 +391,7 @@ def build_manifest_entry(
         scenario_id,
         convoy_size=aux_convoy_size,
         lanes_occupied=aux_lanes_occupied if aux_cfg.enabled else 0,
+        convoy_gap_m=float(aux_cfg.convoy_gap_m) if aux_cfg.enabled else 0.0,
     )
 
     if spawn_lanes_cache is None:
@@ -444,6 +453,8 @@ def build_manifest_entry(
                 suffix_parts.append(f"lanes{aux_lanes_occupied}")
             if aux_convoy_size > 1:
                 suffix_parts.append(f"convoy{aux_convoy_size}")
+            gap = float(aux_cfg.convoy_gap_m)
+            suffix_parts.append(f"gap{gap:g}")
             if suffix_parts:
                 base_aug = entry.get("augmentation_id") or scenario_id
                 entry["augmentation_id"] = f"{base_aug}_{'_'.join(suffix_parts)}"
@@ -557,12 +568,15 @@ def build_manifest_entry(
                     entry["aux_spawn_lane_index"] = primary_aux
                     entry["aux_road_id"] = lane_edge_id(primary_aux)
                     entry["aux_spawn_lane_num"] = lane_num_from_key(primary_aux)
-                    aux_dest = resolve_aux_destination_lane_key(
-                        junction_layout_cache, primary_aux
-                    )
-                    if aux_dest:
-                        entry["aux_destination_lane_id"] = aux_dest
-                        entry["aux_destination_edge_id"] = lane_edge_id(aux_dest)
+                    # Keep layout-scenario turn destinations; straight-through is
+                    # only a fallback when no aux dest was set on the scenario.
+                    if not entry.get("aux_destination_lane_id"):
+                        aux_dest = resolve_aux_destination_lane_key(
+                            junction_layout_cache, primary_aux
+                        )
+                        if aux_dest:
+                            entry["aux_destination_lane_id"] = aux_dest
+                            entry["aux_destination_edge_id"] = lane_edge_id(aux_dest)
         else:
             entry["main_lane_keys"] = [
                 lane_key
@@ -660,6 +674,13 @@ def generate_manifest(
         if junction_layout is None:
             print(f"  Skipping {scene_name}: no junction layout")
             continue
+        shape = junction_layout.get("shape")
+        if shape not in ALLOWED_PRIORITY_JUNCTION_SHAPES:
+            print(
+                f"  Skipping {scene_name}: junction shape {shape!r} "
+                f"(need {sorted(ALLOWED_PRIORITY_JUNCTION_SHAPES)})"
+            )
+            continue
 
         scene_entries = expand_scene_entries(
             scene_dir=scene_dir,
@@ -700,7 +721,9 @@ def generate_manifest(
         "auxiliary_agent": aux_for_entry.enabled,
         "aux_distance_from_intersection": aux_cfg.distance_from_intersection,
         "aux_convoy_size_max": aux_cfg.convoy_size,
-        "aux_convoy_gap_m": aux_cfg.convoy_gap_m,
+        "aux_convoy_gap_m": list(expansion_cfg.aux.convoy_gaps_m)
+        if expansion_cfg.aux is not None
+        else [aux_cfg.convoy_gap_m],
         "aux_lanes_occupied_max": aux_cfg.lanes_occupied,
         "generated_at": datetime.now().isoformat(),
         "scenes": [s.name for s in scenes],
@@ -837,6 +860,16 @@ def _resolve_max_scenarios(scenario_cfg) -> Optional[int]:
     return int(raw)
 
 
+def _resolve_convoy_gaps_m(raw) -> List[float]:
+    """Accept a scalar or list for ``auxiliary.convoy_gap_m``."""
+    if raw is None:
+        return [float(DEFAULT_CONVOY_GAP_M)]
+    if OmegaConf.is_list(raw) or isinstance(raw, (list, tuple)):
+        gaps = [float(x) for x in raw]
+        return gaps if gaps else [float(DEFAULT_CONVOY_GAP_M)]
+    return [float(raw)]
+
+
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(cfg: DictConfig) -> None:
     """Main entry point with Hydra configuration."""
@@ -878,11 +911,12 @@ def main(cfg: DictConfig) -> None:
         sign_distance_before_end=cfg.simulation.sign_distance_before_end,
         spawn_distance_before_end=cfg.simulation.spawn_distance_before_end,
     )
+    convoy_gaps_m = _resolve_convoy_gaps_m(getattr(cfg.auxiliary, "convoy_gap_m", None))
     aux_cfg = AuxiliaryConfig(
         enabled=bool(cfg.auxiliary.enabled),
         distance_from_intersection=float(cfg.auxiliary.distance_from_intersection),
         convoy_size=int(cfg.auxiliary.convoy_size),
-        convoy_gap_m=float(cfg.auxiliary.convoy_gap_m),
+        convoy_gap_m=float(convoy_gaps_m[0]),
         lanes_occupied=int(cfg.auxiliary.lanes_occupied),
         release_when_ego_within_m=float(
             getattr(cfg.auxiliary, "release_when_ego_within_m", 15.0) or 15.0
@@ -903,7 +937,7 @@ def main(cfg: DictConfig) -> None:
             enabled=aux_cfg.enabled,
             distance_from_intersection=aux_cfg.distance_from_intersection,
             convoy_size=aux_cfg.convoy_size,
-            convoy_gap_m=aux_cfg.convoy_gap_m,
+            convoy_gaps_m=tuple(convoy_gaps_m),
             lanes_occupied=aux_cfg.lanes_occupied,
             release_when_ego_within_m=aux_cfg.release_when_ego_within_m,
         ),

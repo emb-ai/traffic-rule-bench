@@ -13,6 +13,7 @@ from .auxiliary_agent import (
     viable_right_aux_lane_keys,
 )
 from .junction_priority_layout import (
+    ALLOWED_PRIORITY_JUNCTION_SHAPES,
     JunctionLayoutError,
     build_junction_priority_layout,
     right_arm_for_layout,
@@ -351,6 +352,16 @@ def check_manifest_viability(
             viable=False,
             reason="no_junction_layout",
             detail=str(exc),
+        )
+
+    if layout.shape not in ALLOWED_PRIORITY_JUNCTION_SHAPES:
+        return ManifestViabilityResult(
+            viable=False,
+            reason="unsupported_junction_shape",
+            detail=(
+                f"shape={layout.shape!r}; priority signs 2.1/2.4 require "
+                f"{sorted(ALLOWED_PRIORITY_JUNCTION_SHAPES)}"
+            ),
         )
 
     spawn_lanes = parse_spawn_lanes_for_viability(net_path, min_ego_lane_m)

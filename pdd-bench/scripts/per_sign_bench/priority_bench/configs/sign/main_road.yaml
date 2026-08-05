@@ -9,8 +9,4 @@ augmentation:
 
 auxiliary:
   enabled: true
-  distance_from_intersection: 20.0
-  convoy_size: 2
-  lanes_occupied: 4
-  convoy_gap_m: 10.0
-  release_when_ego_within_m: 15.0
+

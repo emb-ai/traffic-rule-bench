@@ -20,6 +20,9 @@ RoadClass = Literal["main", "secondary"]
 LayoutMode = Literal["main_secondary", "main_main"]
 JunctionShape = Literal["2", "T", "X"]
 
+# Priority signs 2.1 / 2.4 need a proper conflict table; 2-arm stubs are rejected.
+ALLOWED_PRIORITY_JUNCTION_SHAPES: frozenset[str] = frozenset({"T", "X"})
+
 
 @dataclass
 class SumoLane:
@@ -771,6 +774,43 @@ def left_arm_for_layout(
     ego_edge_id: str,
 ) -> Optional[ApproachArm]:
     edge_id = left_arm_edge_id(layout.to_dict(), ego_edge_id)
+    if edge_id is None:
+        return None
+    return layout.arm_for_edge(edge_id)
+
+
+def straight_arm_edge_id(junction_layout: dict, ego_edge_id: str) -> Optional[str]:
+    """Incoming edge roughly opposite ego (X junctions); None on T/2."""
+    arms = junction_layout.get("arms", [])
+    ego_arm = next((arm for arm in arms if arm.get("edge_id") == ego_edge_id), None)
+    if ego_arm is None:
+        return None
+
+    left_id = left_arm_edge_id(junction_layout, ego_edge_id)
+    right_id = right_arm_edge_id(junction_layout, ego_edge_id)
+    ego_angle = float(ego_arm["entry_angle"])
+    best_edge: Optional[str] = None
+    best_opp = float("inf")
+    for arm in arms:
+        edge_id = arm.get("edge_id")
+        if not edge_id or edge_id == ego_edge_id:
+            continue
+        if edge_id in {left_id, right_id}:
+            continue
+        delta = (float(arm["entry_angle"]) - ego_angle) % (2.0 * math.pi)
+        opp = abs(delta - math.pi)
+        # Within ~50° of opposite.
+        if opp < best_opp and opp < 0.9:
+            best_edge = edge_id
+            best_opp = opp
+    return best_edge
+
+
+def straight_arm_for_layout(
+    layout: JunctionPriorityLayout,
+    ego_edge_id: str,
+) -> Optional[ApproachArm]:
+    edge_id = straight_arm_edge_id(layout.to_dict(), ego_edge_id)
     if edge_id is None:
         return None
     return layout.arm_for_edge(edge_id)

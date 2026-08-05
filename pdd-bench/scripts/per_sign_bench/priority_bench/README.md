@@ -82,7 +82,8 @@ python tools/analyze_manifest_drops.py
 ```
 
 Cropping runs the same viability checks as `generate_manifest.py` (junction
-layout, aux lane length for at least one lead vehicle, routable ego/aux).
+shape must be **T** or **X** — two-arm stubs are rejected; layout, aux lane
+length for at least one lead vehicle, routable ego/aux).
 Invalid junctions are skipped before review. Disable with
 `--no-require-manifest-viable` if needed.
 
@@ -93,7 +94,7 @@ in the root config). Priority signs enable both:
 
 | Axis | Meaning |
 |------|---------|
-| `layout` | Ego × aux arm/lane/destination scenarios (`core/scene_augmentation.py`). Default ego dest: T→left, X→straight; if aux is on ego's **left** arm, also allow a **right-turn** dest (`arm.right_to`) |
+| `layout` | Ego × aux arm/lane/destination scenarios (`core/scene_augmentation.py`). Ego dest + aux dest follow the T/X conflict table (aux never on the opposite arm; ego-right requires aux on the left; aux may turn left/right/straight per case, not only straight-through) |
 | `auxiliary` | Cartesian product of convoy `1..N` and occupied lanes `1..M` |
 
 Expansion (product, short-road skip, geometry dedupe, cap) lives in
@@ -204,7 +205,7 @@ See `configs/config.yaml` and `configs/sign/{main_road,yield}.yaml`.
 | `scenario.*` | `max_scenarios` (cap **after** all axes) |
 | `augmentation.*` | `enabled`, `layout`, `auxiliary` — which axes run (per sign yaml) |
 | `simulation.*` | `spawn_velocity_ms`, `horizon`, `spawn_distance_before_end` (default **15 m**) |
-| `auxiliary.*` | Params when `augmentation.auxiliary` is on: `enabled`, `distance_from_intersection`, `convoy_size`, `lanes_occupied`, `convoy_gap_m`, `release_when_ego_within_m` |
+| `auxiliary.*` | Params when `augmentation.auxiliary` is on: `enabled`, `distance_from_intersection`, `convoy_size`, `lanes_occupied`, `convoy_gap_m` (scalar or list, e.g. `[5, 10]`), `release_when_ego_within_m` |
 | `gif.*` | `enabled`, `policy`, `scaling` (px/m; higher = more zoomed in), `hide_signs` |
 
 Override on the CLI:
@@ -222,5 +223,6 @@ Notes on timing / caps:
 - `auxiliary.release_when_ego_within_m` — when **gated aux** starts: ego's remaining
   distance to lane end ≤ this value. Keep ≥ spawn distance so aux is not held while
   a yielding ego waits outside the release radius.
-- `scenario.max_scenarios` — after layout × convoy × lanes, short-road skips, and
-  geometry dedupe, randomly keep at most this many rows **per scene**.
+- `scenario.max_scenarios` — after layout × convoy × lanes × gaps, short-road
+  skips, and geometry dedupe, **shuffle** then keep at most this many rows
+  **per scene** (default 15).

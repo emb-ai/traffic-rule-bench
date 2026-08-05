@@ -28,9 +28,9 @@ augmentation:
 auxiliary:
   enabled: false
   distance_from_intersection: 20.0
-  convoy_size: 1
-  lanes_occupied: 1
-  convoy_gap_m: 10.0
+  convoy_size: 3
+  lanes_occupied: 4
+  convoy_gap_m: [5.0, 10.0]
   release_when_ego_within_m: 15.0
 
 simulation:

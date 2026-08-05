@@ -7,9 +7,11 @@ from typing import List, Literal, Optional
 
 from metadrive.manager.base_manager import BaseManager
 from metadrive.component.vehicle.base_vehicle import BaseVehicle
+from metadrive.component.vehicle.PID_controller import PIDController
 from metadrive.policy.base_policy import BasePolicy
 from metadrive.policy.idm_policy import IDMPolicy
 from metadrive.component.navigation_module.edge_network_navigation import EdgeNetworkNavigation
+from metadrive.utils.math import wrap_to_pi
 
 
 DEFAULT_DISTANCE_FROM_INTERSECTION = 20.0
@@ -103,12 +105,72 @@ class StationaryPolicy(BasePolicy):
 
 
 class AuxiliaryIDMPolicy(IDMPolicy):
-    """IDM policy tuned for a single fixed route through the junction."""
+    """IDM that sticks tightly to the routed lane centerline (incl. turns)."""
+
+    # Look-ahead along the lane for heading (meters); longer helps on sharp turns.
+    HEADING_LOOKAHEAD_M = 4.0
 
     def __init__(self, control_object, random_seed: int):
         super().__init__(control_object=control_object, random_seed=random_seed)
         self.enable_lane_change = False
         self.enable_idm_overtake = False
+        # Stronger than stock IDM so aux stays on the reference line through
+        # junction connectors instead of cutting across / skipping the turn.
+        self.heading_pid = PIDController(2.8, 0.01, 4.5)
+        self.lateral_pid = PIDController(1.0, 0.002, 0.25)
+
+    def steering_control(self, target_lane) -> float:
+        if target_lane is None:
+            return 0.0
+        ego_vehicle = self.control_object
+        long, lat = target_lane.local_coordinates(ego_vehicle.position)
+        lookahead = min(
+            self.HEADING_LOOKAHEAD_M,
+            max(1.0, float(getattr(target_lane, "length", self.HEADING_LOOKAHEAD_M)) - long),
+        )
+        lane_heading = target_lane.heading_theta_at(long + lookahead)
+        v_heading = ego_vehicle.heading_theta
+        steering = self.heading_pid.get_result(-wrap_to_pi(lane_heading - v_heading))
+        steering += self.lateral_pid.get_result(-lat)
+        return float(steering)
+
+    def move_to_next_road(self):
+        """Advance along navigation checkpoints; do not snap off the route."""
+        navigation = getattr(self.control_object, "navigation", None)
+        current_lanes = getattr(navigation, "current_ref_lanes", None) if navigation else None
+        if not current_lanes:
+            return super().move_to_next_road()
+
+        # Prefer the exact checkpoint lane when it is among the current ref set.
+        checkpoint_lane = None
+        ckpt_idx = getattr(navigation, "current_checkpoint_lane_index", None)
+        if ckpt_idx is not None:
+            try:
+                checkpoint_lane = navigation.map.road_network.get_lane(ckpt_idx)
+            except Exception:
+                checkpoint_lane = None
+        if checkpoint_lane is not None and checkpoint_lane in current_lanes:
+            self.routing_target_lane = checkpoint_lane
+            return True
+
+        if self.routing_target_lane is None:
+            self.routing_target_lane = current_lanes[0]
+            return True
+
+        if self.routing_target_lane in current_lanes:
+            return True
+
+        # Only step forward onto a successor that is still on the planned route.
+        checkpoints = list(getattr(navigation, "checkpoints", None) or [])
+        for lane in current_lanes:
+            if self.routing_target_lane.is_previous_lane_of(lane):
+                if not checkpoints or lane.index in checkpoints:
+                    self.routing_target_lane = lane
+                    return True
+            if checkpoints and lane.index in checkpoints:
+                self.routing_target_lane = lane
+                return True
+        return False
 
 
 class GatedAuxiliaryIDMPolicy(AuxiliaryIDMPolicy):
@@ -387,10 +449,16 @@ class AuxiliaryAgentsManager(BaseManager):
                         )
                     continue
 
-                if candidate_lane in self._alternate_spawn_dest_map:
-                    destination_lane = self._alternate_spawn_dest_map[candidate_lane]
-                elif idx < len(self._destination_lanes) and self._destination_lanes[idx]:
+                # Manifest / layout destination wins for the requested spawn lane.
+                # Alternate-map entries are straight-through fallbacks for other arms.
+                if (
+                    candidate_lane == spawn_lane_index
+                    and idx < len(self._destination_lanes)
+                    and self._destination_lanes[idx]
+                ):
                     destination_lane = self._destination_lanes[idx]
+                elif candidate_lane in self._alternate_spawn_dest_map:
+                    destination_lane = self._alternate_spawn_dest_map[candidate_lane]
                 else:
                     destination_lane = pick_destination_outgoing_lane(
                         candidate_lane, self._outgoing_lanes, road_network
@@ -850,7 +918,7 @@ def resolve_aux_destination_lane_key(
     junction_layout: Optional[dict],
     spawn_lane_key: str,
 ) -> Optional[str]:
-    """Straight-through destination lane key for an aux spawn lane."""
+    """Straight-through destination lane key (fallback when no turn is specified)."""
     if not junction_layout:
         return None
 
@@ -885,6 +953,27 @@ def resolve_aux_destination_lane_key(
     return make_lane_key(dest_edge, lane_num)
 
 
+def resolve_aux_destination_lane_key_for_edge(
+    junction_layout: Optional[dict],
+    spawn_lane_key: str,
+    dest_edge_id: str,
+) -> Optional[str]:
+    """Outgoing lane key on ``dest_edge_id`` matching the spawn lane index."""
+    if not junction_layout or not dest_edge_id:
+        return None
+    lane_num = lane_num_from_key(spawn_lane_key)
+    for candidate in junction_layout.get("arms", []):
+        if candidate.get("edge_id") != dest_edge_id:
+            continue
+        keys = candidate.get("lane_keys", [])
+        for key in keys:
+            if lane_num_from_key(key) == lane_num:
+                return key
+        if keys:
+            return keys[min(lane_num, len(keys) - 1)]
+    return make_lane_key(dest_edge_id, lane_num)
+
+
 def resolve_aux_spawn_plan(
     row: dict,
     ego_lane_index: str,
@@ -914,19 +1003,36 @@ def resolve_aux_spawn_plan(
             row.get("aux_convoy_gap_m", DEFAULT_CONVOY_GAP_M) or DEFAULT_CONVOY_GAP_M
         ),
     )
+    # Straight-through defaults for fallback spawn lanes only.
     alternate_spawn_dest_map: dict = {}
     for lane_key in viable_keys:
         dest = resolve_aux_destination_lane_key(junction_layout, lane_key)
         if dest:
             alternate_spawn_dest_map[lane_key] = dest
 
+    manifest_dest = row.get("aux_destination_lane_id")
+    manifest_dest_edge = row.get("aux_destination_edge_id")
+    manifest_spawn = row.get("aux_spawn_lane_index")
+    if manifest_dest and manifest_spawn:
+        alternate_spawn_dest_map[str(manifest_spawn)] = str(manifest_dest)
+    elif manifest_dest_edge and manifest_spawn:
+        resolved = resolve_aux_destination_lane_key_for_edge(
+            junction_layout, str(manifest_spawn), str(manifest_dest_edge)
+        )
+        if resolved:
+            alternate_spawn_dest_map[str(manifest_spawn)] = resolved
+            manifest_dest = resolved
+
     destination_lanes: List[str] = []
     for idx, spawn_lane in enumerate(spawn_lanes):
-        dest = alternate_spawn_dest_map.get(spawn_lane)
-        if not dest and idx == 0 and row.get("aux_destination_lane_id"):
-            manifest_spawn = row.get("aux_spawn_lane_index")
-            if manifest_spawn and spawn_lane == str(manifest_spawn):
-                dest = str(row["aux_destination_lane_id"])
+        dest = None
+        if manifest_dest and (
+            (manifest_spawn and spawn_lane == str(manifest_spawn))
+            or (idx == 0 and not manifest_spawn)
+        ):
+            dest = str(manifest_dest)
+        if not dest:
+            dest = alternate_spawn_dest_map.get(spawn_lane)
         destination_lanes.append(dest or "")
 
     return spawn_lanes, destination_lanes, alternate_spawn_dest_map

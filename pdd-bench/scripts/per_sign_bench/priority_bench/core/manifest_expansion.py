@@ -1,13 +1,9 @@
-"""Cartesian expansion of layout/aux axes into manifest rows.
-
-Layout scenarios come from ``scene_augmentation``; this module owns the
-product over convoy × lanes, short-road skips, geometry dedupe, and caps.
-"""
+"""Cartesian expansion of layout/aux axes into manifest rows."""
 
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -30,9 +26,14 @@ class AuxiliaryParams:
     enabled: bool = True
     distance_from_intersection: float = 20.0
     convoy_size: int = 1
-    convoy_gap_m: float = 10.0
+    convoy_gaps_m: Tuple[float, ...] = (10.0,)
     lanes_occupied: int = 1
     release_when_ego_within_m: float = 15.0
+
+    @property
+    def convoy_gap_m(self) -> float:
+        """Default / first gap (used when the gap axis is collapsed)."""
+        return float(self.convoy_gaps_m[0]) if self.convoy_gaps_m else 10.0
 
 
 @dataclass(frozen=True)
@@ -78,13 +79,33 @@ def sizes_up_to(
 
 
 def entry_geometry_key(entry: Dict) -> Tuple:
-    """Identity of what appears on the map (order of aux lanes ignored)."""
+    """Identity of what appears on the map (order of aux lanes ignored).
+
+    When several aux lanes are occupied, runtime fills *all* of them; the
+    layout-scenario "primary" aux spawn/dest only picks prefer-order and the
+    written ``aux_destination_*``. Two rows with the same occupied set then
+    look identical (each non-primary lane still gets its straight-through
+    route), so primary dest is omitted from the key for multi-lane occupy.
+    """
+    occupied = frozenset(entry.get("aux_occupied_lane_keys") or [])
+    if len(occupied) <= 1:
+        dest_key = (
+            entry.get("aux_destination_lane_id")
+            or entry.get("aux_destination_edge_id")
+        )
+        spawn_key = entry.get("aux_spawn_lane_index") or entry.get("aux_road_id")
+    else:
+        dest_key = None
+        spawn_key = None
     return (
         entry.get("road_id"),
         entry.get("spawn_lane_num"),
         entry.get("destination_lane_id"),
-        frozenset(entry.get("aux_occupied_lane_keys") or []),
+        occupied,
+        spawn_key,
+        dest_key,
         int(entry.get("aux_convoy_size") or 1),
+        round(float(entry.get("aux_convoy_gap_m") or 0.0), 3),
     )
 
 
@@ -95,21 +116,23 @@ def _fit_aux_lane_keys(
     aux: AuxiliaryParams,
     ego_edge: Optional[str],
     convoy_size: int,
+    convoy_gap_m: Optional[float] = None,
 ) -> List[str]:
+    gap = float(aux.convoy_gap_m if convoy_gap_m is None else convoy_gap_m)
     if spawn_strategy == "yield":
         return viable_aux_lane_keys(
             junction_layout,
             aux.distance_from_intersection,
             ego_edge,
             convoy_size=convoy_size,
-            convoy_gap_m=aux.convoy_gap_m,
+            convoy_gap_m=gap,
         )
     return viable_right_aux_lane_keys(
         junction_layout,
         aux.distance_from_intersection,
         ego_edge,
         convoy_size=convoy_size,
-        convoy_gap_m=aux.convoy_gap_m,
+        convoy_gap_m=gap,
     )
 
 
@@ -155,7 +178,7 @@ def _print_aux_lane_availability(
     min_lane_for_lead = min_aux_spawn_lane_length(
         aux.distance_from_intersection,
         convoy_size=1,
-        convoy_gap_m=aux.convoy_gap_m,
+        convoy_gap_m=min(aux.convoy_gaps_m) if aux.convoy_gaps_m else 10.0,
     )
     if spawn_strategy == "yield":
         available = len(
@@ -260,6 +283,14 @@ def expand_scene_entries(
         aux.convoy_size if aux is not None else 1,
         auxiliary_enabled=auxiliary_on,
     )
+    # Gap is part of the aux cartesian product when the auxiliary axis is on;
+    # otherwise keep a single configured gap on the row.
+    if auxiliary_on and aux is not None and aux.convoy_gaps_m:
+        gap_values = [float(g) for g in aux.convoy_gaps_m]
+    elif aux is not None and aux.convoy_gaps_m:
+        gap_values = [float(aux.convoy_gaps_m[0])]
+    else:
+        gap_values = [10.0]
 
     scene_entries: List[Dict] = []
     skipped_short_aux = 0
@@ -287,61 +318,75 @@ def expand_scene_entries(
         )
         for lanes_n in scene_lane_counts:
             for convoy_n in convoy_sizes:
-                if auxiliary_on and aux is not None:
-                    fit_lanes = _fit_aux_lane_keys(
-                        junction_layout=junction_layout,
-                        spawn_strategy=spawn_strategy,
-                        aux=aux,
-                        ego_edge=ego_edge,
-                        convoy_size=convoy_n,
+                for gap_m in gap_values:
+                    if auxiliary_on and aux is not None:
+                        fit_lanes = _fit_aux_lane_keys(
+                            junction_layout=junction_layout,
+                            spawn_strategy=spawn_strategy,
+                            aux=aux,
+                            ego_edge=ego_edge,
+                            convoy_size=convoy_n,
+                            convoy_gap_m=gap_m,
+                        )
+                        # Skip when the scenario aux lane (or enough lanes) cannot
+                        # hold the full convoy — otherwise convoy=N collapses to
+                        # fewer cars and duplicates a smaller convoy row.
+                        if prefer_aux is not None and prefer_aux not in fit_lanes:
+                            skipped_short_aux += 1
+                            continue
+                        if len(fit_lanes) < lanes_n:
+                            skipped_short_aux += 1
+                            continue
+                    aux_cfg_gap = replace(aux_cfg_for_entry, convoy_gap_m=gap_m)
+                    entry = build_entry(
+                        scene_dir=scene_dir,
+                        scenes_root=scenes_root,
+                        meta=meta,
+                        variant=variant,
+                        sim_cfg=sim_cfg,
+                        aux_cfg=aux_cfg_gap,
+                        aux_convoy_size=convoy_n,
+                        aux_lanes_occupied=lanes_n,
+                        spawn_lanes_cache=list(spawn_lanes),
+                        junction_layout_cache=junction_layout,
+                        spawn_scenario=scenario,
                     )
-                    # Skip when the scenario aux lane (or enough lanes) cannot
-                    # hold the full convoy — otherwise convoy=N collapses to
-                    # fewer cars and duplicates a smaller convoy row.
-                    if prefer_aux is not None and prefer_aux not in fit_lanes:
-                        skipped_short_aux += 1
+                    geom_key = entry_geometry_key(entry)
+                    if geom_key in seen_geometries:
+                        skipped_dup_geometry += 1
                         continue
-                    if len(fit_lanes) < lanes_n:
-                        skipped_short_aux += 1
-                        continue
-                entry = build_entry(
-                    scene_dir=scene_dir,
-                    scenes_root=scenes_root,
-                    meta=meta,
-                    variant=variant,
-                    sim_cfg=sim_cfg,
-                    aux_cfg=aux_cfg_for_entry,
-                    aux_convoy_size=convoy_n,
-                    aux_lanes_occupied=lanes_n,
-                    spawn_lanes_cache=list(spawn_lanes),
-                    junction_layout_cache=junction_layout,
-                    spawn_scenario=scenario,
-                )
-                geom_key = entry_geometry_key(entry)
-                if geom_key in seen_geometries:
-                    skipped_dup_geometry += 1
-                    continue
-                seen_geometries.add(geom_key)
-                scene_entries.append(entry)
+                    seen_geometries.add(geom_key)
+                    scene_entries.append(entry)
 
     if skipped_short_aux:
         print(
-            f"  [aux] Skipped {skipped_short_aux} convoy×lanes combo(s) "
+            f"  [aux] Skipped {skipped_short_aux} convoy×lanes×gap combo(s) "
             f"(aux approach too short for full convoy)"
         )
     if skipped_dup_geometry:
         print(
             f"  [aux] Skipped {skipped_dup_geometry} duplicate combo(s) "
-            f"(same ego path + occupied aux lanes + convoy)"
+            f"(same ego path + occupied aux lanes + convoy + gap)"
         )
 
+    # After the full cartesian product (+ filters), shuffle then cap per scene.
     cap = expansion.max_scenarios
-    if cap is not None and len(scene_entries) > cap:
-        print(
-            f"  Retained {cap} of {len(scene_entries)} manifest entries for {scene_name}"
+    if cap is not None:
+        rng = random.Random(
+            hash((scene_name, "max_scenarios_shuffle", int(cap))) & 0xFFFFFFFF
         )
-        random.shuffle(scene_entries)
-        scene_entries = scene_entries[:cap]
+        rng.shuffle(scene_entries)
+        if len(scene_entries) > cap:
+            print(
+                f"  Retained {cap} of {len(scene_entries)} manifest entries "
+                f"for {scene_name} (shuffled)"
+            )
+            scene_entries = scene_entries[:cap]
+        else:
+            print(
+                f"  Manifest entries for {scene_name}: {len(scene_entries)} "
+                f"(shuffled, under cap={cap})"
+            )
     else:
         print(f"  Manifest entries for {scene_name}: {len(scene_entries)}")
 
