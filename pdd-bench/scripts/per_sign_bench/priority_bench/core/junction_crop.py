@@ -311,6 +311,8 @@ def _trim_polyline(
         return points
 
     if from_end:
+        # Walk backward from the end; when cutting mid-segment, interpolate
+        # from p1 (already-included end side) toward p0.
         acc = 0.0
         kept: List[Tuple[float, float]] = [points[-1]]
         for i in range(len(points) - 2, -1, -1):
@@ -323,7 +325,12 @@ def _trim_polyline(
                 need = max_length - acc
                 if seg > 0:
                     t = need / seg
-                    kept.append((p0[0] + t * (p1[0] - p0[0]), p0[1] + t * (p1[1] - p0[1])))
+                    kept.append(
+                        (
+                            p1[0] + t * (p0[0] - p1[0]),
+                            p1[1] + t * (p0[1] - p1[1]),
+                        )
+                    )
                 break
         kept.reverse()
         return kept
@@ -425,12 +432,54 @@ def _update_net_bounds(root: ET.Element) -> None:
     loc.set("convBoundary", f"{min_x:.2f},{min_y:.2f},{max_x:.2f},{max_y:.2f}")
 
 
+def _rebuild_junction_geometry(
+    net_path: Path,
+    *,
+    corner_detail: int = 5,
+    internal_link_detail: int = 20,
+) -> None:
+    """Re-run netconvert to densify junction corners and internal turn polylines.
+
+    Sparse 2–5 point connectors make MetaDrive IDM cut corners; higher detail
+    gives a smooth reference line for AuxiliaryIDMPolicy.
+    """
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".net.xml", delete=False) as handle:
+        tmp_path = Path(handle.name)
+    try:
+        cmd = [
+            _find_netconvert(),
+            "--sumo-net-file",
+            str(net_path),
+            "-o",
+            str(tmp_path),
+            "--junctions.corner-detail",
+            str(int(corner_detail)),
+            "--junctions.internal-link-detail",
+            str(int(internal_link_detail)),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise JunctionLayoutError(
+                f"netconvert junction rebuild failed for {net_path}:\n"
+                f"{result.stderr or result.stdout}"
+            )
+        if not tmp_path.is_file():
+            raise JunctionLayoutError(f"netconvert did not write {tmp_path}")
+        shutil.move(str(tmp_path), str(net_path))
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 def crop_net_to_junction_only(
     net_path: Path,
     junction_id: str,
     out_path: Path,
     *,
     arm_length_m: float,
+    corner_detail: int = 5,
+    internal_link_detail: int = 20,
 ) -> None:
     """Keep only the picked junction, its internal links, and incoming/outgoing arms."""
     import tempfile
@@ -464,6 +513,14 @@ def crop_net_to_junction_only(
     if not out_path.is_file():
         raise JunctionLayoutError(f"netconvert did not write {out_path}")
 
+    # Densify turn polylines first (expands junction slightly), then trim arms
+    # to ``arm_length_m``. Trimming after rebuild keeps far-end cuts without
+    # undoing connector detail; a second rebuild would re-lengthen arms.
+    _rebuild_junction_geometry(
+        out_path,
+        corner_detail=corner_detail,
+        internal_link_detail=internal_link_detail,
+    )
     tree = ET.parse(out_path)
     root = tree.getroot()
     _trim_arms_in_net(root, junction_id, arm_length_m)

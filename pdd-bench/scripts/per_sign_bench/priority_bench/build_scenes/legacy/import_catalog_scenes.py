@@ -11,19 +11,19 @@ under priority_bench/scenes/ (e.g. sign_72424_j0, sign_72424_j1).
 
 Examples:
     # Import next 10 qualifying catalog scenes not yet in scenes/core/
-    python tools/filter_scenes/import_catalog_scenes.py --limit 10
+    python build_scenes/legacy/import_catalog_scenes.py --limit 10
 
     # Prefer 4-arm, else accept 3-arm (default)
-    python tools/filter_scenes/import_catalog_scenes.py --limit 10 --arms 4 3
+    python build_scenes/legacy/import_catalog_scenes.py --limit 10 --arms 4 3
 
     # Import specific scenes (still checked unless --no-junction-filter)
-    python tools/filter_scenes/import_catalog_scenes.py sign_79054 75605
+    python build_scenes/legacy/import_catalog_scenes.py sign_79054 75605
 
     # Import by numeric sign id
-    python tools/filter_scenes/import_catalog_scenes.py --sign-ids 79054 75605
+    python build_scenes/legacy/import_catalog_scenes.py --sign-ids 79054 75605
 
     # Preview only, no simulation
-    python tools/filter_scenes/import_catalog_scenes.py sign_79054 --no-simulation
+    python build_scenes/legacy/import_catalog_scenes.py sign_79054 --no-simulation
 """
 from __future__ import annotations
 
@@ -36,20 +36,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-FILTER_SCENES_DIR = Path(__file__).resolve().parent
-TOOLS_DIR = FILTER_SCENES_DIR.parent
-PACKAGE_DIR = TOOLS_DIR.parent
+LEGACY_DIR = Path(__file__).resolve().parent
+BUILD_SCENES_DIR = LEGACY_DIR.parent
+PACKAGE_DIR = BUILD_SCENES_DIR.parent
 PDD_BENCH_DIR = PACKAGE_DIR.parent.parent.parent
 DEFAULT_SOURCE = PDD_BENCH_DIR / "scenes" / "2.1"
 DEFAULT_DEST = PACKAGE_DIR / "scenes" / "core"
 
 sys.path.insert(0, str(PACKAGE_DIR))
 
-from lib.junction_crop import (  # noqa: E402
+from core.junction_crop import (  # noqa: E402
     try_find_junction_for_arm_counts,
     try_find_junction_with_arm_count,
 )
-from lib.sumo_utils import load_scene_meta, resolve_net_file  # noqa: E402
+from core.sumo_utils import load_scene_meta, resolve_net_file  # noqa: E402
 from tools.render_map import parse_sumo_net, render_network  # noqa: E402
 
 

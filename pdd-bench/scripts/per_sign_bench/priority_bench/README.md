@@ -18,14 +18,13 @@ priority_bench/
 ├── signs/                # SignProfile registry (main_road=2.1, yield=2.4)
 ├── configs/              # Hydra (configs/sign/{main_road,yield}.yaml)
 ├── data/
-│   ├── main_road/{scenes,output}   # symlinks → former main_sign trees
-│   └── yield/{scenes,output}       # symlinks → former yield_sign trees
-├── tools/
-│   ├── filter_scenes/    # catalog import → crop → review pool
-│   ├── build_scene.py    # OSM → SUMO network
-│   ├── run_simulation.py
-│   ├── render_map.py
-│   └── review_benchmark_gifs.py
+│   ├── main_road/{scenes,output}
+│   └── yield/{scenes,output}
+├── build_scenes/         # materialize moscow allocations → review pool
+│   ├── materialize_scenes.py
+│   ├── review_scenes.py
+│   └── legacy/           # old catalog / Overpass flow
+├── tools/                # ad-hoc debug (GIF review, map render, drop analysis, …)
 ├── generate_manifest.py
 ├── run_benchmark.py
 └── eval_pipeline.py
@@ -61,31 +60,25 @@ ego is near its spawn-lane end so both meet at the junction).
 
 ## Workflow
 
-### Step 1A: Build scene pool (catalog → crop → review)
+### Step 1A: Build scene pool (moscow → materialize → review)
 
-Full sequence is documented in
-[`tools/filter_scenes/README.md`](tools/filter_scenes/README.md). Short version:
+Full sequence:
+[`build_scenes/README.md`](build_scenes/README.md). Short version for **2.4**:
 
 ```bash
-# Import qualifying catalog maps into scenes/core/
-python tools/filter_scenes/import_catalog_scenes.py --limit 30
-
-# Crop until enough manifest-viable junction scenes exist
-python tools/filter_scenes/build_scene_pool.py crop --target 100
+# Link allocated moscow junctions into data/yield/scenes/
+python build_scenes/materialize_scenes.py --sign 2.4
 
 # Review keep/reject in browser
-python tools/filter_scenes/review_junction_scenes.py
+python build_scenes/review_scenes.py
 
-# Progress / drop analysis
-python tools/filter_scenes/build_scene_pool.py status --target 100
+# Optional: why a scene would drop at manifest time
 python tools/analyze_manifest_drops.py
 ```
 
-Cropping runs the same viability checks as `generate_manifest.py` (junction
-shape must be **T** or **X** — two-arm stubs are rejected; layout, aux lane
-length for at least one lead vehicle, routable ego/aux).
-Invalid junctions are skipped before review. Disable with
-`--no-require-manifest-viable` if needed.
+Prereq: shared harvest + allocations under
+[`../moscow_junctions/`](../moscow_junctions/README.md).
+Old catalog/Overpass scripts live in `build_scenes/legacy/` (do not use for new pools).
 
 ### Augmentation axes
 
@@ -115,7 +108,7 @@ still lists `reject` for scenes that remain on disk, `generate_manifest.py`
 exits with an error until you run:
 
 ```bash
-python tools/filter_scenes/review_junction_scenes.py --apply
+python build_scenes/review_scenes.py --apply
 ```
 
 ### Step 1B: Build a single scene from OSM

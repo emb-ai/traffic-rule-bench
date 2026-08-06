@@ -81,6 +81,11 @@ from pathlib import Path as _PathForPath
 _PACKAGE_DIR = _PathForPath(__file__).resolve().parent
 if str(_PACKAGE_DIR) not in sys.path:
     sys.path.insert(0, str(_PACKAGE_DIR))
+
+from core.metadrive_sumo_patch import apply_metadrive_sumo_via_patch  # noqa: E402
+
+apply_metadrive_sumo_via_patch()
+
 import json
 import subprocess
 import sys

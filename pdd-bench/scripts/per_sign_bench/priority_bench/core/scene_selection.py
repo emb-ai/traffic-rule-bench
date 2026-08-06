@@ -72,7 +72,7 @@ def rejected_scene_names(scenes_root: Path) -> list[str]:
 def unapplied_rejected_scenes(scenes_root: Path) -> list[str]:
     """Rejects in scene_selection.json that still exist as top-level scene dirs.
 
-    After review, ``review_junction_scenes.py --apply`` should move these under
+    After review, ``review_scenes.py --apply`` should move these under
     ``_rejected/``. If any remain, manifest generation would still pick them up.
     """
     pending: list[str] = []

@@ -8,16 +8,16 @@ rejected scenes aside.
 
 Examples:
     # Open review UI (default http://127.0.0.1:8765)
-    python tools/filter_scenes/review_junction_scenes.py
+    python build_scenes/review_scenes.py
 
     # Custom port / scenes root
-    python tools/filter_scenes/review_junction_scenes.py --port 9000
+    python build_scenes/review_scenes.py --port 9000
 
     # Move rejected scenes to scenes/_rejected/
-    python tools/filter_scenes/review_junction_scenes.py --apply
+    python build_scenes/review_scenes.py --apply
 
     # Print kept scene names from saved selection
-    python tools/filter_scenes/review_junction_scenes.py --list-kept
+    python build_scenes/review_scenes.py --list-kept
 """
 from __future__ import annotations
 
@@ -32,15 +32,16 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-FILTER_SCENES_DIR = Path(__file__).resolve().parent
-PACKAGE_DIR = FILTER_SCENES_DIR.parent.parent
-SCENES_DIR_DEFAULT = PACKAGE_DIR / "scenes"
+BUILD_SCENES_DIR = Path(__file__).resolve().parent
+PACKAGE_DIR = BUILD_SCENES_DIR.parent
+# Prefer the yield (2.4) pool; override with --scenes-dir for other signs.
+SCENES_DIR_DEFAULT = PACKAGE_DIR / "data" / "yield" / "scenes"
 SELECTION_FILE = "scene_selection.json"
 PREVIEW_NAME_DEFAULT = "custom_cropped.png"
 
 sys.path.insert(0, str(PACKAGE_DIR))
 
-from lib.scene_selection import (  # noqa: E402
+from core.scene_selection import (  # noqa: E402
     REJECTED_SUBDIR,
     RESERVED_SCENE_DIRS,
     VERDICT_KEEP,
@@ -50,7 +51,7 @@ from lib.scene_selection import (  # noqa: E402
     save_scene_selection,
     set_scene_verdict,
 )
-from lib.sumo_utils import load_scene_meta  # noqa: E402
+from core.sumo_utils import load_scene_meta  # noqa: E402
 
 
 def selection_path(scenes_root: Path) -> Path:
@@ -336,7 +337,7 @@ REVIEW_HTML = """<!DOCTYPE html>
       Click image to enlarge. Keys in lightbox: <strong>K</strong> keep,
       <strong>R</strong> reject, <strong>P</strong> pending,
       <strong>←/→</strong> prev/next, <strong>Esc</strong> close.
-      Run <code>review_junction_scenes.py --apply</code> to move rejected scenes to <code>_rejected/</code>.
+      Run <code>review_scenes.py --apply</code> to move rejected scenes to <code>_rejected/</code>.
     </div>
   </header>
   <main>

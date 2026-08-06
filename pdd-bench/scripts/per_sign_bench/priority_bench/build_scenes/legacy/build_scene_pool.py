@@ -1,28 +1,30 @@
 #!/usr/bin/env python3
 """Grow a junction scene pool to a target size (default 100) with review cycles.
 
+LEGACY — prefer build_scenes/materialize_scenes.py for new pools.
+
 Workflow:
   1. Import core maps:
-       python tools/filter_scenes/import_catalog_scenes.py --limit 40
+       python build_scenes/legacy/import_catalog_scenes.py --limit 40
 
   2. Create initial candidate pool (crop junctions until >= target scenes exist):
-       python tools/filter_scenes/build_scene_pool.py crop --target 100
+       python build_scenes/legacy/build_scene_pool.py crop --target 100
 
   3. Review and mark keep/reject:
-       python tools/filter_scenes/review_junction_scenes.py
+       python build_scenes/review_scenes.py
 
   4. After review, add more crops from unused core maps if kept < target:
-       python tools/filter_scenes/build_scene_pool.py fill --target 100
+       python build_scenes/legacy/build_scene_pool.py fill --target 100
 
   Repeat steps 3–4 until kept >= target or core maps are exhausted.
 
   Check progress anytime:
-       python tools/filter_scenes/build_scene_pool.py status --target 100
+       python build_scenes/legacy/build_scene_pool.py status --target 100
 
 Examples:
-    python tools/filter_scenes/build_scene_pool.py status
-    python tools/filter_scenes/build_scene_pool.py crop --target 100
-    python tools/filter_scenes/build_scene_pool.py fill --target 100 --force
+    python build_scenes/legacy/build_scene_pool.py status
+    python build_scenes/legacy/build_scene_pool.py crop --target 100
+    python build_scenes/legacy/build_scene_pool.py fill --target 100 --force
 """
 from __future__ import annotations
 
@@ -31,26 +33,29 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-FILTER_SCENES_DIR = Path(__file__).resolve().parent
-PACKAGE_DIR = FILTER_SCENES_DIR.parent.parent
+LEGACY_DIR = Path(__file__).resolve().parent
+BUILD_SCENES_DIR = LEGACY_DIR.parent
+PACKAGE_DIR = BUILD_SCENES_DIR.parent
 DEFAULT_TARGET = 100
 
 sys.path.insert(0, str(PACKAGE_DIR))
+sys.path.insert(0, str(BUILD_SCENES_DIR))
+sys.path.insert(0, str(LEGACY_DIR))
 
-from lib.manifest_config import (  # noqa: E402
+from core.manifest_config import (  # noqa: E402
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
 )
-from lib.manifest_viability import check_scene_dir_viability  # noqa: E402
-from lib.scene_selection import VERDICT_PENDING  # noqa: E402
-from tools.filter_scenes.crop_junction_scene import (  # noqa: E402
+from core.manifest_viability import check_scene_dir_viability  # noqa: E402
+from core.scene_selection import VERDICT_PENDING  # noqa: E402
+from crop_junction_scene import (  # noqa: E402
     CORE_DIR_DEFAULT,
     SCENES_DIR_DEFAULT,
     discover_core_scene_dirs,
     process_core_scene,
     uncropped_core_dirs,
 )
-from tools.filter_scenes.review_junction_scenes import (  # noqa: E402
+from review_scenes import (  # noqa: E402
     PREVIEW_NAME_DEFAULT,
     discover_review_scenes,
     kept_scene_names,
@@ -335,8 +340,8 @@ def fill_after_review(
     print_pool_status(status)
     if status.kept < status.target:
         print(
-            "\nNext: python tools/filter_scenes/review_junction_scenes.py\n"
-            "Then: python tools/filter_scenes/build_scene_pool.py fill --target "
+            "\nNext: python build_scenes/review_scenes.py\n"
+            "Then: python build_scenes/legacy/build_scene_pool.py fill --target "
             f"{status.target}"
         )
     return total_written
@@ -498,8 +503,8 @@ def main() -> None:
         )
         print_pool_status(status)
         print(
-            "\nNext: python tools/filter_scenes/review_junction_scenes.py\n"
-            f"Then: python tools/filter_scenes/build_scene_pool.py fill --target {args.target}"
+            "\nNext: python build_scenes/review_scenes.py\n"
+            f"Then: python build_scenes/legacy/build_scene_pool.py fill --target {args.target}"
         )
         return
 

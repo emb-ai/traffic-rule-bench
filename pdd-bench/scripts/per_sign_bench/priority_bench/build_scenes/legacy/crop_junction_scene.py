@@ -15,9 +15,9 @@ Selection rules:
   - By default, skip crops that would fail generate_manifest.py (use --no-require-manifest-viable to disable).
 
 Examples:
-    python tools/filter_scenes/crop_junction_scene.py
-    python tools/filter_scenes/crop_junction_scene.py sign_72424 sign_73117 --radius 100
-    python tools/filter_scenes/crop_junction_scene.py --limit 3 --max-junctions 5
+    python build_scenes/legacy/crop_junction_scene.py
+    python build_scenes/legacy/crop_junction_scene.py sign_72424 sign_73117 --radius 100
+    python build_scenes/legacy/crop_junction_scene.py --limit 3 --max-junctions 5
 """
 from __future__ import annotations
 
@@ -28,29 +28,30 @@ import sys
 import tempfile
 from pathlib import Path
 
-TOOLS_DIR = Path(__file__).resolve().parent
-PACKAGE_DIR = TOOLS_DIR.parent.parent
+LEGACY_DIR = Path(__file__).resolve().parent
+BUILD_SCENES_DIR = LEGACY_DIR.parent
+PACKAGE_DIR = BUILD_SCENES_DIR.parent
 SCENES_DIR_DEFAULT = PACKAGE_DIR / "scenes"
 CORE_DIR_DEFAULT = SCENES_DIR_DEFAULT / "core"
 
 sys.path.insert(0, str(PACKAGE_DIR))
 
-from lib.manifest_config import (  # noqa: E402
+from core.manifest_config import (  # noqa: E402
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
 )
-from lib.manifest_viability import (  # noqa: E402
+from core.manifest_viability import (  # noqa: E402
     ManifestViabilityResult,
     check_manifest_viability,
 )
-from lib.junction_crop import (  # noqa: E402
+from core.junction_crop import (  # noqa: E402
     JunctionLayoutError,
     JunctionPick,
     crop_scene_to_junction_pick,
     find_ranked_intersection_junctions,
     resolve_full_source_net,
 )
-from lib.sumo_utils import (  # noqa: E402
+from core.sumo_utils import (  # noqa: E402
     is_core_scene_name,
     junction_scene_name,
     load_scene_meta,

@@ -25,6 +25,11 @@ _PDD_BENCH = _PER_SIGN_DIR.parent.parent
 if str(_PDD_BENCH) not in sys.path:
     sys.path.insert(0, str(_PDD_BENCH))
 
+# Keep metadrive package unmodified: strip split-via shortcuts at graph build.
+from core.metadrive_sumo_patch import apply_metadrive_sumo_via_patch  # noqa: E402
+
+apply_metadrive_sumo_via_patch()
+
 from envs.sumo_env import TrafficSignSumoEnv
 from envs.sumo_traffic_manager import SumoTrafficManager
 from agents.policies.comprehensive_rule_expert import ComprehensiveRuleExpertPolicy

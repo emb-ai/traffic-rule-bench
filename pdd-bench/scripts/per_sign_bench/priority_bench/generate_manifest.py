@@ -340,7 +340,7 @@ def assert_rejected_scenes_applied(scenes_dir: Path) -> None:
     raise SystemExit(
         f"[error] {len(pending)} scene(s) are marked reject in scene_selection.json "
         f"but still live under {scenes_dir.resolve()}.\n"
-        f"  Run: python tools/filter_scenes/review_junction_scenes.py --apply\n"
+        f"  Run: python build_scenes/review_scenes.py --apply\n"
         f"  Pending: {preview}{more}"
     )
 

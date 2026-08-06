@@ -7,24 +7,42 @@ Sign-free junction harvest for Moscow. Scenes are keyed by **SUMO `junction_id`*
 
 ```
 moscow_junctions/
-├── README.md                 # this file
-├── raw/
-│   └── Moscow.osm.pbf        # city extract (see Provenance)
-├── nets/
-│   └── moscow.net.xml        # full-city SUMO network (built once)
-├── index/
-│   ├── junctions.jsonl       # one row per accepted T/X/O
-│   └── junctions_summary.json
-├── scenes/
-│   ├── T/junc_<id>/          # 3-arm intersections
-│   ├── X/junc_<id>/          # 4-arm intersections
-│   └── O/rb_<fingerprint>/   # roundabouts (SUMO <roundabout> blocks)
-├── splits/                   # train/test ID lists (optional, later)
+├── README.md
+├── raw/ … nets/ … index/ … scenes/{T,X,O}/
+├── previews/moscow_net_overview.png
+├── splits/
+│   ├── signs.yaml / signs.json # per-sign shape quotas (JSON is what scripts read)
+│   ├── train_ids.json          # global split (by scene_id)
+│   ├── test_ids.json
+│   ├── split_summary.json
+│   └── sign_allocations.json   # shared-pool samples per sign
 └── scripts/
-    ├── build_net.py          # OSM PBF → moscow.net.xml
-    ├── enumerate_junctions.py
-    ├── crop_scenes.py
-    └── run_pipeline.py       # build → enumerate → crop
+    ├── build_net.py / enumerate_junctions.py / crop_scenes.py / run_pipeline.py
+    ├── make_junction_split.py
+    └── allocate_sign_scenes.py
+```
+
+## Train / test + per-sign allocation
+
+**Logic (brief):**
+
+1. **One shared scene pool** — `scenes/{T,X,O}/` is not owned by any sign.
+2. **One global split** by `scene_id` (`junc_*` / `rb_*`), stratified by shape, **80/20**, **seed=42**. A junction never appears in both train and test.
+3. **Shared pool across signs** — each sign independently samples from the same `train_ids` / `test_ids` (the same map may be used for 2.4 and 2.1).
+4. **Quotas**
+   - Most signs: **~115 train maps**, **X/T = 50/50** (`x_share: 0.5`).
+   - **4.3**: only **O**.
+   - **5.7.1 / 5.7.2**: only **T**.
+   - Test ≈ `115 * 0.2/0.8 ≈ 29` maps per sign (same shape mix).
+
+**What is `x_share`?** (informal synonym: `x_frac`)  
+Fraction of allocated maps that are **X** when the sign allows both T and X.  
+`x_share: 0.5` → half X, half T. Ignored for T-only or O-only signs.
+
+```bash
+python scripts/make_junction_split.py          # → splits/train_ids.json, test_ids.json
+python scripts/allocate_sign_scenes.py        # → splits/sign_allocations.json
+# edit quotas in splits/signs.json (keep signs.yaml in sync) then re-run allocate
 ```
 
 Each scene folder contains:
@@ -115,18 +133,6 @@ python scripts/crop_scenes.py --skip-existing --workers 8
 
 Expect ~hours on the full city net (each crop runs `netconvert` on `moscow.net.xml`).
 Smoke test with `--max-per-shape 20` first if you only need a sample.
-
-## Train / test (next step)
-
-Split **by `junction_id` / roundabout fingerprint**, never by scenario seed:
-
-```text
-splits/train_ids.json
-splits/test_ids.json
-```
-
-Stratify by `shape`. A junction ID must appear in only one split. Scene folders
-under `scenes/` stay shared; benchmarks filter by the ID lists.
 
 ## Relation to priority_bench
 
