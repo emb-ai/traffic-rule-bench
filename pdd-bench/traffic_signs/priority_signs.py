@@ -76,6 +76,16 @@ class YieldSign(BaseTrafficSign):
     EGO_ZONE_END_CENTER_INSET = 4.0
     MAIN_ROAD_ZONE_BEFORE = 15.0
     MAIN_ROAD_ZONE_AFTER = 5.0
+    # Path-geometry sticky yield: sample routes and require foe to clear the
+    # ego/foe path intersection after the coarse MAIN_ROAD_ZONE prefilter.
+    PATH_SAMPLE_STEP_M = 2.0
+    PATH_AHEAD_M = 100.0
+    # Crossing / near-miss: treat as conflict when polylines come this close.
+    # ~5.5m covers adjacent same-direction lane centers that never literally cross.
+    CONFLICT_PATH_TOLERANCE_M = 5.5
+    # Extra metres past the conflict point before releasing yield (0 = release
+    # as soon as the conflict is behind the foe).
+    CONFLICT_CLEARANCE_M = 0.0
 
     def __init__(
         self,
@@ -99,6 +109,8 @@ class YieldSign(BaseTrafficSign):
         self.priority_type = "secondary"
         
         self._vehicle_states = {}
+        # foe_id -> {"conflict_point": np.ndarray|None} once seen in main zone
+        self._path_sticky_foes: dict = {}
 
         self.main_road_lanes = main_road_lanes or []
         self._main_road_node_set: set[str] | None = None
@@ -461,6 +473,351 @@ class YieldSign(BaseTrafficSign):
         if self._auto_detect and not self._pg_initialized:
             self._identify_main_roads()
         return self._is_vehicle_in_main_road_conflict_zone(vehicle)
+
+    @staticmethod
+    def _xy(vehicle) -> np.ndarray | None:
+        try:
+            pos = vehicle.position
+            return np.asarray([float(pos[0]), float(pos[1])], dtype=float)
+        except Exception:
+            return None
+
+    def _route_polyline(
+        self,
+        vehicle,
+        *,
+        ahead_m: float | None = None,
+        step_m: float | None = None,
+    ) -> list[np.ndarray]:
+        """Sample world XY points along the vehicle's remaining navigation route."""
+        ahead = float(self.PATH_AHEAD_M if ahead_m is None else ahead_m)
+        step = float(self.PATH_SAMPLE_STEP_M if step_m is None else step_m)
+        origin = self._xy(vehicle)
+        if origin is None:
+            return []
+
+        points: list[np.ndarray] = [origin]
+        lane = getattr(vehicle, "lane", None)
+        nav = getattr(vehicle, "navigation", None)
+        checkpoints = list(getattr(nav, "checkpoints", None) or []) if nav is not None else []
+        road_network = None
+        try:
+            road_network = nav.map.road_network if nav is not None else None
+        except Exception:
+            road_network = None
+
+        remaining = ahead
+        if road_network is not None and checkpoints:
+            current_idx = getattr(lane, "index", None)
+            try:
+                start_i = checkpoints.index(current_idx) if current_idx in checkpoints else 0
+            except Exception:
+                start_i = 0
+            for i in range(start_i, len(checkpoints)):
+                if remaining <= 0.0:
+                    break
+                try:
+                    ck_lane = road_network.get_lane(checkpoints[i])
+                except Exception:
+                    continue
+                if ck_lane is None:
+                    continue
+                if i == start_i and lane is not None:
+                    try:
+                        long0 = float(ck_lane.local_coordinates(vehicle.position)[0])
+                    except Exception:
+                        long0 = 0.0
+                else:
+                    long0 = 0.0
+                long0 = max(0.0, min(long0, float(ck_lane.length) - 1e-3))
+                s = long0
+                lane_len = float(ck_lane.length)
+                while s < lane_len - 1e-3 and remaining > 0.0:
+                    try:
+                        p = ck_lane.position(s, 0.0)
+                        points.append(np.asarray([float(p[0]), float(p[1])], dtype=float))
+                    except Exception:
+                        break
+                    ds = min(step, lane_len - s, remaining)
+                    if ds <= 1e-6:
+                        break
+                    s += ds
+                    remaining -= ds
+        elif lane is not None:
+            try:
+                long0 = float(lane.local_coordinates(vehicle.position)[0])
+            except Exception:
+                long0 = 0.0
+            s = max(0.0, long0)
+            lane_len = float(lane.length)
+            while s < lane_len - 1e-3 and remaining > 0.0:
+                try:
+                    p = lane.position(s, 0.0)
+                    points.append(np.asarray([float(p[0]), float(p[1])], dtype=float))
+                except Exception:
+                    break
+                ds = min(step, lane_len - s, remaining)
+                if ds <= 1e-6:
+                    break
+                s += ds
+                remaining -= ds
+
+        return points
+
+    @staticmethod
+    def _segment_closest_points(
+        a0: np.ndarray,
+        a1: np.ndarray,
+        b0: np.ndarray,
+        b1: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, float]:
+        """Closest points on segments a0–a1 and b0–b1, plus distance."""
+        a = a1 - a0
+        b = b1 - b0
+        r = a0 - b0
+        aa = float(np.dot(a, a))
+        bb = float(np.dot(b, b))
+        ab = float(np.dot(a, b))
+        ar = float(np.dot(a, r))
+        br = float(np.dot(b, r))
+        denom = aa * bb - ab * ab
+        if denom < 1e-12:
+            s = 0.0
+        else:
+            s = (ab * br - bb * ar) / denom
+        s = max(0.0, min(1.0, s))
+        if bb < 1e-12:
+            t = 0.0
+        else:
+            t = (ab * s + br) / bb
+            t = max(0.0, min(1.0, t))
+            if denom >= 1e-12:
+                s = (ab * t - ar) / aa if aa >= 1e-12 else 0.0
+                s = max(0.0, min(1.0, s))
+        pa = a0 + s * a
+        pb = b0 + t * b
+        return pa, pb, float(np.linalg.norm(pa - pb))
+
+    def _paths_conflict_point(
+        self,
+        ego_path: list[np.ndarray],
+        foe_path: list[np.ndarray],
+        *,
+        tolerance_m: float | None = None,
+    ) -> np.ndarray | None:
+        """First point along the ego route where paths come within tolerance.
+
+        Walking ego-forward (not a global closest) keeps the conflict at the
+        junction merge/crossing instead of sliding down a shared exit arm.
+        """
+        if len(ego_path) < 2 or len(foe_path) < 2:
+            return None
+        tol = float(
+            self.CONFLICT_PATH_TOLERANCE_M if tolerance_m is None else tolerance_m
+        )
+        for i in range(len(ego_path) - 1):
+            best_dist = float("inf")
+            best_mid: np.ndarray | None = None
+            for j in range(len(foe_path) - 1):
+                pa, pb, dist = self._segment_closest_points(
+                    ego_path[i], ego_path[i + 1], foe_path[j], foe_path[j + 1]
+                )
+                if dist < best_dist:
+                    best_dist = dist
+                    best_mid = 0.5 * (pa + pb)
+            if best_mid is not None and best_dist <= tol:
+                return best_mid
+        return None
+
+    def _paths_closest_midpoint(
+        self,
+        ego_path: list[np.ndarray],
+        foe_path: list[np.ndarray],
+    ) -> tuple[np.ndarray | None, float]:
+        """Return (midpoint, distance) of the globally closest path-segment pair."""
+        if len(ego_path) < 2 or len(foe_path) < 2:
+            return None, float("inf")
+        best_dist = float("inf")
+        best_mid: np.ndarray | None = None
+        for i in range(len(ego_path) - 1):
+            for j in range(len(foe_path) - 1):
+                pa, pb, dist = self._segment_closest_points(
+                    ego_path[i], ego_path[i + 1], foe_path[j], foe_path[j + 1]
+                )
+                if dist < best_dist:
+                    best_dist = dist
+                    best_mid = 0.5 * (pa + pb)
+        return best_mid, best_dist
+
+    def _future_route_edge_ids(self, vehicle) -> set[str]:
+        """Edge ids on the remaining navigation route (any lane on an edge)."""
+        edges: set[str] = set()
+        nav = getattr(vehicle, "navigation", None)
+        checkpoints = list(getattr(nav, "checkpoints", None) or []) if nav else []
+        lane = getattr(vehicle, "lane", None)
+        current_idx = getattr(lane, "index", None)
+        start_i = 0
+        if checkpoints and current_idx in checkpoints:
+            try:
+                start_i = checkpoints.index(current_idx)
+            except ValueError:
+                start_i = 0
+        for cp in checkpoints[start_i:]:
+            edge = self._edge_id_from_lane_index(cp)
+            if edge:
+                edges.add(str(edge))
+        cur_edge = self._edge_id_from_lane_index(current_idx)
+        if cur_edge:
+            edges.add(str(cur_edge))
+        return edges
+
+    def _routes_share_future_edge(self, ego_vehicle, foe_vehicle) -> bool:
+        """True when both routes will use the same edge (any lane), e.g. same exit arm."""
+        return bool(self._shared_future_edges(ego_vehicle, foe_vehicle))
+
+    def _shared_future_edges(self, ego_vehicle, foe_vehicle) -> set[str]:
+        ego_edges = self._future_route_edge_ids(ego_vehicle)
+        foe_edges = self._future_route_edge_ids(foe_vehicle)
+        sign_edge = self._edge_id_from_lane_index(getattr(self.lane, "index", None))
+        shared = ego_edges & foe_edges
+        if sign_edge:
+            shared.discard(str(sign_edge))
+        return shared
+
+    def _first_point_on_shared_edge(
+        self,
+        vehicle,
+        shared_edges: set[str],
+        path: list[np.ndarray],
+    ) -> np.ndarray | None:
+        """Merge point: start of the first shared edge on the vehicle's route."""
+        if not shared_edges or len(path) < 1:
+            return None
+        nav = getattr(vehicle, "navigation", None)
+        checkpoints = list(getattr(nav, "checkpoints", None) or []) if nav else []
+        try:
+            road_network = nav.map.road_network if nav is not None else None
+        except Exception:
+            road_network = None
+        if road_network is None or not checkpoints:
+            return path[min(1, len(path) - 1)]
+
+        lane = getattr(vehicle, "lane", None)
+        current_idx = getattr(lane, "index", None)
+        start_i = 0
+        if current_idx in checkpoints:
+            try:
+                start_i = checkpoints.index(current_idx)
+            except ValueError:
+                start_i = 0
+
+        for cp in checkpoints[start_i:]:
+            edge = self._edge_id_from_lane_index(cp)
+            if edge and str(edge) in shared_edges:
+                try:
+                    ck_lane = road_network.get_lane(cp)
+                    p = ck_lane.position(0.0, 0.0)
+                    return np.asarray([float(p[0]), float(p[1])], dtype=float)
+                except Exception:
+                    break
+        return path[min(1, len(path) - 1)]
+
+    def _resolve_path_conflict_point(
+        self,
+        ego_vehicle,
+        foe_vehicle,
+        ego_path: list[np.ndarray],
+        foe_path: list[np.ndarray],
+    ) -> np.ndarray | None:
+        """Conflict point from shared exit merge or near-crossing paths.
+
+        Shared future edges win: lock to the shared-edge *entry* so the point
+        stays at the junction merge even after both vehicles are already on the
+        exit (route polylines then start mid-arm and would otherwise chase).
+        """
+        shared = self._shared_future_edges(ego_vehicle, foe_vehicle)
+        if shared:
+            merge = self._first_point_on_shared_edge(foe_vehicle, shared, foe_path)
+            if merge is not None:
+                return merge
+            merge = self._first_point_on_shared_edge(ego_vehicle, shared, ego_path)
+            if merge is not None:
+                return merge
+        return self._paths_conflict_point(ego_path, foe_path)
+
+    def _has_cleared_conflict_point(
+        self,
+        vehicle,
+        conflict_point: np.ndarray,
+        *,
+        clearance_m: float | None = None,
+    ) -> bool:
+        """True when conflict point is behind the vehicle (optionally + clearance)."""
+        pos = self._xy(vehicle)
+        if pos is None:
+            return False
+        clearance = float(
+            self.CONFLICT_CLEARANCE_M if clearance_m is None else clearance_m
+        )
+        try:
+            heading = float(vehicle.heading_theta)
+        except Exception:
+            return False
+        forward = np.asarray([np.cos(heading), np.sin(heading)], dtype=float)
+        along = float(np.dot(conflict_point - pos, forward))
+        return along < -clearance
+
+    def _is_foe_blocking_ego(self, ego_vehicle, foe_vehicle) -> bool:
+        """Main-zone prefilter + sticky path-clearance until conflict is passed."""
+        if self._is_waiting_gated_aux(foe_vehicle):
+            return False
+
+        foe_id = getattr(foe_vehicle, "id", None)
+        if foe_id is None:
+            return False
+
+        in_main = self._is_vehicle_in_main_road_conflict_zone(foe_vehicle)
+        ego_path = self._route_polyline(ego_vehicle)
+        foe_path = self._route_polyline(foe_vehicle)
+        conflict = self._resolve_path_conflict_point(
+            ego_vehicle, foe_vehicle, ego_path, foe_path
+        )
+
+        sticky = self._path_sticky_foes.get(foe_id)
+
+        if in_main:
+            if sticky is None:
+                self._path_sticky_foes[foe_id] = {"conflict_point": conflict}
+            elif sticky.get("conflict_point") is None and conflict is not None:
+                # Fill once; never slide the point along a shared exit arm.
+                sticky["conflict_point"] = conflict
+            return True
+
+        if sticky is None:
+            return False
+
+        # Freeze conflict_point after first resolve — refreshing to "closest
+        # midpoint" while both are on the same exit edge made ego wait until
+        # aux despawned at road end.
+        if sticky.get("conflict_point") is None and conflict is not None:
+            sticky["conflict_point"] = conflict
+
+        conflict_point = sticky.get("conflict_point")
+        if conflict_point is None:
+            self._path_sticky_foes.pop(foe_id, None)
+            return False
+
+        if self._has_cleared_conflict_point(foe_vehicle, conflict_point):
+            self._path_sticky_foes.pop(foe_id, None)
+            return False
+
+        return True
+
+    def is_vehicle_blocking_yield(self, ego_vehicle, foe_vehicle) -> bool:
+        """Public sticky path-conflict check used by expert / overlays."""
+        if self._auto_detect and not self._pg_initialized:
+            self._identify_main_roads()
+        return self._is_foe_blocking_ego(ego_vehicle, foe_vehicle)
     
     def has_main_road_traffic(self, exclude_vehicle=None) -> tuple:
         """
@@ -473,17 +830,19 @@ class YieldSign(BaseTrafficSign):
             
         if not self.main_road_lanes:
             return False, []
-            
-        conflicting = []
-        for v in self._get_all_vehicles():
-            if exclude_vehicle is not None and v.id == exclude_vehicle.id:
-                continue
-            if self._is_waiting_gated_aux(v):
-                continue
-            if self._is_vehicle_in_main_road_conflict_zone(v):
-                conflicting.append(v)
-        
-        return len(conflicting) > 0, conflicting
+
+        ego = exclude_vehicle
+        if ego is None:
+            # Fall back to coarse main-zone only when no ego is provided.
+            conflicting = []
+            for v in self._get_all_vehicles():
+                if self._is_waiting_gated_aux(v):
+                    continue
+                if self._is_vehicle_in_main_road_conflict_zone(v):
+                    conflicting.append(v)
+            return len(conflicting) > 0, conflicting
+
+        return self._check_main_road_traffic(ego)
 
     def _is_waiting_gated_aux(self, vehicle) -> bool:
         """True for gated aux that has not been released yet (still held at spawn).
@@ -507,22 +866,27 @@ class YieldSign(BaseTrafficSign):
         return not bool(getattr(policy, "released", True))
 
     def _check_main_road_traffic(self, ego_vehicle) -> tuple:
-        """Check if there are vehicles on the main road in the conflict zone."""
+        """Conflict if foe is in main zone or sticky until path conflict is cleared."""
         # Ensure main roads are identified (lazy initialization)
         if self._auto_detect and not self._pg_initialized:
             self._identify_main_roads()
         
         if not self.main_road_lanes:
             return False, []
-            
+
+        live_ids = set()
         conflicting = []
         for v in self._get_all_vehicles():
             if v.id == ego_vehicle.id:
                 continue
-            if self._is_waiting_gated_aux(v):
-                continue
-            if self._is_vehicle_in_main_road_conflict_zone(v):
+            live_ids.add(v.id)
+            if self._is_foe_blocking_ego(ego_vehicle, v):
                 conflicting.append(v)
+
+        # Drop sticky entries for despawned vehicles.
+        for foe_id in list(self._path_sticky_foes.keys()):
+            if foe_id not in live_ids:
+                self._path_sticky_foes.pop(foe_id, None)
         
         return len(conflicting) > 0, conflicting
 

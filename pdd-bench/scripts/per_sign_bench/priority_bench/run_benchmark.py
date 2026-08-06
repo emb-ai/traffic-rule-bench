@@ -408,8 +408,8 @@ def _is_ego_in_yield_zone(sign_mgr, vehicle) -> bool:
     return False
 
 
-def _is_aux_in_main_zone(sign_mgr, aux_vehicles) -> bool:
-    """True when any aux is in a YieldSign MAIN_ROAD_ZONE conflict window."""
+def _is_aux_in_main_zone(sign_mgr, aux_vehicles, ego_vehicle=None) -> bool:
+    """True when any aux blocks yield (main-zone prefilter or sticky path conflict)."""
     if sign_mgr is None or not aux_vehicles:
         return False
     yield_signs = [
@@ -424,7 +424,10 @@ def _is_aux_in_main_zone(sign_mgr, aux_vehicles) -> bool:
             continue
         for sign in yield_signs:
             try:
-                if sign.is_vehicle_on_main_road(aux):
+                if ego_vehicle is not None and hasattr(sign, "is_vehicle_blocking_yield"):
+                    if sign.is_vehicle_blocking_yield(ego_vehicle, aux):
+                        return True
+                elif sign.is_vehicle_on_main_road(aux):
                     return True
             except Exception:
                 continue
@@ -1742,7 +1745,9 @@ def run_one_episode(
                     "Step": step,
                     "Speed": f"{vehicle.speed_km_h:.2f} km/h",
                     "Violations": sign_violations,
-                    "is_aux_in_main_zone": _is_aux_in_main_zone(sign_mgr, aux_vehicles),
+                    "is_aux_in_main_zone": _is_aux_in_main_zone(
+                        sign_mgr, aux_vehicles, ego_vehicle=vehicle
+                    ),
                     "is_ego_in_yield_zone": _is_ego_in_yield_zone(sign_mgr, vehicle),
                 }
 
