@@ -286,8 +286,11 @@ class PlanT2MetaDriveAdapter:
             route_ego_20x2=route_ego,
             speed_limit_kmh=None,     # keep model input unchanged (80 km/h default token)
             max_objects=30,
-            max_distance=75.0,
-            range_factor_front=16.0,
+            # Training filtered objects with range 50 / front factor 2
+            # (PlanT.yaml model.training). These eval defaults are wider; the env
+            # vars exist to A/B whether that train/eval gap costs anything.
+            max_distance=float(_os.environ.get("PLANT2_OBJ_MAX_DIST", 75.0)),
+            range_factor_front=float(_os.environ.get("PLANT2_OBJ_FRONT_FACTOR", 16.0)),
             input_bev=True,
             input_ego_speed=input_ego_speed,
             bev_resolution=128,
