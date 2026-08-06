@@ -20,6 +20,7 @@ paths:
 
 scenario:
   max_scenarios: 10
+  max_total: null # for debugging
 
 augmentation:
   enabled: true

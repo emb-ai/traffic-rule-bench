@@ -27,8 +27,10 @@ if str(_PDD_BENCH) not in sys.path:
 
 # Keep metadrive package unmodified: strip split-via shortcuts at graph build.
 from core.metadrive_sumo_patch import apply_metadrive_sumo_via_patch  # noqa: E402
+from bench.top_down_text_patch import apply_top_down_violations_text_patch  # noqa: E402
 
 apply_metadrive_sumo_via_patch()
+apply_top_down_violations_text_patch()
 
 from envs.sumo_env import TrafficSignSumoEnv
 from envs.sumo_traffic_manager import SumoTrafficManager

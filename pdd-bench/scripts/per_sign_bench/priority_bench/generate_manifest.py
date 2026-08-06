@@ -104,6 +104,7 @@ class PathsConfig:
 @dataclass
 class ScenarioConfig:
     max_scenarios: Optional[int] = None
+    max_total: Optional[int] = None
 
 
 @dataclass
@@ -828,6 +829,25 @@ def generate_manifest(
         entries.extend(scene_entries)
         used_scene_ids.append(scene_dir.name)
 
+    pre_total = len(entries)
+    max_total = scenario_cfg.max_total
+    if max_total is not None and max_total >= 0 and pre_total > max_total:
+        rng = random.Random(
+            hash(("max_total_shuffle", int(max_total), split, PDD_CODE)) & 0xFFFFFFFF
+        )
+        rng.shuffle(entries)
+        entries = entries[: int(max_total)]
+        used_scene_ids = sorted({str(e.get("scene_id")) for e in entries if e.get("scene_id")})
+        print(
+            f"[max_total] Retained {len(entries)} of {pre_total} manifest entries "
+            f"(shuffled, cap={max_total})"
+        )
+    elif max_total is not None:
+        print(
+            f"[max_total] Manifest entries: {pre_total} "
+            f"(under/at cap={max_total}, no trim)"
+        )
+
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "real_manifest.jsonl"
 
@@ -844,9 +864,11 @@ def generate_manifest(
         "split_counts": split_counts,
         "total_scenes": len(used_scene_ids),
         "total_entries": len(entries),
+        "total_entries_before_max_total": pre_total,
         "augmentation_layout": expansion_cfg.layout_on,
         "augmentation_auxiliary": expansion_cfg.auxiliary_on,
         "max_scenarios": scenario_cfg.max_scenarios,
+        "max_total": scenario_cfg.max_total,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
         "traffic_density": sim_cfg.traffic_density,
         "horizon": sim_cfg.horizon,
@@ -1005,6 +1027,14 @@ def _resolve_max_scenarios(scenario_cfg) -> Optional[int]:
     return int(raw)
 
 
+def _resolve_max_total(scenario_cfg) -> Optional[int]:
+    """Global cap on manifest rows after all scenes are expanded (debug)."""
+    raw = getattr(scenario_cfg, "max_total", None)
+    if raw is None:
+        return None
+    return int(raw)
+
+
 def _resolve_convoy_gaps_m(raw) -> List[float]:
     """Accept a scalar or list for ``auxiliary.convoy_gap_m``."""
     if raw is None:
@@ -1048,6 +1078,7 @@ def main(cfg: DictConfig) -> None:
     
     scenario_cfg = ScenarioConfig(
         max_scenarios=_resolve_max_scenarios(cfg.scenario),
+        max_total=_resolve_max_total(cfg.scenario),
     )
     sim_cfg = SimulationConfig(
         spawn_velocity_ms=cfg.simulation.spawn_velocity_ms,

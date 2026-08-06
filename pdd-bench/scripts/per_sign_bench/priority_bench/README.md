@@ -1,4 +1,4 @@
-# priority_bench — unified 2.1 (main road) + 2.4 (yield)
+# priority_bench
 
 Shared junction-priority evaluation bench for real OpenStreetMap / SUMO scenes.
 Sign-specific behavior lives in `signs/` profiles; shared engine in `core/`.
@@ -18,13 +18,14 @@ priority_bench/
 ├── signs/                # SignProfile registry (main_road=2.1, yield=2.4)
 ├── configs/              # Hydra (configs/sign/{main_road,yield}.yaml)
 ├── data/
-│   ├── main_road/{scenes,output}
-│   └── yield/{scenes,output}
+│   ├── main_road/{scenes,output,trajectories}
+│   └── yield/{scenes,output,trajectories}
 ├── build_scenes/         # materialize moscow allocations → review pool
 │   ├── materialize_scenes.py
 │   ├── review_scenes.py
 │   └── legacy/           # old catalog / Overpass flow
 ├── tools/                # ad-hoc debug (GIF review, map render, drop analysis, …)
+├── collect_trajectories/ # oracle / PlanT2 expert collection (SIGN=yield|main_road)
 ├── generate_manifest.py
 ├── run_benchmark.py
 └── eval_pipeline.py
@@ -32,10 +33,9 @@ priority_bench/
 
 Compatibility shims remain under `main_sign/` and `yield_sign/`.
 
-Trajectory collection (oracle / PlanT2) still lives next to the original benches:
-
-- `[../yield_sign/collect_trajectories/](../yield_sign/collect_trajectories/README.md)` (2.4)
-- `[../main_sign/collect_trajectories/](../main_sign/collect_trajectories/README.md)` (2.1)
+Trajectory collection (oracle / PlanT2):
+`[collect_trajectories/](collect_trajectories/README.md)` — set `SIGN=yield|main_road`.
+Old paths under `yield_sign/` / `main_sign/` forward here.
 
 ## Sign rules
 
@@ -112,6 +112,8 @@ python generate_manifest.py sign=yield paths.split=test
 # Common overrides
 python generate_manifest.py sign=yield gif.enabled=true gif.policy=comprehensive_rule_expert
 python generate_manifest.py sign=yield auxiliary.lanes_occupied=2 auxiliary.convoy_size=2
+# Debug: shuffle all augmented rows and keep only N total
+python generate_manifest.py sign=yield scenario.max_total=20
 ```
 
 Output lands under `data/<sign>/output/<timestamp>/`:
@@ -125,7 +127,7 @@ Output lands under `data/<sign>/output/<timestamp>/`:
 
 ```bash
 python eval_pipeline.py \
-    --policies idm \
+    --policies idm,comprehensive_rule_expert,plant2,plant2_rule,carl,carl_rule,ppo_lidar,rule_compliant \
     --manifest data/yield/output/<timestamp> \
     --scenes-root data/yield/scenes
 ```
@@ -138,9 +140,6 @@ The manifest row already carries `pdd_code` / `sign_type`.
 python -m tools.run_simulation <scene_name>
 python -m tools.run_simulation <scene_name> --policy carl
 python -m tools.run_simulation <scene_name> --policy plant2 --max-steps 400
-
-python -m tools.render_map <scene_name>
-python -m tools.render_map <scene_name> --out custom_output.png
 
 # Review GIFs after a run
 python tools/review_benchmark_gifs.py data/yield/output/<timestamp>
@@ -172,9 +171,9 @@ See `configs/config.yaml` and `configs/sign/{main_road,yield}.yaml`.
 | `paths.*`        | `scenes_dir`, `output_base` (`data/<sign>/output`), `experiment_name`                                                                                                                              |
 | `scenario.*`     | `max_scenarios` (cap **after** all axes)                                                                                                                                                           |
 | `augmentation.`* | `enabled`, `layout`, `auxiliary` — which axes run (per sign yaml)                                                                                                                                  |
-| `simulation.*`   | `spawn_velocity_ms`, `horizon`, `spawn_distance_before_end` (default **15 m**)                                                                                                                     |
+| `simulation.`*   | `spawn_velocity_ms`, `horizon`, `spawn_distance_before_end` (default **15 m**)                                                                                                                     |
 | `auxiliary.`*    | Params when `augmentation.auxiliary` is on: `enabled`, `distance_from_intersection`, `convoy_size`, `lanes_occupied`, `convoy_gap_m` (scalar or list, e.g. `[5, 10]`), `release_when_ego_within_m` |
-| `gif.*`          | `enabled`, `policy`, `scaling` (px/m; higher = more zoomed in), `hide_signs`                                                                                                                       |
+| `gif.`*          | `enabled`, `policy`, `scaling` (px/m; higher = more zoomed in), `hide_signs`                                                                                                                       |
 
 
 Override on the CLI:

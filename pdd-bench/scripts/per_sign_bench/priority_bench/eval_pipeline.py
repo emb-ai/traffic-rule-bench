@@ -114,8 +114,8 @@ from core.manifest_config import (
 DEFAULT_MODEL_PATHS: dict[str, Path] = {
     "carl": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
     "carl_rule": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
-    "plant2": CHECKPOINTS_DIR / "plant2_finetuned" / "plant2_supervised_2nd_final.pt",
-    "plant2_rule": CHECKPOINTS_DIR / "plant2_finetuned" / "plant2_supervised_2nd_final.pt",
+    "plant2": CHECKPOINTS_DIR / "plant2_pretrain" / "epoch=029_final_3.pt",
+    "plant2_rule": CHECKPOINTS_DIR / "plant2_pretrain" / "epoch=029_final_3.pt",
 }
 
 
