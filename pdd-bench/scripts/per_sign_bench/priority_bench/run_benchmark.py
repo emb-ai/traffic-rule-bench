@@ -44,7 +44,7 @@ from scripts.per_sign_bench.factorized_space.ego_defaults import (
     sample_ego_params,
 )
 from traffic_signs.priority_signs import MainRoadSign, RightHandYieldSign, YieldSign
-from core.lane_keys import make_lane_key
+from core.lane_keys import clamp_lane_key_to_graph, make_lane_key
 from core.junction_priority_layout import right_arm_edge_id
 from core.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
@@ -391,6 +391,43 @@ def _ego_in_sign_zone(sign, vehicle) -> bool:
             return True
         return False
 
+    return False
+
+
+def _is_ego_in_yield_zone(sign_mgr, vehicle) -> bool:
+    """True when ego is in a YieldSign / RightHandYieldSign approach zone."""
+    if sign_mgr is None or vehicle is None:
+        return False
+    for sign in getattr(sign_mgr, "signs", []) or []:
+        if not isinstance(sign, YieldSign):
+            continue
+        if isinstance(sign, MainRoadSign):
+            continue
+        if _ego_in_sign_zone(sign, vehicle):
+            return True
+    return False
+
+
+def _is_aux_in_main_zone(sign_mgr, aux_vehicles) -> bool:
+    """True when any aux is in a YieldSign MAIN_ROAD_ZONE conflict window."""
+    if sign_mgr is None or not aux_vehicles:
+        return False
+    yield_signs = [
+        sign
+        for sign in (getattr(sign_mgr, "signs", []) or [])
+        if isinstance(sign, YieldSign) and not isinstance(sign, MainRoadSign)
+    ]
+    if not yield_signs:
+        return False
+    for aux in aux_vehicles:
+        if aux is None:
+            continue
+        for sign in yield_signs:
+            try:
+                if sign.is_vehicle_on_main_road(aux):
+                    return True
+            except Exception:
+                continue
     return False
 
 
@@ -765,6 +802,10 @@ def _apply_manifest_ego_spawn_lane(env, row: dict) -> bool:
         if vehicle is None:
             return False
         road_network = env.engine.current_map.road_network
+        clamped_spawn = clamp_lane_key_to_graph(target_key, road_network.graph)
+        if clamped_spawn and clamped_spawn != target_key:
+            print(f"[EgoSpawn] Clamped spawn {target_key} -> {clamped_spawn}")
+            target_key = clamped_spawn
         target_lane = road_network.get_lane(target_key)
         start_long = min(1.0, target_lane.length - 0.1)
         pos = target_lane.position(start_long, 0.0)
@@ -783,6 +824,30 @@ def _apply_manifest_ego_spawn_lane(env, row: dict) -> bool:
     except Exception as exc:
         print(f"[EgoSpawn] Could not teleport to {target_key}: {exc}")
         return False
+
+
+def _apply_manifest_ego_destination(env, row: dict) -> Optional[str]:
+    """Clamp ego destination to a real graph lane and re-bind navigation."""
+    dest = row.get("destination_lane_id")
+    if not dest:
+        return None
+    try:
+        vehicle = env.agent
+        if vehicle is None:
+            return None
+        road_network = env.engine.current_map.road_network
+        clamped = clamp_lane_key_to_graph(str(dest), road_network.graph)
+        if not clamped:
+            return None
+        if clamped != str(dest):
+            print(f"[EgoDest] Clamped destination {dest} -> {clamped}")
+        spawn_key = getattr(vehicle.lane, "index", None)
+        if spawn_key and vehicle.navigation is not None:
+            vehicle.navigation.set_route(spawn_key, clamped)
+        return clamped
+    except Exception as exc:
+        print(f"[EgoDest] Could not apply destination {dest}: {exc}")
+        return None
 
 
 def _reposition_ego_before_lane_end(env, distance_before_end: float) -> bool:
@@ -1325,6 +1390,7 @@ def run_one_episode(
         spawn_distance = float(row.get("spawn_distance_before_end", 0) or 0)
         if spawn_distance > 0:
             _reposition_ego_before_lane_end(base_env, spawn_distance)
+        _apply_manifest_ego_destination(base_env, row)
 
         # Validate route: check that destination is different from spawn
         nav = getattr(base_env.vehicle, "navigation", None)
@@ -1439,6 +1505,7 @@ def run_one_episode(
                     incoming_lanes=incoming_lanes,
                     aux_lanes_occupied=aux_lanes_occupied,
                     aux_distance_from_intersection=aux_distance_from_intersection,
+                    scenes_root=scenes_root,
                 )
             )
             aux_destination_lanes = [
@@ -1665,10 +1732,18 @@ def run_one_episode(
 
             text_dict: dict = {}
             if save_gif:
+                aux_vehicles = []
+                if aux_agent_mgr is not None:
+                    try:
+                        aux_vehicles = list(aux_agent_mgr.auxiliary_vehicles)
+                    except Exception:
+                        aux_vehicles = []
                 text_dict = {
                     "Step": step,
                     "Speed": f"{vehicle.speed_km_h:.2f} km/h",
                     "Violations": sign_violations,
+                    "is_aux_in_main_zone": _is_aux_in_main_zone(sign_mgr, aux_vehicles),
+                    "is_ego_in_yield_zone": _is_ego_in_yield_zone(sign_mgr, vehicle),
                 }
 
             if save_gif:

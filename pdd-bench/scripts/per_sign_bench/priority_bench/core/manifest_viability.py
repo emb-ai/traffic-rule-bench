@@ -27,6 +27,7 @@ from .scene_augmentation import (
     _aux_straight_destination,
     _ego_destination_edges,
     _is_valid_departure,
+    _lane_keys_lookup,
     _pick_outgoing_lane_key,
     augment_layout_for_scene,
     build_spawn_lanes_by_edge,
@@ -92,7 +93,7 @@ def _explain_no_scenarios_equal_priority(
     spawn_by_edge = build_spawn_lanes_by_edge(spawn_lanes)
     lengths = lane_lengths_from_spawn_lanes(spawn_lanes)
     route_index = load_vehicle_route_index(net_path)
-    lane_keys_by_edge = {arm.edge_id: list(arm.lane_keys) for arm in layout.arms}
+    lane_keys_by_edge = _lane_keys_lookup(layout)
     min_aux_lane = min_aux_spawn_lane_length(aux_distance_from_intersection)
 
     ego_edges = sorted({arm.edge_id for arm in layout.arms})
@@ -215,7 +216,7 @@ def _explain_no_scenarios_yield(
     spawn_by_edge = build_spawn_lanes_by_edge(spawn_lanes)
     lengths = lane_lengths_from_spawn_lanes(spawn_lanes)
     route_index = load_vehicle_route_index(net_path)
-    lane_keys_by_edge = {arm.edge_id: list(arm.lane_keys) for arm in layout.arms}
+    lane_keys_by_edge = _lane_keys_lookup(layout)
     min_aux_lane = min_aux_spawn_lane_length(aux_distance_from_intersection)
 
     secondary = sorted(layout.secondary_edge_ids)

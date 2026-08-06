@@ -88,6 +88,9 @@ class JunctionPriorityLayout:
     arms: List[ApproachArm]
     main_edge_ids: Set[str] = field(default_factory=set)
     secondary_edge_ids: Set[str] = field(default_factory=set)
+    # All normal-edge lane keys (incoming + outgoing). Needed to clamp dest
+    # lane indices onto exits that are not themselves approach arms.
+    lane_keys_by_edge: Dict[str, List[str]] = field(default_factory=dict)
 
     def arm_for_edge(self, edge_id: str) -> Optional[ApproachArm]:
         for arm in self.arms:
@@ -112,6 +115,10 @@ class JunctionPriorityLayout:
             "main_edge_ids": sorted(self.main_edge_ids),
             "secondary_edge_ids": sorted(self.secondary_edge_ids),
             "arms": [arm.to_dict() for arm in self.arms],
+            "lane_keys_by_edge": {
+                edge_id: list(keys)
+                for edge_id, keys in sorted(self.lane_keys_by_edge.items())
+            },
         }
 
 
@@ -705,6 +712,15 @@ def build_junction_priority_layout(
                 "expected secondary for stop benchmark"
             )
 
+    lane_keys_by_edge: Dict[str, List[str]] = {
+        edge_id: [
+            lane.metadrive_key
+            for lane in sorted(edge.lanes, key=lambda item: item.lane_num)
+        ]
+        for edge_id, edge in edges.items()
+        if edge.lanes
+    }
+
     return JunctionPriorityLayout(
         junction_id=junction_id,
         junction_type=junctions[junction_id]["type"],
@@ -714,6 +730,7 @@ def build_junction_priority_layout(
         arms=arms,
         main_edge_ids=main_ids,
         secondary_edge_ids=secondary_ids,
+        lane_keys_by_edge=lane_keys_by_edge,
     )
 
 
@@ -841,6 +858,15 @@ def load_junction_priority_layout(path: Path | str) -> JunctionPriorityLayout:
         )
         for arm in data["arms"]
     ]
+    lane_keys_by_edge = {
+        str(edge_id): [str(key) for key in keys]
+        for edge_id, keys in (data.get("lane_keys_by_edge") or {}).items()
+    }
+    if not lane_keys_by_edge:
+        # Legacy layouts only stored incoming arms; still useful as a partial map.
+        for arm in arms:
+            lane_keys_by_edge[arm.edge_id] = list(arm.lane_keys)
+
     return JunctionPriorityLayout(
         junction_id=data["junction_id"],
         junction_type=data.get("junction_type", "unknown"),
@@ -850,6 +876,7 @@ def load_junction_priority_layout(path: Path | str) -> JunctionPriorityLayout:
         arms=arms,
         main_edge_ids=set(data.get("main_edge_ids", [])),
         secondary_edge_ids=set(data.get("secondary_edge_ids", [])),
+        lane_keys_by_edge=lane_keys_by_edge,
     )
 
 

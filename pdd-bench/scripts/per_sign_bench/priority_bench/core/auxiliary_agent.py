@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import List, Literal, Optional
 
 from metadrive.manager.base_manager import BaseManager
@@ -218,7 +219,14 @@ class GatedAuxiliaryIDMPolicy(AuxiliaryIDMPolicy):
         return super().act(*args, **kwargs)
 
 
-from .lane_keys import lane_edge_id, lane_num_from_key, make_lane_key, parse_lane_key
+from .lane_keys import (
+    clamp_lane_key_to_graph,
+    lane_edge_id,
+    lane_num_from_key,
+    make_lane_key,
+    parse_lane_key,
+    pick_lane_key_on_edge,
+)
 
 
 def pick_destination_outgoing_lane(
@@ -348,6 +356,9 @@ class AuxiliaryAgentsManager(BaseManager):
                 aux_vehicle.reset_navigation(lane)
 
             if destination_lane and aux_vehicle.navigation is not None:
+                destination_lane = clamp_lane_key_to_graph(
+                    destination_lane, road_network.graph
+                )
                 aux_vehicle.navigation.set_route(spawn_lane_index, destination_lane)
 
             if self._policy == "idm":
@@ -463,6 +474,10 @@ class AuxiliaryAgentsManager(BaseManager):
                     destination_lane = pick_destination_outgoing_lane(
                         candidate_lane, self._outgoing_lanes, road_network
                     )
+
+                destination_lane = clamp_lane_key_to_graph(
+                    destination_lane, road_network.graph
+                )
 
                 spawned_on_lane = 0
                 for convoy_idx in range(self._convoy_size):
@@ -917,8 +932,16 @@ def resolve_aux_spawn_lanes(
 def resolve_aux_destination_lane_key(
     junction_layout: Optional[dict],
     spawn_lane_key: str,
+    *,
+    route_index: Optional["VehicleRouteIndex"] = None,
+    preferred_dest_edge: Optional[str] = None,
 ) -> Optional[str]:
-    """Straight-through destination lane key (fallback when no turn is specified)."""
+    """Pick a destination lane key reachable from ``spawn_lane_key``.
+
+    Prefers ``preferred_dest_edge``, then arm straight-through, then any
+    outgoing arm exit. When ``route_index`` is provided, only edges that this
+    *lane* can actually enter are used (outer lanes often only turn).
+    """
     if not junction_layout:
         return None
 
@@ -929,49 +952,104 @@ def resolve_aux_destination_lane_key(
         if candidate.get("edge_id") == edge_id:
             arm = candidate
             break
-    if arm is None:
-        return None
 
-    straight_to = [
-        edge
-        for edge in arm.get("straight_to", [])
-        if edge and not str(edge).startswith(":")
-    ]
-    if not straight_to:
-        return None
+    lane_keys_by_edge = junction_layout.get("lane_keys_by_edge") or {
+        candidate.get("edge_id"): list(candidate.get("lane_keys", []))
+        for candidate in junction_layout.get("arms", [])
+        if candidate.get("edge_id")
+    }
 
-    dest_edge = straight_to[0]
-    for candidate in junction_layout.get("arms", []):
-        if candidate.get("edge_id") != dest_edge:
-            continue
-        keys = candidate.get("lane_keys", [])
-        for key in keys:
-            if lane_num_from_key(key) == lane_num:
-                return key
-        if keys:
-            return keys[min(lane_num, len(keys) - 1)]
-    return make_lane_key(dest_edge, lane_num)
+    candidates: List[str] = []
+    if preferred_dest_edge and str(preferred_dest_edge) not in candidates:
+        candidates.append(str(preferred_dest_edge))
+    if arm is not None:
+        for edge in arm.get("straight_to", []):
+            if edge and str(edge) not in candidates and not str(edge).startswith(":"):
+                candidates.append(str(edge))
+        for edge in arm.get("outgoing_to", []):
+            if edge and str(edge) not in candidates and not str(edge).startswith(":"):
+                candidates.append(str(edge))
+
+    if route_index is None:
+        raise ValueError(
+            "[AuxAgent] route_index is required to resolve aux destinations "
+            "(refusing silent straight-through fallback)"
+        )
+
+    if not route_index.has_exit(edge_id, lane_num):
+        return None
+    for dest_edge in candidates:
+        if route_index.can_reach_edge(edge_id, lane_num, dest_edge):
+            return pick_lane_key_on_edge(dest_edge, lane_num, lane_keys_by_edge)
+    for dest_edge in route_index.reachable_real_edges(edge_id, lane_num):
+        return pick_lane_key_on_edge(dest_edge, lane_num, lane_keys_by_edge)
+    return None
 
 
 def resolve_aux_destination_lane_key_for_edge(
     junction_layout: Optional[dict],
     spawn_lane_key: str,
     dest_edge_id: str,
+    *,
+    route_index: Optional["VehicleRouteIndex"] = None,
 ) -> Optional[str]:
-    """Outgoing lane key on ``dest_edge_id`` matching the spawn lane index."""
+    """Outgoing lane key on ``dest_edge_id`` if reachable from the spawn lane."""
     if not junction_layout or not dest_edge_id:
         return None
-    lane_num = lane_num_from_key(spawn_lane_key)
-    for candidate in junction_layout.get("arms", []):
-        if candidate.get("edge_id") != dest_edge_id:
+    return resolve_aux_destination_lane_key(
+        junction_layout,
+        spawn_lane_key,
+        route_index=route_index,
+        preferred_dest_edge=str(dest_edge_id),
+    )
+
+
+def _load_route_index_from_row(row: dict, scenes_root: Optional[Path | str] = None):
+    """Load SUMO route index; resolve relative ``net_path`` against scenes_root.
+
+    Raises if ``net_path`` is missing or cannot be resolved — callers must not
+    silently fall back to unclamped straight-through destinations.
+    """
+    net_path = row.get("net_path")
+    if not net_path:
+        raise ValueError(
+            "[AuxAgent] row is missing net_path; cannot build route index for aux destinations"
+        )
+
+    path = Path(str(net_path))
+    candidates: List[Path] = []
+    if path.is_absolute():
+        candidates.append(path)
+    else:
+        if scenes_root:
+            candidates.append(Path(scenes_root) / path)
+        for key in ("scenes_root", "scenes_dir"):
+            root = row.get(key)
+            if root:
+                candidates.append(Path(str(root)) / path)
+        candidates.append(path)
+
+    # De-dupe while preserving order.
+    seen: set[str] = set()
+    unique_candidates: List[Path] = []
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
             continue
-        keys = candidate.get("lane_keys", [])
-        for key in keys:
-            if lane_num_from_key(key) == lane_num:
-                return key
-        if keys:
-            return keys[min(lane_num, len(keys) - 1)]
-    return make_lane_key(dest_edge_id, lane_num)
+        seen.add(key)
+        unique_candidates.append(candidate)
+
+    resolved = next((candidate for candidate in unique_candidates if candidate.is_file()), None)
+    if resolved is None:
+        raise FileNotFoundError(
+            "[AuxAgent] Could not resolve net_path for route index. "
+            f"net_path={net_path!r}, scenes_root={scenes_root!r}, "
+            f"tried={[str(c) for c in unique_candidates]}"
+        )
+
+    from .sumo_utils import load_vehicle_route_index
+
+    return load_vehicle_route_index(resolved)
 
 
 def resolve_aux_spawn_plan(
@@ -980,8 +1058,15 @@ def resolve_aux_spawn_plan(
     incoming_lanes: Optional[List[dict]] = None,
     aux_lanes_occupied: int = 1,
     aux_distance_from_intersection: float = DEFAULT_DISTANCE_FROM_INTERSECTION,
+    route_index=None,
+    scenes_root: Optional[Path | str] = None,
 ) -> tuple[List[str], List[str], dict]:
-    """Resolve aux spawn lanes, destinations, and alternate spawn->dest fallbacks."""
+    """Resolve aux spawn lanes, destinations, and alternate spawn->dest fallbacks.
+
+    Requires a SUMO ``route_index`` (passed in or loaded from ``net_path`` /
+    ``scenes_root``). Missing nets raise instead of inventing straight-through
+    destinations that outer lanes often cannot reach.
+    """
     spawn_lanes = resolve_aux_spawn_lanes(
         row,
         ego_lane_index=ego_lane_index,
@@ -994,6 +1079,24 @@ def resolve_aux_spawn_plan(
     if row.get("road_id"):
         ego_edge = str(row["road_id"])
 
+    if route_index is None:
+        route_index = _load_route_index_from_row(row, scenes_root=scenes_root)
+
+    # Drop dead-end approach lanes (no SUMO connections — common on outer lanes).
+    if spawn_lanes:
+        kept: List[str] = []
+        for lane_key in spawn_lanes:
+            edge_id = lane_edge_id(lane_key)
+            lane_num = lane_num_from_key(lane_key)
+            if route_index.has_exit(edge_id, lane_num):
+                kept.append(lane_key)
+            else:
+                logging.info(
+                    "[AuxAgent] Skipping aux spawn %s: no SUMO exit connections",
+                    lane_key,
+                )
+        spawn_lanes = kept
+
     viable_keys = viable_aux_lane_keys(
         junction_layout,
         float(row.get("aux_distance_from_intersection", aux_distance_from_intersection)),
@@ -1003,39 +1106,86 @@ def resolve_aux_spawn_plan(
             row.get("aux_convoy_gap_m", DEFAULT_CONVOY_GAP_M) or DEFAULT_CONVOY_GAP_M
         ),
     )
-    # Straight-through defaults for fallback spawn lanes only.
+    viable_keys = [
+        key
+        for key in viable_keys
+        if route_index.has_exit(lane_edge_id(key), lane_num_from_key(key))
+    ]
+
+    manifest_dest = row.get("aux_destination_lane_id")
+    manifest_dest_edge = row.get("aux_destination_edge_id") or (
+        lane_edge_id(str(manifest_dest)) if manifest_dest else None
+    )
+    manifest_spawn = row.get("aux_spawn_lane_index")
+    lane_keys_by_edge = (junction_layout or {}).get("lane_keys_by_edge") or {}
+
+    # Per-lane destinations: each approach lane may only allow a subset of turns.
     alternate_spawn_dest_map: dict = {}
     for lane_key in viable_keys:
-        dest = resolve_aux_destination_lane_key(junction_layout, lane_key)
+        preferred = (
+            str(manifest_dest_edge)
+            if manifest_dest_edge and lane_key == str(manifest_spawn)
+            else None
+        )
+        dest = resolve_aux_destination_lane_key(
+            junction_layout,
+            lane_key,
+            route_index=route_index,
+            preferred_dest_edge=preferred,
+        )
         if dest:
             alternate_spawn_dest_map[lane_key] = dest
 
-    manifest_dest = row.get("aux_destination_lane_id")
-    manifest_dest_edge = row.get("aux_destination_edge_id")
-    manifest_spawn = row.get("aux_spawn_lane_index")
     if manifest_dest and manifest_spawn:
-        alternate_spawn_dest_map[str(manifest_spawn)] = str(manifest_dest)
-    elif manifest_dest_edge and manifest_spawn:
-        resolved = resolve_aux_destination_lane_key_for_edge(
-            junction_layout, str(manifest_spawn), str(manifest_dest_edge)
+        preferred_edge = str(manifest_dest_edge) if manifest_dest_edge else None
+        resolved = resolve_aux_destination_lane_key(
+            junction_layout,
+            str(manifest_spawn),
+            route_index=route_index,
+            preferred_dest_edge=preferred_edge,
         )
         if resolved:
             alternate_spawn_dest_map[str(manifest_spawn)] = resolved
             manifest_dest = resolved
+        elif preferred_edge:
+            # Manifest dest unreachable from this lane — fall back per-lane.
+            manifest_dest = None
 
     destination_lanes: List[str] = []
+    kept_spawns: List[str] = []
     for idx, spawn_lane in enumerate(spawn_lanes):
-        dest = None
+        preferred_edge = None
         if manifest_dest and (
             (manifest_spawn and spawn_lane == str(manifest_spawn))
             or (idx == 0 and not manifest_spawn)
         ):
-            dest = str(manifest_dest)
-        if not dest:
-            dest = alternate_spawn_dest_map.get(spawn_lane)
-        destination_lanes.append(dest or "")
+            preferred_edge = lane_edge_id(str(manifest_dest))
 
-    return spawn_lanes, destination_lanes, alternate_spawn_dest_map
+        dest = resolve_aux_destination_lane_key(
+            junction_layout,
+            spawn_lane,
+            route_index=route_index,
+            preferred_dest_edge=preferred_edge,
+        )
+        if not dest:
+            logging.info(
+                "[AuxAgent] No reachable dest for aux spawn %s; skipping lane",
+                spawn_lane,
+            )
+            continue
+
+        if lane_keys_by_edge:
+            dest = pick_lane_key_on_edge(
+                lane_edge_id(dest),
+                lane_num_from_key(spawn_lane),
+                lane_keys_by_edge,
+            )
+        kept_spawns.append(spawn_lane)
+        destination_lanes.append(dest or "")
+        alternate_spawn_dest_map[spawn_lane] = dest
+
+    return kept_spawns, destination_lanes, alternate_spawn_dest_map
+
 
 
 def add_auxiliary_agents(

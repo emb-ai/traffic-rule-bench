@@ -82,6 +82,41 @@ class VehicleRouteIndex:
                 queue.append((state, depth + 1))
         return False
 
+    def has_exit(self, from_edge: str, from_lane: int) -> bool:
+        """True if this lane has at least one SUMO connection leaving it."""
+        return bool(self._adj.get((from_edge, int(from_lane))))
+
+    def reachable_real_edges(
+        self,
+        from_edge: str,
+        from_lane: int,
+        *,
+        max_hops: int = 8,
+    ) -> list[str]:
+        """Real (non-internal) edges reachable from this lane, BFS order."""
+        start = (from_edge, int(from_lane))
+        queue: deque[tuple[tuple[str, int], int]] = deque([(start, 0)])
+        visited = {start}
+        found: list[str] = []
+        seen_edges: set[str] = set()
+
+        while queue:
+            (edge, lane), depth = queue.popleft()
+            if depth > max_hops:
+                continue
+            for next_edge, next_lane in self._adj.get((edge, lane), []):
+                if self._edge_fn.get(next_edge) == "walkingarea":
+                    continue
+                if is_real_sumo_edge_id(next_edge) and next_edge not in seen_edges:
+                    seen_edges.add(next_edge)
+                    found.append(next_edge)
+                state = (next_edge, next_lane)
+                if state in visited:
+                    continue
+                visited.add(state)
+                queue.append((state, depth + 1))
+        return found
+
 
 def load_vehicle_route_index(net_path: Path) -> VehicleRouteIndex:
     root = ET.parse(net_path).getroot()

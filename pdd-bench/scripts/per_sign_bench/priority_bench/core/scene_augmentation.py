@@ -15,7 +15,7 @@ from .junction_priority_layout import (
     right_arm_for_layout,
     straight_arm_for_layout,
 )
-from .lane_keys import lane_num_from_key, make_lane_key
+from .lane_keys import make_lane_key, pick_lane_key_on_edge
 from .sumo_utils import VehicleRouteIndex, is_vehicle_drivable_lane, load_vehicle_route_index
 
 DEFAULT_AUX_DISTANCE_FROM_INTERSECTION = 20.0
@@ -70,13 +70,14 @@ def _pick_outgoing_lane_key(
     lane_num: int,
     lane_keys_by_edge: Dict[str, List[str]],
 ) -> str:
-    keys = lane_keys_by_edge.get(edge_id, [])
-    if not keys:
-        return _lane_key(edge_id, lane_num)
-    for key in keys:
-        if lane_num_from_key(key) == lane_num:
-            return key
-    return keys[min(lane_num, len(keys) - 1)]
+    return pick_lane_key_on_edge(edge_id, lane_num, lane_keys_by_edge)
+
+
+def _lane_keys_lookup(layout: JunctionPriorityLayout) -> Dict[str, List[str]]:
+    """Prefer full-net lane map; fall back to incoming arms only."""
+    if layout.lane_keys_by_edge:
+        return {edge_id: list(keys) for edge_id, keys in layout.lane_keys_by_edge.items()}
+    return {arm.edge_id: list(arm.lane_keys) for arm in layout.arms}
 
 
 def _is_real_edge_id(edge_id: str) -> bool:
@@ -430,9 +431,7 @@ def enumerate_spawn_scenarios_equal_priority(
 
     lane_lengths = lane_lengths or {}
     min_aux_lane_length = min_aux_spawn_lane_length(aux_distance_from_intersection)
-    lane_keys_by_edge: Dict[str, List[str]] = {
-        arm.edge_id: list(arm.lane_keys) for arm in layout.arms
-    }
+    lane_keys_by_edge = _lane_keys_lookup(layout)
 
     ego_edges = sorted({arm.edge_id for arm in layout.arms})
     scenarios: List[SpawnScenario] = []
@@ -509,9 +508,7 @@ def enumerate_spawn_scenarios_yield(
 
     lane_lengths = lane_lengths or {}
     min_aux_lane_length = min_aux_spawn_lane_length(aux_distance_from_intersection)
-    lane_keys_by_edge: Dict[str, List[str]] = {
-        arm.edge_id: list(arm.lane_keys) for arm in layout.arms
-    }
+    lane_keys_by_edge = _lane_keys_lookup(layout)
 
     secondary_edges = sorted(layout.secondary_edge_ids)
     main_edges = sorted(layout.main_edge_ids)
@@ -653,7 +650,7 @@ def pick_default_main_spawn_meta(
     route_index: Optional[VehicleRouteIndex] = None,
 ) -> Optional[dict]:
     """Pick ego spawn + destination on any equal-priority arm."""
-    lane_keys_by_edge = {arm.edge_id: list(arm.lane_keys) for arm in layout.arms}
+    lane_keys_by_edge = _lane_keys_lookup(layout)
     ego_edges = sorted({arm.edge_id for arm in layout.arms})
 
     ego_edge: Optional[str] = None
@@ -724,7 +721,7 @@ def pick_default_yield_spawn_meta(
     """Pick ego spawn + destination on a secondary (yield) arm."""
     spawn_by_edge = build_spawn_lanes_by_edge(spawn_lanes)
     lane_lengths = lane_lengths_from_spawn_lanes(spawn_lanes)
-    lane_keys_by_edge = {arm.edge_id: list(arm.lane_keys) for arm in layout.arms}
+    lane_keys_by_edge = _lane_keys_lookup(layout)
 
     ego_edge: Optional[str] = None
     if prefer_ego_edge_id and prefer_ego_edge_id in layout.secondary_edge_ids:

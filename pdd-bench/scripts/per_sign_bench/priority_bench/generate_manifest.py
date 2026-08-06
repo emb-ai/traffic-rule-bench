@@ -35,6 +35,7 @@ from core.auxiliary_agent import (
     viable_aux_lane_keys,
     viable_right_aux_lane_keys,
 )
+from core.sumo_utils import load_vehicle_route_index
 from core.manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
@@ -568,11 +569,14 @@ def build_manifest_entry(
                     entry["aux_spawn_lane_index"] = primary_aux
                     entry["aux_road_id"] = lane_edge_id(primary_aux)
                     entry["aux_spawn_lane_num"] = lane_num_from_key(primary_aux)
-                    # Keep layout-scenario turn destinations; straight-through is
+                    # Keep layout-scenario turn destinations; reachable turn is
                     # only a fallback when no aux dest was set on the scenario.
                     if not entry.get("aux_destination_lane_id"):
+                        route_index = load_vehicle_route_index(net_full_path)
                         aux_dest = resolve_aux_destination_lane_key(
-                            junction_layout_cache, primary_aux
+                            junction_layout_cache,
+                            primary_aux,
+                            route_index=route_index,
                         )
                         if aux_dest:
                             entry["aux_destination_lane_id"] = aux_dest
