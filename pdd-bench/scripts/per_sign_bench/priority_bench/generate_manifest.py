@@ -304,7 +304,8 @@ def _stable_seed(
     if lanes_occupied > 0:
         h.update(b"|lanes")
         h.update(str(lanes_occupied).encode("utf-8"))
-    if convoy_gap_m > 0:
+    # Gap only affects spawn when there are 2+ convoy vehicles.
+    if convoy_size > 1 and convoy_gap_m > 0:
         h.update(b"|gap")
         h.update(f"{float(convoy_gap_m):.3f}".encode("utf-8"))
     return int.from_bytes(h.digest()[:4], "big")
@@ -454,8 +455,8 @@ def build_manifest_entry(
                 suffix_parts.append(f"lanes{aux_lanes_occupied}")
             if aux_convoy_size > 1:
                 suffix_parts.append(f"convoy{aux_convoy_size}")
-            gap = float(aux_cfg.convoy_gap_m)
-            suffix_parts.append(f"gap{gap:g}")
+                gap = float(aux_cfg.convoy_gap_m)
+                suffix_parts.append(f"gap{gap:g}")
             if suffix_parts:
                 base_aug = entry.get("augmentation_id") or scenario_id
                 entry["augmentation_id"] = f"{base_aug}_{'_'.join(suffix_parts)}"

@@ -97,6 +97,11 @@ def entry_geometry_key(entry: Dict) -> Tuple:
     else:
         dest_key = None
         spawn_key = None
+    convoy_n = int(entry.get("aux_convoy_size") or 1)
+    # Gap only separates convoy members; size=1 → collapse gap in the key.
+    gap_key = (
+        round(float(entry.get("aux_convoy_gap_m") or 0.0), 3) if convoy_n > 1 else 0.0
+    )
     return (
         entry.get("road_id"),
         entry.get("spawn_lane_num"),
@@ -104,8 +109,8 @@ def entry_geometry_key(entry: Dict) -> Tuple:
         occupied,
         spawn_key,
         dest_key,
-        int(entry.get("aux_convoy_size") or 1),
-        round(float(entry.get("aux_convoy_gap_m") or 0.0), 3),
+        convoy_n,
+        gap_key,
     )
 
 
@@ -318,7 +323,10 @@ def expand_scene_entries(
         )
         for lanes_n in scene_lane_counts:
             for convoy_n in convoy_sizes:
-                for gap_m in gap_values:
+                # Gap only spaces convoy members; with size=1 it is a no-op and
+                # must not duplicate otherwise-identical scenarios.
+                gaps_for_n = gap_values if convoy_n > 1 else gap_values[:1]
+                for gap_m in gaps_for_n:
                     if auxiliary_on and aux is not None:
                         fit_lanes = _fit_aux_lane_keys(
                             junction_layout=junction_layout,

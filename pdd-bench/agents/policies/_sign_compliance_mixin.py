@@ -2800,8 +2800,9 @@ class SignComplianceMixin:
         """Yield / right-hand rule: creep to a stop near the junction.
 
         Hard-stop only near ``stop_line_position`` (YieldSign.YIELD_STOP_BEFORE_END)
-        when main-road traffic is present. Conflict traffic itself is gated by
-        YieldSign.MAIN_ROAD_ZONE_{BEFORE,AFTER} inside ``_check_main_road_traffic``.
+        when conflicting main-road traffic is present. Coarse MAIN_ROAD_ZONE is a
+        prefilter; sticky path-clearance in ``_check_main_road_traffic`` keeps
+        yielding until the foe has passed the ego/foe route intersection.
         """
         if not on_same_road(self.control_object.lane, sign.lane):
             return
