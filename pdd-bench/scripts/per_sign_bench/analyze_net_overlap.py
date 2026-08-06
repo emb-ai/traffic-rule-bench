@@ -40,6 +40,9 @@ BUCKETS = ((1, 1), (2, 5), (6, 20), (21, 10**9))
 # fragment: whole cut-out net; route: edges the ego drives;
 # start: the single edge the ego spawns on (strictest).
 LEVELS = ("fragment", "route", "start")
+# fragment saturates in a dense grid (80-90% everywhere), so it stays in
+# the table as a reference but is left off the charts.
+CHART_LEVELS = ("route", "start")
 
 
 def way_of(edge_id: str) -> str | None:
@@ -247,6 +250,12 @@ def _axes(plt, title: str, ylabel: str, size=(9.0, 4.6)):
     return fig, ax
 
 
+def _headroom(series_values) -> float:
+    """Top of the y axis: the data plus room for the value labels above the bars."""
+    top = max((v for vals in series_values for v in vals), default=0.0)
+    return min(108.0, max(5.0, top * 1.28))
+
+
 def _grouped_bars(ax, labels, series: dict[str, list[float]], fmt="{:.1f}%"):
     n = len(series)
     # Narrow groups when there are few categories, else bars become slabs.
@@ -269,9 +278,8 @@ def _grouped_bars(ax, labels, series: dict[str, list[float]], fmt="{:.1f}%"):
 
 
 def write_charts(comparisons: list[dict], out_dir: Path) -> list[str]:
-    """Two charts: overlap per pair of sets, and per sign class. Both show all
-    three levels side by side — the bars shrink left to right as the criterion
-    tightens (whole fragment -> driven route -> the start edge alone)."""
+    """Two charts: overlap per pair of sets, and per sign class. Both plot the
+    driven route and the start edge alone — the two levels that carry a claim."""
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -290,10 +298,11 @@ def write_charts(comparisons: list[dict], out_dir: Path) -> list[str]:
 
     fig, ax = _axes(plt, "Test scenes standing on a road seen in the other set",
                     "% of scenes", size=(max(9.0, 1.8 * len(pairs)), 4.8))
-    _grouped_bars(ax, pairs,
-                  {lv: [by_pair[p].get(lv, {}).get("touched", {}).get("any", {})
-                        .get("scenes_pct", 0.0) for p in pairs] for lv in LEVELS})
-    ax.set_ylim(0, 105)
+    pair_series = {lv: [by_pair[p].get(lv, {}).get("touched", {}).get("any", {})
+                        .get("scenes_pct", 0.0) for p in pairs] for lv in CHART_LEVELS}
+    _grouped_bars(ax, pairs, pair_series)
+    # Route/start percentages are small; a fixed 0-100 axis would flatten them.
+    ax.set_ylim(0, _headroom(pair_series.values()))
     fig.tight_layout()
     p_ = out_dir / "overlap_by_pair.png"
     fig.savefig(p_, facecolor=SURFACE)
@@ -316,9 +325,9 @@ def write_charts(comparisons: list[dict], out_dir: Path) -> list[str]:
     codes = sorted(per_sign, key=_sign_key)
     fig, ax = _axes(plt, "Test scenes on a shared road, by sign (vs own train set)",
                     "% of scenes", size=(max(9.0, 1.3 * len(codes)), 4.6))
-    _grouped_bars(ax, codes,
-                  {lv: [per_sign[c].get(lv, 0.0) for c in codes] for lv in LEVELS})
-    ax.set_ylim(0, 105)
+    sign_series = {lv: [per_sign[c].get(lv, 0.0) for c in codes] for lv in CHART_LEVELS}
+    _grouped_bars(ax, codes, sign_series)
+    ax.set_ylim(0, _headroom(sign_series.values()))
     fig.tight_layout()
     p_ = out_dir / "overlap_by_sign.png"
     fig.savefig(p_, facecolor=SURFACE)
