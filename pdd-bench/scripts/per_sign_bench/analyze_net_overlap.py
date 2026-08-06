@@ -317,6 +317,8 @@ def main() -> None:
                     metavar="NAME:TRAIN:TEST:SCENES_ROOT")
     ap.add_argument("--out-dir", type=Path, default=Path("net_overlap"))
     ap.add_argument("--no-charts", action="store_true", help="skip PNG charts")
+    ap.add_argument("--brief", action="store_true",
+                    help="summary table only — no per-pair breakdowns, no charts")
     args = ap.parse_args()
 
     parts: dict[str, list[dict]] = {}
@@ -342,11 +344,37 @@ def main() -> None:
                 r["left_name"], r["right_name"] = a, b
                 comparisons.append(r)
 
+    by_pair: dict[str, dict[str, dict]] = collections.defaultdict(dict)
+    for r in comparisons:
+        by_pair[f"{r['left_name']} -> {r['right_name']}"][r["level"]] = r
+
     md = ["# Road overlap between scene sets (net level)", "",
           "`fragment` = every edge of the cut-out net; `route` = edges the ego drives",
           "(BFS sign edge -> destination edge). Edge ids normalised to OSM way,",
           "so both directions and segment splits of a road count as one.", "",
-          "`A -> B` reads: scenes of B standing on a road that also occurs in A.", ""]
+          "`A -> B` reads: scenes of B standing on a road that also occurs in A.", "",
+          "## Summary", "",
+          "| Pair | Shared roads (frag / route) | Scenes on a shared road (frag / route) "
+          "| Route-shared with other class only |",
+          "|---|---|---|---|"]
+    for p, lv in by_pair.items():
+        f_, r_ = lv.get("fragment", {}), lv.get("route", {})
+        ft = f_.get("touched", {}).get("any", {})
+        rt = r_.get("touched", {}).get("any", {})
+        other = r_.get("touched", {}).get("other_class_only", {})
+        md.append(f"| {p} | {f_.get('shared_ways', 0)} / {r_.get('shared_ways', 0)} | "
+                  f"{ft.get('scenes_pct', 0):.1f}% / {rt.get('scenes_pct', 0):.1f}% | "
+                  f"{other.get('scenes_pct', 0):.1f}% |")
+    md.append("")
+    if args.brief:
+        args.out_dir.mkdir(parents=True, exist_ok=True)
+        (args.out_dir / "net_overlap.md").write_text("\n".join(md) + "\n", encoding="utf-8")
+        (args.out_dir / "net_overlap.json").write_text(json.dumps(comparisons, indent=2),
+                                                        encoding="utf-8")
+        print("\n".join(md))
+        print(f"\nWrote {args.out_dir / 'net_overlap.md'}")
+        return
+
     for r in comparisons:
         t = r["touched"]
         md += [f"## {r['left_name']} -> {r['right_name']} ({r['level']})", "",
