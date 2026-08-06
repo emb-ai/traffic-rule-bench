@@ -38,6 +38,9 @@ from pathlib import Path
 
 _WAY_RE = re.compile(r"^-?([^#]+)")
 BUCKETS = ((1, 1), (2, 5), (6, 20), (21, 10**9))
+# fragment: whole cut-out net; route: edges the ego drives;
+# start: the single edge the ego spawns on (strictest).
+LEVELS = ("fragment", "route", "start")
 
 
 def way_of(edge_id: str) -> str | None:
@@ -145,10 +148,11 @@ def load_scenes(catalog: Path, scenes_root: Path, name: str) -> list[dict]:
         if not path:
             unrouted += 1
         route = {w for w in (way_of(e) for e in path) if w} or ({way_of(str(start))} - {None})
+        start_way = {w for w in ({way_of(str(start))} if start else set()) if w}
         out.append({"net_path": np_, "scene_id": row.get("scene_id"),
                     "sign_code": str(row.get("sign_code")),
                     "n_variants": rec["n_variants"],
-                    "fragment": frag, "route": route})
+                    "fragment": frag, "route": route, "start": start_way})
     print(f"[{name}] nets={len(by_net)} loaded={len(out)} missing={missing} "
           f"no-route={unrouted}", file=sys.stderr)
     return out
@@ -226,7 +230,7 @@ def compare(left: list[dict], right: list[dict], level: str) -> dict:
 # value labels, so the palette's contrast relief rule is satisfied.
 SURFACE, INK, INK_2 = "#fcfcfb", "#0b0b0b", "#52514e"
 GRID, AXIS = "#e5e5e2", "#c9c9c4"
-SERIES = {"fragment": "#2a78d6", "route": "#eb6834"}
+SERIES = {"fragment": "#2a78d6", "route": "#eb6834", "start": "#1baf7a"}
 
 
 def _axes(plt, title: str, ylabel: str, size=(9.0, 4.6)):
@@ -254,9 +258,11 @@ def _grouped_bars(ax, labels, series: dict[str, list[float]], fmt="{:.1f}%"):
         ax.bar(xs, values, width * 0.92, label=name, color=SERIES.get(name, "#2a78d6"))
         for x, v in zip(xs, values):
             ax.annotate(fmt.format(v), (x, v), textcoords="offset points",
-                        xytext=(0, 3), ha="center", fontsize=8, color=INK_2)
+                        xytext=(0, 3), ha="center",
+                        fontsize=7.5 if n > 2 else 8, color=INK_2)
     ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels, fontsize=9)
+    # Pair names are long — break them so ticks do not run into each other.
+    ax.set_xticklabels([str(t).replace(" -> ", "\n-> ") for t in labels], fontsize=8)
     if n > 1:
         # Top-right of the title band: inside the axes it collides with tall bars.
         ax.legend(frameon=False, fontsize=9, loc="lower right", ncols=n,
@@ -353,11 +359,11 @@ def write_charts(comparisons: list[dict], out_dir: Path) -> list[str]:
     for r in comparisons:
         by_pair[f"{r['left_name']} -> {r['right_name']}"][r["level"]] = r
     pairs = list(by_pair)
-    levels = ["fragment", "route"]
+    levels = list(LEVELS)
     written = []
 
     fig, ax = _axes(plt, "Scenes standing on a road seen in the other set",
-                    "% of scenes")
+                    "% of scenes", size=(max(9.0, 1.7 * len(pairs)), 4.8))
     _grouped_bars(ax, pairs,
                   {lv: [by_pair[p].get(lv, {}).get("touched", {}).get("any", {})
                         .get("scenes_pct", 0.0) for p in pairs] for lv in levels})
@@ -433,7 +439,7 @@ def main() -> None:
             cross_set = set_a != set_b and split_b == "test"
             if not (same_set_train_test or cross_set):
                 continue
-            for level in ("fragment", "route"):
+            for level in LEVELS:
                 r = compare(parts[a], parts[b], level)
                 r["left_name"], r["right_name"] = a, b
                 comparisons.append(r)
@@ -448,16 +454,20 @@ def main() -> None:
           "so both directions and segment splits of a road count as one.", "",
           "`A -> B` reads: scenes of B standing on a road that also occurs in A.", "",
           "## Summary", "",
-          "| Pair | Shared roads (frag / route) | Scenes on a shared road (frag / route) "
+          "| Pair | Shared roads (frag / route / start) "
+          "| Scenes on a shared road (frag / route / start) "
           "| Route-shared with other class only |",
           "|---|---|---|---|"]
     for p, lv in by_pair.items():
-        f_, r_ = lv.get("fragment", {}), lv.get("route", {})
+        f_, r_, s_ = lv.get("fragment", {}), lv.get("route", {}), lv.get("start", {})
         ft = f_.get("touched", {}).get("any", {})
         rt = r_.get("touched", {}).get("any", {})
+        st = s_.get("touched", {}).get("any", {})
         other = r_.get("touched", {}).get("other_class_only", {})
-        md.append(f"| {p} | {f_.get('shared_ways', 0)} / {r_.get('shared_ways', 0)} | "
-                  f"{ft.get('scenes_pct', 0):.1f}% / {rt.get('scenes_pct', 0):.1f}% | "
+        md.append(f"| {p} | {f_.get('shared_ways', 0)} / {r_.get('shared_ways', 0)}"
+                  f" / {s_.get('shared_ways', 0)} | "
+                  f"{ft.get('scenes_pct', 0):.1f}% / {rt.get('scenes_pct', 0):.1f}%"
+                  f" / {st.get('scenes_pct', 0):.1f}% | "
                   f"{other.get('scenes_pct', 0):.1f}% |")
     md.append("")
     args.out_dir.mkdir(parents=True, exist_ok=True)
