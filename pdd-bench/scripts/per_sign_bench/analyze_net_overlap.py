@@ -47,6 +47,12 @@ def way_of(edge_id: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _sign_key(code: str) -> tuple:
+    """Order sign codes numerically: 2.3.1 < 2.4 < 3.24 < 4.2.1 < 5.7.1."""
+    return tuple((0, int(p)) if p.isdigit() else (1, 0, p)
+                 for p in str(code).split("."))
+
+
 def edge_of_lane(lane_id: str) -> str:
     """'lane_-123260010#2_0' -> '-123260010#2'."""
     lane = str(lane_id)
@@ -285,7 +291,38 @@ def write_summary_chart(comparisons: list[dict], out_dir: Path) -> list[str]:
     p = out_dir / "summary_route.png"
     fig.savefig(p, facecolor=SURFACE)
     plt.close(fig)
-    return [p.name]
+    written = [p.name]
+
+    # Same measure per sign class. Only train->test pairs: a sign belongs to one
+    # set, so every class gets exactly one bar and no series are needed.
+    per_sign: dict[str, float] = {}
+    for r in rows:
+        left_set, left_split = r["left_name"].split("/")
+        right_set, right_split = r["right_name"].split("/")
+        if left_set != right_set or left_split != "train" or right_split != "test":
+            continue
+        for code, d in r["per_class"].items():
+            per_sign[code] = d["scenes_pct"]
+    if not per_sign:
+        return written
+
+    codes = sorted(per_sign, key=_sign_key)
+    vals = [per_sign[c] for c in codes]
+    fig, ax = _axes(plt, "Test scenes on a shared route road, by sign",
+                    "% of scenes", size=(max(8.0, 1.1 * len(codes)), 4.4))
+    ax.bar(range(len(codes)), vals, 0.55, color=SERIES["fragment"])
+    for x, v in enumerate(vals):
+        ax.annotate(f"{v:.1f}%", (x, v), textcoords="offset points",
+                    xytext=(0, 5), ha="center", fontsize=9, color=INK)
+    ax.set_xticks(range(len(codes)))
+    ax.set_xticklabels(codes, fontsize=9)
+    ax.set_ylim(0, max(1.0, max(vals)) * 1.25)
+    fig.tight_layout()
+    p = out_dir / "summary_by_sign.png"
+    fig.savefig(p, facecolor=SURFACE)
+    plt.close(fig)
+    written.append(p.name)
+    return written
 
 
 def write_charts(comparisons: list[dict], out_dir: Path) -> list[str]:
