@@ -275,10 +275,14 @@ def write_summary_chart(comparisons: list[dict], out_dir: Path) -> list[str]:
     fig, ax = _axes(plt, "Test scenes driving a road also driven in the other set",
                     "% of scenes", size=(max(8.0, 1.6 * len(rows)), 4.8))
     xs = range(len(rows))
-    ax.bar(xs, same, 0.55, label="same sign class", color=SERIES["fragment"])
+    # One hue: the whole bar is the route measure, so orange stays "route"
+    # everywhere in the report. The subset is separated by texture, not by a
+    # second hue that would collide with fragment/route in the other charts.
+    ax.bar(xs, same, 0.55, label="same sign class", color=SERIES["route"])
     # 2px surface gap between stacked segments.
     ax.bar(xs, other, 0.55, bottom=[s + 0.35 for s in same],
-           label="other class only", color=SERIES["route"])
+           label="other class only", color=SERIES["route"],
+           hatch="///", edgecolor=SURFACE, linewidth=0)
     for x, (s, o) in enumerate(zip(same, other)):
         ax.annotate(f"{s + o:.1f}%", (x, s + o), textcoords="offset points",
                     xytext=(0, 5), ha="center", fontsize=9, color=INK)
@@ -310,7 +314,7 @@ def write_summary_chart(comparisons: list[dict], out_dir: Path) -> list[str]:
     vals = [per_sign[c] for c in codes]
     fig, ax = _axes(plt, "Test scenes on a shared route road, by sign",
                     "% of scenes", size=(max(8.0, 1.1 * len(codes)), 4.4))
-    ax.bar(range(len(codes)), vals, 0.55, color=SERIES["fragment"])
+    ax.bar(range(len(codes)), vals, 0.55, color=SERIES["route"])
     for x, v in enumerate(vals):
         ax.annotate(f"{v:.1f}%", (x, v), textcoords="offset points",
                     xytext=(0, 5), ha="center", fontsize=9, color=INK)
