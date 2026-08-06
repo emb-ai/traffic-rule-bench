@@ -19,7 +19,7 @@ paths:
   experiment_name: ${now:%Y-%m-%d_%H-%M-%S}
 
 scenario:
-  max_scenarios: 15
+  max_scenarios: 10
 
 augmentation:
   enabled: true

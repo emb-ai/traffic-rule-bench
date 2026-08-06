@@ -33,8 +33,9 @@ priority_bench/
 Compatibility shims remain under `main_sign/` and `yield_sign/`.
 
 Trajectory collection (oracle / PlanT2) still lives next to the original benches:
-- [`../yield_sign/collect_trajectories/`](../yield_sign/collect_trajectories/README.md) (2.4)
-- [`../main_sign/collect_trajectories/`](../main_sign/collect_trajectories/README.md) (2.1)
+
+- `[../yield_sign/collect_trajectories/](../yield_sign/collect_trajectories/README.md)` (2.4)
+- `[../main_sign/collect_trajectories/](../main_sign/collect_trajectories/README.md)` (2.1)
 
 ## Sign rules
 
@@ -63,7 +64,7 @@ ego is near its spawn-lane end so both meet at the junction).
 ### Step 1A: Build scene pool (moscow → materialize → review)
 
 Full sequence:
-[`build_scenes/README.md`](build_scenes/README.md). Short version for **2.4**:
+`[build_scenes/README.md](build_scenes/README.md)`. Short version for **2.4**:
 
 ```bash
 # Link allocated moscow junctions into data/yield/scenes/
@@ -80,60 +81,24 @@ python build_scenes/materialize_scenes.py --sign 2.4 --refill
 python tools/analyze_manifest_drops.py
 ```
 
-Prereq: shared harvest + allocations under
-[`../moscow_junctions/`](../moscow_junctions/README.md).
-Quotas (`n_train` / `n_test`) live in
-[`../moscow_junctions/splits/signs.yaml`](../moscow_junctions/splits/signs.yaml).
+Prereq: shared harvest + allocations under  
+`[../moscow_junctions/](../moscow_junctions/README.md)`.  
+Quotas (`n_train` / `n_test`) live in  
+`[../moscow_junctions/splits/signs.yaml](../moscow_junctions/splits/signs.yaml)`.  
 Old catalog/Overpass scripts live in `build_scenes/legacy/` (do not use for new pools).
 
-### Augmentation axes
-
-Axes are declared in `configs/sign/*.yaml` under `augmentation:` (defaults off
-in the root config). Priority signs enable both:
-
-| Axis | Meaning |
-|------|---------|
-| `layout` | Ego × aux arm/lane/destination scenarios (`core/scene_augmentation.py`). Ego dest + aux dest follow the T/X conflict table (aux never on the opposite arm; ego-right requires aux on the left; aux may turn left/right/straight per case, not only straight-through) |
-| `auxiliary` | Cartesian product of convoy `1..N` and occupied lanes `1..M` |
-
-Expansion (product, short-road skip, geometry dedupe, cap) lives in
-[`core/manifest_expansion.py`](core/manifest_expansion.py); `generate_manifest.py`
-only discovers scenes and writes the jsonl.
-
-A future sign without crossing traffic (e.g. 5.19) would set
-`augmentation.auxiliary: false` and omit / disable the `auxiliary:` block.
-
-When expanding convoy sizes, rows whose aux approach is too short for the full
-convoy (`length < distance + (N-1)*gap + 3m`) are dropped so a truncated spawn
-does not duplicate a smaller-convoy scenario. Rows that differ only by which
-aux lane is listed first but occupy the same set of lanes (common with
-`lanes_occupied >=` number of main arms) are also deduplicated.
-
-After review, apply rejects and generate a manifest. If `scene_selection.json`
-still lists `reject` for scenes that remain on disk, `generate_manifest.py`
-exits with an error until you run:
-
-```bash
-python build_scenes/review_scenes.py --apply
-```
-
-### Step 1B: Build a single scene from OSM
-
-Each scene folder under `data/<sign>/scenes/` (or the legacy `scenes/` trees)
-must contain:
-
-- `map.osm` — OpenStreetMap extract
-- `center.json` — crop center: `{"lat": ..., "lon": ...}`
-
-```bash
-python tools/build_scene.py <scene_name> --radius <meters>
-# example:
-python tools/build_scene.py savvinskaya_3 --radius 100
-```
-
-Creates `map.net.xml`, `cropped.osm`, and `meta.json`.
-
 ### Step 2: Generate evaluation manifest
+
+#### Augmentation axes
+
+Axes are declared in `configs/sign/*.yaml` under `augmentation:` (defaults off in the root config). Priority signs enable both:
+
+
+| Axis        | Meaning                                                                                                                                                                                                                                                              |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `layout`    | Ego × aux arm/lane/destination scenarios (`core/scene_augmentation.py`). Ego dest + aux dest follow the T/X conflict table (aux never on the opposite arm; ego-right requires aux on the left; aux may turn left/right/straight per case, not only straight-through) |
+| `auxiliary` | Cartesian product of convoy `1..N` and occupied lanes `1..M`                                                                                                                                                                                                         |
+
 
 ```bash
 # Equal-priority / main road (2.1)
@@ -186,8 +151,8 @@ python tools/review_benchmark_gifs.py data/yield/output/<timestamp>
 To collect expert trajectories the same way as the general bench
 (`collect_trajectories.sh` → oracle selection), with priority auxiliary agents:
 
-- Yield (2.4): see [`../yield_sign/collect_trajectories/README.md`](../yield_sign/collect_trajectories/README.md)
-- Main road (2.1): see [`../main_sign/collect_trajectories/README.md`](../main_sign/collect_trajectories/README.md)
+- Yield (2.4): see `[../yield_sign/collect_trajectories/README.md](../yield_sign/collect_trajectories/README.md)`
+- Main road (2.1): see `[../main_sign/collect_trajectories/README.md](../main_sign/collect_trajectories/README.md)`
 
 Quick visual smoke test (yield):
 
@@ -201,14 +166,16 @@ SMOKE=1 ./collect_trajectories.sh
 
 See `configs/config.yaml` and `configs/sign/{main_road,yield}.yaml`.
 
-| Group | Key examples |
-|-------|----------------|
-| `paths.*` | `scenes_dir`, `output_base` (`data/<sign>/output`), `experiment_name` |
-| `scenario.*` | `max_scenarios` (cap **after** all axes) |
-| `augmentation.*` | `enabled`, `layout`, `auxiliary` — which axes run (per sign yaml) |
-| `simulation.*` | `spawn_velocity_ms`, `horizon`, `spawn_distance_before_end` (default **15 m**) |
-| `auxiliary.*` | Params when `augmentation.auxiliary` is on: `enabled`, `distance_from_intersection`, `convoy_size`, `lanes_occupied`, `convoy_gap_m` (scalar or list, e.g. `[5, 10]`), `release_when_ego_within_m` |
-| `gif.*` | `enabled`, `policy`, `scaling` (px/m; higher = more zoomed in), `hide_signs` |
+
+| Group            | Key examples                                                                                                                                                                                       |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `paths.*`        | `scenes_dir`, `output_base` (`data/<sign>/output`), `experiment_name`                                                                                                                              |
+| `scenario.*`     | `max_scenarios` (cap **after** all axes)                                                                                                                                                           |
+| `augmentation.`* | `enabled`, `layout`, `auxiliary` — which axes run (per sign yaml)                                                                                                                                  |
+| `simulation.*`   | `spawn_velocity_ms`, `horizon`, `spawn_distance_before_end` (default **15 m**)                                                                                                                     |
+| `auxiliary.`*    | Params when `augmentation.auxiliary` is on: `enabled`, `distance_from_intersection`, `convoy_size`, `lanes_occupied`, `convoy_gap_m` (scalar or list, e.g. `[5, 10]`), `release_when_ego_within_m` |
+| `gif.*`          | `enabled`, `policy`, `scaling` (px/m; higher = more zoomed in), `hide_signs`                                                                                                                       |
+
 
 Override on the CLI:
 
@@ -221,10 +188,11 @@ python generate_manifest.py sign=yield scenario.max_scenarios=5
 Notes on timing / caps:
 
 - `simulation.spawn_distance_before_end` — where **ego** is placed on its approach
-  (meters before lane end / junction). Default 15 m.
+(meters before lane end / junction). Default 15 m.
 - `auxiliary.release_when_ego_within_m` — when **gated aux** starts: ego's remaining
-  distance to lane end ≤ this value. Keep ≥ spawn distance so aux is not held while
-  a yielding ego waits outside the release radius.
+distance to lane end ≤ this value. Keep ≥ spawn distance so aux is not held while
+a yielding ego waits outside the release radius.
 - `scenario.max_scenarios` — after layout × convoy × lanes × gaps, short-road
-  skips, and geometry dedupe, **shuffle** then keep at most this many rows
-  **per scene** (default 15).
+skips, and geometry dedupe, **shuffle** then keep at most this many rows
+**per scene** (default 15).
+
