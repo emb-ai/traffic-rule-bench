@@ -3,22 +3,21 @@
 
 Catalog fields only tell which road the SIGN stands on. A scene is a cut-out
 fragment holding dozens of edges, so two scenes on different sign roads can
-still share an intersection or a whole block. This script measures that, on two
-levels:
-
-  fragment  every non-internal edge of the scene net
-  route     only edges the ego actually drives: BFS over <connection> from the
-            sign edge (road_id) to the destination edge (destination_lane_id)
+still share an intersection or a whole block. This script measures that.
 
 Edge ids are OSM-derived ("-399521721#2"), so they are comparable across
 scenes; they are normalised to a bare way id (sign and "#segment" dropped) so
 that opposite directions and segment splits of one road collapse together.
 
-Reported per ordered pair of scene sets (train->test, speed->detour, ...):
-  * shared roads (OSM ways) and how many scenes of each side stand on them
-  * how many right-hand scenes share at least one road with the left-hand side,
-    split by whether the road is shared with the SAME sign class or another one
-  * how many roads a scene shares, as a distribution
+Three levels, from loosest to strictest:
+
+  fragment  every non-internal edge of the scene net
+  route     only edges the ego actually drives: BFS over <connection> from the
+            sign edge (road_id) to the destination edge (destination_lane_id)
+  start     the single edge the ego spawns on (the sign road)
+
+Output is one summary table per ordered pair of scene sets plus two charts
+(by pair, by sign class); net_overlap.json keeps the full per-pair detail.
 
   python3 analyze_net_overlap.py \\
       --set speed:<train80.jsonl>:<test20.jsonl>:<scenes_root> \\
@@ -269,88 +268,14 @@ def _grouped_bars(ax, labels, series: dict[str, list[float]], fmt="{:.1f}%"):
                   bbox_to_anchor=(1, 1.0), labelcolor=INK_2, handlelength=1.2)
 
 
-def write_summary_chart(comparisons: list[dict], out_dir: Path) -> list[str]:
-    """The summary table as one chart: route-level overlap per pair, split into
-    same-class and other-class-only. Fragment level is left out on purpose — in a
-    dense grid it saturates and says nothing."""
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
-        print("[charts] matplotlib not available — skipping", file=sys.stderr)
-        return []
-
-    rows = [r for r in comparisons if r["level"] == "route"]
-    if not rows:
-        return []
-    labels = [f"{r['left_name']}\n-> {r['right_name']}" for r in rows]
-    other = [r["touched"]["other_class_only"]["scenes_pct"] for r in rows]
-    same = [r["touched"]["any"]["scenes_pct"] - o for r, o in zip(rows, other)]
-
-    fig, ax = _axes(plt, "Test scenes driving a road also driven in the other set",
-                    "% of scenes", size=(max(8.0, 1.6 * len(rows)), 4.8))
-    xs = range(len(rows))
-    # One hue: the whole bar is the route measure, so orange stays "route"
-    # everywhere in the report. The subset is separated by texture, not by a
-    # second hue that would collide with fragment/route in the other charts.
-    ax.bar(xs, same, 0.55, label="same sign class", color=SERIES["route"])
-    # 2px surface gap between stacked segments.
-    ax.bar(xs, other, 0.55, bottom=[s + 0.35 for s in same],
-           label="other class only", color=SERIES["route"],
-           hatch="///", edgecolor=SURFACE, linewidth=0)
-    for x, (s, o) in enumerate(zip(same, other)):
-        ax.annotate(f"{s + o:.1f}%", (x, s + o), textcoords="offset points",
-                    xytext=(0, 5), ha="center", fontsize=9, color=INK)
-    ax.set_xticks(list(xs))
-    ax.set_xticklabels(labels, fontsize=8)
-    ax.set_ylim(0, max(1.0, max(s + o for s, o in zip(same, other))) * 1.25)
-    ax.legend(frameon=False, fontsize=9, loc="lower right", ncols=2,
-              bbox_to_anchor=(1, 1.0), labelcolor=INK_2, handlelength=1.2)
-    fig.tight_layout()
-    p = out_dir / "summary_route.png"
-    fig.savefig(p, facecolor=SURFACE)
-    plt.close(fig)
-    written = [p.name]
-
-    # Same measure per sign class. Only train->test pairs: a sign belongs to one
-    # set, so every class gets exactly one bar and no series are needed.
-    per_sign: dict[str, float] = {}
-    for r in rows:
-        left_set, left_split = r["left_name"].split("/")
-        right_set, right_split = r["right_name"].split("/")
-        if left_set != right_set or left_split != "train" or right_split != "test":
-            continue
-        for code, d in r["per_class"].items():
-            per_sign[code] = d["scenes_pct"]
-    if not per_sign:
-        return written
-
-    codes = sorted(per_sign, key=_sign_key)
-    vals = [per_sign[c] for c in codes]
-    fig, ax = _axes(plt, "Test scenes on a shared route road, by sign",
-                    "% of scenes", size=(max(8.0, 1.1 * len(codes)), 4.4))
-    ax.bar(range(len(codes)), vals, 0.55, color=SERIES["route"])
-    for x, v in enumerate(vals):
-        ax.annotate(f"{v:.1f}%", (x, v), textcoords="offset points",
-                    xytext=(0, 5), ha="center", fontsize=9, color=INK)
-    ax.set_xticks(range(len(codes)))
-    ax.set_xticklabels(codes, fontsize=9)
-    ax.set_ylim(0, max(1.0, max(vals)) * 1.25)
-    fig.tight_layout()
-    p = out_dir / "summary_by_sign.png"
-    fig.savefig(p, facecolor=SURFACE)
-    plt.close(fig)
-    written.append(p.name)
-    return written
-
-
 def write_charts(comparisons: list[dict], out_dir: Path) -> list[str]:
+    """Two charts: overlap per pair of sets, and per sign class. Both show all
+    three levels side by side — the bars shrink left to right as the criterion
+    tightens (whole fragment -> driven route -> the start edge alone)."""
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        from matplotlib.ticker import MaxNLocator
     except ImportError:
         print("[charts] matplotlib not available — skipping", file=sys.stderr)
         return []
@@ -359,52 +284,46 @@ def write_charts(comparisons: list[dict], out_dir: Path) -> list[str]:
     for r in comparisons:
         by_pair[f"{r['left_name']} -> {r['right_name']}"][r["level"]] = r
     pairs = list(by_pair)
-    levels = list(LEVELS)
+    if not pairs:
+        return []
     written = []
 
-    fig, ax = _axes(plt, "Scenes standing on a road seen in the other set",
-                    "% of scenes", size=(max(9.0, 1.7 * len(pairs)), 4.8))
+    fig, ax = _axes(plt, "Test scenes standing on a road seen in the other set",
+                    "% of scenes", size=(max(9.0, 1.8 * len(pairs)), 4.8))
     _grouped_bars(ax, pairs,
                   {lv: [by_pair[p].get(lv, {}).get("touched", {}).get("any", {})
-                        .get("scenes_pct", 0.0) for p in pairs] for lv in levels})
+                        .get("scenes_pct", 0.0) for p in pairs] for lv in LEVELS})
     ax.set_ylim(0, 105)
     fig.tight_layout()
-    p = out_dir / "overlap_any.png"
-    fig.savefig(p, facecolor=SURFACE)
+    p_ = out_dir / "overlap_by_pair.png"
+    fig.savefig(p_, facecolor=SURFACE)
     plt.close(fig)
-    written.append(p.name)
+    written.append(p_.name)
 
-    for pair, per_level in by_pair.items():
-        ref = per_level.get("fragment") or next(iter(per_level.values()))
-        codes = list(ref["per_class"])
-        if not codes:
+    # Per sign class, train->test only: every class then appears exactly once,
+    # measured against the training half of its own set.
+    per_sign: dict[str, dict[str, float]] = collections.defaultdict(dict)
+    for r in comparisons:
+        left_set, left_split = r["left_name"].split("/")
+        right_set, right_split = r["right_name"].split("/")
+        if left_set != right_set or left_split != "train" or right_split != "test":
             continue
-        fig, ax = _axes(plt, f"By sign class — {pair}", "% of scenes")
-        _grouped_bars(ax, codes,
-                      {lv: [per_level.get(lv, {}).get("per_class", {})
-                            .get(c, {}).get("scenes_pct", 0.0) for c in codes]
-                       for lv in levels})
-        ax.set_ylim(0, 105)
-        fig.tight_layout()
-        p = out_dir / f"overlap_by_class_{pair.replace(' -> ', '_to_').replace('/', '-')}.png"
-        fig.savefig(p, facecolor=SURFACE)
-        plt.close(fig)
-        written.append(p.name)
+        for code, d in r["per_class"].items():
+            per_sign[code][r["level"]] = d["scenes_pct"]
+    if not per_sign:
+        return written
 
-        buckets = list(ref["hist"])
-        fig, ax = _axes(plt, f"How many roads a scene shares — {pair}", "scenes")
-        _grouped_bars(ax, buckets,
-                      {lv: [per_level.get(lv, {}).get("hist", {}).get(b, {})
-                            .get("scenes", 0) for b in buckets] for lv in levels},
-                      fmt="{:.0f}")
-        ax.set_xlabel("shared roads per scene", color=INK_2, fontsize=9)
-        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-        fig.tight_layout()
-        p = out_dir / f"overlap_hist_{pair.replace(' -> ', '_to_').replace('/', '-')}.png"
-        fig.savefig(p, facecolor=SURFACE)
-        plt.close(fig)
-        written.append(p.name)
-
+    codes = sorted(per_sign, key=_sign_key)
+    fig, ax = _axes(plt, "Test scenes on a shared road, by sign (vs own train set)",
+                    "% of scenes", size=(max(9.0, 1.3 * len(codes)), 4.6))
+    _grouped_bars(ax, codes,
+                  {lv: [per_sign[c].get(lv, 0.0) for c in codes] for lv in LEVELS})
+    ax.set_ylim(0, 105)
+    fig.tight_layout()
+    p_ = out_dir / "overlap_by_sign.png"
+    fig.savefig(p_, facecolor=SURFACE)
+    plt.close(fig)
+    written.append(p_.name)
     return written
 
 
@@ -417,8 +336,6 @@ def main() -> None:
     ap.add_argument("--no-charts", action="store_true", help="skip PNG charts")
     ap.add_argument("--link-charts", action="store_true",
                     help="reference PNGs by relative path instead of embedding them")
-    ap.add_argument("--brief", action="store_true",
-                    help="summary table only — no per-pair breakdowns, no charts")
     args = ap.parse_args()
 
     parts: dict[str, list[dict]] = {}
@@ -470,61 +387,11 @@ def main() -> None:
                   f" / {st.get('scenes_pct', 0):.1f}% | "
                   f"{other.get('scenes_pct', 0):.1f}% |")
     md.append("")
-    args.out_dir.mkdir(parents=True, exist_ok=True)
-    summary_chart = [] if args.no_charts else write_summary_chart(comparisons, args.out_dir)
-    if summary_chart:
-        md += [_img(args.out_dir, c, not args.link_charts) for c in summary_chart] + [""]
-
-    if args.brief:
-        (args.out_dir / "net_overlap.md").write_text("\n".join(md) + "\n", encoding="utf-8")
-        (args.out_dir / "net_overlap.json").write_text(json.dumps(comparisons, indent=2),
-                                                        encoding="utf-8")
-        print("\n".join(md))
-        print(f"\nWrote {args.out_dir / 'net_overlap.md'}"
-              + (f" (+{len(summary_chart)} chart)" if summary_chart else ""))
-        return
-
-    for r in comparisons:
-        t = r["touched"]
-        md += [f"## {r['left_name']} -> {r['right_name']} ({r['level']})", "",
-               f"nets: {r['n_left']} -> {r['n_right']} | "
-               f"roads: {r['ways_left']} vs {r['ways_right']}, "
-               f"**shared {r['shared_ways']}**", "",
-               "| Shared road with | Nets | % nets | Scenes | % scenes |",
-               "|---|---:|---:|---:|---:|"]
-        for key, label in (("any", "any train scene"),
-                           ("same_class", "same sign class"),
-                           ("other_class_only", "other class only")):
-            d = t[key]
-            md.append(f"| {label} | {d['nets']} | {d['nets_pct']:.1f}% | "
-                      f"{d['scenes']} | {d['scenes_pct']:.1f}% |")
-
-        md += ["", "Roads shared per scene:", "",
-               "| Roads | Nets | Scenes |", "|---|---:|---:|"]
-        for label, d in r["hist"].items():
-            md.append(f"| {label} | {d['nets']} | {d['scenes']} |")
-
-        md += ["", "By sign class:", "",
-               "| Sign | Nets | Touched | % | Scenes | Touched | % |",
-               "|---|---:|---:|---:|---:|---:|---:|"]
-        for code, d in r["per_class"].items():
-            md.append(f"| {code} | {d['nets']} | {d['nets_touched']} | {d['nets_pct']:.1f}% | "
-                      f"{d['scenes']} | {d['scenes_touched']} | {d['scenes_pct']:.1f}% |")
-
-        if r["worst"]:
-            md += ["", "Most overlapping scenes:", "",
-                   "| Scene | Sign | Shared roads | Example roads | Train signs |",
-                   "|---|---|---:|---|---|"]
-            for w in r["worst"]:
-                md.append(f"| {w['scene']} | {w['sign']} | {w['shared_roads']} | "
-                          f"{', '.join(w['roads'])} | {', '.join(w['train_signs'])} |")
-        md.append("")
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     charts = [] if args.no_charts else write_charts(comparisons, args.out_dir)
     if charts:
-        md += ["## Charts", ""] + [_img(args.out_dir, c, not args.link_charts)
-                                   for c in charts] + [""]
+        md += [_img(args.out_dir, c, not args.link_charts) for c in charts] + [""]
 
     (args.out_dir / "net_overlap.md").write_text("\n".join(md) + "\n", encoding="utf-8")
     (args.out_dir / "net_overlap.json").write_text(json.dumps(comparisons, indent=2),
