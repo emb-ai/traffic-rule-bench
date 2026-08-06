@@ -23,6 +23,7 @@ build_scenes/
 
 Prereq: `moscow_junctions` has `nets/moscow.net.xml`, `index/junctions.jsonl`,
 and `splits/sign_allocations.json` (see `../moscow_junctions/README.md`).
+Map quotas live in `moscow_junctions/splits/signs.yaml` (`n_train` / `n_test`).
 
 ```bash
 cd traffic-rule-bench/pdd-bench/scripts/per_sign_bench/priority_bench
@@ -37,8 +38,13 @@ python build_scenes/review_scenes.py
 # 3) Apply rejects → data/yield/scenes/_rejected/
 python build_scenes/review_scenes.py --apply
 
-# 4) Manifest / bench
-python generate_manifest.py sign=yield
+# 4) Top up kept counts to signs.yaml quotas (new scenes = pending)
+python build_scenes/materialize_scenes.py --sign 2.4 --refill
+# Repeat review → --apply → --refill until quotas met or pool exhausted
+
+# 5) Manifest / bench (filter train or test via Hydra)
+python generate_manifest.py sign=yield paths.split=train
+python generate_manifest.py sign=yield paths.split=test
 ```
 
 ### Materialize flags
@@ -46,11 +52,14 @@ python generate_manifest.py sign=yield
 | Flag | Meaning |
 |------|---------|
 | `--split train\|test\|all` | Which half of the allocation (default `all`) |
+| `--refill` | Add unused maps until kept train/test hit `signs.yaml` quotas |
 | `--mode symlink\|copy` | Symlink into sign pool (default) or full copy |
 | `--crop-missing` / `--no-crop-missing` | Crop from city net if missing under `moscow_junctions/scenes` (default: crop) |
 | `--force-preview` | Rebuild `custom_cropped.png` for the review UI |
 
-Pool bookkeeping: `data/yield/scenes/moscow_pool.json`.
+Pool bookkeeping: `data/yield/scenes/moscow_pool.json` (per-scene `split`).
+Keep train+test in one `scenes/` folder; choose half at manifest time with
+`paths.split`.
 
 ## Relation to moscow_junctions
 
@@ -60,9 +69,11 @@ moscow_junctions/scenes/{T,X,O}/junc_*   ← city harvest (shared)
         ▼
 build_scenes/materialize_scenes.py --sign 2.4
         ▼
-data/yield/scenes/junc_*                 ← symlink/copy + review
+data/yield/scenes/junc_*                 ← symlink/copy + review (+ --refill)
         ▼
-generate_manifest.py sign=yield
+generate_manifest.py sign=yield paths.split=train|test|all
+        ▼
+output/<ts>/{real_manifest.jsonl, repro/}
 ```
 
 ## Legacy

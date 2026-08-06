@@ -50,11 +50,21 @@ from core.scene_augmentation import (
     pick_default_main_spawn_meta_for_net,
     pick_default_yield_spawn_meta_for_net,
 )
-from core.scene_selection import is_reserved_scene_dir, unapplied_rejected_scenes
+from core.scene_selection import is_reserved_scene_dir, unapplied_rejected_scenes, load_scene_selection
+from core.moscow_pool import (
+    count_splits,
+    filter_scene_dirs_by_split,
+    load_moscow_pool,
+    normalize_split,
+    pool_path,
+)
 from core.sumo_utils import is_vehicle_drivable_lane
 from signs import SignProfile, get_profile, scenes_dir as profile_scenes_dir, output_dir as profile_output_dir
 
 RUN_BENCH_SCRIPT = SCRIPT_DIR / "run_benchmark.py"
+MOSCOW_ROOT = SCRIPT_DIR.parent / "moscow_junctions"
+DEFAULT_ALLOCATIONS = MOSCOW_ROOT / "splits" / "sign_allocations.json"
+DEFAULT_SIGNS_YAML = MOSCOW_ROOT / "splits" / "signs.yaml"
 
 # Set by main() from Hydra `sign=` before generation runs.
 PROFILE: SignProfile | None = None
@@ -88,6 +98,7 @@ class PathsConfig:
     scenes_dir: Optional[str] = None
     output_base: Optional[str] = None
     experiment_name: Optional[str] = None
+    split: str = "all"
 
 
 @dataclass
@@ -345,6 +356,98 @@ def assert_rejected_scenes_applied(scenes_dir: Path) -> None:
         f"  Run: python build_scenes/review_scenes.py --apply\n"
         f"  Pending: {preview}{more}"
     )
+
+
+
+def _file_sha256(path: Path) -> Optional[str]:
+    if not path.is_file():
+        return None
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _load_signs_quota(signs_yaml: Path = DEFAULT_SIGNS_YAML) -> dict:
+    if not signs_yaml.is_file():
+        return {}
+    try:
+        import yaml  # type: ignore
+    except ImportError:
+        return {}
+    with signs_yaml.open(encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def write_repro_artifacts(
+    *,
+    output_dir: Path,
+    scenes_dir: Path,
+    split_filter: str,
+    used_scene_ids: List[str],
+    split_by_id: Dict[str, str],
+    pdd_code: str,
+) -> Path:
+    """Write ``repro/`` snapshot for experiment reproduction."""
+    repro_dir = output_dir / "repro"
+    repro_dir.mkdir(parents=True, exist_ok=True)
+
+    pool = load_moscow_pool(scenes_dir)
+    selection = load_scene_selection(scenes_dir)
+    pool_snapshot = {
+        "scenes_dir": str(scenes_dir.resolve()),
+        "moscow_pool": pool,
+        "scene_selection": selection,
+    }
+    (repro_dir / "pool_snapshot.json").write_text(
+        json.dumps(pool_snapshot, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    split_filter_doc = {
+        "split": split_filter,
+        "n_scenes": len(used_scene_ids),
+        "scene_ids": list(used_scene_ids),
+        "counts": count_splits(used_scene_ids, split_by_id),
+    }
+    (repro_dir / "split_filter.json").write_text(
+        json.dumps(split_filter_doc, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    signs_cfg = _load_signs_quota()
+    n_train = int(signs_cfg.get("n_train", 115)) if signs_cfg else None
+    test_frac = float(signs_cfg.get("test_frac", 0.2)) if signs_cfg else None
+    n_test = None
+    if signs_cfg:
+        n_test = signs_cfg.get("n_test")
+        if n_test is None and n_train is not None and test_frac is not None:
+            n_test = max(1, round(n_train * test_frac / (1.0 - test_frac)))
+        else:
+            n_test = int(n_test) if n_test is not None else None
+        sign_spec = (signs_cfg.get("signs") or {}).get(str(pdd_code)) or {}
+        if "n_train" in sign_spec:
+            n_train = int(sign_spec["n_train"])
+        if "n_test" in sign_spec:
+            n_test = int(sign_spec["n_test"])
+
+    alloc_path = DEFAULT_ALLOCATIONS
+    allocations_ref = {
+        "allocations_path": str(alloc_path.resolve()) if alloc_path.exists() else str(alloc_path),
+        "allocations_sha256": _file_sha256(alloc_path),
+        "signs_yaml": str(DEFAULT_SIGNS_YAML.resolve()) if DEFAULT_SIGNS_YAML.exists() else str(DEFAULT_SIGNS_YAML),
+        "seed": signs_cfg.get("seed") if signs_cfg else None,
+        "n_train": n_train,
+        "n_test": n_test,
+        "test_frac": test_frac,
+        "pdd_code": pdd_code,
+    }
+    (repro_dir / "allocations_ref.json").write_text(
+        json.dumps(allocations_ref, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return repro_dir
 
 
 def load_scene_metadata(scene_dir: Path) -> Dict:
@@ -630,24 +733,42 @@ def generate_manifest(
     sim_cfg: SimulationConfig,
     aux_cfg: AuxiliaryConfig,
     expansion_cfg: ExpansionConfig,
+    split: str = "all",
 ) -> List[Dict]:
     """Generate real_manifest.jsonl from discovered scenes."""
+    split = normalize_split(split)
     assert_rejected_scenes_applied(scenes_dir)
-    scenes = discover_scenes(scenes_dir)
+    all_scenes = discover_scenes(scenes_dir)
     print(f"Scenes root: {scenes_dir.resolve()}")
-    print(f"Discovered {len(scenes)} scene(s)")
+    print(f"Discovered {len(all_scenes)} scene(s) on disk")
+
+    try:
+        scenes, split_by_id, skipped_unknown = filter_scene_dirs_by_split(
+            all_scenes, split=split, scenes_dir=scenes_dir
+        )
+    except FileNotFoundError as exc:
+        raise SystemExit(f"[error] {exc}") from exc
+
+    if skipped_unknown:
+        preview = ", ".join(skipped_unknown[:8])
+        more = f" (+{len(skipped_unknown) - 8} more)" if len(skipped_unknown) > 8 else ""
+        print(
+            f"  [split] Skipping {len(skipped_unknown)} scene(s) not in "
+            f"{pool_path(scenes_dir).name}: {preview}{more}"
+        )
+    print(f"Split filter: {split} → {len(scenes)} scene(s)")
     print(
         f"Augmentation axes: layout={expansion_cfg.layout_on}, "
         f"auxiliary={expansion_cfg.auxiliary_on}"
     )
     if not scenes:
         print(
-            f"[warn] No scenes with meta.json + net found under {scenes_dir}. "
-            "Check data/<sign>/scenes symlink / paths.scenes_dir."
+            f"[warn] No scenes with meta.json + net found under {scenes_dir} "
+            f"(after paths.split={split}). "
+            "Check data/<sign>/scenes / paths.scenes_dir / moscow_pool.json."
         )
     entries = []
 
-    # When the auxiliary axis is off, force aux disabled in row fields.
     aux_for_entry = aux_cfg
     if not expansion_cfg.auxiliary_on:
         aux_for_entry = AuxiliaryConfig(
@@ -659,6 +780,7 @@ def generate_manifest(
             release_when_ego_within_m=aux_cfg.release_when_ego_within_m,
         )
 
+    used_scene_ids: List[str] = []
     for scene_dir in scenes:
         meta = load_scene_metadata(scene_dir)
         scene_name = meta.get("scene_name", scene_dir.name)
@@ -700,7 +822,11 @@ def generate_manifest(
             build_entry=build_manifest_entry,
             aux_cfg_for_entry=aux_for_entry,
         )
+        scene_split = split_by_id.get(scene_name) or split_by_id.get(scene_dir.name)
+        for entry in scene_entries:
+            entry["split"] = scene_split
         entries.extend(scene_entries)
+        used_scene_ids.append(scene_dir.name)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "real_manifest.jsonl"
@@ -709,11 +835,14 @@ def generate_manifest(
         for entry in entries:
             f.write(json.dumps(entry, default=str) + "\n")
 
+    split_counts = count_splits(used_scene_ids, split_by_id)
     summary = {
         "pdd_code": PDD_CODE,
         "sign_type": SIGN_TYPE,
         "sign_name": SIGN_NAME,
-        "total_scenes": len(scenes),
+        "split_filter": split,
+        "split_counts": split_counts,
+        "total_scenes": len(used_scene_ids),
         "total_entries": len(entries),
         "augmentation_layout": expansion_cfg.layout_on,
         "augmentation_auxiliary": expansion_cfg.auxiliary_on,
@@ -731,7 +860,7 @@ def generate_manifest(
         else [aux_cfg.convoy_gap_m],
         "aux_lanes_occupied_max": aux_cfg.lanes_occupied,
         "generated_at": datetime.now().isoformat(),
-        "scenes": [s.name for s in scenes],
+        "scenes": list(used_scene_ids),
     }
 
     summary_path = output_dir / "real_manifest_summary.json"
@@ -743,7 +872,18 @@ def generate_manifest(
     with open(manifest_meta_path, "w", encoding="utf-8") as f:
         json.dump(manifest_meta, f, indent=2, ensure_ascii=False)
 
+    repro_dir = write_repro_artifacts(
+        output_dir=output_dir,
+        scenes_dir=scenes_dir,
+        split_filter=split,
+        used_scene_ids=used_scene_ids,
+        split_by_id=split_by_id,
+        pdd_code=PDD_CODE,
+    )
+    print(f"Wrote repro artifacts → {repro_dir}")
+
     return entries
+
 
 # -----------------------------------------------------------------------------
 # GIF rendering
@@ -958,6 +1098,9 @@ def main(cfg: DictConfig) -> None:
         scaling=float(getattr(cfg.gif, "scaling", 24.0) or 24.0),
     )
 
+    split = normalize_split(getattr(cfg.paths, "split", "all"))
+    print(f"Using paths.split: {split}")
+
     entries = generate_manifest(
         scenes_dir=scenes_dir,
         output_dir=experiment_dir,
@@ -965,6 +1108,7 @@ def main(cfg: DictConfig) -> None:
         sim_cfg=sim_cfg,
         aux_cfg=aux_cfg,
         expansion_cfg=expansion_cfg,
+        split=split,
     )
     
     if gif_cfg.enabled and entries:
@@ -987,6 +1131,7 @@ def main(cfg: DictConfig) -> None:
     
     print(f"\nOutput files:")
     print(f"  - Manifest: {experiment_dir / 'real_manifest.jsonl'}")
+    print(f"  - Repro: {experiment_dir / 'repro'}")
     print(f"  - Config: {config_path}")
 
 

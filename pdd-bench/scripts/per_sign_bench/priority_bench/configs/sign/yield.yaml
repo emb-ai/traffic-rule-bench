@@ -9,5 +9,3 @@ augmentation:
 
 auxiliary:
   enabled: true
-  convoy_size: 1
-  lanes_occupied: 1

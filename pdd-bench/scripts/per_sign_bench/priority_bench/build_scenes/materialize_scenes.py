@@ -13,16 +13,20 @@ Examples:
 
     # Only train half; regenerate previews
     python build_scenes/materialize_scenes.py --sign 2.4 --split train --force-preview
+
+    # After review --apply: top up kept counts to signs.yaml quotas
+    python build_scenes/materialize_scenes.py --sign 2.4 --refill
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import random
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 BUILD_SCENES_DIR = Path(__file__).resolve().parent
 PRIORITY_BENCH = BUILD_SCENES_DIR.parent
@@ -32,9 +36,29 @@ MOSCOW_SCRIPTS = MOSCOW_ROOT / "scripts"
 sys.path.insert(0, str(PRIORITY_BENCH))
 sys.path.insert(0, str(MOSCOW_SCRIPTS))
 
+from allocate_sign_scenes import (  # noqa: E402
+    _counts_for_sign,
+    _load_yaml,
+    _sample,
+)
+from core.moscow_pool import (  # noqa: E402
+    load_moscow_pool,
+    save_moscow_pool,
+    scene_split_map,
+)
+from core.scene_selection import (  # noqa: E402
+    REJECTED_SUBDIR,
+    VERDICT_REJECT,
+    is_reserved_scene_dir,
+    load_scene_selection,
+    set_scene_verdict,
+)
 from signs import get_profile, scenes_dir as profile_scenes_dir  # noqa: E402
 
 PREVIEW_NAME = "custom_cropped.png"
+DEFAULT_SIGNS_YAML = MOSCOW_ROOT / "splits" / "signs.yaml"
+DEFAULT_TRAIN_IDS = MOSCOW_ROOT / "splits" / "train_ids.json"
+DEFAULT_TEST_IDS = MOSCOW_ROOT / "splits" / "test_ids.json"
 
 
 def _load_json(path: Path) -> dict:
@@ -123,6 +147,49 @@ def _link_or_copy(src: Path, dst: Path, *, mode: str) -> None:
         raise ValueError(f"Unknown mode {mode!r}")
 
 
+def _materialize_one(
+    sid: str,
+    *,
+    half: str,
+    index: Dict[str, dict],
+    dest_scenes: Path,
+    moscow_scenes: Path,
+    moscow_net: Path,
+    radius_m: float,
+    force_preview: bool,
+    crop_missing: bool,
+    mode: str,
+) -> dict:
+    row = index.get(sid)
+    if row is None:
+        raise KeyError(f"not in junction index: {sid}")
+    if crop_missing:
+        src = _ensure_cropped(
+            row,
+            moscow_scenes=moscow_scenes,
+            moscow_net=moscow_net,
+            radius_m=radius_m,
+        )
+    else:
+        src = _moscow_scene_dir(moscow_scenes, row["shape"], sid)
+        if not (src / "map.net.xml").is_file():
+            raise FileNotFoundError(
+                f"Missing crop {src} (re-run with --crop-missing)"
+            )
+    preview = src / PREVIEW_NAME
+    if force_preview or not preview.is_file():
+        _render_preview(src / "map.net.xml", preview)
+    dst = dest_scenes / sid
+    _link_or_copy(src, dst, mode=mode)
+    return {
+        "scene_id": sid,
+        "shape": row["shape"],
+        "split": half,
+        "path": str(dst),
+        "moscow_path": str(src),
+    }
+
+
 def materialize(
     *,
     sign: str,
@@ -159,42 +226,20 @@ def materialize(
     records: List[dict] = []
 
     for sid in scene_ids:
-        row = index.get(sid)
-        if row is None:
-            print(f"  [fail] {sid}: not in junction index")
-            fail += 1
-            continue
         try:
-            if crop_missing:
-                src = _ensure_cropped(
-                    row,
-                    moscow_scenes=moscow_scenes,
-                    moscow_net=moscow_net,
-                    radius_m=radius_m,
-                )
-            else:
-                src = _moscow_scene_dir(moscow_scenes, row["shape"], sid)
-                if not (src / "map.net.xml").is_file():
-                    raise FileNotFoundError(
-                        f"Missing crop {src} (re-run with --crop-missing)"
-                    )
-
-            # Shared moscow crops stay sign-agnostic; sign/split live in moscow_pool.json.
-            preview = src / PREVIEW_NAME
-            if force_preview or not preview.is_file():
-                _render_preview(src / "map.net.xml", preview)
-
-            dst = dest_scenes / sid
-            _link_or_copy(src, dst, mode=mode)
-            records.append(
-                {
-                    "scene_id": sid,
-                    "shape": row["shape"],
-                    "split": half_of[sid],
-                    "path": str(dst),
-                    "moscow_path": str(src),
-                }
+            rec = _materialize_one(
+                sid,
+                half=half_of[sid],
+                index=index,
+                dest_scenes=dest_scenes,
+                moscow_scenes=moscow_scenes,
+                moscow_net=moscow_net,
+                radius_m=radius_m,
+                force_preview=force_preview,
+                crop_missing=crop_missing,
+                mode=mode,
             )
+            records.append(rec)
             ok += 1
         except Exception as exc:  # noqa: BLE001
             print(f"  [fail] {sid}: {exc}")
@@ -209,11 +254,251 @@ def materialize(
         "n_fail": fail,
         "scenes": records,
     }
-    (dest_scenes / "moscow_pool.json").write_text(
-        json.dumps(pool_meta, indent=2) + "\n", encoding="utf-8"
-    )
+    save_moscow_pool(dest_scenes, pool_meta)
     print(f"[materialize] {sign}: ok={ok} fail={fail} → {dest_scenes}")
     return pool_meta
+
+
+def _sign_quotas(signs_cfg: dict, sign: str) -> Tuple[int, int, List[str], Optional[float], int]:
+    """Return (n_train, n_test, shapes, x_share, seed)."""
+    seed = int(signs_cfg.get("seed", 42))
+    n_train = int(signs_cfg.get("n_train", 115))
+    test_frac = float(signs_cfg.get("test_frac", 0.2))
+    n_test = int(
+        signs_cfg.get("n_test")
+        or max(1, round(n_train * test_frac / (1.0 - test_frac)))
+    )
+    spec = (signs_cfg.get("signs") or {}).get(sign) or {}
+    shapes = list(spec.get("shapes") or ["T", "X"])
+    x_share = spec.get("x_share", spec.get("x_frac"))
+    if "n_train" in spec:
+        n_train = int(spec["n_train"])
+    if "n_test" in spec:
+        n_test = int(spec["n_test"])
+    return n_train, n_test, shapes, x_share, seed
+
+
+def _live_scene_ids(dest_scenes: Path) -> Set[str]:
+    ids: Set[str] = set()
+    if not dest_scenes.is_dir():
+        return ids
+    for entry in dest_scenes.iterdir():
+        if not entry.is_dir() or is_reserved_scene_dir(entry.name):
+            continue
+        if (entry / "meta.json").is_file() or (entry / "map.net.xml").is_file():
+            ids.add(entry.name)
+    return ids
+
+
+def _rejected_history_ids(dest_scenes: Path) -> Set[str]:
+    """IDs marked reject or already moved under _rejected/."""
+    out: Set[str] = set()
+    selection = load_scene_selection(dest_scenes)
+    for name, verdict in (selection.get("scenes") or {}).items():
+        if verdict == VERDICT_REJECT:
+            out.add(str(name))
+    rejected_root = dest_scenes / REJECTED_SUBDIR
+    if rejected_root.is_dir():
+        for entry in rejected_root.iterdir():
+            if entry.is_dir():
+                out.add(entry.name)
+    return out
+
+
+def _kept_by_split(dest_scenes: Path) -> Dict[str, Set[str]]:
+    """Live scenes that are not rejected, grouped by train/test."""
+    pool = load_moscow_pool(dest_scenes) or {}
+    split_map = scene_split_map(pool)
+    rejected = _rejected_history_ids(dest_scenes)
+    live = _live_scene_ids(dest_scenes)
+    selection = load_scene_selection(dest_scenes).get("scenes") or {}
+    kept: Dict[str, Set[str]] = {"train": set(), "test": set()}
+    for sid in live:
+        if sid in rejected:
+            continue
+        if selection.get(sid) == VERDICT_REJECT:
+            continue
+        half = split_map.get(sid)
+        if half in kept:
+            kept[half].add(sid)
+    return kept
+
+
+def _excluded_ids(dest_scenes: Path, alloc_block: dict) -> Set[str]:
+    """Never re-draw these for refill."""
+    excluded = set(_rejected_history_ids(dest_scenes))
+    excluded |= _live_scene_ids(dest_scenes)
+    for half in ("train", "test"):
+        for sid in (alloc_block.get(half) or {}).get("scene_ids") or []:
+            excluded.add(str(sid))
+    # Also any id ever recorded in moscow_pool (covers removed live links).
+    pool = load_moscow_pool(dest_scenes) or {}
+    for rec in pool.get("scenes") or []:
+        if rec.get("scene_id"):
+            excluded.add(str(rec["scene_id"]))
+    return excluded
+
+
+def _pick_refill_ids(
+    *,
+    need: int,
+    shapes: List[str],
+    x_share: Optional[float],
+    by_shape_pool: Dict[str, List[str]],
+    excluded: Set[str],
+    seed_key: str,
+) -> List[str]:
+    if need <= 0:
+        return []
+    need_by_shape = _counts_for_sign(shapes=shapes, n_total=need, x_share=x_share)
+    rng = random.Random(seed_key)
+    picked: List[str] = []
+    for shape, k in need_by_shape.items():
+        pool = [s for s in by_shape_pool.get(shape, []) if s not in excluded]
+        chosen = _sample(pool, k, rng)
+        if len(chosen) < k:
+            print(
+                f"  [refill] shortfall {shape}: want {k}, available {len(chosen)}"
+            )
+        picked.extend(chosen)
+        excluded.update(chosen)
+    return sorted(set(picked))
+
+
+def refill(
+    *,
+    sign: str,
+    mode: str,
+    dest_scenes: Path,
+    allocations_path: Path,
+    signs_yaml: Path,
+    train_ids_path: Path,
+    test_ids_path: Path,
+    index_path: Path,
+    moscow_scenes: Path,
+    moscow_net: Path,
+    radius_m: float,
+    force_preview: bool,
+    crop_missing: bool,
+) -> dict:
+    """Top up kept train/test counts to signs.yaml quotas with fresh scenes."""
+    signs_cfg = _load_yaml(signs_yaml)
+    n_train, n_test, shapes, x_share, seed = _sign_quotas(signs_cfg, sign)
+    targets = {"train": n_train, "test": n_test}
+
+    alloc_doc = _load_json(allocations_path)
+    if sign not in alloc_doc.get("signs", {}):
+        raise KeyError(f"Sign {sign!r} not in {allocations_path}")
+    block = alloc_doc["signs"][sign]
+
+    train_doc = _load_json(train_ids_path)
+    test_doc = _load_json(test_ids_path)
+    pools = {
+        "train": train_doc.get("by_shape") or {},
+        "test": test_doc.get("by_shape") or {},
+    }
+
+    kept = _kept_by_split(dest_scenes)
+    excluded = _excluded_ids(dest_scenes, block)
+    index = _index_by_scene_id(index_path)
+
+    print(
+        f"[refill] targets train={n_train} test={n_test}; "
+        f"kept train={len(kept['train'])} test={len(kept['test'])}"
+    )
+
+    new_by_half: Dict[str, List[str]] = {"train": [], "test": []}
+    for half in ("train", "test"):
+        need = max(0, int(targets[half]) - len(kept[half]))
+        if need <= 0:
+            print(f"  [{half}] already at quota ({len(kept[half])})")
+            continue
+        print(f"  [{half}] need {need} more")
+        picked = _pick_refill_ids(
+            need=need,
+            shapes=shapes,
+            x_share=x_share,
+            by_shape_pool=pools[half],
+            excluded=excluded,
+            seed_key=f"{seed}|{sign}|refill|{half}|{len(excluded)}",
+        )
+        new_by_half[half] = picked
+        print(f"  [{half}] picked {len(picked)}")
+
+    dest_scenes.mkdir(parents=True, exist_ok=True)
+    pool = load_moscow_pool(dest_scenes) or {
+        "sign": sign,
+        "split": "all",
+        "mode": mode,
+        "allocations_file": str(allocations_path),
+        "scenes": [],
+    }
+    records_by_id = {
+        str(r["scene_id"]): r for r in (pool.get("scenes") or []) if r.get("scene_id")
+    }
+
+    ok = fail = 0
+    added: List[str] = []
+    for half, sids in new_by_half.items():
+        for sid in sids:
+            try:
+                rec = _materialize_one(
+                    sid,
+                    half=half,
+                    index=index,
+                    dest_scenes=dest_scenes,
+                    moscow_scenes=moscow_scenes,
+                    moscow_net=moscow_net,
+                    radius_m=radius_m,
+                    force_preview=force_preview,
+                    crop_missing=crop_missing,
+                    mode=mode,
+                )
+                records_by_id[sid] = rec
+                set_scene_verdict(dest_scenes, sid, "pending")
+                # Append into allocations for this sign.
+                half_block = block.setdefault(half, {"scene_ids": [], "by_shape": {}, "n": 0})
+                ids = list(half_block.get("scene_ids") or [])
+                if sid not in ids:
+                    ids.append(sid)
+                    half_block["scene_ids"] = sorted(ids)
+                    shape = str(rec["shape"])
+                    by_shape = dict(half_block.get("by_shape") or {})
+                    by_shape[shape] = int(by_shape.get(shape, 0)) + 1
+                    half_block["by_shape"] = by_shape
+                    half_block["n"] = len(half_block["scene_ids"])
+                added.append(sid)
+                ok += 1
+            except Exception as exc:  # noqa: BLE001
+                print(f"  [fail] {sid}: {exc}")
+                fail += 1
+
+    pool["sign"] = sign
+    pool["mode"] = mode
+    pool["allocations_file"] = str(allocations_path)
+    pool["scenes"] = sorted(records_by_id.values(), key=lambda r: str(r.get("scene_id")))
+    pool["n_ok"] = len(pool["scenes"])
+    pool["n_fail"] = fail
+    save_moscow_pool(dest_scenes, pool)
+
+    alloc_doc["signs"][sign] = block
+    allocations_path.write_text(
+        json.dumps(alloc_doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    kept_after = _kept_by_split(dest_scenes)
+    print(
+        f"[refill] added={ok} fail={fail}; "
+        f"kept now train={len(kept_after['train'])} test={len(kept_after['test'])} "
+        f"→ {dest_scenes}"
+    )
+    return {
+        "added": added,
+        "ok": ok,
+        "fail": fail,
+        "kept": {k: sorted(v) for k, v in kept_after.items()},
+        "targets": targets,
+    }
 
 
 def main() -> None:
@@ -223,7 +508,12 @@ def main() -> None:
         "--split",
         choices=("all", "train", "test"),
         default="all",
-        help="Which allocation half to materialize",
+        help="Which allocation half to materialize (ignored with --refill)",
+    )
+    ap.add_argument(
+        "--refill",
+        action="store_true",
+        help="Top up kept train/test counts to signs.yaml quotas from unused ids",
     )
     ap.add_argument(
         "--mode",
@@ -242,6 +532,9 @@ def main() -> None:
         type=Path,
         default=MOSCOW_ROOT / "splits" / "sign_allocations.json",
     )
+    ap.add_argument("--signs-yaml", type=Path, default=DEFAULT_SIGNS_YAML)
+    ap.add_argument("--train-ids", type=Path, default=DEFAULT_TRAIN_IDS)
+    ap.add_argument("--test-ids", type=Path, default=DEFAULT_TEST_IDS)
     ap.add_argument(
         "--index",
         type=Path,
@@ -285,6 +578,29 @@ def main() -> None:
         sys.exit(f"ERROR: index not found: {args.index}")
     if args.crop_missing and not args.moscow_net.is_file():
         sys.exit(f"ERROR: moscow net not found: {args.moscow_net}")
+
+    if args.refill:
+        if not args.signs_yaml.is_file():
+            sys.exit(f"ERROR: signs yaml not found: {args.signs_yaml}")
+        if not args.train_ids.is_file() or not args.test_ids.is_file():
+            sys.exit("ERROR: train_ids.json / test_ids.json required for --refill")
+        print(f"[refill] sign={args.sign} → {dest} (mode={args.mode})")
+        refill(
+            sign=str(profile.pdd_code),
+            mode=args.mode,
+            dest_scenes=dest,
+            allocations_path=args.allocations,
+            signs_yaml=args.signs_yaml,
+            train_ids_path=args.train_ids,
+            test_ids_path=args.test_ids,
+            index_path=args.index,
+            moscow_scenes=args.moscow_scenes,
+            moscow_net=args.moscow_net,
+            radius_m=args.radius_m,
+            force_preview=args.force_preview,
+            crop_missing=args.crop_missing,
+        )
+        return
 
     print(f"[materialize] sign={args.sign} → {dest} (mode={args.mode})")
     materialize(

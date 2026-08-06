@@ -72,12 +72,18 @@ python build_scenes/materialize_scenes.py --sign 2.4
 # Review keep/reject in browser
 python build_scenes/review_scenes.py
 
+# Apply rejects, then top up to signs.yaml quotas if short
+python build_scenes/review_scenes.py --apply
+python build_scenes/materialize_scenes.py --sign 2.4 --refill
+
 # Optional: why a scene would drop at manifest time
 python tools/analyze_manifest_drops.py
 ```
 
 Prereq: shared harvest + allocations under
 [`../moscow_junctions/`](../moscow_junctions/README.md).
+Quotas (`n_train` / `n_test`) live in
+[`../moscow_junctions/splits/signs.yaml`](../moscow_junctions/splits/signs.yaml).
 Old catalog/Overpass scripts live in `build_scenes/legacy/` (do not use for new pools).
 
 ### Augmentation axes
@@ -133,8 +139,10 @@ Creates `map.net.xml`, `cropped.osm`, and `meta.json`.
 # Equal-priority / main road (2.1)
 python generate_manifest.py sign=main_road
 
-# Yield (2.4)
+# Yield (2.4) — all / train / test (filter via moscow_pool.json)
 python generate_manifest.py sign=yield
+python generate_manifest.py sign=yield paths.split=train
+python generate_manifest.py sign=yield paths.split=test
 
 # Common overrides
 python generate_manifest.py sign=yield gif.enabled=true gif.policy=comprehensive_rule_expert
@@ -143,7 +151,8 @@ python generate_manifest.py sign=yield auxiliary.lanes_occupied=2 auxiliary.conv
 
 Output lands under `data/<sign>/output/<timestamp>/`:
 
-- `real_manifest.jsonl` — scenario definitions
+- `real_manifest.jsonl` — scenario definitions (each row has `split`)
+- `repro/` — pool snapshot + split filter + allocations ref (for reproduction)
 - `config.yaml` — resolved Hydra config
 - `gifs/` — if `gif.enabled=true`
 

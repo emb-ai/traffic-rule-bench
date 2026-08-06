@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Allocate ~n_train maps per sign from the shared global train/test split.
+"""Allocate n_train / n_test maps per sign from the shared global train/test split.
 
 Shared pool: signs sample independently from the same train_ids / test_ids
 (a junction may be assigned to several signs). Within one sign, scene_ids are
 unique.
+
+Canonical quotas: ``splits/signs.yaml`` (``n_train``, ``n_test``, ``seed``, …).
+This script writes ``sign_allocations.json`` and a generated ``signs.json`` twin.
 
 For signs with shapes [T, X], ``x_share`` is the fraction of X maps
 (e.g. 0.5 → 50/50 X/T). That is the former informal name ``x_frac``.
@@ -199,7 +202,18 @@ def main() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
+    # Generated twin of signs.yaml (YAML remains the editable source of truth).
+    twin = args.signs_yaml.with_suffix(".json")
+    twin.write_text(
+        json.dumps(signs_cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
     print(f"[allocate] signs={len(result['signs'])} → {args.out}")
+    print(f"[allocate] wrote twin config → {twin}")
+    print(
+        f"[allocate] quotas n_train={result['n_train_target']} "
+        f"n_test={result['n_test_target']} seed={result['seed']}"
+    )
     for code, block in result["signs"].items():
         print(
             f"  {code}: train={block['train']['n']} {block['train']['by_shape']}  "

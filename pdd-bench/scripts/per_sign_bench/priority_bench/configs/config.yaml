@@ -15,6 +15,7 @@ hydra:
 
 paths:
   scenes_dir: scenes
+  split: all  # all | train | test
   experiment_name: ${now:%Y-%m-%d_%H-%M-%S}
 
 scenario:

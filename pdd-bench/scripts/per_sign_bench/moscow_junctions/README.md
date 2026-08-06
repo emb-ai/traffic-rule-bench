@@ -29,11 +29,22 @@ moscow_junctions/
 1. **One shared scene pool** — `scenes/{T,X,O}/` is not owned by any sign.
 2. **One global split** by `scene_id` (`junc_*` / `rb_*`), stratified by shape, **80/20**, **seed=42**. A junction never appears in both train and test.
 3. **Shared pool across signs** — each sign independently samples from the same `train_ids` / `test_ids` (the same map may be used for 2.4 and 2.1).
-4. **Quotas**
-   - Most signs: **~115 train maps**, **X/T = 50/50** (`x_share: 0.5`).
+4. **Quotas** (edit `splits/signs.yaml` — canonical; `signs.json` is a generated twin)
+
+   | Key | Default | Meaning |
+   |-----|---------|---------|
+   | `n_train` | **115** | Target train maps per sign (after review) |
+   | `n_test` | **29** | Target test maps per sign |
+   | `test_frac` | 0.2 | Used when deriving `n_test` if omitted |
+   | `x_share` | 0.5 | Fraction of X among {T,X} for that sign |
+   | `seed` | 42 | Allocation RNG seed |
+
+   - Most signs: shapes `[T, X]`, `x_share: 0.5`.
    - **4.3**: only **O**.
    - **5.7.1 / 5.7.2**: only **T**.
-   - Test ≈ `115 * 0.2/0.8 ≈ 29` maps per sign (same shape mix).
+
+   These numbers are **per-sign map quotas**, not OSM download size
+   (`raw/DOWNLOAD_META.json` is only about the BBBike extract).
 
 **What is `x_share`?** (informal synonym: `x_frac`)  
 Fraction of allocated maps that are **X** when the sign allows both T and X.  
@@ -41,8 +52,8 @@ Fraction of allocated maps that are **X** when the sign allows both T and X.
 
 ```bash
 python scripts/make_junction_split.py          # → splits/train_ids.json, test_ids.json
-python scripts/allocate_sign_scenes.py        # → splits/sign_allocations.json
-# edit quotas in splits/signs.json (keep signs.yaml in sync) then re-run allocate
+python scripts/allocate_sign_scenes.py        # → splits/sign_allocations.json (+ signs.json twin)
+# edit quotas in splits/signs.yaml then re-run allocate
 ```
 
 Each scene folder contains:
