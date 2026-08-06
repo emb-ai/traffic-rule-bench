@@ -194,8 +194,8 @@ def compare(left: list[dict], right: list[dict], level: str) -> dict:
         "touched": {k: {"nets": v[0], "nets_pct": 100.0 * v[0] / n_nets,
                         "scenes": v[1], "scenes_pct": 100.0 * v[1] / n_scenes}
                     for k, v in touched.items()},
-        "hist": {f"{lo}-{hi if hi < 10**9 else '+'}": {"nets": v[0], "scenes": v[1]}
-                 for (lo, hi), v in hist.items()},
+        "hist": {(f"{lo}+" if hi >= 10**9 else str(lo) if lo == hi else f"{lo}-{hi}"):
+                 {"nets": v[0], "scenes": v[1]} for (lo, hi), v in hist.items()},
         "per_class": {c: {"nets": v[0], "scenes": v[1], "nets_touched": v[2],
                           "scenes_touched": v[3],
                           "nets_pct": 100.0 * v[2] / (v[0] or 1),
@@ -205,12 +205,118 @@ def compare(left: list[dict], right: list[dict], level: str) -> dict:
     }
 
 
+# --- charts -----------------------------------------------------------------
+# Validated categorical slots (light surface): blue, orange. Bars carry direct
+# value labels, so the palette's contrast relief rule is satisfied.
+SURFACE, INK, INK_2 = "#fcfcfb", "#0b0b0b", "#52514e"
+GRID, AXIS = "#e5e5e2", "#c9c9c4"
+SERIES = {"fragment": "#2a78d6", "route": "#eb6834"}
+
+
+def _axes(plt, title: str, ylabel: str, size=(9.0, 4.6)):
+    fig, ax = plt.subplots(figsize=size, dpi=160)
+    fig.patch.set_facecolor(SURFACE)
+    ax.set_facecolor(SURFACE)
+    ax.set_title(title, color=INK, fontsize=12, pad=14, loc="left")
+    ax.set_ylabel(ylabel, color=INK_2, fontsize=9)
+    ax.yaxis.grid(True, color=GRID, linewidth=0.8)
+    ax.set_axisbelow(True)
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    ax.spines["bottom"].set_color(AXIS)
+    ax.tick_params(colors=INK_2, labelsize=9, length=0)
+    return fig, ax
+
+
+def _grouped_bars(ax, labels, series: dict[str, list[float]], fmt="{:.1f}%"):
+    n = len(series)
+    # Narrow groups when there are few categories, else bars become slabs.
+    group = 0.7 if len(labels) >= 4 else 0.45
+    width = group / n
+    for i, (name, values) in enumerate(series.items()):
+        xs = [x - group / 2 + width * (i + 0.5) for x in range(len(labels))]
+        ax.bar(xs, values, width * 0.92, label=name, color=SERIES.get(name, "#2a78d6"))
+        for x, v in zip(xs, values):
+            ax.annotate(fmt.format(v), (x, v), textcoords="offset points",
+                        xytext=(0, 3), ha="center", fontsize=8, color=INK_2)
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels, fontsize=9)
+    if n > 1:
+        # Top-right of the title band: inside the axes it collides with tall bars.
+        ax.legend(frameon=False, fontsize=9, loc="lower right", ncols=n,
+                  bbox_to_anchor=(1, 1.0), labelcolor=INK_2, handlelength=1.2)
+
+
+def write_charts(comparisons: list[dict], out_dir: Path) -> list[str]:
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.ticker import MaxNLocator
+    except ImportError:
+        print("[charts] matplotlib not available — skipping", file=sys.stderr)
+        return []
+
+    by_pair: dict[str, dict[str, dict]] = collections.defaultdict(dict)
+    for r in comparisons:
+        by_pair[f"{r['left_name']} -> {r['right_name']}"][r["level"]] = r
+    pairs = list(by_pair)
+    levels = ["fragment", "route"]
+    written = []
+
+    fig, ax = _axes(plt, "Scenes standing on a road seen in the other set",
+                    "% of scenes")
+    _grouped_bars(ax, pairs,
+                  {lv: [by_pair[p].get(lv, {}).get("touched", {}).get("any", {})
+                        .get("scenes_pct", 0.0) for p in pairs] for lv in levels})
+    ax.set_ylim(0, 105)
+    fig.tight_layout()
+    p = out_dir / "overlap_any.png"
+    fig.savefig(p, facecolor=SURFACE)
+    plt.close(fig)
+    written.append(p.name)
+
+    for pair, per_level in by_pair.items():
+        ref = per_level.get("fragment") or next(iter(per_level.values()))
+        codes = list(ref["per_class"])
+        if not codes:
+            continue
+        fig, ax = _axes(plt, f"By sign class — {pair}", "% of scenes")
+        _grouped_bars(ax, codes,
+                      {lv: [per_level.get(lv, {}).get("per_class", {})
+                            .get(c, {}).get("scenes_pct", 0.0) for c in codes]
+                       for lv in levels})
+        ax.set_ylim(0, 105)
+        fig.tight_layout()
+        p = out_dir / f"overlap_by_class_{pair.replace(' -> ', '_to_').replace('/', '-')}.png"
+        fig.savefig(p, facecolor=SURFACE)
+        plt.close(fig)
+        written.append(p.name)
+
+        buckets = list(ref["hist"])
+        fig, ax = _axes(plt, f"How many roads a scene shares — {pair}", "scenes")
+        _grouped_bars(ax, buckets,
+                      {lv: [per_level.get(lv, {}).get("hist", {}).get(b, {})
+                            .get("scenes", 0) for b in buckets] for lv in levels},
+                      fmt="{:.0f}")
+        ax.set_xlabel("shared roads per scene", color=INK_2, fontsize=9)
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+        fig.tight_layout()
+        p = out_dir / f"overlap_hist_{pair.replace(' -> ', '_to_').replace('/', '-')}.png"
+        fig.savefig(p, facecolor=SURFACE)
+        plt.close(fig)
+        written.append(p.name)
+
+    return written
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--set", dest="sets", action="append", required=True,
                     metavar="NAME:TRAIN:TEST:SCENES_ROOT")
     ap.add_argument("--out-dir", type=Path, default=Path("net_overlap"))
+    ap.add_argument("--no-charts", action="store_true", help="skip PNG charts")
     args = ap.parse_args()
 
     parts: dict[str, list[dict]] = {}
@@ -278,11 +384,16 @@ def main() -> None:
         md.append("")
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    charts = [] if args.no_charts else write_charts(comparisons, args.out_dir)
+    if charts:
+        md += ["## Charts", ""] + [f"![{c}]({c})" for c in charts] + [""]
+
     (args.out_dir / "net_overlap.md").write_text("\n".join(md) + "\n", encoding="utf-8")
     (args.out_dir / "net_overlap.json").write_text(json.dumps(comparisons, indent=2),
                                                     encoding="utf-8")
     print("\n".join(md))
-    print(f"\nWrote {args.out_dir / 'net_overlap.md'}")
+    print(f"\nWrote {args.out_dir / 'net_overlap.md'}"
+          + (f" (+{len(charts)} charts)" if charts else ""))
 
 
 if __name__ == "__main__":
