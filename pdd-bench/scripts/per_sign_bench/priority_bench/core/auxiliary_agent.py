@@ -979,10 +979,29 @@ def resolve_aux_destination_lane_key(
     if not route_index.has_exit(edge_id, lane_num):
         return None
     for dest_edge in candidates:
-        if route_index.can_reach_edge(edge_id, lane_num, dest_edge):
-            return pick_lane_key_on_edge(dest_edge, lane_num, lane_keys_by_edge)
+        if not route_index.can_reach_edge(edge_id, lane_num, dest_edge):
+            continue
+        # Prefer same lane index only when that dest lane is actually reachable
+        # (e.g. left turn from lane 0 may only enter dest lane 1).
+        allowed = route_index.reachable_lanes_on_edge(edge_id, lane_num, dest_edge)
+        key = pick_lane_key_on_edge(
+            dest_edge,
+            lane_num,
+            lane_keys_by_edge,
+            allowed_lane_nums=sorted(allowed),
+        )
+        if key:
+            return key
     for dest_edge in route_index.reachable_real_edges(edge_id, lane_num):
-        return pick_lane_key_on_edge(dest_edge, lane_num, lane_keys_by_edge)
+        allowed = route_index.reachable_lanes_on_edge(edge_id, lane_num, dest_edge)
+        key = pick_lane_key_on_edge(
+            dest_edge,
+            lane_num,
+            lane_keys_by_edge,
+            allowed_lane_nums=sorted(allowed),
+        )
+        if key:
+            return key
     return None
 
 
@@ -1175,9 +1194,11 @@ def resolve_aux_spawn_plan(
             continue
 
         if lane_keys_by_edge:
+            # Keep the resolved dest lane index (may differ from spawn lane —
+            # e.g. left turn from lane 0 onto dest lane 1).
             dest = pick_lane_key_on_edge(
                 lane_edge_id(dest),
-                lane_num_from_key(spawn_lane),
+                lane_num_from_key(dest),
                 lane_keys_by_edge,
             )
         kept_spawns.append(spawn_lane)

@@ -86,6 +86,39 @@ class VehicleRouteIndex:
         """True if this lane has at least one SUMO connection leaving it."""
         return bool(self._adj.get((from_edge, int(from_lane))))
 
+    def reachable_lanes_on_edge(
+        self,
+        from_edge: str,
+        from_lane: int,
+        to_edge: str,
+        *,
+        max_hops: int = 8,
+    ) -> set[int]:
+        """Lane indices on ``to_edge`` reachable from the spawn lane."""
+        if not is_real_sumo_edge_id(to_edge) or from_edge == to_edge:
+            return set()
+
+        start = (from_edge, int(from_lane))
+        queue: deque[tuple[tuple[str, int], int]] = deque([(start, 0)])
+        visited = {start}
+        hits: set[int] = set()
+
+        while queue:
+            (edge, lane), depth = queue.popleft()
+            if depth > max_hops:
+                continue
+            for next_edge, next_lane in self._adj.get((edge, lane), []):
+                if self._edge_fn.get(next_edge) == "walkingarea":
+                    continue
+                if is_real_sumo_edge_id(next_edge) and next_edge == to_edge:
+                    hits.add(int(next_lane))
+                state = (next_edge, next_lane)
+                if state in visited:
+                    continue
+                visited.add(state)
+                queue.append((state, depth + 1))
+        return hits
+
     def reachable_real_edges(
         self,
         from_edge: str,

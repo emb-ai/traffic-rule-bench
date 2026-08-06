@@ -76,9 +76,6 @@ python build_scenes/review_scenes.py
 # Apply rejects, then top up to signs.yaml quotas if short
 python build_scenes/review_scenes.py --apply
 python build_scenes/materialize_scenes.py --sign 2.4 --refill
-
-# Optional: why a scene would drop at manifest time
-python tools/analyze_manifest_drops.py
 ```
 
 Prereq: shared harvest + allocations under  
