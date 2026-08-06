@@ -28,6 +28,7 @@ Reported per ordered pair of scene sets (train->test, speed->detour, ...):
 from __future__ import annotations
 
 import argparse
+import base64
 import collections
 import json
 import re
@@ -45,6 +46,15 @@ def way_of(edge_id: str) -> str | None:
         return None
     m = _WAY_RE.match(edge_id)
     return m.group(1) if m else None
+
+
+def _img(out_dir: Path, name: str, embed: bool) -> str:
+    """Markdown image: a base64 data URI by default, so the report renders on its
+    own; a relative link when the PNGs travel with it."""
+    if not embed:
+        return f"![{name}]({name})"
+    data = base64.b64encode((out_dir / name).read_bytes()).decode("ascii")
+    return f"![{name}](data:image/png;base64,{data})"
 
 
 def _sign_key(code: str) -> tuple:
@@ -399,6 +409,8 @@ def main() -> None:
                     metavar="NAME:TRAIN:TEST:SCENES_ROOT")
     ap.add_argument("--out-dir", type=Path, default=Path("net_overlap"))
     ap.add_argument("--no-charts", action="store_true", help="skip PNG charts")
+    ap.add_argument("--link-charts", action="store_true",
+                    help="reference PNGs by relative path instead of embedding them")
     ap.add_argument("--brief", action="store_true",
                     help="summary table only — no per-pair breakdowns, no charts")
     args = ap.parse_args()
@@ -451,7 +463,7 @@ def main() -> None:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     summary_chart = [] if args.no_charts else write_summary_chart(comparisons, args.out_dir)
     if summary_chart:
-        md += [f"![{c}]({c})" for c in summary_chart] + [""]
+        md += [_img(args.out_dir, c, not args.link_charts) for c in summary_chart] + [""]
 
     if args.brief:
         (args.out_dir / "net_overlap.md").write_text("\n".join(md) + "\n", encoding="utf-8")
@@ -501,7 +513,8 @@ def main() -> None:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     charts = [] if args.no_charts else write_charts(comparisons, args.out_dir)
     if charts:
-        md += ["## Charts", ""] + [f"![{c}]({c})" for c in charts] + [""]
+        md += ["## Charts", ""] + [_img(args.out_dir, c, not args.link_charts)
+                                   for c in charts] + [""]
 
     (args.out_dir / "net_overlap.md").write_text("\n".join(md) + "\n", encoding="utf-8")
     (args.out_dir / "net_overlap.json").write_text(json.dumps(comparisons, indent=2),
