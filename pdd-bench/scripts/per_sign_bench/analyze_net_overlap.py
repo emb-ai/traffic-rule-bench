@@ -247,6 +247,47 @@ def _grouped_bars(ax, labels, series: dict[str, list[float]], fmt="{:.1f}%"):
                   bbox_to_anchor=(1, 1.0), labelcolor=INK_2, handlelength=1.2)
 
 
+def write_summary_chart(comparisons: list[dict], out_dir: Path) -> list[str]:
+    """The summary table as one chart: route-level overlap per pair, split into
+    same-class and other-class-only. Fragment level is left out on purpose — in a
+    dense grid it saturates and says nothing."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("[charts] matplotlib not available — skipping", file=sys.stderr)
+        return []
+
+    rows = [r for r in comparisons if r["level"] == "route"]
+    if not rows:
+        return []
+    labels = [f"{r['left_name']}\n-> {r['right_name']}" for r in rows]
+    other = [r["touched"]["other_class_only"]["scenes_pct"] for r in rows]
+    same = [r["touched"]["any"]["scenes_pct"] - o for r, o in zip(rows, other)]
+
+    fig, ax = _axes(plt, "Test scenes driving a road also driven in the other set",
+                    "% of scenes", size=(max(8.0, 1.6 * len(rows)), 4.8))
+    xs = range(len(rows))
+    ax.bar(xs, same, 0.55, label="same sign class", color=SERIES["fragment"])
+    # 2px surface gap between stacked segments.
+    ax.bar(xs, other, 0.55, bottom=[s + 0.35 for s in same],
+           label="other class only", color=SERIES["route"])
+    for x, (s, o) in enumerate(zip(same, other)):
+        ax.annotate(f"{s + o:.1f}%", (x, s + o), textcoords="offset points",
+                    xytext=(0, 5), ha="center", fontsize=9, color=INK)
+    ax.set_xticks(list(xs))
+    ax.set_xticklabels(labels, fontsize=8)
+    ax.set_ylim(0, max(1.0, max(s + o for s, o in zip(same, other))) * 1.25)
+    ax.legend(frameon=False, fontsize=9, loc="lower right", ncols=2,
+              bbox_to_anchor=(1, 1.0), labelcolor=INK_2, handlelength=1.2)
+    fig.tight_layout()
+    p = out_dir / "summary_route.png"
+    fig.savefig(p, facecolor=SURFACE)
+    plt.close(fig)
+    return [p.name]
+
+
 def write_charts(comparisons: list[dict], out_dir: Path) -> list[str]:
     try:
         import matplotlib
@@ -366,13 +407,18 @@ def main() -> None:
                   f"{ft.get('scenes_pct', 0):.1f}% / {rt.get('scenes_pct', 0):.1f}% | "
                   f"{other.get('scenes_pct', 0):.1f}% |")
     md.append("")
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    summary_chart = [] if args.no_charts else write_summary_chart(comparisons, args.out_dir)
+    if summary_chart:
+        md += [f"![{c}]({c})" for c in summary_chart] + [""]
+
     if args.brief:
-        args.out_dir.mkdir(parents=True, exist_ok=True)
         (args.out_dir / "net_overlap.md").write_text("\n".join(md) + "\n", encoding="utf-8")
         (args.out_dir / "net_overlap.json").write_text(json.dumps(comparisons, indent=2),
                                                         encoding="utf-8")
         print("\n".join(md))
-        print(f"\nWrote {args.out_dir / 'net_overlap.md'}")
+        print(f"\nWrote {args.out_dir / 'net_overlap.md'}"
+              + (f" (+{len(summary_chart)} chart)" if summary_chart else ""))
         return
 
     for r in comparisons:
