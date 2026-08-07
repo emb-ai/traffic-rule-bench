@@ -89,6 +89,20 @@ def main() -> None:
     if (root / "data").is_dir():
         root = root / "data"
 
+    # PlanTDataset loads car_data.npy from a hardcoded upstream path; the file
+    # ships next to dataset.py, so redirect the read instead of patching theirs.
+    import numpy as np
+
+    _np_load = np.load
+
+    def _load(file, *a, **kw):
+        f = str(file)
+        if f.endswith("car_data.npy") and not Path(f).is_file():
+            file = str(plant_dir / "car_data.npy")
+        return _np_load(file, *a, **kw)
+
+    np.load = _load
+
     from dataset import PlanTDataset, generate_batch  # noqa: E402
     from util.sign_id import SIGN_CODES  # noqa: E402
 
