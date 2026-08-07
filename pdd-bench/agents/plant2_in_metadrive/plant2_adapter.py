@@ -298,6 +298,18 @@ class PlanT2MetaDriveAdapter:
             device=self.device,
         )
 
+        # Object pool as the model sees it — to compare the eval-side convention
+        # against the training dumps (boxes/NNNN.json.gz) row by row.
+        if _os.environ.get("PLANT2_DEBUG_OBJS"):
+            _x = batch.get("x_objs")
+            if _x is not None:
+                _rows = _x[0] if _x.dim() == 3 else _x
+                for _r in _rows.tolist():
+                    if _r[0] > 0:
+                        print(f"[objdbg] type={_r[0]:.0f} x={_r[1]:+.1f} y={_r[2]:+.1f} "
+                              f"yaw={_r[3]:+.0f} spd={_r[4]:.1f}", flush=True)
+                print("[objdbg] ---", flush=True)
+
         with torch.no_grad():
             _, _, pred_plan, _ = self._model(batch)
 
