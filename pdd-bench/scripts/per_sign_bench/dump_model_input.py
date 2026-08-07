@@ -82,8 +82,8 @@ def main() -> None:
     args = ap.parse_args()
 
     plant_dir = Path(args.plant_dir).resolve()
+    # Only the PlanT root: adding PlanT/util shadows stdlib `logging`.
     sys.path.insert(0, str(plant_dir))
-    sys.path.insert(0, str(plant_dir / "util"))
 
     root = Path(args.split).resolve()
     if (root / "data").is_dir():
