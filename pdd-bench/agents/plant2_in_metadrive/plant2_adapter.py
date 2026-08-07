@@ -307,6 +307,19 @@ class PlanT2MetaDriveAdapter:
             pred_path, pred_wps, _ = pred_plan
             pred_plan = (pred_path, pred_wps, None)
 
+        # The dumps used for finetuning store route AND targets in MetaDrive
+        # convention (y=left), while the controllers below read the prediction as
+        # CARLA (y=right). Flipping only the route input leaves the output
+        # mirrored — steering comes out inverted. This flips the prediction too,
+        # so route in / path out can be put in one convention together.
+        if _os.environ.get("PLANT2_PRED_YFLIP"):
+            _pp, _pw, _ps = pred_plan
+            if _pp is not None:
+                _pp = _pp.clone(); _pp[..., 1] = -_pp[..., 1]
+            if _pw is not None:
+                _pw = _pw.clone(); _pw[..., 1] = -_pw[..., 1]
+            pred_plan = (_pp, _pw, _ps)
+
         ego_speed = float(getattr(vehicle, "speed", 0.0))
         speed_limit_idx = int(batch["speed_limit"][0].item())
         target_speed_mps = get_target_speed_from_limit(speed_limit_idx)
