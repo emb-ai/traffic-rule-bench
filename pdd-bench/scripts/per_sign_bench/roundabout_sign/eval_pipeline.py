@@ -187,6 +187,7 @@ def run_baseline_by_scenes(
     save_gifs: bool,
     plant2_action_mode: str,
     jobs: int,
+    scenes_per_job: int = 1,
 ) -> None:
     """Run one (policy, ego-variant) baseline; parallelize across scenes."""
     run_name = f"{policy}_{variant}"
@@ -208,19 +209,26 @@ def run_baseline_by_scenes(
         run(cmd)
         return
 
-    workers = min(jobs, len(scene_lines))
+    # run_benchmark.py loads the policy checkpoint once per process, so grouping
+    # scenes amortizes that startup instead of paying it on every scene.
+    chunk = max(1, int(scenes_per_job))
+    groups = [scene_lines[i:i + chunk] for i in range(0, len(scene_lines), chunk)]
+    workers = min(jobs, len(groups))
     shards_root = out_dir / "_scene_shards" / run_name
     shards_root.mkdir(parents=True, exist_ok=True)
     tasks: list[tuple[int, str, Path, Path]] = []
-    for i, line in enumerate(scene_lines):
-        label = _scene_label(line, i)
+    for i, group in enumerate(groups):
+        label = _scene_label(group[0], i)
+        if len(group) > 1:
+            label = f"{label} +{len(group) - 1}"
         shard_manifest = shards_root / f"scene_{i:04d}.jsonl"
-        shard_manifest.write_text(line + "\n", encoding="utf-8")
+        shard_manifest.write_text("\n".join(group) + "\n", encoding="utf-8")
         shard_out = final_eval_dir / "_shards" / f"{i:04d}"
         tasks.append((i, label, shard_manifest, shard_out))
 
     print(
-        f"\n[{run_name}] parallelizing {len(tasks)} scene(s) "
+        f"\n[{run_name}] parallelizing {len(scene_lines)} scene(s) in "
+        f"{len(tasks)} job(s) of up to {chunk} "
         f"with jobs={workers} (methods stay sequential)"
     )
 
@@ -238,7 +246,7 @@ def run_baseline_by_scenes(
             plant2_action_mode=plant2_action_mode,
             output_dir=shard_out,
         )
-        print(f"\n[{run_name}] start scene {i + 1}/{len(tasks)}: {label}")
+        print(f"\n[{run_name}] start job {i + 1}/{len(tasks)}: {label}")
         run(cmd)
         return label
 
@@ -249,7 +257,7 @@ def run_baseline_by_scenes(
             i, label, _, _ = futures[future]
             try:
                 future.result()
-                print(f"[{run_name}] finished scene {i + 1}/{len(tasks)}: {label}")
+                print(f"[{run_name}] finished job {i + 1}/{len(tasks)}: {label}")
             except subprocess.CalledProcessError as exc:
                 failures.append(f"{label} (exit {exc.returncode})")
             except Exception as exc:
@@ -366,10 +374,15 @@ def main() -> None:
     p.add_argument("--jobs", type=int, default=8,
                    help=("Max parallel scene workers within each baseline "
                          "(default: 8). Policies/baselines still run one after another."))
+    p.add_argument("--scenes-per-job", type=int, default=1,
+                   help=("Scenes handled by one run_benchmark.py process (default: 1). "
+                         "Higher values amortize model-load startup across scenes."))
     args = p.parse_args()
 
     if args.jobs < 1:
         sys.exit("--jobs must be >= 1")
+    if args.scenes_per_job < 1:
+        sys.exit("--scenes-per-job must be >= 1")
 
     manifest_paths: list[Path] = []
     run_dirs: list[Path] = []
@@ -459,7 +472,7 @@ def main() -> None:
     # --replay-root writes replays straight into the layout build_csv expects:
     # <OUT>/runs/var_0/<run_name>/replays/<sign>/by_sign/.../replay.json
     bench_root = OUT / "benchmark"
-    print(f"Scene parallelism: jobs={args.jobs}")
+    print(f"Scene parallelism: jobs={args.jobs} scenes_per_job={args.scenes_per_job}")
     for policy, variant in baselines:
         run_baseline_by_scenes(
             policy=policy,
@@ -473,6 +486,7 @@ def main() -> None:
             save_gifs=args.save_gifs,
             plant2_action_mode=args.plant2_action_mode,
             jobs=args.jobs,
+            scenes_per_job=args.scenes_per_job,
         )
 
     # metrics pipeline (build --  aggregate -- MD report) 

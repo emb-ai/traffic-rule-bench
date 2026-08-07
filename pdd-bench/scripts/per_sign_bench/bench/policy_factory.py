@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import sys
 
-from bench._paths import SDC_ROOT
+from bench._paths import PLANT2_REPO, SDC_ROOT
 
 try:
     import torch
@@ -34,7 +34,7 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
     elif policy == "plant2":
         if not model_path:
             raise ValueError("--model-path is required for --policy plant2")
-        PLANT2_PATH = SDC_ROOT / "plant2"
+        PLANT2_PATH = PLANT2_REPO
         if str(PLANT2_PATH) not in sys.path:
             sys.path.insert(0, str(PLANT2_PATH))
         from agents.policies.plain_plant2_policy import PlainPlanT2Policy
@@ -57,7 +57,7 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
     elif policy == "plant2_rule":
         if not model_path:
             raise ValueError("--model-path is required for --policy plant2_rule")
-        PLANT2_PATH = SDC_ROOT / "plant2"
+        PLANT2_PATH = PLANT2_REPO
         if str(PLANT2_PATH) not in sys.path:
             sys.path.insert(0, str(PLANT2_PATH))
         from agents.policies.plant2_sign_compliant import PlanT2SignCompliantPolicy

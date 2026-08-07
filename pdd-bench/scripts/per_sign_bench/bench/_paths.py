@@ -6,6 +6,7 @@ run_benchmark or standalone.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -21,6 +22,7 @@ def _find_pdd_bench_root(start: Path) -> Path:
 _THIS = Path(__file__).resolve()
 PDD_BENCH_DIR = _find_pdd_bench_root(_THIS)
 SDC_ROOT = PDD_BENCH_DIR.parent
+PLANT2_REPO = Path(os.environ["PLANT2_REPO"]) if os.environ.get("PLANT2_REPO") else SDC_ROOT / "plant2"
 METADRIVE_DIR = SDC_ROOT / "metadrive"
 
 for _p in (PDD_BENCH_DIR, METADRIVE_DIR, PDD_BENCH_DIR / "scripts" / "per_sign_bench"):

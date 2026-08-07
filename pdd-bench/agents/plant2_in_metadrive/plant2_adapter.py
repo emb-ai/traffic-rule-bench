@@ -11,6 +11,8 @@ first `get_action()` call.
 
 from __future__ import annotations
 
+import json
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -30,13 +32,67 @@ def _ensure_plant2_paths(plant_repo_dir: Path) -> None:
             sys.path.insert(0, ps)
 
 
-# --- pure-pursuit constants (match eval_plant2_wps_steer.py) ---
+# --- pure-pursuit constants (match PlanTVariables.target_speeds / bins_speed=8) ---
 _SPEED_BINS = np.array(
-    [0.0, 0.025, 0.05472609, 1.0, 1.5, 2.0, 4.0, 8.0, 10.0, 20.0],
+    [0.0, 4.0, 8.0, 10.0, 13.88888888, 16.0, 17.77777777, 20.0],
     dtype=np.float32,
 )
 _WHEELBASE_M = 2.5
 _LOOKAHEAD_IDX = 1
+
+
+def _env_float_or_none(name: str) -> Optional[float]:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return None
+    return float(raw)
+
+
+def _apply_stop_prob_threshold(probs: np.ndarray, desired_speed: float) -> float:
+    """Force desired_speed=0 when stop-bin mass is high / other-bin mass is low.
+
+    Env (default off / None):
+      PLANT2_STOP_PROB_THR      — if probs[0] >= thr → stop
+      PLANT2_STOP_OTHER_MASS_THR — if sum(probs[1:]) <= thr → stop
+    """
+    stop_thr = _env_float_or_none("PLANT2_STOP_PROB_THR")
+    other_thr = _env_float_or_none("PLANT2_STOP_OTHER_MASS_THR")
+    if stop_thr is None and other_thr is None:
+        return desired_speed
+    p0 = float(probs[0]) if probs is not None and len(probs) else 0.0
+    other = float(probs[1:].sum()) if probs is not None and len(probs) > 1 else 1.0
+    force = False
+    if stop_thr is not None and p0 >= stop_thr:
+        force = True
+    if other_thr is not None and other <= other_thr:
+        force = True
+    return 0.0 if force else desired_speed
+
+
+def _maybe_log_speed_pred(
+    probs: np.ndarray,
+    desired_speed: float,
+    ego_speed: float,
+    extra: Optional[dict] = None,
+) -> None:
+    """Append one JSON line when PLANT2_SPEED_LOG_PATH is set."""
+    path = os.environ.get("PLANT2_SPEED_LOG_PATH")
+    if not path:
+        return
+    rec = {
+        "probs": [float(x) for x in probs.tolist()],
+        "p0": float(probs[0]),
+        "other_mass": float(probs[1:].sum()) if len(probs) > 1 else 0.0,
+        "desired_speed": float(desired_speed),
+        "ego_speed": float(ego_speed),
+    }
+    if extra:
+        rec.update(extra)
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
 
 
 def _wps_to_action(pred_plan, current_speed: float, target_speed_mps: float) -> np.ndarray:
@@ -67,12 +123,15 @@ def _wps_to_action(pred_plan, current_speed: float, target_speed_mps: float) -> 
             # pred_wps use CARLA y=right; MetaDrive steer +1=left (mirrors plant2_control.py:198)
             steer = -steer
 
+    probs = None
     if pred_speed is not None:
         logits = pred_speed.detach().float()
         if logits.dim() > 1:
             logits = logits.squeeze(0)
         probs = torch.softmax(logits, dim=0).cpu().numpy()
         desired_speed = float((probs * _SPEED_BINS).sum())
+        desired_speed = _apply_stop_prob_threshold(probs, desired_speed)
+        _maybe_log_speed_pred(probs, desired_speed, current_speed)
     elif wps_np is not None and wps_np.shape[0] >= 4:
         desired_speed = float(np.linalg.norm(wps_np[2] - wps_np[3]) * 4.0)
         if current_speed < 0.01:
@@ -173,9 +232,14 @@ class PlanT2MetaDriveAdapter:
         # speed_token → new-style HFLM that appends a dedicated speed token at end
         _has_speed_token: bool = "speed_token" in _sd
 
+        # sign_emb → checkpoint trained with explicit PDD sign_id token
+        _has_sign_emb: bool = any(k.startswith("sign_emb.") for k in _sd)
+        self._use_sign_id: bool = _has_sign_emb
+
         print(
             f"[PlanT2Adapter] ckpt keys: speed_classifier={self._has_trained_speed_head}  "
-            f"ego_speed_emb={_has_ego_speed_emb}  speed_token={_has_speed_token}"
+            f"ego_speed_emb={_has_ego_speed_emb}  speed_token={_has_speed_token}  "
+            f"sign_emb={_has_sign_emb}"
         )
         if not self._has_trained_speed_head:
             print(
@@ -296,6 +360,8 @@ class PlanT2MetaDriveAdapter:
             bev_resolution=128,
             bev_size_meters=64.0,
             device=self.device,
+            include_sign_id=bool(getattr(self, "_use_sign_id", False)),
+            sign_code=getattr(self, "sign_code", None),
         )
 
         # Object pool as the model sees it — to compare the eval-side convention
@@ -398,6 +464,14 @@ class PlanT2MetaDriveAdapter:
                 logits = logits.squeeze(0)
             probs = torch.softmax(logits, dim=0).cpu().numpy()
             desired_speed = float((probs * SPEED_BINS).sum())
+            soft_desired = desired_speed
+            desired_speed = _apply_stop_prob_threshold(probs, desired_speed)
+            _maybe_log_speed_pred(
+                probs,
+                desired_speed,
+                current_speed,
+                extra={"soft_desired_speed": soft_desired, "ctrl": "pid"},
+            )
         else:
             _wp = pred_wps if pred_wps is not None else pred_path
             if _wp is not None:

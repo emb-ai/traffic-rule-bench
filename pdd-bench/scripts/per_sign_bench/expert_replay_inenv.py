@@ -56,6 +56,59 @@ for _p in (PDD_BENCH_DIR, METADRIVE_DIR, BENCHMARK_DIR):
         sys.path.insert(0, _ps)
 
 
+def _sign_lib_root_candidates(scenes_root: Optional[Path] = None) -> list[Path]:
+    """Dirs that contain ``lib/auxiliary_agent.py`` (per-sign packages)."""
+    candidates: list[Path] = []
+    seen: set[str] = set()
+
+    def _add(p: Path) -> None:
+        s = str(p.resolve())
+        if s not in seen:
+            seen.add(s)
+            candidates.append(Path(s))
+
+    if scenes_root is not None:
+        p = Path(scenes_root).resolve()
+        for _ in range(8):
+            if (p / "lib" / "auxiliary_agent.py").is_file():
+                _add(p)
+                break
+            if p.parent == p:
+                break
+            p = p.parent
+    for lib_aux in BENCHMARK_DIR.glob("*/lib/auxiliary_agent.py"):
+        _add(lib_aux.parent.parent)
+    return candidates
+
+
+def _pickle_load_replay(pkl_path: Path, scenes_root: Optional[Path] = None):
+    """pickle.load with temporary per-sign ``lib`` on sys.path.
+
+    Paths are removed before returning so later ``from run_benchmark import …``
+    in expert_replay does not resolve to a random ``*_sign/run_benchmark.py``.
+    """
+    inserted: list[str] = []
+    for root in _sign_lib_root_candidates(scenes_root):
+        s = str(root)
+        if s not in sys.path:
+            sys.path.insert(0, s)
+            inserted.append(s)
+    try:
+        with open(pkl_path, "rb") as f:
+            return pickle.load(f)
+    finally:
+        for s in inserted:
+            try:
+                sys.path.remove(s)
+            except ValueError:
+                pass
+        # Drop a cached wrong ``lib`` from a prior insert so the next call
+        # can bind the scenes_root-specific package if needed.
+        for mod in list(sys.modules):
+            if mod == "lib" or mod.startswith("lib."):
+                del sys.modules[mod]
+
+
 def _render_top_down(env, window: bool, screen_record: bool):
     env.render(
         mode="top_down",
@@ -254,7 +307,7 @@ def replay_in_our_env(
     save_plant2_dir: Optional[Path] = None,
 ) -> dict:
     sidecar = json.load(open(sidecar_path))
-    scenario = pickle.load(open(pkl_path, "rb"))
+    scenario = _pickle_load_replay(Path(pkl_path), scenes_root)
 
     from expert_replay import _build_env    # re-use env-builder
     from bench import env_builders as _env_builders
