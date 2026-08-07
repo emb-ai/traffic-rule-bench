@@ -360,7 +360,10 @@ class PlanT2MetaDriveAdapter:
             bev_resolution=128,
             bev_size_meters=64.0,
             device=self.device,
-            include_sign_id=bool(getattr(self, "_use_sign_id", False)),
+            # PLANT2_SIGN_TOKEN=0 drops the global sign token, so the A/B can
+            # separate it from the per-object PDD classes (PLANT2_SIGN_OBJS).
+            include_sign_id=bool(getattr(self, "_use_sign_id", False))
+            and _os.environ.get("PLANT2_SIGN_TOKEN", "1") not in ("0", "false", "False"),
             sign_code=getattr(self, "sign_code", None),
         )
 
