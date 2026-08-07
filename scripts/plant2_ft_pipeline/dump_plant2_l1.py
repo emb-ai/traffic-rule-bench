@@ -10,16 +10,28 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import importlib.util
+import json
 import os
-import subprocess
 import sys
-import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
-from _env import bench_dir, pipeline_dir, resolve_python, shepelev
-from _utils import WorkerPool, default_dump_max_workers, prepare_fv_experts
+from _env import pipeline_dir, shepelev, trb_root
+from _utils import default_dump_max_workers, prepare_fv_experts
+
+EXPERT_REPLAY_FOR_PLANT2 = (
+    trb_root()
+    / "pdd-bench"
+    / "scripts"
+    / "per_sign_bench"
+    / "expert_replay_for_plant2.py"
+)
+_run_batch: Callable[..., dict] | None = None
 
 SM_MNT = Path("/mnt/virtual_ai0001053-01202_SR006-nfs2/smirnova")
 ZINK_BENCH_DEFAULT = Path(
@@ -39,6 +51,115 @@ EXPERT_SIGNS: dict[str, tuple[str, str]] = {
 FV_SIGNS = ["3.24", "4.6", "5.21", "5.31"]
 
 
+def _load_run_batch() -> Callable[..., dict]:
+    global _run_batch
+    if _run_batch is not None:
+        return _run_batch
+    if not EXPERT_REPLAY_FOR_PLANT2.is_file():
+        raise SystemExit(f"ERROR: missing replay module: {EXPERT_REPLAY_FOR_PLANT2}")
+    spec = importlib.util.spec_from_file_location(
+        "expert_replay_for_plant2",
+        EXPERT_REPLAY_FOR_PLANT2,
+    )
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"ERROR: cannot import replay module: {EXPERT_REPLAY_FOR_PLANT2}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    _run_batch = mod.run_batch
+    return _run_batch
+
+
+def _replay_desc(
+    experts: Path,
+    scenes: Path,
+    out_dir: Path,
+    *,
+    backends: str,
+    start: int,
+    count: int | None,
+) -> str:
+    parts = [
+        f"experts={experts}",
+        f"scenes={scenes}",
+        f"out={out_dir}",
+        f"backends={backends}",
+        f"start={start}",
+    ]
+    if count is not None:
+        parts.append(f"count={count}")
+    return " ".join(parts)
+
+
+def _run_replay_batch(
+    experts: Path,
+    scenes: Path,
+    out_dir: Path,
+    *,
+    backends: str,
+    start: int,
+    count: int | None,
+    save_gifs: bool = False,
+    log_path: Path | None = None,
+) -> int:
+    if save_gifs:
+        print(f"[warn] --save-gifs ignored ({EXPERT_REPLAY_FOR_PLANT2.name} has no gif export)")
+    run_batch = _load_run_batch()
+    try:
+        if log_path is not None:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("w", encoding="utf-8") as logf:
+                with contextlib.redirect_stdout(logf), contextlib.redirect_stderr(logf):
+                    summary = run_batch(
+                        experts.resolve(),
+                        scenes.resolve(),
+                        out_dir.resolve(),
+                        count=count,
+                        start=start,
+                        backends=backends,
+                    )
+                    print(json.dumps(summary, indent=2))
+        else:
+            summary = run_batch(
+                experts.resolve(),
+                scenes.resolve(),
+                out_dir.resolve(),
+                count=count,
+                start=start,
+                backends=backends,
+            )
+            print(json.dumps(summary, indent=2))
+        return 0
+    except Exception as exc:
+        msg = f"ERROR: {exc}\n"
+        print(msg, end="" if log_path is None else "", file=sys.stderr)
+        if log_path is not None:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(msg, encoding="utf-8")
+        return 1
+
+
+def _replay_batch_job(
+    experts: str,
+    scenes_root: str,
+    save_plant2_dir: str,
+    backends: str,
+    start: int,
+    count: int | None,
+    log_path: str | None,
+    save_gifs: bool,
+) -> int:
+    return _run_replay_batch(
+        Path(experts),
+        Path(scenes_root),
+        Path(save_plant2_dir),
+        backends=backends,
+        start=start,
+        count=count,
+        save_gifs=save_gifs,
+        log_path=Path(log_path) if log_path else None,
+    )
+
+
 @dataclass
 class DumpJob:
     name: str
@@ -48,47 +169,8 @@ class DumpJob:
     n: int
 
 
-def _replay_cmd(
-    py: Path,
-    script: Path,
-    experts: Path,
-    scenes: Path,
-    out_dir: Path,
-    *,
-    backends: str,
-    start: int,
-    count: int | None,
-    save_gifs: bool,
-    gif_subdir: str,
-) -> list[str]:
-    cmd = [
-        str(py),
-        str(script),
-        "--experts",
-        str(experts),
-        "--scenes-root",
-        str(scenes),
-        "--save-plant2-dir",
-        str(out_dir),
-        "--backends",
-        backends,
-        "--ego-mode",
-        "recorded",
-        "--npc-mode",
-        "recorded",
-        "--start",
-        str(start),
-    ]
-    if count is not None:
-        cmd.extend(["--count", str(count)])
-    if save_gifs:
-        cmd.extend(["--save-gifs", "--gif-dir", str(out_dir / "gifs" / gif_subdir)])
-    return cmd
-
-
 def _run_experts(args: argparse.Namespace) -> int:
-    py = resolve_python(args.python_exe)
-    script = bench_dir() / "expert_replay_inenv.py"
+    _load_run_batch()
     ct = pipeline_dir()
     args.out_dir.mkdir(parents=True, exist_ok=True)
     log_dir = args.out_dir / "logs"
@@ -105,18 +187,20 @@ def _run_experts(args: argparse.Namespace) -> int:
             print(f"[FAIL] {sign}: missing inputs")
             fail += 1
             continue
-        cmd = _replay_cmd(
-            py, script, experts, scenes, args.out_dir,
+        desc = _replay_desc(
+            experts, scenes, args.out_dir,
             backends=args.backends, start=args.start, count=args.count,
-            save_gifs=args.save_gifs, gif_subdir=sign,
         )
-        print(f"[run] {sign}: {' '.join(cmd)}")
+        print(f"[run] {sign}: {desc}")
         if args.dry_run:
             ok += 1
             continue
         logf = log_dir / f"{sign}_{ts}.log"
-        with logf.open("w") as f:
-            rc = subprocess.run(cmd, cwd=str(bench_dir()), stdout=f, stderr=subprocess.STDOUT).returncode
+        rc = _run_replay_batch(
+            experts, scenes, args.out_dir,
+            backends=args.backends, start=args.start, count=args.count,
+            save_gifs=args.save_gifs, log_path=logf,
+        )
         fail += rc != 0
         ok += rc == 0
         print(f"[{'ok' if rc == 0 else 'FAIL'}] {sign} rc={rc}")
@@ -125,8 +209,7 @@ def _run_experts(args: argparse.Namespace) -> int:
 
 
 def _run_fv(args: argparse.Namespace) -> int:
-    py = resolve_python(args.python_exe)
-    script = bench_dir() / "expert_replay_inenv.py"
+    _load_run_batch()
     args.out_dir.mkdir(parents=True, exist_ok=True)
     experts_dir = args.out_dir / "experts"
     log_dir = args.out_dir / "logs"
@@ -140,8 +223,8 @@ def _run_fv(args: argparse.Namespace) -> int:
         node_filter=args.node_filter,
     )
     max_jobs = args.max_jobs if args.max_jobs > 0 else len(args.fv_signs)
-    pool = WorkerPool(max_jobs)
     rc_map: dict[str, int] = {}
+    pending: list[tuple[str, dict[str, object]]] = []
 
     for sign in args.fv_signs:
         slug = sign.replace(".", "_")
@@ -150,34 +233,44 @@ def _run_fv(args: argparse.Namespace) -> int:
             print(f"[FAIL] {sign}: empty/missing experts")
             rc_map[sign] = 1
             continue
-        cmd = _replay_cmd(
-            py, script, experts, args.scenes_root, args.out_dir,
-            backends=args.backends, start=args.start, count=args.count,
-            save_gifs=args.save_gifs, gif_subdir=slug,
-        )
         logf = log_dir / f"{slug}_{ts}.log"
         if args.dry_run:
             print(f"[dry-run] {sign}")
             rc_map[sign] = 0
             continue
-        pool.spawn(sign, cmd, cwd=bench_dir(), log_path=logf)
-    if not args.dry_run:
-        rc_map.update(pool.wait_all())
+        pending.append((
+            sign,
+            {
+                "experts": str(experts),
+                "scenes_root": str(args.scenes_root),
+                "save_plant2_dir": str(args.out_dir),
+                "backends": args.backends,
+                "start": args.start,
+                "count": args.count,
+                "log_path": str(logf),
+                "save_gifs": args.save_gifs,
+            },
+        ))
+
+    if pending:
+        with ProcessPoolExecutor(max_workers=max_jobs) as pool:
+            futures = {pool.submit(_replay_batch_job, **job): key for key, job in pending}
+            for fut in as_completed(futures):
+                rc_map[futures[fut]] = fut.result()
     fail = sum(1 for r in rc_map.values() if r != 0)
     print(f"=== fv done fail={fail} ===")
     return fail
 
 
 def _run_lane(args: argparse.Namespace) -> int:
-    py = resolve_python(args.python_exe)
-    script = bench_dir() / "expert_replay_inenv.py"
+    _load_run_batch()
     experts = (
         pipeline_dir()
         / "traj-priority-signs/traj_lane_5_15_train80/experts"
         / f"experts_scene_uid_{args.experts_rank}.jsonl"
     )
     scenes = args.zink_bench / "lane_direction_signs/scenes/5_15_1"
-    for p, label in ((script, "script"), (experts, "experts"), (scenes, "scenes")):
+    for p, label in ((EXPERT_REPLAY_FOR_PLANT2, "replay module"), (experts, "experts"), (scenes, "scenes")):
         if not p.exists():
             raise SystemExit(f"ERROR: missing {label}: {p}")
 
@@ -190,8 +283,8 @@ def _run_lane(args: argparse.Namespace) -> int:
     if count <= 0:
         raise SystemExit("ERROR: nothing to dump")
     n_shards = min(args.n_shards, count)
-    pool = WorkerPool(n_shards)
     rc: dict[int, int] = {}
+    pending: list[tuple[int, dict[str, object]]] = []
 
     for shard in range(n_shards):
         st = args.start + shard * count // n_shards
@@ -199,20 +292,30 @@ def _run_lane(args: argparse.Namespace) -> int:
         cnt = en - st
         if cnt <= 0:
             continue
-        cmd = _replay_cmd(
-            py, script, experts, scenes, args.out_dir,
-            backends=args.backends, start=st, count=cnt,
-            save_gifs=args.save_gifs, gif_subdir=f"lane_shard{shard}",
-        )
         logf = log_dir / f"lane_shard{shard}_{ts}.log"
         if args.dry_run:
             print(f"[dry-run] shard={shard} count={cnt}")
             rc[shard] = 0
             continue
-        pool.spawn(str(shard), cmd, cwd=bench_dir(), log_path=logf)
-    if not args.dry_run:
-        for k, v in pool.wait_all().items():
-            rc[int(k)] = v
+        pending.append((
+            shard,
+            {
+                "experts": str(experts),
+                "scenes_root": str(scenes),
+                "save_plant2_dir": str(args.out_dir),
+                "backends": args.backends,
+                "start": st,
+                "count": cnt,
+                "log_path": str(logf),
+                "save_gifs": args.save_gifs,
+            },
+        ))
+
+    if pending:
+        with ProcessPoolExecutor(max_workers=n_shards) as pool:
+            futures = {pool.submit(_replay_batch_job, **job): shard for shard, job in pending}
+            for fut in as_completed(futures):
+                rc[futures[fut]] = fut.result()
     fail = sum(1 for v in rc.values() if v != 0)
     print(f"=== lane done fail={fail} ===")
     return fail
@@ -268,8 +371,7 @@ def _build_rebuild_jobs(args: argparse.Namespace) -> list[DumpJob]:
 
 
 def _run_rebuild_signs(args: argparse.Namespace) -> int:
-    py = resolve_python(args.python_exe)
-    script = bench_dir() / "expert_replay_inenv.py"
+    _load_run_batch()
     nproc = os.cpu_count() or 8
     max_workers = args.max_workers or default_dump_max_workers(nproc)
 
@@ -302,23 +404,36 @@ def _run_rebuild_signs(args: argparse.Namespace) -> int:
             print(t[:3], t[6])
         return 0
 
-    pool = WorkerPool(max_workers)
     rc_files: dict[str, Path] = {}
+    pending: list[tuple[str, dict[str, object], Path]] = []
 
     for slug, start, count, experts, scenes, out, name in tasks:
         out.mkdir(parents=True, exist_ok=True)
         logf = out / "logs" / f"{slug}_{ts}.log"
         rc_file = out / "logs" / f"{slug}_{ts}.rc"
-        cmd = _replay_cmd(
-            py, script, experts, scenes, out,
-            backends=args.backends, start=start, count=count,
-            save_gifs=args.save_gifs, gif_subdir=slug,
-        )
         print(f"[spawn] {name} {slug} start={start} count={count}")
-        pool.spawn(slug, cmd, cwd=bench_dir(), log_path=logf)
+        pending.append((
+            slug,
+            {
+                "experts": str(experts),
+                "scenes_root": str(scenes),
+                "save_plant2_dir": str(out),
+                "backends": args.backends,
+                "start": start,
+                "count": count,
+                "log_path": str(logf),
+                "save_gifs": args.save_gifs,
+            },
+            rc_file,
+        ))
         rc_files[slug] = rc_file
 
-    results = pool.wait_all()
+    results: dict[str, int] = {}
+    with ProcessPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_replay_batch_job, **job): slug for slug, job, _ in pending}
+        for fut in as_completed(futures):
+            results[futures[fut]] = fut.result()
+
     ok = fail = 0
     for slug, code in results.items():
         rc_files[slug].write_text(f"{code}\n")
