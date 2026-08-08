@@ -82,9 +82,16 @@ done
 
 echo
 echo "=== summary for $LABEL"
-python3 collect_metrics.py --runs "${PREFIX}_*" --baseline "${POLICY}_default" > /dev/null 2>&1 \
-    && grep -v 'data:image' output/_all_metrics/all_metrics.md \
-    || echo "collect_metrics failed — run refinalize.sh first"
+# Rebuild any report the eval left unfinalized; a no-op when they all exist.
+bash refinalize.sh "${PREFIX}_*" > "${PREFIX}_refinalize.log" 2>&1 || true
+if python3 collect_metrics.py --runs "${PREFIX}_*" --baseline "${POLICY}_default"; then
+    grep -v 'data:image' output/_all_metrics/all_metrics.md
+else
+    # Never hide why: a missing script and missing reports need different fixes.
+    echo "!! collect_metrics failed (error above)"
+    echo "   reports found: $(ls -d output/${PREFIX}_*/*/eval_out/reports 2>/dev/null | wc -l)"
+    echo "   refinalize log: ${PREFIX}_refinalize.log"
+fi
 }
 
 for lbl in $LABELS; do
