@@ -27,11 +27,13 @@ def build_cfg(plant_dir: Path, split_root: Path):
     model_yaml = plant_dir / "config" / "model" / "PlanT.yaml"
     cfg_model = OmegaConf.load(model_yaml)
     cfg = OmegaConf.create({"model": cfg_model})
-    # Fields the dataset reads that live outside model/PlanT.yaml.
-    cfg.model.training.setdefault("filter_routes", False)
-    cfg.model.training.setdefault("augment", False)
-    cfg.model.training.setdefault("augment_parked", False)
-    cfg.model.training.setdefault("input_bev", False)  # skip PNG decode for speed
+    # Force, do not default: PlanT.yaml ships augment_parked=True, which sends
+    # the dataset into parked_trees[town] and dies on our per-sign town names.
+    # We want the frames as dumped anyway, without any augmentation on top.
+    cfg.model.training.filter_routes = False
+    cfg.model.training.augment = False
+    cfg.model.training.augment_parked = False
+    cfg.model.training.input_bev = False  # skip PNG decode for speed
     cfg.model.training.setdefault("seq_len", 1)
     return cfg
 
