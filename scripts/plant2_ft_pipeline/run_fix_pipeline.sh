@@ -9,7 +9,7 @@
 #       controllers assume 0.25 s (PlanT dataset WPS_STRIDE fixes it)
 #
 # Stages are separately runnable so a failure does not cost the whole queue:
-#   STAGES="dump split cache train eval"      (default: all)
+#   STAGES="dump assemble split cache train eval"      (default: all)
 #
 # Experts, scenes and the old dump follow from the label, exactly as in
 # dump_plant2_l1_from_experts.sh — nothing has to be spelled out by hand:
@@ -187,14 +187,35 @@ if has_stage dump; then
     fi
 fi
 
+# --- assemble -------------------------------------------------------------------
+# One variable must change between baseline and experiment: the convoy in the
+# re-dumped signs. Everything else keeps the exact routes best_024 was trained
+# on — the other priority signs and the detour set are hardlinked over, and the
+# fv / lane trees are linked in place (the split reads all three or dies).
+if has_stage assemble; then
+    say "assemble: carrying non-redumped routes from $DUMP_OLD"
+    $PY "$(dirname "$0")/assemble_fix_dump.py" \
+        --old "$DUMP_OLD" --new "$DUMP_NEW" --labels "$LABELS" || echo "!! assemble failed"
+
+    for tree in plant2_l1_traj_fv_nodeA_signs plant2_l1_lane_signs; do
+        if [ ! -e "$FIX_ROOT/$tree" ]; then
+            if [ -d "$SHEP/$tree" ]; then
+                ln -s "$SHEP/$tree" "$FIX_ROOT/$tree"
+                echo "   linked $tree -> $SHEP/$tree"
+            else
+                echo "   !! $SHEP/$tree missing — the split will refuse to run"
+            fi
+        fi
+    done
+fi
+
 # --- split --------------------------------------------------------------------
 if has_stage split; then
     say "split: $DUMP_NEW -> $SPLIT_NEW"
-    # No CLI: sources and OUT come from SHEPELEV via _paths.py, and missing
-    # source dirs are skipped — so pointing SHEPELEV at $FIX_ROOT splits exactly
-    # the dump we just made.
+    # No CLI: sources and OUT come from SHEPELEV via _paths.py, so pointing
+    # SHEPELEV at $FIX_ROOT splits our tree plus the two linked ones.
     ( cd "$(dirname "$0")" && SHEPELEV="$FIX_ROOT" PLAN_T="$PLANT" \
-      $PY make_train_val_split_fv_experts_signs.py 2>&1 | tail -8 ) \
+      $PY make_train_val_split_fv_experts_signs.py 2>&1 | tail -20 ) \
       || echo "!! split failed"
     ls -d "$SPLIT_NEW/train/data" "$SPLIT_NEW/val/data" 2>/dev/null \
       || echo "!! split produced no train/val — check the log above"
