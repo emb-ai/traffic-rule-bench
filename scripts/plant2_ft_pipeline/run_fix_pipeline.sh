@@ -110,7 +110,12 @@ done
 printf "  dump new: %s\n  dump old: %s\n  base ckpt: %s%s\n" \
     "$DUMP_NEW" "$DUMP_OLD" "$BASE_CKPT" \
     "$([ -f "$BASE_CKPT" ] || echo '   <-- MISSING')"
-[ -x "$PY" ] || echo "  !! PY=$PY is not executable"
+if [ ! -x "$PY" ]; then
+    # The eval scripts run under whatever python3 is active; follow them rather
+    # than dying on a hardcoded env path that only exists on some nodes.
+    PY=$(command -v python3) || { echo "  !! no python3 on PATH"; exit 1; }
+    echo "  note: PY not found, falling back to $PY"
+fi
 if has_stage train && [ ! -x "$TRAIN_PY" ]; then
     echo "  !! TRAIN_PY=$TRAIN_PY is not executable — set TRAIN_PY to the training env"
 fi
