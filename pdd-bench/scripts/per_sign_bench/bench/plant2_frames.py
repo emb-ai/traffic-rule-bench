@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 import math
 import re
 from pathlib import Path
@@ -223,20 +224,41 @@ def collect_boxes(engine, vehicle,
         boxes.append(entry)
         obj_id += 1
 
+    n_before = len(boxes)
     traffic_mgr = getattr(engine, "traffic_manager", None)
     if traffic_mgr is not None:
         for v in list(getattr(traffic_mgr, "vehicles", [])):
             _add(v)
+    n_traffic = len(boxes) - n_before
+
+    # Auxiliary convoys (junction benches) live in their OWN manager, so
+    # engine.get_objects is the only path that reaches them. Swallowing an error
+    # here silently drops every such vehicle — from the training dumps and, since
+    # eval shares this collector, from the model input too. Report, never hide.
+    n_engine = 0
     if hasattr(engine, "get_objects"):
         try:
+            n_at = len(boxes)
             for obj in engine.get_objects(lambda o: hasattr(o, "position")).values():
                 _add(obj)
-        except Exception:
-            pass
+            n_engine = len(boxes) - n_at
+        except Exception as exc:
+            print(f"[plant2_frames] engine.get_objects failed ({exc!r}); auxiliary "
+                  f"vehicles will be MISSING from this frame", flush=True)
+
+    n_at = len(boxes)
     obj_mgr = getattr(engine, "object_manager", None)
     if obj_mgr is not None:
         for obj in getattr(obj_mgr, "spawned_objects", {}).values():
             _add(obj)
+    n_objmgr = len(boxes) - n_at
+
+    if os.environ.get("PLANT2_DEBUG_BOXES"):
+        aux = getattr(engine, "managers", {}) or {}
+        n_aux_mgr = len(getattr(aux.get("auxiliary_agent_manager"), "spawned_objects", {}) or {})
+        print(f"[plant2_frames] boxes by source: traffic_manager={n_traffic} "
+              f"engine.get_objects={n_engine} object_manager={n_objmgr} "
+              f"| aux manager holds {n_aux_mgr} object(s)", flush=True)
 
     # Explicit PDD signs (spatial tokens for PlanT tok_emb).
     sign_mgr = getattr(engine, "traffic_sign_manager", None)
