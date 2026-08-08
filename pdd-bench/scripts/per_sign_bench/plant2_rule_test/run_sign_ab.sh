@@ -2,6 +2,7 @@
 # A/B the eval-side sign channels on one PDD label, with sanity gates.
 #
 #   LABEL=2.5 CKPT=/abs/ckpt.ckpt bash run_sign_ab.sh
+#   LABELS="2.5 4.3" CKPT=... bash run_sign_ab.sh          # queue several signs
 #   LABEL=4.3 CKPT=... CONFIGS="both narrow" bash run_sign_ab.sh
 #
 # Channels under test (see plant2_adapter / metadrive_obs_to_plant2):
@@ -19,11 +20,10 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
-LABEL=${LABEL:-2.5}
+LABELS=${LABELS:-${LABEL:-2.5}}
 CKPT=${CKPT:?set CKPT=/abs/path/to.ckpt}
 JOBS=${JOBS:-8}
 POLICY=${POLICY:-plant2}
-PREFIX=${PREFIX:-ab$(echo "$LABEL" | tr -d '.')}
 CONFIGS=${CONFIGS:-"prefix objs token both narrow remap"}
 EXPECT_N=${EXPECT_N:-0}          # 0 = do not check the scene count
 
@@ -42,8 +42,13 @@ env_for () {                      # config name -> env assignments
     esac
 }
 
-echo "=== label=$LABEL policy=$POLICY jobs=$JOBS ckpt=$(basename "$CKPT")"
-echo "=== configs: $CONFIGS"
+run_label () {
+LABEL=$1
+PREFIX=${PREFIX_OVERRIDE:-ab$(echo "$LABEL" | tr -d '.')}   # ab25, ab43, …
+
+echo
+echo "############ label=$LABEL policy=$POLICY jobs=$JOBS ckpt=$(basename "$CKPT")"
+echo "############ configs: $CONFIGS"
 
 for cfg in $CONFIGS; do
     vars=$(env_for "$cfg")
@@ -74,10 +79,15 @@ for cfg in $CONFIGS; do
 done
 
 echo
-echo "=== summary"
+echo "=== summary for $LABEL"
 python3 collect_metrics.py --runs "${PREFIX}_*" --baseline "${POLICY}_default" > /dev/null 2>&1 \
     && grep -v 'data:image' output/_all_metrics/all_metrics.md \
     || echo "collect_metrics failed — run refinalize.sh first"
+}
+
+for lbl in $LABELS; do
+    run_label "$lbl"
+done
 
 cat <<'EOF'
 
