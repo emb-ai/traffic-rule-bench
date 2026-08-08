@@ -242,6 +242,100 @@ def _park_unmatched_live(live_objs: dict, obj_map: dict, ego_live) -> None:
             pass
 
 
+
+# Junction signs (2.1 / 2.3.x / 2.4 / 2.5 / 4.3) get their traffic from a
+# per-bench AuxiliaryAgentsManager, which build_env_for_row does not register.
+# Without it the recorded convoy has no live bodies to bind to, so it silently
+# vanishes from the dumped frames — which is why those splits contain no cars.
+_AUX_BENCH_BY_CODE = {
+    "2.1": "main_sign",
+    "2.3.1": "secondary_sign",
+    "2.3.2": "secondary_sign",
+    "2.3.3": "secondary_sign",
+    "2.4": "yield_sign",
+    "2.5": "stop_sign",
+    "4.3": "roundabout_sign",
+}
+
+
+def _add_auxiliary_agents_for_row(env, row: dict, verbose: bool = True) -> int:
+    """Spawn the bench's auxiliary convoy on an env built by build_env_for_row.
+
+    Mirrors the live call site in <bench>/run_benchmark.run_one_episode. Returns
+    the number of vehicles spawned (0 when the sign has no aux traffic, when the
+    row lacks the junction layout, or when the bench code is unavailable).
+    """
+    code = str(row.get("sign_code") or row.get("sign_type") or "")
+    bench = _AUX_BENCH_BY_CODE.get(code)
+    if bench is None:
+        return 0
+
+    bench_dir = BENCHMARK_DIR / bench
+    if not (bench_dir / "lib" / "auxiliary_agent.py").is_file():
+        if verbose:
+            print(f"[aux] no auxiliary_agent.py under {bench} — skipped")
+        return 0
+
+    import importlib
+    import sys as _sys
+
+    added = [p for p in (str(bench_dir),) if p not in _sys.path]
+    _sys.path[:0] = added
+    try:
+        aux_mod = importlib.import_module("lib.auxiliary_agent")
+        lane_keys = importlib.import_module("lib.lane_keys")
+        rb = importlib.import_module("run_benchmark")
+
+        base_env = getattr(env, "engine", None) and env
+        incoming, outgoing = rb._analyze_junction_lanes(base_env)
+        ego_lane = lane_keys.make_lane_key(str(row.get("road_id")),
+                                           int(row.get("spawn_lane_num", 0) or 0))
+        plan = aux_mod.resolve_aux_spawn_plan(
+            row,
+            ego_lane_index=ego_lane,
+            incoming_lanes=incoming,
+            aux_lanes_occupied=int(row.get("aux_lanes_occupied", 4) or 4),
+            aux_distance_from_intersection=float(
+                row.get("aux_distance_from_intersection", 20.0) or 20.0),
+        )
+        spawn_lanes, dest_lanes = plan[0], plan[1]
+        extra = plan[2] if len(plan) > 2 else None
+        if not spawn_lanes:
+            if verbose:
+                print(f"[aux] {bench}: no viable spawn lanes for this row — skipped")
+            return 0
+
+        kwargs = dict(
+            spawn_lane_indices=spawn_lanes,
+            outgoing_lanes=outgoing,
+            destination_lanes=[d or None for d in (dest_lanes or [])] or None,
+            ego_vehicle=base_env.vehicle,
+            ego_spawn_lane_index=ego_lane,
+            distance_from_intersection=float(
+                row.get("aux_distance_from_intersection", 20.0) or 20.0),
+            spawn_velocity_ms=float(row.get("aux_spawn_velocity_ms", 5.0) or 5.0),
+            convoy_size=int(row.get("aux_convoy_size", 3) or 3),
+            convoy_gap_m=float(row.get("aux_convoy_gap_m", 10.0) or 10.0),
+        )
+        if extra is not None:
+            kwargs["alternate_spawn_dest_map"] = extra
+        mgr = aux_mod.add_auxiliary_agents(base_env, **kwargs)
+        n = len(getattr(mgr, "spawned_objects", {}) or {})
+        if verbose:
+            print(f"[aux] {bench}: convoy of {n} vehicle(s) registered for replay")
+        return n
+    except Exception as exc:
+        print(f"[aux] {bench}: could not register auxiliary agents ({exc!r})")
+        return 0
+    finally:
+        for p in added:
+            if p in _sys.path:
+                _sys.path.remove(p)
+        for mod in list(_sys.modules):
+            if mod == "lib" or mod.startswith("lib."):
+                del _sys.modules[mod]
+
+
 _TRAFFIC_MGR_KEYS = (
     "sumo_traffic_manager",
     "traffic_manager",
@@ -250,6 +344,9 @@ _TRAFFIC_MGR_KEYS = (
     "crosswalk_pedestrian_manager",
     "crosswalk_yield_enforcer",
     "crosswalk_yield_enforcer_manager",
+    # Junction benches drive their convoy from this manager's own IDM policies;
+    # during replay the recorded states are the truth, so it must not step.
+    "auxiliary_agent_manager",
 )
 
 
@@ -305,6 +402,7 @@ def replay_in_our_env(
     max_steps: int = 500,
     scenes_root: Optional[Path] = None,
     save_plant2_dir: Optional[Path] = None,
+    aux_agents: bool = False,
 ) -> dict:
     sidecar = json.load(open(sidecar_path))
     scenario = _pickle_load_replay(Path(pkl_path), scenes_root)
@@ -359,6 +457,9 @@ def replay_in_our_env(
     traffic_patched: list = []
     try:
         env.reset(seed=env_seed)
+
+        if aux_agents:
+            _add_auxiliary_agents_for_row(env, row)
 
         sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
         rn = env.current_map.road_network
@@ -716,6 +817,7 @@ def run_experts_batch(
     gif_dir: Path | None = None,
     ego_mode: str = "recorded",
     npc_mode: str = "recorded",
+    aux_agents: bool = False,
 ) -> dict:
     """Batch-replay experts_*.jsonl rows and dump PlanT2 frames.
 
@@ -793,6 +895,7 @@ def run_experts_batch(
                 max_steps=max_steps,
                 scenes_root=Path(scenes_root),
                 save_plant2_dir=save_plant2_dir,
+                aux_agents=aux_agents,
             )
         except Exception as exc:
             import traceback
@@ -874,6 +977,10 @@ def main():
     parser.add_argument("--save-plant2-dir", type=str, default=None,
                         help="Dump PlanT2 boxes/measurements under "
                              "<dir>/data/<scene_uid>_<variant>/")
+    parser.add_argument("--aux-agents", action="store_true",
+                        help="spawn the bench's auxiliary convoy (junction signs "
+                             "2.1/2.3.x/2.4/2.5/4.3) so recorded traffic has live "
+                             "bodies to bind to — without it those dumps have no cars")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -904,6 +1011,7 @@ def main():
             gif_dir=Path(args.gif_dir) if args.gif_dir else None,
             ego_mode=args.ego_mode,
             npc_mode=args.npc_mode,
+            aux_agents=args.aux_agents,
         )
         print(json.dumps(summary, indent=2))
         return
@@ -948,6 +1056,7 @@ def main():
         max_steps=max_steps,
         scenes_root=Path(args.scenes_root) if args.scenes_root else None,
         save_plant2_dir=plant2_dir,
+        aux_agents=args.aux_agents,
     )
     print(json.dumps({k: v for k, v in result.items() if k != "violations_replay"
                        and k != "violations_original"}, indent=2, ensure_ascii=False))
