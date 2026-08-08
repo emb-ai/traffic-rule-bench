@@ -21,7 +21,9 @@ SM=${SM:?set SM=/mnt/virtual_ai0001053-01202_SR006-nfs2/smirnova}
 TRB=$SM/traffic-rule-bench
 PIPE=$TRB/scripts/plant2_ft_pipeline/run_fix_pipeline.sh
 TEST=$TRB/pdd-bench/scripts/per_sign_bench/plant2_rule_test
-CKPT=${CKPT:?set CKPT=/abs/path/best_024_*.ckpt (the baseline)}
+# Only the optional control A/B needs the baseline checkpoint; the finetunes
+# resume from BASE_CKPT inside the pipeline.
+CKPT=${CKPT:-}
 LABELS=${LABELS:-"2.5 4.3"}
 RUNS=${RUNS:-"d2 d3 d2d3"}
 FIX_ROOT=${FIX_ROOT:-$SM/plant2_fix}
@@ -65,7 +67,9 @@ print('-- routes per sign:', {k: v['N'] for k, v in sorted(m['per_sign'].items()
 # --- 2. control A/B on 4.3 (baseline checkpoint) ------------------------------
 # Off by default: it delays the finetunes by ~15 min and only re-confirms on a
 # second sign what 2.5 already showed. AB43=1 puts it back in front.
-if [ "${AB43:-0}" = 1 ]; then
+if [ "${AB43:-0}" = 1 ] && [ -z "$CKPT" ]; then
+    echo "!! AB43=1 needs CKPT=/abs/baseline.ckpt — skipping the control A/B"
+elif [ "${AB43:-0}" = 1 ]; then
     step "control A/B on 4.3 (prefix vs both) -> $LOGDIR/ab43.log"
     ( cd "$TEST" && LABELS=4.3 CKPT="$CKPT" JOBS=8 CONFIGS="prefix both" \
       bash run_sign_ab.sh ) > "$LOGDIR/ab43.log" 2>&1 || true
