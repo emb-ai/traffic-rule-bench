@@ -35,13 +35,17 @@ mkdir -p "$LOGDIR"
 step () { echo; echo "======== [$(date +'%F %H:%M:%S')] $*"; }
 
 # --- 1. let the data stages finish --------------------------------------------
-if pgrep -f expert_replay_inenv.py >/dev/null; then
-    step "waiting for the running dump to finish"
-    while pgrep -f expert_replay_inenv.py >/dev/null; do sleep 60; done
-fi
-if pgrep -f make_train_val_split_fv_experts_signs.py >/dev/null; then
-    step "waiting for the running split to finish"
-    while pgrep -f make_train_val_split_fv_experts_signs.py >/dev/null; do sleep 30; done
+# Watch the pipeline process itself, not only its workers: between the shards of
+# one sign and the next there is a moment with no expert_replay_inenv alive, and
+# starting the split there would cut the dump in half.
+data_job_running () {
+    pgrep -f 'run_fix_pipeline\.sh|expert_replay_inenv\.py|make_train_val_split' \
+        | grep -qv "^$$\$"
+}
+if data_job_running; then
+    step "waiting for the data stages already in flight"
+    while data_job_running; do sleep 60; done
+    echo "   data job finished at $(date +%H:%M:%S)"
 fi
 
 step "data check"
