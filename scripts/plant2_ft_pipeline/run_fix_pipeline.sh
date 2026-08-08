@@ -122,6 +122,12 @@ fi
 
 # --- dump ---------------------------------------------------------------------
 if has_stage dump; then
+    if [ "${WIPE:-0}" = 1 ] && [ -d "$DUMP_NEW/data" ]; then
+        # Routes dumped before the aux fix carry no traffic; mixed with fixed
+        # ones they would quietly dilute exactly the effect under test.
+        say "wipe: dropping $(find "$DUMP_NEW/data" -mindepth 1 -maxdepth 1 -type d | wc -l) old route(s)"
+        rm -rf "$DUMP_NEW/data"
+    fi
     mkdir -p "$DUMP_NEW/logs"
     for lbl in $LABELS; do
         experts=$(experts_for "$lbl") || {
@@ -169,9 +175,16 @@ if has_stage dump; then
     done
 
     say "dump check: do the new frames contain cars?"
+    chk="$DUMP_NEW/logs/frame_check.log"
     $PY "$PSB/dump_model_input.py" --split "$DUMP_NEW" --plant-dir "$PLANT" \
-        --samples 3 --stride 40 2>&1 | grep -E "состав|сэмпл" || true
-    echo "   (expect 'car: N' next to the sign — old dumps show the sign alone)"
+        --samples 3 --stride 40 > "$chk" 2>&1
+    if grep -qE '^  состав' "$chk"; then
+        grep -E '^=== |^  состав' "$chk"
+        echo "   (expect 'car: N' next to the sign — old dumps show the sign alone)"
+    else
+        echo "!! the check printed no frame composition — last lines of $chk:"
+        tail -12 "$chk"
+    fi
 fi
 
 # --- split --------------------------------------------------------------------

@@ -258,6 +258,36 @@ _AUX_BENCH_BY_CODE = {
 }
 
 
+_AUX_RB_CACHE: dict = {}
+_AUX_LIB_OWNER: dict = {}
+
+
+def _load_bench_run_benchmark(bench: str, bench_dir: Path):
+    """Import ``<bench>/run_benchmark.py`` under a name of its own.
+
+    ``per_sign_bench/run_benchmark.py`` is already in sys.modules (expert_replay
+    imports it at module level), so ``import_module("run_benchmark")`` returns
+    that generic runner — which has no junction helpers. Load the bench's file
+    by path instead, once per bench: it pulls in torch and SB3, so re-executing
+    it for every route would cost more than the replay itself.
+    """
+    mod = _AUX_RB_CACHE.get(bench)
+    if mod is not None:
+        return mod
+    import importlib.util
+    import sys as _sys
+
+    name = f"_aux_rb_{bench}"
+    spec = importlib.util.spec_from_file_location(name, bench_dir / "run_benchmark.py")
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {bench_dir / 'run_benchmark.py'}")
+    mod = importlib.util.module_from_spec(spec)
+    _sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    _AUX_RB_CACHE[bench] = mod
+    return mod
+
+
 def _add_auxiliary_agents_for_row(env, row: dict, verbose: bool = True) -> int:
     """Spawn the bench's auxiliary convoy on an env built by build_env_for_row.
 
@@ -281,10 +311,18 @@ def _add_auxiliary_agents_for_row(env, row: dict, verbose: bool = True) -> int:
 
     added = [p for p in (str(bench_dir),) if p not in _sys.path]
     _sys.path[:0] = added
+    # `lib` is a per-bench package name: a copy left by another sign would
+    # shadow this one. Swap it out only when the bench actually changes, so
+    # consecutive rows of the same sign reuse the loaded modules.
+    if _AUX_LIB_OWNER.get("bench") != bench:
+        for k in list(_sys.modules):
+            if k == "lib" or k.startswith("lib."):
+                del _sys.modules[k]
     try:
+        rb = _load_bench_run_benchmark(bench, bench_dir)
         aux_mod = importlib.import_module("lib.auxiliary_agent")
         lane_keys = importlib.import_module("lib.lane_keys")
-        rb = importlib.import_module("run_benchmark")
+        _AUX_LIB_OWNER["bench"] = bench
 
         base_env = getattr(env, "engine", None) and env
         incoming, outgoing = rb._analyze_junction_lanes(base_env)
@@ -331,9 +369,8 @@ def _add_auxiliary_agents_for_row(env, row: dict, verbose: bool = True) -> int:
         for p in added:
             if p in _sys.path:
                 _sys.path.remove(p)
-        for mod in list(_sys.modules):
-            if mod == "lib" or mod.startswith("lib."):
-                del _sys.modules[mod]
+        # `lib` stays loaded for the next row of the same bench; nothing else in
+        # this process imports that name.
 
 
 _TRAFFIC_MGR_KEYS = (
