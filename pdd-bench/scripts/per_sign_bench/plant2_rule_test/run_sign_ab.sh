@@ -44,7 +44,9 @@ env_for () {                      # config name -> env assignments
 
 run_label () {
 LABEL=$1
-PREFIX=${PREFIX_OVERRIDE:-ab$(echo "$LABEL" | tr -d '.')}   # ab25, ab43, …
+# PREFIX_OVERRIDE replaces only the leading tag; the label digits are always
+# appended, so queueing several signs cannot collide (ab25/ab43, fxd225/fxd243).
+PREFIX="${PREFIX_OVERRIDE:-ab}$(echo "$LABEL" | tr -d '.')"
 
 echo
 echo "############ label=$LABEL policy=$POLICY jobs=$JOBS ckpt=$(basename "$CKPT")"
