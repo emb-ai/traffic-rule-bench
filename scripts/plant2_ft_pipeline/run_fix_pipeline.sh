@@ -116,8 +116,11 @@ if [ ! -x "$PY" ]; then
     PY=$(command -v python3) || { echo "  !! no python3 on PATH"; exit 1; }
     echo "  note: PY not found, falling back to $PY"
 fi
-if has_stage train && [ ! -x "$TRAIN_PY" ]; then
-    echo "  !! TRAIN_PY=$TRAIN_PY is not executable — set TRAIN_PY to the training env"
+if has_stage train; then
+    [ -x "$TRAIN_PY" ] || echo "  !! TRAIN_PY=$TRAIN_PY is not executable"
+    # Checked here, not an hour later after the cache prefill.
+    ENTRY=$SHEP/collected_trajectories/plant2_py_shims/run_lit_finetune.py
+    [ -f "$ENTRY" ] || echo "  !! training entry point missing: $ENTRY"
 fi
 
 # --- dump ---------------------------------------------------------------------
@@ -271,21 +274,27 @@ if has_stage train; then
         stride=1; [ "$run" = d3 ] && stride=2; [ "$run" = d2d3 ] && stride=2
         addon="fix_${run}"
         say "train: $addon (split=$(basename "$split") stride=$stride lr=$LR epochs=$EPOCHS)"
-        ( cd "$PLANT" && \
-          DS="$split/train" DS_VAL="$split/val" DS_LOCAL="$CACHE_ROOT/$run" \
-          CACHE_SIZE_GB=${CACHE_SIZE_GB:-700} SEED=1 CHECKPOINT_ADDON="$addon" \
-          CKPT_EVERY_N_EPOCHS=3 WPS_STRIDE=$stride \
-          $TRAIN_PY lit_finetune.py \
-            user.working_dir="$TRB/plant2" \
-            resume_path="$BASE_CKPT" \
-            gpus=$GPUS lr_scheduler=cosine_warmup \
-            model.training.max_epochs=$EPOCHS \
-            model.training.learning_rate=$LR \
-            model.training.augment_parked=False \
-            +model.training.filter_routes=false \
-            +model.training.wps_stride=$stride \
-          2>&1 | tee "$TRB/plant2/ft_${addon}.log" \
-          | grep -E "Trainable routes|sign_id resolve|val/loss_all|Epoch" | tail -20 )
+        # Go through the proven launcher rather than calling lit_finetune here:
+        # it escapes the '=' in epoch=029_final_1.ckpt for Hydra's override
+        # grammar, passes resume=True / use_caching=True, and uses the shim that
+        # keeps flash_attn out. Reproducing that by hand is how the first
+        # attempt died before a single step. WPS_STRIDE is read from the env by
+        # the dataset, so it needs no override.
+        # SHEPELEV must stay the real one here: the launcher resolves the shim
+        # entry point under it, unlike the split, which we redirect on purpose.
+        train_py_env=""
+        [ -x "$TRAIN_PY" ] && train_py_env="$TRAIN_PY"
+        env SPLIT="$split" DS="$split/train" DS_VAL="$split/val" \
+            DS_LOCAL="$CACHE_ROOT/$run" CACHE_SIZE_GB="${CACHE_SIZE_GB:-700}" \
+            SEED=1 CHECKPOINT_ADDON="$addon" CKPT_EVERY_N_EPOCHS=3 \
+            WPS_STRIDE="$stride" GPUS="$GPUS" CKPT0="$BASE_CKPT" \
+            SHEPELEV="$SHEP" ${train_py_env:+PYTHON="$train_py_env"} \
+            LEARNING_RATE="$LR" MAX_EPOCHS="$EPOCHS" LR_SCHEDULER=cosine_warmup \
+            bash "$(dirname "$0")/run_plant2_finetune.sh" \
+            > "$TRB/plant2/ft_${addon}.log" 2>&1
+        grep -E "Trainable routes|sign_id resolve|val/loss_all|Epoch |Error|Traceback" \
+            "$TRB/plant2/ft_${addon}.log" | tail -15
+        echo "   full log: $TRB/plant2/ft_${addon}.log"
         echo "   checkpoints: $TRB/plant2/PlanT/checkpoints_ft/$addon/"
     done
 fi

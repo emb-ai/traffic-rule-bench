@@ -51,6 +51,11 @@ export DS="${DS:-$SPLIT/train}"
 export DS_VAL="${DS_VAL:-$SPLIT/val}"
 export DS_LOCAL="${DS_LOCAL:-/tmp/plant2_ds_cache_${SEED}}"
 export WANDB_MODE="${WANDB_MODE:-offline}"
+# GPUS>1 picks the first N devices unless the caller pinned them by hand.
+GPUS="${GPUS:-1}"
+if [[ -z "${CUDA_VISIBLE_DEVICES:-}" && "$GPUS" -gt 1 ]]; then
+  CUDA_VISIBLE_DEVICES="$(seq -s, 0 $((GPUS - 1)))"
+fi
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 # Avoid user-site transformers (older) + broken root-owned flash_attn ABI mismatch.
 export PYTHONNOUSERSITE="${PYTHONNOUSERSITE:-1}"
@@ -78,7 +83,7 @@ echo "  DS       = $DS"
 echo "  DS_VAL   = $DS_VAL"
 echo "  DS_LOCAL = $DS_LOCAL"
 echo "  SEED     = $SEED"
-echo "  GPU      = $CUDA_VISIBLE_DEVICES"
+echo "  GPU      = $CUDA_VISIBLE_DEVICES (gpus=$GPUS)"
 echo "  LR       = $LEARNING_RATE"
 echo "  SCHED    = $LR_SCHEDULER (warmup_ratio=$WARMUP_RATIO)"
 echo "  BS       = $BATCH_SIZE  workers=$NUM_WORKERS  epochs=$MAX_EPOCHS"
@@ -101,7 +106,7 @@ hydra_esc() { printf '%s' "$1" | sed 's/=/\\=/g'; }
 "$PY" -u "$LIT_ENTRY" \
   resume=True \
   "resume_path=$(hydra_esc "$CKPT")" \
-  gpus=1 \
+  "gpus=$GPUS" \
   use_caching=True \
   "lr_scheduler=$LR_SCHEDULER" \
   "warmup_ratio=$WARMUP_RATIO" \
