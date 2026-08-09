@@ -223,6 +223,28 @@ fi
 
 # --- split --------------------------------------------------------------------
 if has_stage split; then
+    # Re-splitting on top of an existing tree is not idempotent: the per-sign
+    # shuffle runs over the signs in order, so adding signs reshuffles the ones
+    # after them, and a route already hardlinked into val can land in train the
+    # second time — the same route in both halves. Start clean whenever the old
+    # split is stale (missing a label under test) or when asked.
+    stale=0
+    if [ -f "$SPLIT_NEW/split_meta.json" ]; then
+        for lbl in $LABELS; do
+            $PY -c "
+import json, sys
+per = json.load(open('$SPLIT_NEW/split_meta.json'))['per_sign']
+sys.exit(0 if per.get('$lbl', {}).get('N', 0) > 0 else 1)
+" || stale=1
+        done
+    fi
+    if [ "${WIPE_SPLIT:-0}" = 1 ] || [ "$stale" = 1 ]; then
+        if [ -d "$SPLIT_NEW" ]; then
+            say "wipe: removing the previous split (stale=$stale) at $SPLIT_NEW"
+            rm -rf "$SPLIT_NEW"
+        fi
+    fi
+
     say "split: $DUMP_NEW -> $SPLIT_NEW"
     # No CLI: sources and OUT come from SHEPELEV via _paths.py, so pointing
     # SHEPELEV at $FIX_ROOT splits our tree plus the two linked ones.
