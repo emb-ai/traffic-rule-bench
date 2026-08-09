@@ -197,6 +197,15 @@ if has_stage assemble; then
     $PY "$(dirname "$0")/assemble_fix_dump.py" \
         --old "$DUMP_OLD" --new "$DUMP_NEW" --labels "$LABELS" || echo "!! assemble failed"
 
+    # SHEPELEV is redirected to $FIX_ROOT for the split, and that same variable
+    # also points load_priority_uid_sign() at collected_trajectories. Without
+    # this link the uid->sign map comes out empty and every route named after a
+    # scene uid (2.5, 2.1, 2.3.x, 2.4, detour) is dropped as "unknown".
+    if [ ! -e "$FIX_ROOT/collected_trajectories" ] && [ -d "$SHEP/collected_trajectories" ]; then
+        ln -s "$SHEP/collected_trajectories" "$FIX_ROOT/collected_trajectories"
+        echo "   linked collected_trajectories (uid -> sign map)"
+    fi
+
     for tree in plant2_l1_traj_fv_nodeA_signs plant2_l1_lane_signs; do
         if [ ! -e "$FIX_ROOT/$tree" ]; then
             if [ -d "$SHEP/$tree" ]; then
@@ -219,6 +228,23 @@ if has_stage split; then
       || echo "!! split failed"
     ls -d "$SPLIT_NEW/train/data" "$SPLIT_NEW/val/data" 2>/dev/null \
       || echo "!! split produced no train/val — check the log above"
+
+    # A split that silently lost the signs under test would train a model that
+    # cannot possibly show the effect — check before anything reaches a GPU.
+    $PY - "$SPLIT_NEW/split_meta.json" "$LABELS" <<'PY'
+import json, sys
+meta_path, labels = sys.argv[1], sys.argv[2].split()
+try:
+    per_sign = json.load(open(meta_path))["per_sign"]
+except OSError:
+    print(f"!! no {meta_path}"); raise SystemExit(1)
+print("   routes per sign:", {k: v["N"] for k, v in sorted(per_sign.items())})
+missing = [s for s in labels if per_sign.get(s, {}).get("N", 0) == 0]
+if missing:
+    print(f"!! split contains no routes for {missing} — the finetune would be "
+          f"blind to exactly the signs under test. Do not train on it.")
+    raise SystemExit(1)
+PY
 fi
 
 # --- cache --------------------------------------------------------------------

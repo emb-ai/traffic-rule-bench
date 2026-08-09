@@ -62,11 +62,16 @@ if [ ! -f "$SPLIT_NEW/split_meta.json" ]; then
     echo "   see $LOGDIR/data.log"
     exit 1
 fi
-python3 -c "
-import json
-m = json.load(open('$SPLIT_NEW/split_meta.json'))
-print('-- routes per sign:', {k: v['N'] for k, v in sorted(m['per_sign'].items())})
-"
+python3 - "$SPLIT_NEW/split_meta.json" "$LABELS" <<'PY' || exit 1
+import json, sys
+per_sign = json.load(open(sys.argv[1]))["per_sign"]
+print("-- routes per sign:", {k: v["N"] for k, v in sorted(per_sign.items())})
+missing = [s for s in sys.argv[2].split() if per_sign.get(s, {}).get("N", 0) == 0]
+if missing:
+    print(f"!! the split has no routes for {missing} — a finetune on it cannot "
+          f"show the effect under test. Fix the split before training.")
+    raise SystemExit(1)
+PY
 
 # --- 2. control A/B on 4.3 (baseline checkpoint) ------------------------------
 # Off by default: it delays the finetunes by ~15 min and only re-confirms on a
