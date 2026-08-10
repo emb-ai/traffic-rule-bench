@@ -113,7 +113,7 @@ def main() -> None:
                 print(f"  {done}/{len(routes)} routes, frames={total_frames}, "
                       f"vehicle entries dropped={total_dropped}", flush=True)
 
-    if total_dropped == 0:
+    if total_dropped == 0 and total_frames > 0:
         print("!! no vehicle entries were dropped — the source dump has no "
               "traffic, so this 'old' half would be identical to 'new'")
     print(f"DONE routes={len(routes)} frames={total_frames} dropped={total_dropped}")

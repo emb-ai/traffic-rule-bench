@@ -18,9 +18,11 @@ Routes are symlinked, so neither tree costs disk.
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import os
 import random
+import re
 import sys
 from pathlib import Path
 
@@ -34,6 +36,36 @@ from make_train_val_split_fv_experts_signs import (  # noqa: E402
 )
 
 SEED = 42
+
+_PDD_RE = re.compile(r"^\d\.\d+(\.\d+)?$")
+
+
+def sniff_sign(route_dir: Path) -> str | None:
+    """Resolve the sign from the dumped boxes themselves.
+
+    Route names carry no code (``sign_..._default``) and the uid→sign map
+    lives in expert jsonls on nfs3 — but every dumped frame stores the PDD
+    sign as a box with its code, so the data is self-describing. Scan a few
+    frames spread across the route; the sign enters the range filter at
+    different times, so the first frame alone is not enough.
+    """
+    boxes = route_dir / "boxes"
+    if not boxes.is_dir():
+        return None
+    frames = sorted(boxes.iterdir())
+    if not frames:
+        return None
+    step = max(1, len(frames) // 12)
+    for f in frames[::step]:
+        try:
+            entries = json.load(gzip.open(f))
+        except Exception:  # noqa: BLE001
+            continue
+        for e in entries:
+            code = e.get("pdd_code") or e.get("class") or ""
+            if _PDD_RE.match(str(code)):
+                return str(code)
+    return None
 
 
 def ensure_slurm(split_root: Path) -> None:
@@ -96,7 +128,10 @@ def main() -> None:
         for p in sorted(data.iterdir()):
             if not p.is_dir():
                 continue
-            if route_sign(p.name, uid2sign) != args.sign:
+            sign = route_sign(p.name, uid2sign)
+            if sign is None:
+                sign = sniff_sign(p)
+            if sign != args.sign:
                 continue
             if not route_is_ok(p):
                 continue
