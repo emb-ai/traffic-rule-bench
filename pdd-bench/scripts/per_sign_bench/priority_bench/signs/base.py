@@ -1,10 +1,10 @@
-"""Sign profiles for priority-junction benches (2.1 equal-priority, 2.4 yield)."""
+"""Sign profiles for priority-junction benches (2.1 / 2.4 / 2.5)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal, Optional
+from typing import Literal, Optional
 
 from core.scene_augmentation import SpawnStrategy
 
@@ -52,15 +52,35 @@ YIELD = SignProfile(
     ego_road_class="secondary",
 )
 
+STOP = SignProfile(
+    id="stop",
+    pdd_code="2.5",
+    sign_type="stop",
+    sign_name="Stop",
+    # Same junction geometry / spawn / aux axes as yield; only the plate +
+    # stop-line violation differ (handled in run_benchmark + StopSign class).
+    layout_mode="main_secondary",
+    spawn_strategy="yield",
+    data_subdir="stop",
+    output_code="2_5",
+    ego_road_class="secondary",
+)
+
+_PROFILES = (MAIN_ROAD, YIELD, STOP)
+
 _REGISTRY: dict[str, SignProfile] = {
     MAIN_ROAD.id: MAIN_ROAD,
     YIELD.id: YIELD,
+    STOP.id: STOP,
     # aliases
     "2.1": MAIN_ROAD,
     "2_1": MAIN_ROAD,
     "main": MAIN_ROAD,
     "2.4": YIELD,
     "2_4": YIELD,
+    "2.5": STOP,
+    "2_5": STOP,
+    "stop_sign": STOP,
 }
 
 
@@ -69,12 +89,12 @@ def get_profile(sign_id: str) -> SignProfile:
     try:
         return _REGISTRY[key]
     except KeyError as exc:
-        known = ", ".join(sorted({p.id for p in (MAIN_ROAD, YIELD)}))
+        known = ", ".join(sorted({p.id for p in _PROFILES}))
         raise KeyError(f"Unknown sign {sign_id!r}. Expected one of: {known}") from exc
 
 
 def list_profiles() -> list[SignProfile]:
-    return [MAIN_ROAD, YIELD]
+    return list(_PROFILES)
 
 
 def package_root() -> Path:

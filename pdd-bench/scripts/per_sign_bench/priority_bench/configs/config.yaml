@@ -1,6 +1,7 @@
-# Priority junction bench — 2.1 main_road / 2.4 yield
+# Priority junction bench — 2.1 main_road / 2.4 yield / 2.5 stop
 #   python generate_manifest.py
 #   python generate_manifest.py sign=yield
+#   python generate_manifest.py sign=stop
 
 defaults:
   - _self_

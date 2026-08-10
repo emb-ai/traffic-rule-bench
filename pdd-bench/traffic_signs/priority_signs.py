@@ -975,8 +975,11 @@ class RightHandYieldSign(YieldSign):
         right_road_lanes: list = None,
         **kwargs,
     ):
+        # Invisible metrics tracker only: no 3D model and no top-down icon.
+        # A 2.1 icon here duplicated MainRoadSign on the ego approach whenever
+        # ego spawned off the rightmost lane (edge plate + mid-lane tracker).
         kwargs.setdefault("show_model", False)
-        kwargs.setdefault("icon_path", "2.1.png")
+        kwargs["icon_path"] = None
         super().__init__(
             lane,
             intersection_name=intersection_name,
@@ -985,6 +988,7 @@ class RightHandYieldSign(YieldSign):
             **kwargs,
         )
         self.priority_type = "right_hand_yield"
+        self.icon_path = None
 
     def get_rule_description(self) -> str:
         return (

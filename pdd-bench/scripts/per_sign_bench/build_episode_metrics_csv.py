@@ -60,6 +60,10 @@ POLICY_DISPLAY_NAME: dict[str, str] = {
 # and in_zone steps under the SUBCLASS name (e.g. "MinimumSpeedLimit20"
 # instead of "MinimumSpeedLimitSign"). Without this mapping all speed runs
 # count target_in_zone=0 and target_compliant=True.
+#
+# Priority plates 2.1 / 2.3.x are informational and never violate; SIGN_CLASS_MAP
+# already points those PDDs at RightHandYieldSign / YieldSign (the classes that
+# own the approach zone and emit violations).
 TARGET_CLASS_SUBCLASSES: dict[str, list[str]] = {
     "SpeedLimitSign":         ["SpeedLimitSign15"],
     "EndOfSpeedLimitSign":    ["EndOfSpeedLimitSign15"],

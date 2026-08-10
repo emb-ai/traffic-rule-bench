@@ -45,7 +45,7 @@ from scripts.per_sign_bench.factorized_space.ego_defaults import (
     numpy_legacy_seed,
     sample_ego_params,
 )
-from traffic_signs.priority_signs import MainRoadSign, RightHandYieldSign, YieldSign
+from traffic_signs.priority_signs import MainRoadSign, RightHandYieldSign, StopSign, YieldSign
 from core.lane_keys import clamp_lane_key_to_graph, make_lane_key
 from core.junction_priority_layout import right_arm_edge_id
 from core.auxiliary_agent import (
@@ -910,6 +910,17 @@ def _row_is_yield(row: dict) -> bool:
     return code in {"2.4", "2_4"} or sign_type == "yield"
 
 
+def _row_is_stop(row: dict) -> bool:
+    code = str(row.get("pdd_code") or row.get("sign_code") or "")
+    sign_type = str(row.get("sign_type") or "")
+    return code in {"2.5", "2_5"} or sign_type in {"stop", "stop_sign"}
+
+
+def _row_is_main_secondary(row: dict) -> bool:
+    """Yield (2.4) and stop (2.5) share main/secondary layout + secondary ego."""
+    return _row_is_yield(row) or _row_is_stop(row)
+
+
 def _get_junction_layout(row: dict, scenes_root: Path) -> dict | None:
     """Load junction layout from manifest row or build from scene net.xml."""
     if row.get("junction_layout"):
@@ -921,7 +932,7 @@ def _get_junction_layout(row: dict, scenes_root: Path) -> dict | None:
 
     net_file = Path(str(net_path))
     full_path = net_file if net_file.is_absolute() else scenes_root / net_file
-    mode = "main_secondary" if _row_is_yield(row) else "main_main"
+    mode = "main_secondary" if _row_is_main_secondary(row) else "main_main"
     try:
         layout = build_junction_priority_layout(full_path, mode=mode)
     except JunctionLayoutError as exc:
@@ -931,8 +942,8 @@ def _get_junction_layout(row: dict, scenes_root: Path) -> dict | None:
 
 
 def _ensure_secondary_ego_spawn(row: dict, scenes_root: Path) -> None:
-    """Ensure manifest spawn edge is on a secondary junction arm (yield only)."""
-    if not _row_is_yield(row):
+    """Ensure manifest spawn edge is on a secondary junction arm (yield/stop)."""
+    if not _row_is_main_secondary(row):
         return
     layout = _get_junction_layout(row, scenes_root)
     if not layout:
@@ -1137,10 +1148,14 @@ def _place_right_hand_yield_tracker(
         return False
 
 
-def _place_yield_sign_on_spawn_lane(
-    env, distance_before_end: float = 20.0, show_model: bool = True
+def _place_secondary_sign_on_spawn_lane(
+    env,
+    secondary_sign_cls,
+    distance_before_end: float = 20.0,
+    show_model: bool = True,
 ) -> bool:
-    """Fallback: place a single YieldSign beside the ego approach road."""
+    """Fallback: place a single secondary-arm plate beside the ego approach."""
+    label = secondary_sign_cls.__name__
     try:
         vehicle = env.agent
         if vehicle is None or vehicle.lane is None:
@@ -1154,7 +1169,7 @@ def _place_yield_sign_on_spawn_lane(
         lane = vehicle.lane
         placement_long = sign_placement_long(lane, distance_before_end)
         sign = sign_mgr.add_sign(
-            YieldSign,
+            secondary_sign_cls,
             lane=lane,
             longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
             lateral_offset=lateral_offset_beside_lane(lane, placement_long),
@@ -1166,23 +1181,32 @@ def _place_yield_sign_on_spawn_lane(
             sign.is_priority_sign = False
         return sign is not None
     except Exception as e:
-        print(f"[YieldSign] Failed to place sign: {e}")
+        print(f"[{label}] Failed to place sign: {e}")
         return False
 
 
-def _place_yield_junction_signs(
+def _place_main_secondary_junction_signs(
     env,
     row: dict,
     scenes_root: Path,
+    secondary_sign_cls,
     distance_before_end: float = 20.0,
     show_model: bool = True,
 ) -> bool:
-    """Place MainRoadSign on main arms and YieldSign on secondary arms."""
+    """Place MainRoadSign on main arms and ``secondary_sign_cls`` on secondary arms.
+
+    Shared by yield (2.4 / YieldSign) and stop (2.5 / StopSign). Keeps priority_bench
+    outgoing_edge_ids exclusions that the standalone stop_sign bench lacked.
+    """
+    label = secondary_sign_cls.__name__
     layout = _get_junction_layout(row, scenes_root)
     if layout is None:
-        print("[JunctionSigns] No layout available, falling back to ego-only yield sign")
-        return _place_yield_sign_on_spawn_lane(
-            env, distance_before_end=distance_before_end, show_model=show_model
+        print(f"[JunctionSigns] No layout available, falling back to ego-only {label}")
+        return _place_secondary_sign_on_spawn_lane(
+            env,
+            secondary_sign_cls,
+            distance_before_end=distance_before_end,
+            show_model=show_model,
         )
 
     sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
@@ -1194,9 +1218,14 @@ def _place_yield_junction_signs(
     main_arms = arms_for_road_class(layout, "main")
     secondary_arms = arms_for_road_class(layout, "secondary")
     if not main_arms or not secondary_arms:
-        print("[JunctionSigns] Missing main/secondary arms, falling back to ego-only yield sign")
-        return _place_yield_sign_on_spawn_lane(
-            env, distance_before_end=distance_before_end, show_model=show_model
+        print(
+            f"[JunctionSigns] Missing main/secondary arms, falling back to ego-only {label}"
+        )
+        return _place_secondary_sign_on_spawn_lane(
+            env,
+            secondary_sign_cls,
+            distance_before_end=distance_before_end,
+            show_model=show_model,
         )
 
     main_lanes = []
@@ -1213,14 +1242,19 @@ def _place_yield_junction_signs(
     outgoing_edge_ids -= main_approach_edges
 
     if not main_lanes:
-        print("[JunctionSigns] Could not resolve main lanes, falling back to ego-only yield sign")
-        return _place_yield_sign_on_spawn_lane(
-            env, distance_before_end=distance_before_end, show_model=show_model
+        print(
+            f"[JunctionSigns] Could not resolve main lanes, falling back to ego-only {label}"
+        )
+        return _place_secondary_sign_on_spawn_lane(
+            env,
+            secondary_sign_cls,
+            distance_before_end=distance_before_end,
+            show_model=show_model,
         )
 
     junction_id = layout.get("junction_id", "")
     placed_main = 0
-    placed_yield = 0
+    placed_secondary = 0
 
     for arm in main_arms:
         edge_id = arm.get("edge_id", "")
@@ -1249,12 +1283,12 @@ def _place_yield_junction_signs(
         edge_id = arm.get("edge_id", "")
         lane = resolve_sign_lane_for_edge(env, edge_id, arm.get("lane_keys", []))
         if lane is None:
-            print(f"[JunctionSigns] Skipping yield sign, lane not found for edge: {edge_id}")
+            print(f"[JunctionSigns] Skipping {label}, lane not found for edge: {edge_id}")
             continue
         placement_long = sign_placement_long(lane, distance_before_end)
         try:
             sign = sign_mgr.add_sign(
-                YieldSign,
+                secondary_sign_cls,
                 lane=lane,
                 longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
                 lateral_offset=lateral_offset_beside_lane(lane, placement_long),
@@ -1267,16 +1301,69 @@ def _place_yield_junction_signs(
             )
             if sign is not None:
                 sign.is_priority_sign = False
-            placed_yield += 1
+            placed_secondary += 1
         except Exception as exc:
-            print(f"[JunctionSigns] Failed YieldSign on edge {edge_id}: {exc}")
+            print(f"[JunctionSigns] Failed {label} on edge {edge_id}: {exc}")
 
     print(
-        f"[JunctionSigns] Placed {placed_main} MainRoadSign(s) and {placed_yield} YieldSign(s) "
+        f"[JunctionSigns] Placed {placed_main} MainRoadSign(s) and "
+        f"{placed_secondary} {label}(s) "
         f"at junction {junction_id} ({layout.get('shape')}), "
         f"shoulder offset={SIGN_SHOULDER_OFFSET_M}m"
     )
-    return placed_main > 0 or placed_yield > 0
+    return placed_main > 0 or placed_secondary > 0
+
+
+def _place_yield_sign_on_spawn_lane(
+    env, distance_before_end: float = 20.0, show_model: bool = True
+) -> bool:
+    return _place_secondary_sign_on_spawn_lane(
+        env, YieldSign, distance_before_end=distance_before_end, show_model=show_model
+    )
+
+
+def _place_yield_junction_signs(
+    env,
+    row: dict,
+    scenes_root: Path,
+    distance_before_end: float = 20.0,
+    show_model: bool = True,
+) -> bool:
+    """Place MainRoadSign on main arms and YieldSign on secondary arms."""
+    return _place_main_secondary_junction_signs(
+        env,
+        row,
+        scenes_root,
+        YieldSign,
+        distance_before_end=distance_before_end,
+        show_model=show_model,
+    )
+
+
+def _place_stop_sign_on_spawn_lane(
+    env, distance_before_end: float = 20.0, show_model: bool = True
+) -> bool:
+    return _place_secondary_sign_on_spawn_lane(
+        env, StopSign, distance_before_end=distance_before_end, show_model=show_model
+    )
+
+
+def _place_stop_junction_signs(
+    env,
+    row: dict,
+    scenes_root: Path,
+    distance_before_end: float = 20.0,
+    show_model: bool = True,
+) -> bool:
+    """Place MainRoadSign on main arms and StopSign on secondary arms."""
+    return _place_main_secondary_junction_signs(
+        env,
+        row,
+        scenes_root,
+        StopSign,
+        distance_before_end=distance_before_end,
+        show_model=show_model,
+    )
 
 
 def _place_junction_priority_signs(
@@ -1287,6 +1374,14 @@ def _place_junction_priority_signs(
     show_model: bool = True,
 ) -> bool:
     """Dispatch sign placement by row pdd_code / sign_type."""
+    if _row_is_stop(row):
+        return _place_stop_junction_signs(
+            env,
+            row,
+            scenes_root=scenes_root,
+            distance_before_end=distance_before_end,
+            show_model=show_model,
+        )
     if _row_is_yield(row):
         return _place_yield_junction_signs(
             env,
@@ -1430,7 +1525,7 @@ def run_one_episode(
                 distance_before_end=sign_distance,
                 show_model=not hide_signs,
             )
-            if not _row_is_yield(row):
+            if not _row_is_main_secondary(row):
                 _place_right_hand_yield_tracker(
                     base_env,
                     row,

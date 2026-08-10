@@ -32,6 +32,10 @@ for _p in (PDD_BENCH_DIR, METADRIVE_DIR, BENCHMARK_DIR):
     if _ps not in sys.path:
         sys.path.insert(0, _ps)
 
+from bench.top_down_text_patch import apply_top_down_violations_text_patch  # noqa: E402
+
+apply_top_down_violations_text_patch()
+
 
 def _build_env(catalog_row: dict, profile: dict):
     """Construct an _EnvWithTraffic with the SumoTrafficManager injected."""

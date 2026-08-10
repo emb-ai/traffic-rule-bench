@@ -19,7 +19,7 @@ build_scenes/
     └── build_scene_pool.py
 ```
 
-## Flow (2.4 yield)
+## Flow (example: 2.4 yield; same for 2.1 / 2.5)
 
 Prereq: `moscow_junctions` has `nets/moscow.net.xml`, `index/junctions.jsonl`,
 and `splits/sign_allocations.json` (see `../moscow_junctions/README.md`).
@@ -28,15 +28,15 @@ Map quotas live in `moscow_junctions/splits/signs.yaml` (`n_train` / `n_test`).
 ```bash
 cd traffic-rule-bench/pdd-bench/scripts/per_sign_bench/priority_bench
 
-# 1) Link allocated 2.4 maps (train+test) into data/yield/scenes/
-python build_scenes/materialize_scenes.py --sign 2.4
+# 1) Link allocated maps (train+test) into data/<sign>/scenes/
+python build_scenes/materialize_scenes.py --sign 2.4   # or 2.1 / 2.5
 
 # 2) Review keep/reject
-python build_scenes/review_scenes.py
-# default --scenes-dir = data/yield/scenes
+python build_scenes/review_scenes.py --scenes-dir data/yield/scenes
+# stop:  --scenes-dir data/stop/scenes
 
-# 3) Apply rejects → data/yield/scenes/_rejected/
-python build_scenes/review_scenes.py --apply
+# 3) Apply rejects → data/<sign>/scenes/_rejected/
+python build_scenes/review_scenes.py --scenes-dir data/yield/scenes --apply
 
 # 4) Top up kept counts to signs.yaml quotas (new scenes = pending)
 python build_scenes/materialize_scenes.py --sign 2.4 --refill
@@ -44,7 +44,7 @@ python build_scenes/materialize_scenes.py --sign 2.4 --refill
 
 # 5) Manifest / bench (filter train or test via Hydra)
 python generate_manifest.py sign=yield paths.split=train
-python generate_manifest.py sign=yield paths.split=test
+python generate_manifest.py sign=stop paths.split=test
 ```
 
 ### Materialize flags

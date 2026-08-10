@@ -30,10 +30,12 @@ NO_ENTRY_SIGNS = {"3.1", "3.2", "3.18.1", "3.18.2", "3.19"}
 HORIZON_DEFAULT = 600
 MIN_FINAL_STEP = 30
 
-# PDD code → sign class name (from select_experts.py:54)
+# PDD code → class name used for compliance / in-zone (must match violation
+# emitter). Informational plates 2.1 / 2.3.x never violate — see select_experts.
 SIGN_CLASS_MAP = {
-    "2.1": "MainRoadSign", "2.2": "EndMainRoadSmartSign",
-    "2.3.1": "SecondaryRoadSign", "2.3.2": "SecondaryRoadRightSign", "2.3.3": "SecondaryRoadLeftSign",
+    "2.1": "RightHandYieldSign", "2.2": "EndMainRoadSmartSign",
+    "2.3": "YieldSign",
+    "2.3.1": "YieldSign", "2.3.2": "YieldSign", "2.3.3": "YieldSign",
     "2.4": "YieldSign", "2.5": "StopSign",
     "3.1": "NoEntrySign", "3.2": "NoTrafficSign",
     "3.18.1": "NoRightTurnSign", "3.18.2": "NoLeftTurnSign", "3.19": "NoUTurnSign",

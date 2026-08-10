@@ -3,10 +3,10 @@
 
 Thin adaptation of per_sign_bench/select_experts_coverage.py:
   * loads all_runs from priority collect_trajectories layout
-    (<root>/*/2_4|2_1/all_runs.jsonl and <root>/_merged/all_runs.jsonl)
+    (<root>/*/2_4|2_1|2_5/all_runs.jsonl and <root>/_merged/all_runs.jsonl)
   * catalog may be the one written by expert_replay_priority.py, or built
     on the fly from --manifest
-  * default sign is 2.4; pass --signs 2.1 for main_road
+  * default sign is 2.4; pass --signs 2.1 / 2.5 for main_road / stop
 
 Usage:
   python select_experts_coverage.py \\
@@ -60,6 +60,7 @@ def load_rows(roots: list[str]) -> tuple[list[dict], dict]:
         # priority layout: <policy>/<slug>/all_runs.jsonl
         files += sorted(root_p.glob("*/2_4/all_runs.jsonl"))
         files += sorted(root_p.glob("*/2_1/all_runs.jsonl"))
+        files += sorted(root_p.glob("*/2_5/all_runs.jsonl"))
         files += sorted(root_p.glob("*/*/all_runs.jsonl"))
         merged = root_p / "_merged" / "all_runs.jsonl"
         if merged.is_file():

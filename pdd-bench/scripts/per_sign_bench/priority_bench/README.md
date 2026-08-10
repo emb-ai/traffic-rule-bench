@@ -15,17 +15,18 @@ cd traffic-rule-bench/pdd-bench/scripts/per_sign_bench/priority_bench
 ```
 priority_bench/
 ├── core/                 # shared libs (layout, crop, aux, augmentation, viability, …)
-├── signs/                # SignProfile registry (main_road=2.1, yield=2.4)
-├── configs/              # Hydra (configs/sign/{main_road,yield}.yaml)
+├── signs/                # SignProfile registry (main_road=2.1, yield=2.4, stop=2.5)
+├── configs/              # Hydra (configs/sign/{main_road,yield,stop}.yaml)
 ├── data/
 │   ├── main_road/{scenes,output,trajectories}
-│   └── yield/{scenes,output,trajectories}
+│   ├── yield/{scenes,output,trajectories}
+│   └── stop/{scenes,output,trajectories}
 ├── build_scenes/         # materialize moscow allocations → review pool
 │   ├── materialize_scenes.py
 │   ├── review_scenes.py
 │   └── legacy/           # old catalog / Overpass flow
 ├── tools/                # ad-hoc debug (GIF review, map render, drop analysis, …)
-├── collect_trajectories/ # oracle / PlanT2 expert collection (SIGN=yield|main_road)
+├── collect_trajectories/ # oracle / PlanT2 expert collection (SIGN=yield|main_road|stop)
 ├── generate_manifest.py
 ├── run_benchmark.py
 └── eval_pipeline.py
@@ -34,7 +35,7 @@ priority_bench/
 Compatibility shims remain under `main_sign/` and `yield_sign/`.
 
 Trajectory collection (oracle / PlanT2):
-`[collect_trajectories/](collect_trajectories/README.md)` — set `SIGN=yield|main_road`.
+`[collect_trajectories/](collect_trajectories/README.md)` — set `SIGN=yield|main_road|stop`.
 Old paths under `yield_sign/` / `main_sign/` forward here.
 
 ## Sign rules
@@ -59,23 +60,29 @@ the junction end.
 Auxiliary agents spawn on **main-road** incoming lanes (gated IDM: released when
 ego is near its spawn-lane end so both meet at the junction).
 
+### 2.5 — stop (`sign=stop`)
+
+Same junction geometry / ego / aux axes as yield (2.4). Secondary arms get
+**StopSign** instead of YieldSign: yield-to-main **plus** a mandatory full stop
+before the stop line (`StopSign` in `traffic_signs/priority_signs.py`).
+
 ## Workflow
 
 ### Step 1A: Build scene pool (moscow → materialize → review)
 
 Full sequence:
-`[build_scenes/README.md](build_scenes/README.md)`. Short version for **2.4**:
+`[build_scenes/README.md](build_scenes/README.md)`. Short version for **2.5**:
 
 ```bash
-# Link allocated moscow junctions into data/yield/scenes/
-python build_scenes/materialize_scenes.py --sign 2.4
+# Link allocated moscow junctions into data/stop/scenes/
+python build_scenes/materialize_scenes.py --sign 2.5
 
 # Review keep/reject in browser
-python build_scenes/review_scenes.py
+python build_scenes/review_scenes.py --scenes-dir data/stop/scenes
 
 # Apply rejects, then top up to signs.yaml quotas if short
-python build_scenes/review_scenes.py --apply
-python build_scenes/materialize_scenes.py --sign 2.4 --refill
+python build_scenes/review_scenes.py --scenes-dir data/stop/scenes --apply
+python build_scenes/materialize_scenes.py --sign 2.5 --refill
 ```
 
 Prereq: shared harvest + allocations under  
@@ -106,11 +113,15 @@ python generate_manifest.py sign=yield
 python generate_manifest.py sign=yield paths.split=train
 python generate_manifest.py sign=yield paths.split=test
 
+# Stop (2.5)
+python generate_manifest.py sign=stop
+python generate_manifest.py sign=stop paths.split=train
+
 # Common overrides
-python generate_manifest.py sign=yield gif.enabled=true gif.policy=comprehensive_rule_expert
-python generate_manifest.py sign=yield auxiliary.lanes_occupied=2 auxiliary.convoy_size=2
+python generate_manifest.py sign=stop gif.enabled=true gif.policy=comprehensive_rule_expert
+python generate_manifest.py sign=stop auxiliary.lanes_occupied=2 auxiliary.convoy_size=2
 # Debug: shuffle all augmented rows and keep only N total
-python generate_manifest.py sign=yield scenario.max_total=20
+python generate_manifest.py sign=stop scenario.max_total=20
 ```
 
 Output lands under `data/<sign>/output/<timestamp>/`:
@@ -125,8 +136,8 @@ Output lands under `data/<sign>/output/<timestamp>/`:
 ```bash
 python eval_pipeline.py \
     --policies idm,comprehensive_rule_expert,plant2,plant2_rule,carl,carl_rule,ppo_lidar,rule_compliant \
-    --manifest data/yield/output/<timestamp> \
-    --scenes-root data/yield/scenes
+    --manifest data/stop/output/<timestamp> \
+    --scenes-root data/stop/scenes
 ```
 
 The manifest row already carries `pdd_code` / `sign_type`.
@@ -139,28 +150,24 @@ python -m tools.run_simulation <scene_name> --policy carl
 python -m tools.run_simulation <scene_name> --policy plant2 --max-steps 400
 
 # Review GIFs after a run
-python tools/review_benchmark_gifs.py data/yield/output/<timestamp>
+python tools/review_benchmark_gifs.py data/stop/output/<timestamp>
 ```
 
 ## Trajectory collection + oracle (aux agents)
 
-To collect expert trajectories the same way as the general bench
-(`collect_trajectories.sh` → oracle selection), with priority auxiliary agents:
+See `[collect_trajectories/](collect_trajectories/README.md)` — set `SIGN=yield|main_road|stop`.
 
-- Yield (2.4): see `[../yield_sign/collect_trajectories/README.md](../yield_sign/collect_trajectories/README.md)`
-- Main road (2.1): see `[../main_sign/collect_trajectories/README.md](../main_sign/collect_trajectories/README.md)`
-
-Quick visual smoke test (yield):
+Quick visual smoke test (stop):
 
 ```bash
-cd ../yield_sign/collect_trajectories
-SMOKE=1 ./collect_trajectories.sh
-# GIFs under output/trajectories_*/comprehensive_rule_expert/2_4/gifs/
+cd collect_trajectories
+SIGN=stop SMOKE=1 ./collect_trajectories.sh
+# GIFs under data/stop/trajectories/trajectories_*/comprehensive_rule_expert/2_5/gifs/
 ```
 
 ## Configuration
 
-See `configs/config.yaml` and `configs/sign/{main_road,yield}.yaml`.
+See `configs/config.yaml` and `configs/sign/{main_road,yield,stop}.yaml`.
 
 
 | Group            | Key examples                                                                                                                                                                                       |
@@ -176,9 +183,9 @@ See `configs/config.yaml` and `configs/sign/{main_road,yield}.yaml`.
 Override on the CLI:
 
 ```bash
-python generate_manifest.py sign=yield simulation.horizon=800 auxiliary.convoy_size=3
-python generate_manifest.py sign=yield augmentation.auxiliary=false  # layout only
-python generate_manifest.py sign=yield scenario.max_scenarios=5
+python generate_manifest.py sign=stop simulation.horizon=800 auxiliary.convoy_size=3
+python generate_manifest.py sign=stop augmentation.auxiliary=false  # layout only
+python generate_manifest.py sign=stop scenario.max_scenarios=5
 ```
 
 Notes on timing / caps:
@@ -191,4 +198,3 @@ a yielding ego waits outside the release radius.
 - `scenario.max_scenarios` — after layout × convoy × lanes × gaps, short-road
 skips, and geometry dedupe, **shuffle** then keep at most this many rows
 **per scene** (default 15).
-

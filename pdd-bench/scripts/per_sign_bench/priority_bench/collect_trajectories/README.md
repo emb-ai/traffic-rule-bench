@@ -1,6 +1,6 @@
 # Priority trajectory collection + oracle selection
 
-Unified collector for `priority_bench` signs (`yield` 2.4 / `main_road` 2.1).
+Unified collector for `priority_bench` signs (`yield` 2.4 / `main_road` 2.1 / `stop` 2.5).
 Adapted from `yield_sign/collect_trajectories` and `main_sign/collect_trajectories`:
 
 - episodes go through `priority_bench/run_benchmark.run_one_episode`
@@ -17,12 +17,12 @@ Train/test is **not** split here — use `paths.split=train|test` at
 `SIGN` selects a data tree under `priority_bench/data/<sign>/`:
 
 
-|                    | yield                                            | main_road                                            |
-| ------------------ | ------------------------------------------------ | ---------------------------------------------------- |
-| scenes             | `data/yield/scenes`                              | `data/main_road/scenes`                              |
-| auto `MANIFEST`    | latest `data/yield/output/*/real_manifest.jsonl` | latest `data/main_road/output/*/real_manifest.jsonl` |
-| default `OUT_BASE` | `data/yield/trajectories/trajectories_<ts>/`     | `data/main_road/trajectories/trajectories_<ts>/`     |
-| sidecar slug       | `2_4`                                            | `2_1`                                                |
+|                    | yield                                            | main_road                                            | stop                                            |
+| ------------------ | ------------------------------------------------ | ---------------------------------------------------- | ----------------------------------------------- |
+| scenes             | `data/yield/scenes`                              | `data/main_road/scenes`                              | `data/stop/scenes`                              |
+| auto `MANIFEST`    | latest `data/yield/output/*/real_manifest.jsonl` | latest `data/main_road/output/*/real_manifest.jsonl` | latest `data/stop/output/*/real_manifest.jsonl` |
+| default `OUT_BASE` | `data/yield/trajectories/trajectories_<ts>/`     | `data/main_road/trajectories/trajectories_<ts>/`     | `data/stop/trajectories/trajectories_<ts>/`     |
+| sidecar slug       | `2_4`                                            | `2_1`                                                | `2_5`                                           |
 
 
 So `SIGN=yield SMOKE=1 ./collect_trajectories.sh` without `MANIFEST` picks the
@@ -34,7 +34,7 @@ newest yield eval/manifest run and writes under `data/yield/trajectories/…`
 
 ```
 collect_trajectories/
-├── collect_trajectories.sh      # orchestrator (SIGN=yield|main_road)
+├── collect_trajectories.sh      # orchestrator (SIGN=yield|main_road|stop)
 ├── expert_replay_priority.py    # per-policy collector → all_runs + pkl + json
 ├── select_experts_coverage.py   # oracle top-1 / top-2 / map selection
 ├── make_oracle_table.sh         # → oracle_metrics_summary_top2.md
@@ -62,7 +62,7 @@ Output of a run (default under `data/<sign>/trajectories/`):
 └── experts/                       # after select_experts_coverage.py
 ```
 
-`<slug>` is `2_4` (yield) or `2_1` (main_road).
+`<slug>` is `2_4` (yield), `2_1` (main_road), or `2_5` (stop).
 
 ## 1. Smoke / visual check (recommended first)
 
@@ -72,6 +72,7 @@ conda activate zinkovich-plant2
 
 SIGN=yield SMOKE=1 ./collect_trajectories.sh
 # or: SIGN=main_road SMOKE=1 ./collect_trajectories.sh
+# or: SIGN=stop SMOKE=1 ./collect_trajectories.sh
 ```
 
 Check GIFs and that `replay.pkl` exists next to `replay.json`:
@@ -118,7 +119,7 @@ bash collect_trajectories.sh
 
 Notes:
 
-- `SIGN=yield|main_road` (aliases `2.4|2_4|2.1|2_1|main`).
+- `SIGN=yield|main_road|stop` (aliases `2.4|2_4|2.1|2_1|main|2.5|2_5|stop_sign`).
 - Default ckpts (relative to `collect_trajectories/`):
   - `CARL_CKPT=../../../../checkpoints/carl/nuplan_51479_1B/model_best.pth`
   - `PLANT2_CKPT=../../../../checkpoints/plant2_pretrain/epoch=029_final_3.ckpt`
@@ -140,7 +141,7 @@ python select_experts_coverage.py \
     --out-dir "$OUT/experts"
 ```
 
-Use `--signs 2.1` for main_road collections.
+Use `--signs 2.1` for main_road and `--signs 2.5` for stop collections.
 
 ## 4. Metrics table
 
@@ -156,6 +157,7 @@ SIGN=yield ./make_oracle_table.sh ../data/yield/trajectories/trajectories_<ts>
 | ----------- | --- | ----- | ----------------------- | ---------------------------------------------------- | ----------------------------------------------- |
 | `yield`     | 2.4 | `2_4` | `data/yield/scenes`     | latest `data/yield/output/*/real_manifest.jsonl`     | `data/yield/trajectories/trajectories_<ts>`     |
 | `main_road` | 2.1 | `2_1` | `data/main_road/scenes` | latest `data/main_road/output/*/real_manifest.jsonl` | `data/main_road/trajectories/trajectories_<ts>` |
+| `stop`      | 2.5 | `2_5` | `data/stop/scenes`      | latest `data/stop/output/*/real_manifest.jsonl`      | `data/stop/trajectories/trajectories_<ts>`      |
 
 
 Compatibility shims remain under `yield_sign/collect_trajectories` and

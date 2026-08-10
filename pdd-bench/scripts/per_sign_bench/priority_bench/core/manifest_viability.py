@@ -360,7 +360,7 @@ def check_manifest_viability(
             viable=False,
             reason="unsupported_junction_shape",
             detail=(
-                f"shape={layout.shape!r}; priority signs 2.1/2.4 require "
+                f"shape={layout.shape!r}; priority signs 2.1/2.4/2.5 require "
                 f"{sorted(ALLOWED_PRIORITY_JUNCTION_SHAPES)}"
             ),
         )

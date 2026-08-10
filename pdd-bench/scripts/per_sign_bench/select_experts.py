@@ -13,11 +13,16 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 SIGN_CLASS_MAP = {
     # Source: sdc/pdd-bench/envs/sumo_env.py:SIGN_TYPE_TO_CLASS
-    "2.1":    "MainRoadSign",
+    # Compliance / in-zone metrics must use the class that actually emits
+    # violations (and owns the approach zone), not the informational plate:
+    #   2.1 MainRoadSign → never violates; RightHandYieldSign tracks RH rule
+    #   2.3.x SecondaryRoad* → never violate; YieldSign on secondary enforces
+    "2.1":    "RightHandYieldSign",
     "2.2":    "EndMainRoadSmartSign",
-    "2.3.1":  "SecondaryRoadSign",
-    "2.3.2":  "SecondaryRoadRightSign",
-    "2.3.3":  "SecondaryRoadLeftSign",
+    "2.3":    "YieldSign",  # alias when scenes are tagged 2.3 without subtype
+    "2.3.1":  "YieldSign",
+    "2.3.2":  "YieldSign",
+    "2.3.3":  "YieldSign",
     "2.4":    "YieldSign",
     "2.5":    "StopSign",
     "3.1":    "NoEntrySign",
@@ -67,6 +72,15 @@ SIGN_CLASS_MAP = {
     "5.22":   "EndOfResidentialZoneSign",
     "5.31":   "ZoneSpeedLimitSign",
     "5.32":   "EndOfZoneSpeedLimitSign",
+}
+
+# Informational plate class names (for docs / debugging). Compliance uses
+# SIGN_CLASS_MAP above.
+PLATE_CLASS_MAP = {
+    "2.1": "MainRoadSign",
+    "2.3.1": "SecondaryRoadSign",
+    "2.3.2": "SecondaryRoadRightSign",
+    "2.3.3": "SecondaryRoadLeftSign",
 }
 
 NO_ENTRY_SIGNS = {"3.1", "3.2", "3.18.1", "3.18.2", "3.19"}
