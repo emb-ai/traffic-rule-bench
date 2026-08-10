@@ -18,6 +18,10 @@ PIPE=$TRB/scripts/plant2_ft_pipeline
 PLANT=$TRB/plant2/PlanT
 TEST=$TRB/pdd-bench/scripts/per_sign_bench/plant2_rule_test
 PY=${PY:-$(command -v python3)}
+# The prefill imports diskcache and the PlanT dataset, so it needs the training
+# environment, not whatever python3 the shell happens to have.
+PREFILL_PY=${PREFILL_PY:-$SHEP/conda_envs/arbelyaev-sdc/bin/python}
+[ -x "$PREFILL_PY" ] || PREFILL_PY=$PY
 
 SIGN=${SIGN:-2.5}
 TAG=${TAG:-only$(echo "$SIGN" | tr -d '.')}
@@ -66,7 +70,7 @@ for half in $HALVES; do
         say "cache $half -> $CACHE_ROOT/$half"
         ( cd "$PIPE" && DS="$split/train" DS_VAL="$split/val" \
           DS_LOCAL="$CACHE_ROOT/$half" CACHE_SIZE_GB=${CACHE_SIZE_GB:-200} \
-          PLAN_T="$PLANT" $PY prefill_plant2_diskcache.py 2>&1 | tail -3 ) \
+          PLAN_T="$PLANT" $PREFILL_PY prefill_plant2_diskcache.py 2>&1 | tail -3 ) \
           || echo "!! prefill failed for $half"
     fi
 
