@@ -47,7 +47,7 @@ from scripts.per_sign_bench.factorized_space.ego_defaults import (
 )
 from traffic_signs.priority_signs import MainRoadSign, RightHandYieldSign, StopSign, YieldSign
 from core.lane_keys import clamp_lane_key_to_graph, make_lane_key
-from core.junction_priority_layout import right_arm_edge_id
+from core.junction_priority_layout import right_arm_edge_id, straight_arm_edge_id
 from core.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
     DEFAULT_CONVOY_SIZE,
@@ -1192,11 +1192,15 @@ def _place_main_secondary_junction_signs(
     secondary_sign_cls,
     distance_before_end: float = 20.0,
     show_model: bool = True,
+    secondary_sign_for_arm=None,
 ) -> bool:
-    """Place MainRoadSign on main arms and ``secondary_sign_cls`` on secondary arms.
+    """Place MainRoadSign on main arms and secondary plates on secondary arms.
 
     Shared by yield (2.4 / YieldSign) and stop (2.5 / StopSign). Keeps priority_bench
     outgoing_edge_ids exclusions that the standalone stop_sign bench lacked.
+
+    ``secondary_sign_for_arm(arm) -> sign_cls`` optionally picks a different plate
+    per secondary arm (stop X: ego arm StopSign, opposite YieldSign).
     """
     label = secondary_sign_cls.__name__
     layout = _get_junction_layout(row, scenes_root)
@@ -1254,7 +1258,7 @@ def _place_main_secondary_junction_signs(
 
     junction_id = layout.get("junction_id", "")
     placed_main = 0
-    placed_secondary = 0
+    placed_by_cls: dict[str, int] = {}
 
     for arm in main_arms:
         edge_id = arm.get("edge_id", "")
@@ -1283,12 +1287,16 @@ def _place_main_secondary_junction_signs(
         edge_id = arm.get("edge_id", "")
         lane = resolve_sign_lane_for_edge(env, edge_id, arm.get("lane_keys", []))
         if lane is None:
-            print(f"[JunctionSigns] Skipping {label}, lane not found for edge: {edge_id}")
+            print(f"[JunctionSigns] Skipping secondary sign, lane not found for edge: {edge_id}")
             continue
+        arm_cls = secondary_sign_cls
+        if secondary_sign_for_arm is not None:
+            arm_cls = secondary_sign_for_arm(arm) or secondary_sign_cls
+        arm_label = arm_cls.__name__
         placement_long = sign_placement_long(lane, distance_before_end)
         try:
             sign = sign_mgr.add_sign(
-                secondary_sign_cls,
+                arm_cls,
                 lane=lane,
                 longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
                 lateral_offset=lateral_offset_beside_lane(lane, placement_long),
@@ -1301,13 +1309,17 @@ def _place_main_secondary_junction_signs(
             )
             if sign is not None:
                 sign.is_priority_sign = False
-            placed_secondary += 1
+            placed_by_cls[arm_label] = placed_by_cls.get(arm_label, 0) + 1
         except Exception as exc:
-            print(f"[JunctionSigns] Failed {label} on edge {edge_id}: {exc}")
+            print(f"[JunctionSigns] Failed {arm_label} on edge {edge_id}: {exc}")
 
+    placed_secondary = sum(placed_by_cls.values())
+    secondary_summary = ", ".join(
+        f"{n} {name}(s)" for name, n in sorted(placed_by_cls.items())
+    ) or f"0 {label}(s)"
     print(
         f"[JunctionSigns] Placed {placed_main} MainRoadSign(s) and "
-        f"{placed_secondary} {label}(s) "
+        f"{secondary_summary} "
         f"at junction {junction_id} ({layout.get('shape')}), "
         f"shoulder offset={SIGN_SHOULDER_OFFSET_M}m"
     )
@@ -1348,6 +1360,30 @@ def _place_stop_sign_on_spawn_lane(
     )
 
 
+def _stop_secondary_sign_for_arm(layout: dict, row: dict, arm: dict):
+    """On X stop scenes: ego secondary → StopSign (2.5), opposite → YieldSign (2.4).
+
+    T / single-secondary keep StopSign on every secondary arm. Priority logic is
+    unchanged (main vs secondary); only the opposite plate differs visually.
+    """
+    if str(layout.get("shape") or "") != "X":
+        return StopSign
+    ego_edge = str(row.get("road_id") or "")
+    edge_id = str(arm.get("edge_id") or "")
+    if not ego_edge or not edge_id:
+        return StopSign
+    if edge_id == ego_edge:
+        return StopSign
+    opposite = straight_arm_edge_id(layout, ego_edge)
+    if opposite is not None and edge_id == str(opposite):
+        return YieldSign
+    # Other non-ego secondary on X (should be the opposite in the usual layout).
+    secondary_ids = {str(e) for e in (layout.get("secondary_edge_ids") or [])}
+    if edge_id in secondary_ids and edge_id != ego_edge:
+        return YieldSign
+    return StopSign
+
+
 def _place_stop_junction_signs(
     env,
     row: dict,
@@ -1355,7 +1391,14 @@ def _place_stop_junction_signs(
     distance_before_end: float = 20.0,
     show_model: bool = True,
 ) -> bool:
-    """Place MainRoadSign on main arms and StopSign on secondary arms."""
+    """Place MainRoadSign on main; StopSign on ego secondary; YieldSign opposite on X."""
+    layout = _get_junction_layout(row, scenes_root)
+
+    def _for_arm(arm: dict):
+        if layout is None:
+            return StopSign
+        return _stop_secondary_sign_for_arm(layout, row, arm)
+
     return _place_main_secondary_junction_signs(
         env,
         row,
@@ -1363,6 +1406,7 @@ def _place_stop_junction_signs(
         StopSign,
         distance_before_end=distance_before_end,
         show_model=show_model,
+        secondary_sign_for_arm=_for_arm,
     )
 
 

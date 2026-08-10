@@ -62,8 +62,11 @@ ego is near its spawn-lane end so both meet at the junction).
 
 ### 2.5 — stop (`sign=stop`)
 
-Same junction geometry / ego / aux axes as yield (2.4). Secondary arms get
-**StopSign** instead of YieldSign: yield-to-main **plus** a mandatory full stop
+Same junction geometry / ego / aux axes as yield (2.4). Secondary **ego** arm gets
+**StopSign** (2.5). On **X** junctions the opposite secondary arm shows a **YieldSign**
+(2.4) plate — priority logic is unchanged (main vs secondary); only that plate differs.
+**T** junctions keep a single StopSign on the secondary stem. Main-road arms get
+**MainRoadSign**. Ego must yield to main traffic **and** make a mandatory full stop
 before the stop line (`StopSign` in `traffic_signs/priority_signs.py`).
 
 ## Workflow
