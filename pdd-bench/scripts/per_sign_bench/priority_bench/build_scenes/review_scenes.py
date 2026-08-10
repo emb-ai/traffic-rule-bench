@@ -13,6 +13,10 @@ Examples:
     # Custom port / scenes root
     python build_scenes/review_scenes.py --port 9000
 
+    # Mark every pending scene as keep, then browse and reject the bad ones
+    python build_scenes/review_scenes.py --scenes-dir data/stop/scenes --mark-all-keep
+    python build_scenes/review_scenes.py --scenes-dir data/stop/scenes
+
     # Move rejected scenes to scenes/_rejected/
     python build_scenes/review_scenes.py --apply
 
@@ -68,6 +72,39 @@ def save_selection(scenes_root: Path, data: dict[str, Any]) -> None:
 
 def set_verdict(scenes_root: Path, scene_name: str, verdict: str) -> None:
     set_scene_verdict(scenes_root, scene_name, verdict)
+
+
+def mark_all_scenes(
+    scenes_root: Path,
+    *,
+    preview_name: str,
+    verdict: str = VERDICT_KEEP,
+    only_pending: bool = True,
+) -> tuple[int, int]:
+    """Bulk-set verdicts for all discoverable preview scenes.
+
+    Returns (n_changed, n_total). With ``only_pending=True`` (default), existing
+    keep/reject marks are left alone — intended for “keep everything first,
+    then reject a few”.
+    """
+    records = discover_review_scenes(scenes_root, preview_name=preview_name)
+    if not records:
+        return 0, 0
+    selection = load_selection(scenes_root)
+    scenes_map: dict[str, str] = selection.setdefault("scenes", {})
+    changed = 0
+    for record in records:
+        name = record["name"]
+        current = scenes_map.get(name, VERDICT_PENDING)
+        if only_pending and current != VERDICT_PENDING:
+            continue
+        if current == verdict:
+            continue
+        scenes_map[name] = verdict
+        changed += 1
+    if changed:
+        save_selection(scenes_root, selection)
+    return changed, len(records)
 
 
 def discover_review_scenes(
@@ -225,6 +262,11 @@ REVIEW_HTML = """<!DOCTYPE html>
       border-color: transparent;
       font-weight: 600;
     }
+    .actions button.btn-keep {
+      background: rgba(46, 125, 50, 0.25);
+      color: #81c784;
+      border-color: var(--keep);
+    }
     main { padding: 16px 20px 40px; }
     .grid {
       display: grid;
@@ -330,6 +372,7 @@ REVIEW_HTML = """<!DOCTYPE html>
         <button data-filter="reject">Rejected</button>
       </div>
       <div class="actions">
+        <button id="keep-all-pending" class="btn-keep">Keep all pending</button>
         <button id="export-kept" class="primary">Copy kept list</button>
       </div>
     </div>
@@ -337,6 +380,8 @@ REVIEW_HTML = """<!DOCTYPE html>
       Click image to enlarge. Keys in lightbox: <strong>K</strong> keep,
       <strong>R</strong> reject, <strong>P</strong> pending,
       <strong>←/→</strong> prev/next, <strong>Esc</strong> close.
+      <strong>Keep all pending</strong> marks every unmarked scene as keep
+      (existing rejects stay); then reject the bad ones.
       Run <code>review_scenes.py --apply</code> to move rejected scenes to <code>_rejected/</code>.
     </div>
   </header>
@@ -492,6 +537,27 @@ REVIEW_HTML = """<!DOCTYPE html>
       }
     });
 
+    document.getElementById("keep-all-pending").addEventListener("click", async () => {
+      const nPending = scenes.filter((s) => s.verdict === "pending").length;
+      if (!nPending) {
+        alert("No pending scenes.");
+        return;
+      }
+      if (!confirm(`Mark ${nPending} pending scene(s) as keep? Existing rejects stay.`)) {
+        return;
+      }
+      const data = await api("/api/selection/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ verdict: "keep", only_pending: true }),
+      });
+      for (const s of scenes) {
+        if (s.verdict === "pending") s.verdict = "keep";
+      }
+      render();
+      alert(`Marked ${data.changed}/${data.total} scene(s) as keep.`);
+    });
+
     document.getElementById("lb-prev").addEventListener("click", () => lightboxStep(-1));
     document.getElementById("lb-next").addEventListener("click", () => lightboxStep(1));
     document.getElementById("lb-close").addEventListener("click", closeLightbox);
@@ -601,6 +667,33 @@ def make_handler(scenes_root: Path, preview_name: str):
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
+            if parsed.path == "/api/selection/bulk":
+                try:
+                    payload = self._read_json()
+                    verdict = payload.get("verdict", VERDICT_KEEP)
+                    only_pending = bool(payload.get("only_pending", True))
+                    if verdict not in {VERDICT_KEEP, VERDICT_REJECT, VERDICT_PENDING}:
+                        self._send_json({"error": f"invalid verdict: {verdict}"}, status=400)
+                        return
+                    changed, total = mark_all_scenes(
+                        scenes_root,
+                        preview_name=preview_name,
+                        verdict=verdict,
+                        only_pending=only_pending,
+                    )
+                    self._send_json(
+                        {
+                            "ok": True,
+                            "verdict": verdict,
+                            "only_pending": only_pending,
+                            "changed": changed,
+                            "total": total,
+                        }
+                    )
+                except Exception as exc:
+                    self._send_json({"error": str(exc)}, status=400)
+                return
+
             if parsed.path != "/api/selection":
                 self.send_error(404)
                 return
@@ -686,6 +779,19 @@ def main() -> None:
         action="store_true",
         help="Print kept scene names from scene_selection.json and exit",
     )
+    parser.add_argument(
+        "--mark-all-keep",
+        action="store_true",
+        help=(
+            "Mark all pending scenes as keep and exit "
+            "(existing reject/keep unchanged). Then reopen the UI and reject bad ones."
+        ),
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="With --mark-all-keep, overwrite existing keep/reject too (every scene → keep)",
+    )
     args = parser.parse_args()
 
     scenes_root = args.scenes_dir.expanduser().resolve()
@@ -693,6 +799,20 @@ def main() -> None:
     if args.list_kept:
         for name in kept_scene_names(scenes_root, preview_name=args.preview_name):
             print(name)
+        return
+
+    if args.mark_all_keep:
+        changed, total = mark_all_scenes(
+            scenes_root,
+            preview_name=args.preview_name,
+            verdict=VERDICT_KEEP,
+            only_pending=not args.force,
+        )
+        scope = "all scenes" if args.force else "pending only"
+        print(
+            f"Marked {changed}/{total} scene(s) as keep ({scope}) → "
+            f"{selection_path(scenes_root)}"
+        )
         return
 
     if args.apply:

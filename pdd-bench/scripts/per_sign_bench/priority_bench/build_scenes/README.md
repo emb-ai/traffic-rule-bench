@@ -34,6 +34,9 @@ python build_scenes/materialize_scenes.py --sign 2.4   # or 2.1 / 2.5
 # 2) Review keep/reject
 python build_scenes/review_scenes.py --scenes-dir data/yield/scenes
 # stop:  --scenes-dir data/stop/scenes
+# Optional: mark every pending scene as keep, then reject only the bad ones
+python build_scenes/review_scenes.py --scenes-dir data/stop/scenes --mark-all-keep
+# (or click "Keep all pending" in the UI)
 
 # 3) Apply rejects → data/<sign>/scenes/_rejected/
 python build_scenes/review_scenes.py --scenes-dir data/yield/scenes --apply
