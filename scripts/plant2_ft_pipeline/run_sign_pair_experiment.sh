@@ -80,6 +80,7 @@ for half in $HALVES; do
             DS_LOCAL="$CACHE_ROOT/$half" CACHE_SIZE_GB=${CACHE_SIZE_GB:-200} \
             SEED=1 CHECKPOINT_ADDON="$addon" CKPT_EVERY_N_EPOCHS=3 \
             GPUS="$GPUS" CKPT0="$BASE_CKPT" SHEPELEV="$SHEP" \
+            DDP_STRATEGY="${DDP_STRATEGY:-ddp_find_unused_parameters_true}" \
             LEARNING_RATE="$LR" MAX_EPOCHS="$EPOCHS" LR_SCHEDULER=cosine_warmup \
             bash "$PIPE/run_plant2_finetune.sh" > "$TRB/plant2/ft_${addon}.log" 2>&1
         grep -E "val/loss_all|Epoch |Error|Traceback" "$TRB/plant2/ft_${addon}.log" | tail -8
