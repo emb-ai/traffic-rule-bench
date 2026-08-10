@@ -11,6 +11,9 @@ from typing import Any
 DEFAULT_SPAWN_DISTANCE_BEFORE_END = 12.0
 DEFAULT_AUX_DISTANCE_FROM_INTERSECTION = 20.0
 DEFAULT_AUX_LANES_OCCUPIED_MAX = 4
+# Expert mandatory dwell at stop line after speed≈0 (sim steps; ×0.1 s ≈ seconds).
+# Was 30 (~3.0 s); halved to 15 (~1.5 s).
+DEFAULT_STOP_WAIT_STEPS = 15
 
 # Row fields that may be filled from manifest.json / real_manifest_summary.json.
 EXPERIMENT_DEFAULT_KEYS = (
@@ -24,6 +27,7 @@ EXPERIMENT_DEFAULT_KEYS = (
     "aux_convoy_size_max",
     "aux_convoy_gap_m",
     "aux_lanes_occupied_max",
+    "stop_wait_steps",
 )
 
 
@@ -60,8 +64,16 @@ def enrich_manifest_row(row: dict[str, Any], config: dict[str, Any] | None = Non
         )
         out["aux_distance_from_intersection"] = float(raw)
 
+    if out.get("stop_wait_steps") is None:
+        raw = config.get("stop_wait_steps", DEFAULT_STOP_WAIT_STEPS)
+        out["stop_wait_steps"] = int(raw)
+
     for key in EXPERIMENT_DEFAULT_KEYS:
-        if key in ("spawn_distance_before_end", "aux_distance_from_intersection"):
+        if key in (
+            "spawn_distance_before_end",
+            "aux_distance_from_intersection",
+            "stop_wait_steps",
+        ):
             continue
         if out.get(key) is None and key in config:
             out[key] = config[key]

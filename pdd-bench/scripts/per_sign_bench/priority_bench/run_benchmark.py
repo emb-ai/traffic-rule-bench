@@ -72,6 +72,7 @@ from core.junction_priority_layout import (
 )
 from core.manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+    DEFAULT_STOP_WAIT_STEPS,
     enrich_manifest_row,
     load_manifest_config,
 )
@@ -1604,6 +1605,10 @@ def run_one_episode(
                     apply_ego_sampled(policy_obj, sampled_ego_params)
                 else:
                     apply_ego_defaults(policy_obj)
+            if hasattr(policy_obj, "STOP_WAIT_STEPS"):
+                policy_obj.STOP_WAIT_STEPS = int(
+                    row.get("stop_wait_steps", DEFAULT_STOP_WAIT_STEPS)
+                )
 
         # Add auxiliary agents on every incoming lane (except ego's road)
         # aux_agent_mgr = None
@@ -2347,6 +2352,13 @@ def main():
         help=f"Fallback max main-road lanes to occupy when manifest row omits aux_lanes_occupied "
              f"(default: {DEFAULT_AUX_LANES_OCCUPIED_MAX})",
     )
+    parser.add_argument(
+        "--stop-wait-steps",
+        type=int,
+        default=None,
+        help=f"Override expert stop-line dwell in sim steps (default from manifest / "
+             f"{DEFAULT_STOP_WAIT_STEPS} ≈ 1.5 s at 0.1 s/step)",
+    )
 
     args = parser.parse_args()
 
@@ -2494,6 +2506,8 @@ def main():
             
             if args.debug_one_way_sign_selection:
                 row["debug_one_way_sign_selection"] = True
+            if args.stop_wait_steps is not None:
+                row["stop_wait_steps"] = int(args.stop_wait_steps)
             gif_path = None
             if gifs_dir is not None:
                 seed_val = int(row.get("seed") or row.get("deterministic_seed") or 0)

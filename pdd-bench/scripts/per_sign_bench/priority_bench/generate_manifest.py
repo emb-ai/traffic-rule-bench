@@ -10,6 +10,7 @@ import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -39,6 +40,7 @@ from core.sumo_utils import load_vehicle_route_index
 from core.manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+    DEFAULT_STOP_WAIT_STEPS,
 )
 from core.manifest_expansion import (
     AuxiliaryParams,
@@ -59,7 +61,13 @@ from core.moscow_pool import (
     pool_path,
 )
 from core.sumo_utils import is_vehicle_drivable_lane
-from signs import SignProfile, get_profile, scenes_dir as profile_scenes_dir, output_dir as profile_output_dir
+from signs import (
+    STOP,
+    SignProfile,
+    get_profile,
+    scenes_dir as profile_scenes_dir,
+    output_dir as profile_output_dir,
+)
 
 RUN_BENCH_SCRIPT = SCRIPT_DIR / "run_benchmark.py"
 MOSCOW_ROOT = SCRIPT_DIR.parent / "moscow_junctions"
@@ -126,6 +134,13 @@ class SimulationConfig:
 
 
 @dataclass
+class ExpertConfig:
+    """Rule-expert hyperparameters written into each manifest row."""
+
+    stop_wait_steps: int = DEFAULT_STOP_WAIT_STEPS
+
+
+@dataclass
 class AuxiliaryConfig:
     enabled: bool = True
     distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION
@@ -153,6 +168,7 @@ class ManifestConfig:
     scenario: ScenarioConfig = field(default_factory=ScenarioConfig)
     augmentation: AugmentationAxesConfig = field(default_factory=AugmentationAxesConfig)
     simulation: SimulationConfig = field(default_factory=SimulationConfig)
+    expert: ExpertConfig = field(default_factory=ExpertConfig)
     auxiliary: AuxiliaryConfig = field(default_factory=AuxiliaryConfig)
     gif: GifConfig = field(default_factory=GifConfig)
 
@@ -482,6 +498,7 @@ def build_manifest_entry(
     spawn_lanes_cache: Optional[List[SumoLaneInfo]] = None,
     junction_layout_cache: Optional[dict] = None,
     spawn_scenario: Optional[SpawnScenario] = None,
+    expert_cfg: Optional[ExpertConfig] = None,
 ) -> Dict:
     """Build a single manifest entry for a scene."""
     scene_name = meta.get("scene_name", scene_dir.name)
@@ -550,7 +567,11 @@ def build_manifest_entry(
         "aux_convoy_gap_m": aux_cfg.convoy_gap_m,
         "aux_lanes_occupied": aux_lanes_occupied,
     }
-    
+    if _profile().id == STOP.id:
+        entry["stop_wait_steps"] = int(
+            (expert_cfg or ExpertConfig()).stop_wait_steps
+        )
+
     if spawn_scenario is not None:
         entry.update(spawn_scenario.to_manifest_fields())
         if aux_cfg.enabled:
@@ -735,8 +756,10 @@ def generate_manifest(
     aux_cfg: AuxiliaryConfig,
     expansion_cfg: ExpansionConfig,
     split: str = "all",
+    expert_cfg: Optional[ExpertConfig] = None,
 ) -> List[Dict]:
     """Generate real_manifest.jsonl from discovered scenes."""
+    expert_cfg = expert_cfg or ExpertConfig()
     split = normalize_split(split)
     assert_rejected_scenes_applied(scenes_dir)
     all_scenes = discover_scenes(scenes_dir)
@@ -820,7 +843,7 @@ def generate_manifest(
             spawn_strategy=_profile().spawn_strategy,
             sim_cfg=sim_cfg,
             expansion=expansion_cfg,
-            build_entry=build_manifest_entry,
+            build_entry=partial(build_manifest_entry, expert_cfg=expert_cfg),
             aux_cfg_for_entry=aux_for_entry,
         )
         scene_split = split_by_id.get(scene_name) or split_by_id.get(scene_dir.name)
@@ -884,6 +907,8 @@ def generate_manifest(
         "generated_at": datetime.now().isoformat(),
         "scenes": list(used_scene_ids),
     }
+    if _profile().id == STOP.id:
+        summary["stop_wait_steps"] = int(expert_cfg.stop_wait_steps)
 
     summary_path = output_dir / "real_manifest_summary.json"
     with open(summary_path, "w", encoding="utf-8") as f:
@@ -1087,6 +1112,12 @@ def main(cfg: DictConfig) -> None:
         sign_distance_before_end=cfg.simulation.sign_distance_before_end,
         spawn_distance_before_end=cfg.simulation.spawn_distance_before_end,
     )
+    expert_cfg = ExpertConfig(
+        stop_wait_steps=int(
+            getattr(getattr(cfg, "expert", None), "stop_wait_steps", DEFAULT_STOP_WAIT_STEPS)
+            or DEFAULT_STOP_WAIT_STEPS
+        ),
+    )
     convoy_gaps_m = _resolve_convoy_gaps_m(getattr(cfg.auxiliary, "convoy_gap_m", None))
     aux_cfg = AuxiliaryConfig(
         enabled=bool(cfg.auxiliary.enabled),
@@ -1140,6 +1171,7 @@ def main(cfg: DictConfig) -> None:
         aux_cfg=aux_cfg,
         expansion_cfg=expansion_cfg,
         split=split,
+        expert_cfg=expert_cfg,
     )
     
     if gif_cfg.enabled and entries:

@@ -123,6 +123,8 @@ python generate_manifest.py sign=stop paths.split=train
 # Common overrides
 python generate_manifest.py sign=stop gif.enabled=true gif.policy=comprehensive_rule_expert
 python generate_manifest.py sign=stop auxiliary.lanes_occupied=2 auxiliary.convoy_size=2
+# Stop dwell at the line (sign=stop only): default 15 steps (~1.5 s); was 30 (~3 s)
+python generate_manifest.py sign=stop expert.stop_wait_steps=15
 # Debug: shuffle all augmented rows and keep only N total
 python generate_manifest.py sign=stop scenario.max_total=20
 ```

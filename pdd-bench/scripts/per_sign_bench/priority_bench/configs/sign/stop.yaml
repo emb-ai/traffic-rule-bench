@@ -9,3 +9,6 @@ augmentation:
 
 auxiliary:
   enabled: true
+
+expert:
+  stop_wait_steps: 15
