@@ -43,6 +43,12 @@ TAG=${TAG:-only$(echo "$SIGN" | tr -d '.')${_v2}}
 FIX_ROOT=${FIX_ROOT:-$SM/plant2_fix}
 DUMP_NEW=${DUMP_NEW:-$FIX_ROOT/plant2_l1_from_experts_signs}
 DUMP_OLD=${DUMP_OLD:-${SHEP:+$SHEP/plant2_l1_from_experts_signs}}
+# Without nfs3 the baseline dump is unreachable; synthesize it from the new
+# dump instead (same replayed episodes minus the convoy's vehicle boxes).
+if [ -z "$DUMP_OLD" ] || [ ! -d "$DUMP_OLD/data" ]; then
+    DUMP_OLD=$FIX_ROOT/old_synth_${SIGN}
+    SYNTH_OLD=1
+fi
 SPLIT_NEW=${SPLIT_NEW:-$FIX_ROOT/split_${SIGN}_new}
 SPLIT_OLD=${SPLIT_OLD:-$FIX_ROOT/split_${SIGN}_old}
 CACHE_ROOT=${CACHE_ROOT:-/tmp/plant2_cache_pair${_v2}}
@@ -51,13 +57,6 @@ BASE_CKPT=${BASE_CKPT:-${SHEP:+$SHEP/plant2_checkpoints/epoch=029_final_1.ckpt}}
 # Fail on what is actually missing, by name, before any stage runs.
 [ -n "$BASE_CKPT" ] && [ -f "$BASE_CKPT" ] \
     || { echo "!! BASE_CKPT not found (${BASE_CKPT:-unset}) — pass BASE_CKPT=/abs/base.ckpt"; exit 1; }
-if [ -z "$DUMP_OLD" ] || [ ! -d "$DUMP_OLD/data" ]; then
-    if [[ " ${HALVES:-new old} " == *" old "* ]]; then
-        echo "!! DUMP_OLD not found (${DUMP_OLD:-unset}) — the 'old' half needs the baseline dump."
-        echo "   Either pass DUMP_OLD=/abs/dump, or run HALVES=new here and the old half on a node with nfs3."
-        exit 1
-    fi
-fi
 
 EPOCHS=${EPOCHS:-12}
 LR=${LR:-1e-5}
@@ -76,13 +75,12 @@ echo "  old frames: $DUMP_OLD"
 
 # --- splits -------------------------------------------------------------------
 if has_stage split; then
-    # The matched pair is defined over routes usable in BOTH dumps; building the
-    # halves from different route sets on different nodes would silently break
-    # the pairing, so the split always needs both dumps visible at once.
-    [ -n "$DUMP_OLD" ] && [ -d "$DUMP_OLD/data" ] || {
-        echo "!! the split stage needs the old dump too (DUMP_OLD) — copy it once:"
-        echo "   rsync -a --include='sumo_2_5_*' <nfs3>/plant2_l1_from_experts_signs/data/ <here>/old_dump/data/"
-        exit 1; }
+    if [ "${SYNTH_OLD:-0}" = 1 ] && [ ! -d "$DUMP_OLD/data" ]; then
+        say "old half: synthesizing no-traffic frames -> $DUMP_OLD"
+        $PY "$PIPE/make_old_half_from_new.py" \
+            --new-dump "$DUMP_NEW" --out "$DUMP_OLD" --jobs ${JOBS:-16} \
+            || { echo "!! synthesis failed"; exit 1; }
+    fi
     say "matched splits -> $SPLIT_NEW / $SPLIT_OLD"
     ( cd "$PIPE" && SHEPELEV="$SHEP" PLAN_T="$PLANT" $PY make_sign_pair_splits.py \
         --sign "$SIGN" --new-dump "$DUMP_NEW" --old-dump "$DUMP_OLD" \
