@@ -80,7 +80,9 @@ PROFILE: SignProfile | None = None
 
 def _profile() -> SignProfile:
     if PROFILE is None:
-        raise RuntimeError("PROFILE is not set; call main() with sign=main_road|yield|stop")
+        raise RuntimeError(
+            "PROFILE is not set; call main() with sign=main|secondary|yield|stop"
+        )
     return PROFILE
 
 

@@ -74,8 +74,10 @@ FLOOR_OVERSHOOT_KMH = 3.0          # aim this far ABOVE the min so a policy's
                                    # pull-back (its own target is below the min)
                                    # doesn't dip below min - tolerance
 
-STOP_SAFETY_CONFLICT_RADIUS = 25.0 # metres around intersection to check for conflicts
-STOP_SAFETY_MAX_WAIT = 200         # max extra steps to wait after stop (timeout)
+# Once this close to the stop line, keep the stop FSM engaged even when
+# speed≈0 makes ``_approach_dist(0)`` collapse to 0 (otherwise the expert
+# drops out of the wait loop, kick-starts, then re-brakes — stutter after stop).
+STOP_ENGAGE_DISTANCE_M = 12.0
 
 # Force the first allowed exit at a direction sign. MetaDrive IDM follows the
 # approach-lane centreline into the default (often straight) connector even
@@ -200,7 +202,7 @@ def lane_index_num(lane):
 class SignComplianceMixin:
     """Traffic sign compliance logic shared between PPO and IDM experts."""
 
-    STOP_WAIT_STEPS = 30
+    STOP_WAIT_STEPS = 15  # ~1.5 s at 0.1 s/step (was 30); override via expert.stop_wait_steps
     NO_STOP_MIN_SPEED_KMH = 5.0
     BRAKE_ACTION = -1.0
     # Mid-route U-turn crawl/spin assist (3.18 detours). Opt-in — PlanT2 only.
@@ -2201,8 +2203,7 @@ class SignComplianceMixin:
         stop_long = sign.stop_line_position
         sid = id(sign)
         st = self._stop_states.setdefault(
-            sid, {"waiting": False, "steps": 0, "done": False,
-                  "safety_wait": 0}
+            sid, {"waiting": False, "steps": 0, "done": False}
         )
 
         if on_same_road(ego_lane, sign_lane):
@@ -2210,7 +2211,7 @@ class SignComplianceMixin:
             dist = stop_long - veh_long
             # Past the stop line — reset state so the sign is inert for this vehicle.
             if veh_long >= stop_long + STOP_PAST_THRESHOLD:
-                st.update(waiting=False, steps=0, done=False, safety_wait=0)
+                st.update(waiting=False, steps=0, done=False)
                 return
         else:
             # Ego on an upstream lane that eventually leads to sign.lane —
@@ -2221,21 +2222,32 @@ class SignComplianceMixin:
 
         if st["done"]:
             return
-        if 0 < dist < self._approach_dist(0.0):
-            if st["waiting"]:
-                st["steps"] += 1
-                if st["steps"] >= self.STOP_WAIT_STEPS:
-                    # Post-stop safety: check for conflicting traffic
-                    if self._is_intersection_clear(sign) or st["safety_wait"] >= STOP_SAFETY_MAX_WAIT:
-                        st.update(done=True, waiting=False)
-                        return
-                    st["safety_wait"] = st.get("safety_wait", 0) + 1
-                self._cap_speed(0.001)
-            elif self.control_object.speed < 0.1:
-                st.update(waiting=True, steps=0)
-                self._cap_speed(0.001)
-            else:
-                self._cap_speed(0.001)
+
+        # Engage window: braking distance OR a fixed near-line radius.
+        # Critical: at speed≈0, ``_approach_dist(0)`` is 0, so a pure
+        # approach_dist gate would drop the FSM mid-wait and the kick-start
+        # in ComprehensiveRuleExpert would inch forward then re-brake (stutter).
+        approach = max(float(self._approach_dist(0.0)), STOP_ENGAGE_DISTANCE_M)
+        in_stop_zone = dist is not None and 0 < float(dist) < approach
+        if st["waiting"] and dist is not None and float(dist) > 0:
+            in_stop_zone = True
+        if not in_stop_zone:
+            return
+
+        if st["waiting"]:
+            st["steps"] += 1
+            if st["steps"] >= self.STOP_WAIT_STEPS:
+                # Mandatory dwell counted from first speed≈0. Further holding
+                # for conflicting traffic is yield/TTC (``_handle_yield_sign``),
+                # not a second post-clearance wait.
+                st.update(done=True, waiting=False)
+                return
+            self._cap_speed(0.001)
+        elif self.control_object.speed < 0.1:
+            st.update(waiting=True, steps=0)
+            self._cap_speed(0.001)
+        else:
+            self._cap_speed(0.001)
 
     def _distance_to_sign(self, ego_lane, sign_lane, stop_long, max_depth=6):
         """Total distance from ego's current position to sign.stop_line_position
@@ -2322,38 +2334,6 @@ class SignComplianceMixin:
             self._cap_speed(0.001)
             return True
         return False
-
-    def _is_intersection_clear(self, sign):
-        """Check if it's safe to proceed after stopping at a stop sign.
-
-        Returns True if no conflicting vehicles are within the conflict
-        radius ahead of the stop line.
-        """
-        from metadrive.component.vehicle.base_vehicle import BaseVehicle
-        engine = getattr(self, "engine", None)
-        if engine is None:
-            return True
-        stop_pos = sign.lane.position(sign.stop_line_position, 0)
-        ego_id = getattr(self.control_object, "id", None)
-        for obj in engine.get_objects(filter=lambda o: isinstance(o, BaseVehicle)).values():
-            if getattr(obj, "id", None) == ego_id:
-                continue
-            diff = obj.position - stop_pos
-            dist = float(np.sqrt(diff[0] ** 2 + diff[1] ** 2))
-            if dist < STOP_SAFETY_CONFLICT_RADIUS:
-                # Check if this vehicle is on a crossing road (not same road)
-                if not on_same_road(obj.lane, sign.lane):
-                    # If SUMO priority data is available for this lane,
-                    # only block for vehicles on lanes we must yield to.
-                    info = self._get_sumo_priority_info(sign.lane)
-                    if info is not None:
-                        watch = set(info["priority"].get("must_yield_to") or [])
-                        if watch:
-                            other_idx = getattr(obj.lane, "index", None)
-                            if other_idx not in watch:
-                                continue  # not a priority conflict — ignore
-                    return False
-        return True
 
     def _get_sumo_priority_info(self, ego_lane):
         """Return SUMO junction priority dict for the given lane, or None.
@@ -3604,8 +3584,12 @@ class SignComplianceMixin:
                 elif isinstance(sign, MainRoadSign):
                     self._handle_main_road(sign)
                 elif isinstance(sign, (SecondaryRoadSign,
-                                       SecondaryRoadLeftSign, SecondaryRoadRightSign,
-                                       BaseEndOfZoneSign)):
+                                       SecondaryRoadLeftSign,
+                                       SecondaryRoadRightSign)):
+                    # 2.3.x on the ego approach = has priority (same as 2.1).
+                    # Ego on a secondary arm still yields via YieldSign (2.4).
+                    self._handle_main_road(sign)
+                elif isinstance(sign, BaseEndOfZoneSign):
                     pass  # informational — no action needed
             except Exception as exc:
                 logger.debug("Error processing %s: %s", type(sign).__name__, exc)

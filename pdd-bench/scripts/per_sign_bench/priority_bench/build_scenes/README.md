@@ -19,7 +19,7 @@ build_scenes/
     └── build_scene_pool.py
 ```
 
-## Flow (example: 2.4 yield; same for 2.1 / 2.5)
+## Flow (example: 2.4 yield; same for 2.1 / 2.3 / 2.5)
 
 Prereq: `moscow_junctions` has `nets/moscow.net.xml`, `index/junctions.jsonl`,
 and `splits/sign_allocations.json` (see `../moscow_junctions/README.md`).
@@ -29,7 +29,7 @@ Map quotas live in `moscow_junctions/splits/signs.yaml` (`n_train` / `n_test`).
 cd traffic-rule-bench/pdd-bench/scripts/per_sign_bench/priority_bench
 
 # 1) Link allocated maps (train+test) into data/<sign>/scenes/
-python build_scenes/materialize_scenes.py --sign 2.4   # or 2.1 / 2.5
+python build_scenes/materialize_scenes.py --sign 2.4   # or 2.1 / 2.3 / 2.5
 
 # 2) Review keep/reject
 python build_scenes/review_scenes.py --scenes-dir data/yield/scenes

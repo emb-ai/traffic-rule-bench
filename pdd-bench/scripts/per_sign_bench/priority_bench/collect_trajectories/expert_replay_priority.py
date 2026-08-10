@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Priority-bench trajectory collector (yield 2.4 / main_road 2.1 / stop 2.5).
+"""Priority-bench trajectory collector (2.1 / 2.3 / 2.4 / 2.5).
 
 Drives episodes through ``priority_bench/run_benchmark.run_one_episode`` so
 auxiliary agents and sign placement match the unified eval.
@@ -447,7 +447,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--sign",
         default="yield",
-        help="Sign profile id: yield|main_road|stop (aliases 2.4|2.1|2.5)",
+        help="Sign profile id: yield|main|stop|secondary "
+             "(aliases 2.4|2.1|2.5|2.3|main_road|secondary_road)",
     )
     p.add_argument("--manifest", required=True,
                    help="real_manifest.jsonl from generate_manifest (paths.split already applied)")

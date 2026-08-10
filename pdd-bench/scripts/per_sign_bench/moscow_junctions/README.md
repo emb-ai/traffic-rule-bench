@@ -40,6 +40,7 @@ moscow_junctions/
    | `seed` | 42 | Allocation RNG seed |
 
    - Most signs: shapes `[T, X]`, `x_share: 0.5`.
+   - **2.3**: one unified key (plates 2.3.1 on X, 2.3.2+2.3.3 on T at runtime).
    - **4.3**: only **O**.
    - **5.7.1 / 5.7.2**: only **T**.
 

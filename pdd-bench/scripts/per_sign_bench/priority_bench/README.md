@@ -15,10 +15,11 @@ cd traffic-rule-bench/pdd-bench/scripts/per_sign_bench/priority_bench
 ```
 priority_bench/
 ├── core/                 # shared libs (layout, crop, aux, augmentation, viability, …)
-├── signs/                # SignProfile registry (main_road=2.1, yield=2.4, stop=2.5)
-├── configs/              # Hydra (configs/sign/{main_road,yield,stop}.yaml)
+├── signs/                # SignProfile registry (main=2.1, secondary=2.3, yield=2.4, stop=2.5)
+├── configs/              # Hydra (configs/sign/{main,secondary,yield,stop}.yaml)
 ├── data/
 │   ├── main_road/{scenes,output,trajectories}
+│   ├── secondary_road/{scenes,output,trajectories}
 │   ├── yield/{scenes,output,trajectories}
 │   └── stop/{scenes,output,trajectories}
 ├── build_scenes/         # materialize moscow allocations → review pool
@@ -26,7 +27,7 @@ priority_bench/
 │   ├── review_scenes.py
 │   └── legacy/           # old catalog / Overpass flow
 ├── tools/                # ad-hoc debug (GIF review, map render, drop analysis, …)
-├── collect_trajectories/ # oracle / PlanT2 expert collection (SIGN=yield|main_road|stop)
+├── collect_trajectories/ # oracle / PlanT2 expert collection (SIGN=…|secondary)
 ├── generate_manifest.py
 ├── run_benchmark.py
 └── eval_pipeline.py
@@ -35,12 +36,12 @@ priority_bench/
 Compatibility shims remain under `main_sign/` and `yield_sign/`.
 
 Trajectory collection (oracle / PlanT2):
-`[collect_trajectories/](collect_trajectories/README.md)` — set `SIGN=yield|main_road|stop`.
+`[collect_trajectories/](collect_trajectories/README.md)` — set `SIGN=yield|main|stop|secondary`.
 Old paths under `yield_sign/` / `main_sign/` forward here.
 
 ## Sign rules
 
-### 2.1 — main road / equal priority (`sign=main_road`)
+### 2.1 — main road / equal priority (`sign=main`)
 
 All incoming roads carry **MainRoadSign**. The plate itself is informational.
 
@@ -49,6 +50,23 @@ Violations are tracked by an invisible `RightHandYieldSign` on the ego approach
 (same zone logic as yield 2.4, but watching the **right** conflicting arm only).
 
 Auxiliary agents spawn **only on the right incoming arm** relative to ego.
+
+### 2.3 — secondary road (`sign=secondary`)
+
+Unified family for plates **2.3.1 / 2.3.2 / 2.3.3**. Same junction geometry / ego /
+aux axes as yield (2.4): ego on a **secondary** approach with **YieldSign**; aux on
+**main**. Allocation is one key `"2.3"` with balanced T/X (`x_share: 0.5`).
+
+Plate placement on **main** arms:
+
+| Shape | Plates |
+|-------|--------|
+| **X** | **2.3.1** (`SecondaryRoadSign`) on every main approach |
+| **T** | **2.3.2** (`SecondaryRoadRightSign`) and **2.3.3** (`SecondaryRoadLeftSign`) on the two main approaches (stem on the right / left of that approach) |
+
+Secondary approaches always get **YieldSign** (2.4). Metrics / expert yield logic
+come from that YieldSign; 2.3 plates mark main-road priority (expert treats them
+like MainRoadSign when ego is on that arm).
 
 ### 2.4 — yield (`sign=yield`)
 
@@ -109,12 +127,16 @@ Axes are declared in `configs/sign/*.yaml` under `augmentation:` (defaults off i
 
 ```bash
 # Equal-priority / main road (2.1)
-python generate_manifest.py sign=main_road
+python generate_manifest.py sign=main
 
 # Yield (2.4) — all / train / test (filter via moscow_pool.json)
 python generate_manifest.py sign=yield
 python generate_manifest.py sign=yield paths.split=train
 python generate_manifest.py sign=yield paths.split=test
+
+# Secondary road (2.3) — X→2.3.1, T→2.3.2+2.3.3
+python generate_manifest.py sign=secondary
+python generate_manifest.py sign=secondary paths.split=train
 
 # Stop (2.5)
 python generate_manifest.py sign=stop
@@ -160,7 +182,7 @@ python tools/review_benchmark_gifs.py data/stop/output/<timestamp>
 
 ## Trajectory collection + oracle (aux agents)
 
-See `[collect_trajectories/](collect_trajectories/README.md)` — set `SIGN=yield|main_road|stop`.
+See `[collect_trajectories/](collect_trajectories/README.md)` — set `SIGN=yield|main|stop|secondary`.
 
 Quick visual smoke test (stop):
 
@@ -172,7 +194,7 @@ SIGN=stop SMOKE=1 ./collect_trajectories.sh
 
 ## Configuration
 
-See `configs/config.yaml` and `configs/sign/{main_road,yield,stop}.yaml`.
+See `configs/config.yaml` and `configs/sign/{main,secondary,yield,stop}.yaml`.
 
 
 | Group            | Key examples                                                                                                                                                                                       |

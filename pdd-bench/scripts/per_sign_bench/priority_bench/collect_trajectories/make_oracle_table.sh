@@ -3,7 +3,7 @@
 #
 # Usage:
 #   SIGN=yield ./make_oracle_table.sh output/trajectories_yield_<ts>
-#   SIGN=main_road ./make_oracle_table.sh output/trajectories_main_road_<ts>
+#   SIGN=main ./make_oracle_table.sh output/trajectories_main_<ts>
 #   ./make_oracle_table.sh output/trajectories_<ts> output/trajectories_<ts>/experts
 set -euo pipefail
 
@@ -26,13 +26,16 @@ HORIZON="${HORIZON:-1500}"
 if [ -z "$PDD_CODE" ]; then
     case "${SIGN}" in
         yield|2.4|2_4) PDD_CODE=2.4 ;;
-        main_road|main|2.1|2_1) PDD_CODE=2.1 ;;
+        main|main_road|2.1|2_1) PDD_CODE=2.1 ;;
         stop|stop_sign|2.5|2_5) PDD_CODE=2.5 ;;
+        secondary|secondary_road|2.3|2_3|2.3.1|2.3.2|2.3.3) PDD_CODE=2.3 ;;
         *)
             if [ -d "$OUT_BASE/_manifests/2_1" ] || compgen -G "$OUT_BASE"'/*/2_1/all_runs.jsonl' > /dev/null; then
                 PDD_CODE=2.1
             elif [ -d "$OUT_BASE/_manifests/2_5" ] || compgen -G "$OUT_BASE"'/*/2_5/all_runs.jsonl' > /dev/null; then
                 PDD_CODE=2.5
+            elif [ -d "$OUT_BASE/_manifests/2_3" ] || compgen -G "$OUT_BASE"'/*/2_3/all_runs.jsonl' > /dev/null; then
+                PDD_CODE=2.3
             else
                 PDD_CODE=2.4
             fi

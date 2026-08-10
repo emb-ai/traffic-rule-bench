@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# collect_trajectories.sh — priority_bench (yield 2.4 / main_road 2.1 / stop 2.5)
+# collect_trajectories.sh — priority_bench (2.1 / 2.3 / 2.4 / 2.5)
 #
 # Profile-driven collector. Same invocation style as yield_sign/main_sign
 # collectors, but scenes go through priority_bench/run_benchmark with aux agents.
 #
-#   SIGN=yield|main_road|stop   (aliases: 2.4|2_4|2.1|2_1|main|2.5|2_5|stop_sign)
+#   SIGN=yield|main|stop|secondary
+#   (aliases: 2.4|2_4|2.1|2_1|main_road|2.5|2_5|stop_sign|2.3|2_3|secondary_road)
 #
 # Colleague-equivalent (yield):
 #   SIGN=yield \
@@ -44,8 +45,8 @@ case "$SIGN" in
         PDD_CODE=2.4
         DATA_SUBDIR=yield
         ;;
-    main_road|main|2.1|2_1)
-        SIGN=main_road
+    main|main_road|2.1|2_1)
+        SIGN=main
         SIGN_SLUG=2_1
         PDD_CODE=2.1
         DATA_SUBDIR=main_road
@@ -56,8 +57,14 @@ case "$SIGN" in
         PDD_CODE=2.5
         DATA_SUBDIR=stop
         ;;
+    secondary|secondary_road|2.3|2_3|2.3.1|2.3.2|2.3.3)
+        SIGN=secondary
+        SIGN_SLUG=2_3
+        PDD_CODE=2.3
+        DATA_SUBDIR=secondary_road
+        ;;
     *)
-        echo "[FAIL] unknown SIGN='$SIGN' (expected yield|main_road|stop or 2.4|2.1|2.5)"
+        echo "[FAIL] unknown SIGN='$SIGN' (expected yield|main|stop|secondary or 2.4|2.1|2.5|2.3)"
         exit 1
         ;;
 esac
@@ -196,7 +203,7 @@ mkdir -p "$OUT_BASE" "$LOG_DIR" "$MERGED_DIR" "$MANIFESTS_DIR"
 exec > >(tee -a "$LOG_DIR/progress.log") 2>&1
 
 # Resolve default manifest: latest data/<sign>/output/*/real_manifest.jsonl
-# (SIGN=yield → data/yield/…; SIGN=main_road → data/main_road/…; SIGN=stop → data/stop/…).
+# (SIGN=yield → data/yield/…; SIGN=main → data/main_road/…; SIGN=stop → data/stop/…).
 # Prefer an explicit MANIFEST=…/real_manifest.jsonl from the desired
 # generate_manifest run (e.g. paths.split=train).
 if [ -z "$MANIFEST" ]; then

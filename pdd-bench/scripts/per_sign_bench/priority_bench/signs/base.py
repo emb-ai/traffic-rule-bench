@@ -1,4 +1,4 @@
-"""Sign profiles for priority-junction benches (2.1 / 2.4 / 2.5)."""
+"""Sign profiles for priority-junction benches (2.1 / 2.3 / 2.4 / 2.5)."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ class SignProfile:
 
 
 MAIN_ROAD = SignProfile(
-    id="main_road",
+    id="main",
     pdd_code="2.1",
     sign_type="main",
     sign_name="Main road (equal priority)",
@@ -38,6 +38,20 @@ MAIN_ROAD = SignProfile(
     data_subdir="main_road",
     output_code="2_1",
     ego_road_class=None,
+)
+
+SECONDARY_ROAD = SignProfile(
+    id="secondary",
+    pdd_code="2.3",
+    sign_type="secondary",
+    sign_name="Intersection with secondary road (2.3)",
+    # Same geometry / ego / aux as yield (2.4). Main arms get 2.3.x plates
+    # (X: 2.3.1; T: 2.3.2 + 2.3.3); secondary arms get YieldSign.
+    layout_mode="main_secondary",
+    spawn_strategy="yield",
+    data_subdir="secondary_road",
+    output_code="2_3",
+    ego_road_class="secondary",
 )
 
 YIELD = SignProfile(
@@ -66,16 +80,23 @@ STOP = SignProfile(
     ego_road_class="secondary",
 )
 
-_PROFILES = (MAIN_ROAD, YIELD, STOP)
+_PROFILES = (MAIN_ROAD, SECONDARY_ROAD, YIELD, STOP)
 
 _REGISTRY: dict[str, SignProfile] = {
     MAIN_ROAD.id: MAIN_ROAD,
+    SECONDARY_ROAD.id: SECONDARY_ROAD,
     YIELD.id: YIELD,
     STOP.id: STOP,
     # aliases
     "2.1": MAIN_ROAD,
     "2_1": MAIN_ROAD,
-    "main": MAIN_ROAD,
+    "main_road": MAIN_ROAD,
+    "2.3": SECONDARY_ROAD,
+    "2_3": SECONDARY_ROAD,
+    "2.3.1": SECONDARY_ROAD,
+    "2.3.2": SECONDARY_ROAD,
+    "2.3.3": SECONDARY_ROAD,
+    "secondary_road": SECONDARY_ROAD,
     "2.4": YIELD,
     "2_4": YIELD,
     "2.5": STOP,

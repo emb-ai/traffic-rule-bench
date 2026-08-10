@@ -2,6 +2,7 @@
 
 from .base import (
     MAIN_ROAD,
+    SECONDARY_ROAD,
     STOP,
     YIELD,
     SignProfile,
@@ -13,6 +14,7 @@ from .base import (
 
 __all__ = [
     "MAIN_ROAD",
+    "SECONDARY_ROAD",
     "YIELD",
     "STOP",
     "SignProfile",

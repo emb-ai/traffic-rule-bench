@@ -880,6 +880,32 @@ def load_junction_priority_layout(path: Path | str) -> JunctionPriorityLayout:
     )
 
 
+def secondary_side_from_main_arm(
+    junction_layout: dict,
+    main_edge_id: str,
+    secondary_edge_id: str,
+) -> Optional[Literal["left", "right"]]:
+    """Whether the secondary stem is on the left or right of a main approach.
+
+    Used for T-junction 2.3.2 / 2.3.3 plate selection (secondary on right → 2.3.2,
+    secondary on left → 2.3.3).
+    """
+    arms = junction_layout.get("arms", [])
+    main_arm = next((arm for arm in arms if arm.get("edge_id") == main_edge_id), None)
+    sec_arm = next((arm for arm in arms if arm.get("edge_id") == secondary_edge_id), None)
+    if main_arm is None or sec_arm is None:
+        return None
+
+    main_angle = float(main_arm["entry_angle"])
+    sec_angle = float(sec_arm["entry_angle"])
+    diff = (sec_angle - main_angle) % (2.0 * math.pi)
+    if 0.3 < diff < math.pi:
+        return "right"
+    if math.pi < diff < (2.0 * math.pi - 0.3):
+        return "left"
+    return None
+
+
 def _format_layout(layout: JunctionPriorityLayout) -> str:
     lines = [
         f"Junction: {layout.junction_id} ({layout.junction_type}, shape={layout.shape}, mode={layout.mode})",

@@ -1,5 +1,5 @@
 # @package _global_
-sign: main_road
+sign: main
 paths:
   output_base: data/main_road/output
 
@@ -9,4 +9,3 @@ augmentation:
 
 auxiliary:
   enabled: true
-

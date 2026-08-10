@@ -667,7 +667,22 @@ def crop_scene_to_junction_pick(
     spawn_strategy = str(meta.get("spawn_strategy") or meta.get("sign_type") or "main")
     picker = (
         pick_default_yield_spawn_meta_for_net
-        if spawn_strategy in {"yield", "2.4", "2_4", "stop", "2.5", "2_5", "stop_sign"}
+        if spawn_strategy in {
+            "yield",
+            "2.4",
+            "2_4",
+            "stop",
+            "2.5",
+            "2_5",
+            "stop_sign",
+            "secondary_road",
+            "secondary",
+            "2.3",
+            "2_3",
+            "2.3.1",
+            "2.3.2",
+            "2.3.3",
+        }
         else pick_default_main_spawn_meta_for_net
     )
     spawn_meta = picker(
