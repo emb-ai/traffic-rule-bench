@@ -12,15 +12,16 @@
 set -uo pipefail
 
 SM=${SM:?set SM=/mnt/virtual_ai0001053-01202_SR006-nfs2/smirnova}
-# shepelev's tree (old dump, base ckpt, training env, shims) lives on nfs3,
-# which different nodes mount under different roots — probe the known ones.
+# shepelev's tree on nfs3 supplies the DEFAULTS for the old dump, the base
+# checkpoint and the training python. Nodes without nfs3 can run too — each of
+# those just has to be passed explicitly; the checks below name what is missing.
 if [ -z "${SHEP:-}" ]; then
     for c in /home/jovyan/shares/SR006.nfs3/shepelev \
              /mnt/virtual_ai0001053-01202_SR006-nfs3/shepelev; do
         [ -d "$c" ] && SHEP=$c && break
     done
 fi
-SHEP=${SHEP:?nfs3/shepelev not found on this node — pass SHEP=/abs/path (needed for the old dump, the base checkpoint and the training env)}
+SHEP=${SHEP:-}
 TRB=$SM/traffic-rule-bench
 PIPE=$TRB/scripts/plant2_ft_pipeline
 PLANT=$TRB/plant2/PlanT
@@ -28,8 +29,8 @@ TEST=$TRB/pdd-bench/scripts/per_sign_bench/plant2_rule_test
 PY=${PY:-$(command -v python3)}
 # The prefill imports diskcache and the PlanT dataset, so it needs the training
 # environment, not whatever python3 the shell happens to have.
-PREFILL_PY=${PREFILL_PY:-$SHEP/conda_envs/arbelyaev-sdc/bin/python}
-[ -x "$PREFILL_PY" ] || PREFILL_PY=$PY
+PREFILL_PY=${PREFILL_PY:-${SHEP:+$SHEP/conda_envs/arbelyaev-sdc/bin/python}}
+[ -n "$PREFILL_PY" ] && [ -x "$PREFILL_PY" ] || PREFILL_PY=$PY
 
 SIGN=${SIGN:-2.5}
 # Label mode and loss rebalance for the v2 pair (defect D4). TS_LOOKAHEAD=1
@@ -41,11 +42,22 @@ _v2=""; [ "$TS_LOOKAHEAD" != 0 ] && _v2="v2"
 TAG=${TAG:-only$(echo "$SIGN" | tr -d '.')${_v2}}
 FIX_ROOT=${FIX_ROOT:-$SM/plant2_fix}
 DUMP_NEW=${DUMP_NEW:-$FIX_ROOT/plant2_l1_from_experts_signs}
-DUMP_OLD=${DUMP_OLD:-$SHEP/plant2_l1_from_experts_signs}
+DUMP_OLD=${DUMP_OLD:-${SHEP:+$SHEP/plant2_l1_from_experts_signs}}
 SPLIT_NEW=${SPLIT_NEW:-$FIX_ROOT/split_${SIGN}_new}
 SPLIT_OLD=${SPLIT_OLD:-$FIX_ROOT/split_${SIGN}_old}
 CACHE_ROOT=${CACHE_ROOT:-/tmp/plant2_cache_pair${_v2}}
-BASE_CKPT=${BASE_CKPT:-$SHEP/plant2_checkpoints/epoch=029_final_1.ckpt}
+BASE_CKPT=${BASE_CKPT:-${SHEP:+$SHEP/plant2_checkpoints/epoch=029_final_1.ckpt}}
+
+# Fail on what is actually missing, by name, before any stage runs.
+[ -n "$BASE_CKPT" ] && [ -f "$BASE_CKPT" ] \
+    || { echo "!! BASE_CKPT not found (${BASE_CKPT:-unset}) — pass BASE_CKPT=/abs/base.ckpt"; exit 1; }
+if [ -z "$DUMP_OLD" ] || [ ! -d "$DUMP_OLD/data" ]; then
+    if [[ " ${HALVES:-new old} " == *" old "* ]]; then
+        echo "!! DUMP_OLD not found (${DUMP_OLD:-unset}) — the 'old' half needs the baseline dump."
+        echo "   Either pass DUMP_OLD=/abs/dump, or run HALVES=new here and the old half on a node with nfs3."
+        exit 1
+    fi
+fi
 
 EPOCHS=${EPOCHS:-12}
 LR=${LR:-1e-5}
@@ -64,6 +76,13 @@ echo "  old frames: $DUMP_OLD"
 
 # --- splits -------------------------------------------------------------------
 if has_stage split; then
+    # The matched pair is defined over routes usable in BOTH dumps; building the
+    # halves from different route sets on different nodes would silently break
+    # the pairing, so the split always needs both dumps visible at once.
+    [ -n "$DUMP_OLD" ] && [ -d "$DUMP_OLD/data" ] || {
+        echo "!! the split stage needs the old dump too (DUMP_OLD) — copy it once:"
+        echo "   rsync -a --include='sumo_2_5_*' <nfs3>/plant2_l1_from_experts_signs/data/ <here>/old_dump/data/"
+        exit 1; }
     say "matched splits -> $SPLIT_NEW / $SPLIT_OLD"
     ( cd "$PIPE" && SHEPELEV="$SHEP" PLAN_T="$PLANT" $PY make_sign_pair_splits.py \
         --sign "$SIGN" --new-dump "$DUMP_NEW" --old-dump "$DUMP_OLD" \

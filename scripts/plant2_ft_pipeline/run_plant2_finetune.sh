@@ -59,8 +59,10 @@ fi
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 # Avoid user-site transformers (older) + broken root-owned flash_attn ABI mismatch.
 export PYTHONNOUSERSITE="${PYTHONNOUSERSITE:-1}"
-SHIM_DIR="$SHEPELEV/collected_trajectories/plant2_py_shims"
-LIT_ENTRY="$SHIM_DIR/run_lit_finetune.py"
+# The entry-point shim ships in this repo; shepelev's copy is only a fallback
+# for nodes where the repo predates it. Nodes without nfs3 must not need it.
+LIT_ENTRY="${LIT_ENTRY:-$SHIM}"
+[ -f "$LIT_ENTRY" ] || LIT_ENTRY="$SHEPELEV/collected_trajectories/plant2_py_shims/run_lit_finetune.py"
 
 LEARNING_RATE="${LEARNING_RATE:-1e-4}"
 BATCH_SIZE="${BATCH_SIZE:-1536}"
