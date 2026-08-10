@@ -123,6 +123,7 @@ hydra_esc() { printf '%s' "$1" | sed 's/=/\\=/g'; }
   model.training.augment=False \
   model.training.augment_parked=False \
   "model.training.stop_speed_loss_weight=$STOP_SPEED_LOSS_WEIGHT" \
+  "user.working_dir=$(hydra_esc "$PLANT")" \
   "model.training.log_path=$(hydra_esc "$PLAN_T/log/ft_${CHECKPOINT_ADDON}_${SEED}")" \
   "expname=ft_${CHECKPOINT_ADDON}" \
   "wandb_name=ft_${CHECKPOINT_ADDON}_${SEED}"
