@@ -12,7 +12,15 @@
 set -uo pipefail
 
 SM=${SM:?set SM=/mnt/virtual_ai0001053-01202_SR006-nfs2/smirnova}
-SHEP=${SHEP:-/home/jovyan/shares/SR006.nfs3/shepelev}
+# shepelev's tree (old dump, base ckpt, training env, shims) lives on nfs3,
+# which different nodes mount under different roots — probe the known ones.
+if [ -z "${SHEP:-}" ]; then
+    for c in /home/jovyan/shares/SR006.nfs3/shepelev \
+             /mnt/virtual_ai0001053-01202_SR006-nfs3/shepelev; do
+        [ -d "$c" ] && SHEP=$c && break
+    done
+fi
+SHEP=${SHEP:?nfs3/shepelev not found on this node — pass SHEP=/abs/path (needed for the old dump, the base checkpoint and the training env)}
 TRB=$SM/traffic-rule-bench
 PIPE=$TRB/scripts/plant2_ft_pipeline
 PLANT=$TRB/plant2/PlanT
