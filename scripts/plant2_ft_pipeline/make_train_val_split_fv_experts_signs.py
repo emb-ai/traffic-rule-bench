@@ -18,7 +18,7 @@ import random
 import re
 import subprocess
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from _paths import shepelev
@@ -31,7 +31,10 @@ SRCS = [
 ]
 OUT = SHEPELEV / "plant2_l1_fv_experts_split_signs"
 SEED = 42
-WORKERS = min(64, (os.cpu_count() or 8) * 2)
+# Hardlinking is I/O, not CPU: threads keep the external `cp` calls busy
+# without the fork-time deadlock a process pool hits on a few thousand
+# queued jobs (it hung here for 11 h with every worker in futex_wait).
+WORKERS = int(os.environ.get("SPLIT_WORKERS", min(32, (os.cpu_count() or 8))))
 REQUIRED_DIRS = ("measurements", "boxes", "bev_no_car_semantics")
 
 
@@ -262,7 +265,7 @@ def main() -> None:
 
     print(f"hardlinking {len(jobs)} routes with workers={WORKERS} …", flush=True)
     done = skipped = 0
-    with ProcessPoolExecutor(max_workers=WORKERS) as ex:
+    with ThreadPoolExecutor(max_workers=WORKERS) as ex:
         futs = [ex.submit(hardlink_one, j) for j in jobs]
         for fut in as_completed(futs):
             st = fut.result()
