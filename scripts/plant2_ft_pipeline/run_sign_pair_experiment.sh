@@ -75,7 +75,10 @@ echo "  old frames: $DUMP_OLD"
 
 # --- splits -------------------------------------------------------------------
 if has_stage split; then
-    if [ "${SYNTH_OLD:-0}" = 1 ] && [ ! -d "$DUMP_OLD/data" ]; then
+    # The synthesizer is resume-safe (complete routes are skipped), so run it
+    # whenever the old half is synthetic — a partial tree from an interrupted
+    # attempt gets finished instead of being mistaken for done.
+    if [ "${SYNTH_OLD:-0}" = 1 ]; then
         say "old half: synthesizing no-traffic frames -> $DUMP_OLD"
         $PY "$PIPE/make_old_half_from_new.py" \
             --new-dump "$DUMP_NEW" --out "$DUMP_OLD" --jobs ${JOBS:-16} \

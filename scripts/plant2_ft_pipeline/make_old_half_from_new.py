@@ -30,16 +30,34 @@ def is_ego(entry: dict) -> bool:
     return len(pos) >= 2 and abs(pos[0]) < 1e-6 and abs(pos[1]) < 1e-6
 
 
+def route_done(src: Path, dst: Path) -> bool:
+    """Complete iff the results file is linked and every frame is rewritten."""
+    if not (dst / "results.json.gz").exists():
+        return False
+    src_boxes, dst_boxes = src / "boxes", dst / "boxes"
+    if not src_boxes.is_dir():
+        return True
+    return dst_boxes.is_dir() and len(os.listdir(dst_boxes)) == len(os.listdir(src_boxes))
+
+
 def strip_route(src: Path, dst: Path) -> tuple[int, int]:
-    """Return (frames, vehicles_dropped)."""
+    """Return (frames, vehicles_dropped). Resume-safe: existing files are kept.
+
+    Some routes carry a nested duplicate of themselves (a dump artifact,
+    ``sign_x/sign_x/…``); anything but the known layout — boxes/, sibling data
+    dirs of plain files, top-level files — is skipped, since the trainer never
+    reads it and hardlinking a directory is impossible anyway.
+    """
     dropped = 0
     frames = 0
     for item in src.iterdir():
         out = dst / item.name
-        if item.name == "boxes":
+        if item.name == "boxes" and item.is_dir():
             out.mkdir(parents=True, exist_ok=True)
             for f in item.iterdir():
                 frames += 1
+                if (out / f.name).exists():
+                    continue
                 entries = json.load(gzip.open(f))
                 kept = []
                 for e in entries:
@@ -52,9 +70,11 @@ def strip_route(src: Path, dst: Path) -> tuple[int, int]:
         elif item.is_dir():
             out.mkdir(parents=True, exist_ok=True)
             for f in item.iterdir():
+                if f.is_dir():
+                    continue  # nested junk directory
                 if not (out / f.name).exists():
                     os.link(f, out / f.name)
-        else:
+        elif item.is_file():
             if not out.exists():
                 os.link(item, out)
     return frames, dropped
@@ -75,6 +95,10 @@ def main() -> None:
     out_data.mkdir(parents=True, exist_ok=True)
 
     routes = sorted(p for p in src_data.iterdir() if p.is_dir())
+    pending = [r for r in routes if not route_done(r, out_data / r.name)]
+    if len(pending) < len(routes):
+        print(f"resume: {len(routes) - len(pending)} route(s) already complete", flush=True)
+    routes = pending
     print(f"stripping vehicles from {len(routes)} route(s) -> {out_data}", flush=True)
 
     total_frames = total_dropped = done = 0
