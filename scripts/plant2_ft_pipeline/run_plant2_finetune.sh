@@ -68,6 +68,9 @@ NUM_WORKERS="${NUM_WORKERS:-4}"
 LR_SCHEDULER="${LR_SCHEDULER:-cosine_warmup}"
 WARMUP_RATIO="${WARMUP_RATIO:-0.1}"
 MAX_EPOCHS="${MAX_EPOCHS:-30}"
+# Loss-side rebalance for the stop bin (lit_module._weighted_egospeed_ce);
+# 1.0 = off, the historical default.
+STOP_SPEED_LOSS_WEIGHT="${STOP_SPEED_LOSS_WEIGHT:-1.0}"
 export CACHE_SIZE_GB="${CACHE_SIZE_GB:-641}"
 export CKPT_EVERY_N_EPOCHS="${CKPT_EVERY_N_EPOCHS:-5}"
 
@@ -89,6 +92,7 @@ echo "  SCHED    = $LR_SCHEDULER (warmup_ratio=$WARMUP_RATIO)"
 echo "  BS       = $BATCH_SIZE  workers=$NUM_WORKERS  epochs=$MAX_EPOCHS"
 echo "  ADDON    = $CHECKPOINT_ADDON"
 echo "  CACHE_GB = $CACHE_SIZE_GB  ckpt_every=$CKPT_EVERY_N_EPOCHS"
+echo "  STOPW    = $STOP_SPEED_LOSS_WEIGHT  ts_lookahead=${TS_LOOKAHEAD:-0} wps_stride=${WPS_STRIDE:-1}"
 echo "  PYTHON   = $PY"
 echo "  ENTRY    = $LIT_ENTRY (flash_attn disabled)"
 echo "  NOUSERSITE=$PYTHONNOUSERSITE"
@@ -116,6 +120,7 @@ hydra_esc() { printf '%s' "$1" | sed 's/=/\\=/g'; }
   "model.training.num_workers=$NUM_WORKERS" \
   model.training.augment=False \
   model.training.augment_parked=False \
+  "model.training.stop_speed_loss_weight=$STOP_SPEED_LOSS_WEIGHT" \
   "model.training.log_path=$(hydra_esc "$PLAN_T/log/ft_${CHECKPOINT_ADDON}_${SEED}")" \
   "expname=ft_${CHECKPOINT_ADDON}" \
   "wandb_name=ft_${CHECKPOINT_ADDON}_${SEED}"

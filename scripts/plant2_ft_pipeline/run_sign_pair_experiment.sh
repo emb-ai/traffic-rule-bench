@@ -24,13 +24,19 @@ PREFILL_PY=${PREFILL_PY:-$SHEP/conda_envs/arbelyaev-sdc/bin/python}
 [ -x "$PREFILL_PY" ] || PREFILL_PY=$PY
 
 SIGN=${SIGN:-2.5}
-TAG=${TAG:-only$(echo "$SIGN" | tr -d '.')}
+# Label mode and loss rebalance for the v2 pair (defect D4). TS_LOOKAHEAD=1
+# relabels target_speed with the min ego speed over the future window inside
+# the dataset; the tag and cache change with it so v1/v2 runs never mix.
+TS_LOOKAHEAD=${TS_LOOKAHEAD:-0}
+STOP_SPEED_LOSS_WEIGHT=${STOP_SPEED_LOSS_WEIGHT:-1.0}
+_v2=""; [ "$TS_LOOKAHEAD" != 0 ] && _v2="v2"
+TAG=${TAG:-only$(echo "$SIGN" | tr -d '.')${_v2}}
 FIX_ROOT=${FIX_ROOT:-$SM/plant2_fix}
 DUMP_NEW=${DUMP_NEW:-$FIX_ROOT/plant2_l1_from_experts_signs}
 DUMP_OLD=${DUMP_OLD:-$SHEP/plant2_l1_from_experts_signs}
 SPLIT_NEW=${SPLIT_NEW:-$FIX_ROOT/split_${SIGN}_new}
 SPLIT_OLD=${SPLIT_OLD:-$FIX_ROOT/split_${SIGN}_old}
-CACHE_ROOT=${CACHE_ROOT:-/tmp/plant2_cache_pair}
+CACHE_ROOT=${CACHE_ROOT:-/tmp/plant2_cache_pair${_v2}}
 BASE_CKPT=${BASE_CKPT:-$SHEP/plant2_checkpoints/epoch=029_final_1.ckpt}
 
 EPOCHS=${EPOCHS:-12}
@@ -44,7 +50,7 @@ STAGES=${STAGES:-all}
 has_stage () { [ "$STAGES" = all ] || [[ " $STAGES " == *" $1 "* ]]; }
 say () { echo; echo "######## [$(date +%H:%M:%S)] $*"; }
 
-say "sign=$SIGN gpus=$GPUS epochs=$EPOCHS lr=$LR halves='$HALVES'"
+say "sign=$SIGN gpus=$GPUS epochs=$EPOCHS lr=$LR halves='$HALVES' ts_lookahead=$TS_LOOKAHEAD stop_w=$STOP_SPEED_LOSS_WEIGHT tag=$TAG"
 echo "  new frames: $DUMP_NEW"
 echo "  old frames: $DUMP_OLD"
 
@@ -70,6 +76,7 @@ for half in $HALVES; do
         say "cache $half -> $CACHE_ROOT/$half"
         ( cd "$PIPE" && DS="$split/train" DS_VAL="$split/val" \
           DS_LOCAL="$CACHE_ROOT/$half" CACHE_SIZE_GB=${CACHE_SIZE_GB:-200} \
+          TS_LOOKAHEAD="$TS_LOOKAHEAD" \
           PLAN_T="$PLANT" $PREFILL_PY prefill_plant2_diskcache.py 2>&1 | tail -3 ) \
           || echo "!! prefill failed for $half"
     fi
@@ -80,6 +87,7 @@ for half in $HALVES; do
             DS_LOCAL="$CACHE_ROOT/$half" CACHE_SIZE_GB=${CACHE_SIZE_GB:-200} \
             SEED=1 CHECKPOINT_ADDON="$addon" CKPT_EVERY_N_EPOCHS=3 \
             GPUS="$GPUS" CKPT0="$BASE_CKPT" SHEPELEV="$SHEP" \
+            TS_LOOKAHEAD="$TS_LOOKAHEAD" STOP_SPEED_LOSS_WEIGHT="$STOP_SPEED_LOSS_WEIGHT" \
             DDP_STRATEGY="${DDP_STRATEGY:-ddp_find_unused_parameters_true}" \
             LEARNING_RATE="$LR" MAX_EPOCHS="$EPOCHS" LR_SCHEDULER=cosine_warmup \
             bash "$PIPE/run_plant2_finetune.sh" > "$TRB/plant2/ft_${addon}.log" 2>&1
