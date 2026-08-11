@@ -20,6 +20,19 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
+# The eval must see the repo's OWN metadrive submodule (it carries the sign
+# channels) and pdd-bench, regardless of what the active env has installed —
+# some nodes ship a site-packages metadrive without even a `manager` module.
+# Self-export like eval_ckpt_sequential.sh does, and fail fast if it's wrong.
+TRB_ROOT="$(cd ../../../.. && pwd)"
+export PYTHONPATH="$TRB_ROOT/metadrive:$TRB_ROOT/pdd-bench:${PYTHONPATH:-}"
+python3 - <<'PYCHECK' || exit 1
+from metadrive.manager.base_manager import BaseManager  # noqa: F401
+import metadrive, os
+root = os.environ["PYTHONPATH"].split(":")[0]
+assert os.path.realpath(metadrive.__file__).startswith(os.path.realpath(root)),     f"metadrive resolves outside the repo: {metadrive.__file__}"
+PYCHECK
+
 LABELS=${LABELS:-${LABEL:-2.5}}
 CKPT=${CKPT:?set CKPT=/abs/path/to.ckpt}
 JOBS=${JOBS:-8}
