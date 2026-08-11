@@ -8,14 +8,21 @@ Subcommands:
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import argparse
 import subprocess
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-from _env import metrics_root, plan_t, shepelev, setup_eval_thread_env
-from _eval import (
+from lib.env import metrics_root, plan_t, shepelev, setup_eval_thread_env
+from lib.eval_core import (
     DEFAULT_MANIFEST,
     DEFAULT_MANIFEST_DETOUR,
     DEFAULT_SCENES,

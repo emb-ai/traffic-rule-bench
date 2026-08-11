@@ -6,14 +6,23 @@ Subcommands:
   experts         Priority/detour experts only (sequential)
   fv              FV nodeA speed-limit experts only
   lane            Lane 5.15.1 only (sharded)
+  one             Dump exactly one random expert trajectory
 """
 from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 import argparse
 import contextlib
 import importlib.util
 import json
 import os
+import random
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -21,8 +30,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from _env import pipeline_dir, shepelev, trb_root
-from _utils import default_dump_max_workers, prepare_fv_experts
+from lib.env import shepelev, trb_root
+from lib.utils import default_dump_max_workers, prepare_fv_experts
 
 EXPERT_REPLAY_FOR_PLANT2 = (
     trb_root()
@@ -31,7 +40,7 @@ EXPERT_REPLAY_FOR_PLANT2 = (
     / "per_sign_bench"
     / "expert_replay_for_plant2.py"
 )
-_run_batch: Callable[..., dict] | None = None
+_expert_replay_mod: object | None = None
 
 SM_MNT = Path("/mnt/virtual_ai0001053-01202_SR006-nfs2/smirnova")
 ZINK_BENCH_DEFAULT = Path(
@@ -51,10 +60,31 @@ EXPERT_SIGNS: dict[str, tuple[str, str]] = {
 FV_SIGNS = ["3.24", "4.6", "5.21", "5.31"]
 
 
-def _load_run_batch() -> Callable[..., dict]:
-    global _run_batch
-    if _run_batch is not None:
-        return _run_batch
+def _traj_root() -> Path:
+    return shepelev() / "collected_trajectories"
+
+
+def _bench_local() -> Path:
+    return trb_root() / "pdd-bench/scripts/per_sign_bench"
+
+
+def _experts_path(rel_exp: str, experts_rank: str) -> Path:
+    return _traj_root() / rel_exp / f"experts_scene_uid_{experts_rank}.jsonl"
+
+
+def _scenes_path(rel_sc: str, args: argparse.Namespace) -> Path:
+    if rel_sc == "__DETOUR__":
+        return args.detour_scenes
+    local = _bench_local() / rel_sc
+    if local.is_dir():
+        return local
+    return args.zink_bench / rel_sc
+
+
+def _load_expert_replay():
+    global _expert_replay_mod
+    if _expert_replay_mod is not None:
+        return _expert_replay_mod
     if not EXPERT_REPLAY_FOR_PLANT2.is_file():
         raise SystemExit(f"ERROR: missing replay module: {EXPERT_REPLAY_FOR_PLANT2}")
     spec = importlib.util.spec_from_file_location(
@@ -65,8 +95,56 @@ def _load_run_batch() -> Callable[..., dict]:
         raise SystemExit(f"ERROR: cannot import replay module: {EXPERT_REPLAY_FOR_PLANT2}")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    _run_batch = mod.run_batch
-    return _run_batch
+    _expert_replay_mod = mod
+    return mod
+
+
+def _load_run_batch() -> Callable[..., dict]:
+    return _load_expert_replay().run_batch
+
+
+def _sign_experts_scenes(sign: str, args: argparse.Namespace) -> tuple[Path, Path]:
+    if sign not in EXPERT_SIGNS:
+        raise SystemExit(f"ERROR: unknown --sign {sign!r}; choose from {list(EXPERT_SIGNS)}")
+    rel_exp, rel_sc = EXPERT_SIGNS[sign]
+    return _experts_path(rel_exp, args.experts_rank), _scenes_path(rel_sc, args)
+
+
+def _backend_for_row(row: dict) -> str:
+    if row.get("backend"):
+        return str(row["backend"])
+    sidecar_path = row.get("sidecar_path")
+    if not sidecar_path:
+        return "sumo"
+    sidecar = json.loads(Path(sidecar_path).read_text(encoding="utf-8"))
+    return str(sidecar.get("backend") or "sumo")
+
+
+def _expert_row_candidates(experts_path: Path, backends: str) -> list[tuple[int, dict]]:
+    allowed = {b.strip() for b in backends.split(",") if b.strip()}
+    out: list[tuple[int, dict]] = []
+    with experts_path.open(encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            if _backend_for_row(row) in allowed:
+                out.append((i, row))
+    return out
+
+
+def _pick_random_expert(
+    experts_path: Path,
+    *,
+    backends: str,
+    seed: int | None,
+) -> tuple[int, dict]:
+    candidates = _expert_row_candidates(experts_path, backends)
+    if not candidates:
+        raise SystemExit(f"ERROR: no expert rows matching backends={backends!r} in {experts_path}")
+    rng = random.Random(seed)
+    return rng.choice(candidates)
 
 
 def _replay_desc(
@@ -169,9 +247,71 @@ class DumpJob:
     n: int
 
 
+def _run_one(args: argparse.Namespace) -> int:
+    mod = _load_expert_replay()
+    from bench.plant2_frames import ensure_slurm_dummy, plant2_route_dir
+
+    if args.sign:
+        experts, scenes = _sign_experts_scenes(args.sign, args)
+    elif args.experts is not None and args.scenes_root is not None:
+        experts, scenes = args.experts.resolve(), args.scenes_root.resolve()
+    else:
+        raise SystemExit("ERROR: provide --sign stop (etc.) or both --experts and --scenes-root")
+
+    for label, path in (("experts", experts), ("scenes", scenes)):
+        if not path.exists():
+            raise SystemExit(f"ERROR: missing {label}: {path}")
+
+    line_idx, row = _pick_random_expert(experts, backends=args.backends, seed=args.seed)
+    pkl_path, sidecar_path, scene_uid, variant, backend = mod.resolve_expert_paths(row)
+    route_dir = plant2_route_dir(args.out_dir, scene_uid, variant)
+
+    plan = {
+        "experts": str(experts),
+        "experts_line": line_idx,
+        "scenes_root": str(scenes),
+        "backend": backend,
+        "scene_uid": scene_uid,
+        "variant": variant,
+        "pkl_path": str(pkl_path),
+        "sidecar_path": str(sidecar_path),
+        "out_dir": str(args.out_dir),
+        "route_dir": str(route_dir),
+    }
+    print(json.dumps({"plan": plan}, indent=2))
+
+    if args.dry_run:
+        return 0
+
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    ensure_slurm_dummy(args.out_dir)
+
+    if route_dir.exists() and (route_dir / "results.json.gz").is_file() and not args.force:
+        print(json.dumps({
+            "status": "skipped",
+            "reason": "route already exists (use --force to re-dump)",
+            **plan,
+        }, indent=2))
+        return 0
+
+    try:
+        result = mod.dump_plant2(
+            pkl_path,
+            sidecar_path,
+            scenes_root=scenes,
+            save_plant2_dir=args.out_dir,
+            max_steps=args.max_steps,
+        )
+    except Exception as exc:
+        print(json.dumps({"status": "fail", "error": str(exc), **plan}, indent=2), file=sys.stderr)
+        return 1
+
+    print(json.dumps({"status": "ok", **plan, "result": result}, indent=2))
+    return 0
+
+
 def _run_experts(args: argparse.Namespace) -> int:
     _load_run_batch()
-    ct = pipeline_dir()
     args.out_dir.mkdir(parents=True, exist_ok=True)
     log_dir = args.out_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -181,15 +321,28 @@ def _run_experts(args: argparse.Namespace) -> int:
 
     for sign in args.signs:
         rel_exp, rel_sc = EXPERT_SIGNS[sign]
-        experts = ct / rel_exp / experts_file
-        scenes = args.detour_scenes if rel_sc == "__DETOUR__" else args.zink_bench / rel_sc
+        experts = _experts_path(rel_exp, args.experts_rank)
+        scenes = _scenes_path(rel_sc, args)
         if not experts.is_file() or not scenes.is_dir():
             print(f"[FAIL] {sign}: missing inputs")
             fail += 1
             continue
+        start = args.start
+        count = args.count
+        if args.random_one:
+            candidates = _expert_row_candidates(experts, args.backends)
+            if not candidates:
+                print(f"[FAIL] {sign}: no expert rows for backends={args.backends!r}")
+                fail += 1
+                continue
+            rng = random.Random(args.seed)
+            line_idx, _ = rng.choice(candidates)
+            start = line_idx
+            count = 1
+            print(f"[random-one] {sign}: experts line {line_idx}")
         desc = _replay_desc(
             experts, scenes, args.out_dir,
-            backends=args.backends, start=args.start, count=args.count,
+            backends=args.backends, start=start, count=count,
         )
         print(f"[run] {sign}: {desc}")
         if args.dry_run:
@@ -198,7 +351,7 @@ def _run_experts(args: argparse.Namespace) -> int:
         logf = log_dir / f"{sign}_{ts}.log"
         rc = _run_replay_batch(
             experts, scenes, args.out_dir,
-            backends=args.backends, start=args.start, count=args.count,
+            backends=args.backends, start=start, count=count,
             save_gifs=args.save_gifs, log_path=logf,
         )
         fail += rc != 0
@@ -264,12 +417,8 @@ def _run_fv(args: argparse.Namespace) -> int:
 
 def _run_lane(args: argparse.Namespace) -> int:
     _load_run_batch()
-    experts = (
-        pipeline_dir()
-        / "traj-priority-signs/traj_lane_5_15_train80/experts"
-        / f"experts_scene_uid_{args.experts_rank}.jsonl"
-    )
-    scenes = args.zink_bench / "lane_direction_signs/scenes/5_15_1"
+    experts = _experts_path("traj-priority-signs/traj_lane_5_15_train80/experts", args.experts_rank)
+    scenes = _scenes_path("lane_direction_signs/scenes/5_15_1", args)
     for p, label in ((EXPERT_REPLAY_FOR_PLANT2, "replay module"), (experts, "experts"), (scenes, "scenes")):
         if not p.exists():
             raise SystemExit(f"ERROR: missing {label}: {p}")
@@ -322,7 +471,6 @@ def _run_lane(args: argparse.Namespace) -> int:
 
 
 def _build_rebuild_jobs(args: argparse.Namespace) -> list[DumpJob]:
-    ct = pipeline_dir()
     experts_file = f"experts_scene_uid_{args.experts_rank}.jsonl"
     jobs: list[DumpJob] = []
 
@@ -339,8 +487,12 @@ def _build_rebuild_jobs(args: argparse.Namespace) -> list[DumpJob]:
         jobs.append(DumpJob(name, experts, scenes, out, n))
 
     for sign, (rel_exp, rel_sc) in EXPERT_SIGNS.items():
-        scenes = args.detour_scenes if rel_sc == "__DETOUR__" else args.zink_bench / rel_sc
-        add(f"exp:{sign}", ct / rel_exp / experts_file, scenes, args.out_exp)
+        add(
+            f"exp:{sign}",
+            _experts_path(rel_exp, args.experts_rank),
+            _scenes_path(rel_sc, args),
+            args.out_exp,
+        )
 
     prepare_fv_experts(
         src=args.fv_experts_src,
@@ -359,8 +511,8 @@ def _build_rebuild_jobs(args: argparse.Namespace) -> list[DumpJob]:
 
     add(
         "lane:5.15.1",
-        ct / "traj-priority-signs/traj_lane_5_15_train80/experts" / experts_file,
-        args.zink_bench / "lane_direction_signs/scenes/5_15_1",
+        _experts_path("traj-priority-signs/traj_lane_5_15_train80/experts", args.experts_rank),
+        _scenes_path("lane_direction_signs/scenes/5_15_1", args),
         args.out_lane,
     )
 
@@ -451,6 +603,7 @@ def _common_parser(sub: argparse._SubParsersAction) -> None:
         ("experts", "Priority/detour experts (sequential)"),
         ("fv", "FV nodeA experts"),
         ("lane", "Lane 5.15.1 (sharded)"),
+        ("one", "Dump one random expert trajectory"),
     ):
         p = sub.add_parser(name, help=help_)
         p.add_argument("--python", dest="python_exe", default=None)
@@ -494,6 +647,30 @@ def main(argv: list[str] | None = None) -> int:
     ex.add_argument("--signs", nargs="+", default=list(EXPERT_SIGNS.keys()), choices=list(EXPERT_SIGNS.keys()))
     ex.add_argument("--count", type=int, default=None)
     ex.add_argument("--start", type=int, default=0)
+    ex.add_argument(
+        "--random-one",
+        action="store_true",
+        help="pick one random expert row per --sign (overrides --start/--count)",
+    )
+    ex.add_argument("--seed", type=int, default=None, help="RNG seed for --random-one")
+
+    one = sub.choices["one"]
+    one.add_argument("--out-dir", type=Path, default=sh / "plant2_l1_one_random")
+    one.add_argument(
+        "--sign",
+        default="stop",
+        choices=list(EXPERT_SIGNS.keys()),
+        help="expert pool to sample from (default: stop / 2.5)",
+    )
+    one.add_argument("--experts", type=Path, default=None, help="override experts jsonl")
+    one.add_argument("--scenes-root", type=Path, default=None, help="override scenes dir")
+    one.add_argument("--seed", type=int, default=None, help="RNG seed")
+    one.add_argument("--max-steps", type=int, default=1500)
+    one.add_argument(
+        "--force",
+        action="store_true",
+        help="re-dump even if route_dir/results.json.gz already exists",
+    )
 
     fv = sub.choices["fv"]
     fv.add_argument("--out-dir", type=Path, default=sh / "plant2_l1_traj_fv_nodeA")
@@ -517,6 +694,7 @@ def main(argv: list[str] | None = None) -> int:
         "experts": _run_experts,
         "fv": _run_fv,
         "lane": _run_lane,
+        "one": _run_one,
     }
     return handlers[args.cmd](args)
 

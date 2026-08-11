@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Pipeline: retrofit 2.5 target_speed → fresh diskcache → FT (2 LRs) → eval Sign SR.
+# Pipeline: extract 2.5 cache → FT (2 LRs) → eval Sign SR.
 #
 # Uses a dedicated DS_LOCAL so we do not fight /tmp/plant2_ds_cache_spatial_aug.
 # New checkpoint addons: fvexp30_spatial_2p5_tsfix_lr{1e4,1e5}
 set -euo pipefail
 
-PIPELINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PIPELINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
-source "$PIPELINE_DIR/_env.sh"
+source "$PIPELINE_DIR/shell/env.sh"
 
 CT="$PIPELINE_DIR"
 PLAN_T="$TRB_ROOT/plant2/PlanT"
 PY="$SHEPELEV/conda_envs/arbelyaev-sdc/bin/python"
 SPLIT="$SHEPELEV/plant2_l1_fv_experts_split_signs_2.5"
 CKPT0="$SHEPELEV/plant2_checkpoints/epoch=029_final_1.ckpt"
-SHIM="$PIPELINE_DIR/plant2_py_shims/run_lit_finetune.py"
+SHIM="$PIPELINE_DIR/shims/run_lit_finetune.py"
 SIGNS_DIR="$SHEPELEV/traffic-rule-bench/pdd-bench/scripts/per_sign_bench/plant2_rule_test"
 
 export DS_LOCAL="${DS_LOCAL:-/tmp/plant2_ds_cache_2p5_tsfix}"
@@ -40,65 +40,10 @@ log() { echo "[$(date -Is)] $*" | tee -a "$PIPE_LOG"; }
 
 hydra_esc() { printf '%s' "$1" | sed 's/=/\\=/g'; }
 
-verify_measurements() {
-  "$PY" - <<'PY'
-import gzip, json
-from pathlib import Path
-import sys
-sys.path.insert(0, "$TRB_ROOT/plant2/PlanT")
-from util.sign_id import load_split_meta_route2sign, load_uid2sign, resolve_route_sign
-
-root = Path("/home/jovyan/shares/SR006.nfs3/shepelev/plant2_l1_fv_experts_split_signs")
-extra = load_split_meta_route2sign(root / "split_meta.json")
-uid = load_uid2sign()
-broken = []
-n = 0
-for split in ("train", "val"):
-    data = root / split / "data"
-    for p in data.iterdir():
-        if not p.is_dir():
-            continue
-        s = extra.get(p.name) or resolve_route_sign(p.name, uid)
-        if s != "2.5":
-            continue
-        n += 1
-        files = sorted((p / "measurements").glob("*.json.gz"))
-        if not files:
-            broken.append((p.name, "no_meas"))
-            continue
-        # sparse sample
-        idxs = list(range(0, len(files), max(1, len(files) // 15)))[:15]
-        all20 = True
-        for i in idxs:
-            with gzip.open(files[i], "rt") as f:
-                d = json.load(f)
-            if abs(float(d["target_speed"]) - 20.0) > 1e-6:
-                all20 = False
-                break
-        if all20:
-            broken.append((p.name, "target_all_20"))
-print(f"n_2.5={n} broken={len(broken)}")
-for b in broken[:10]:
-    print(" BROKEN", b)
-raise SystemExit(1 if broken else 0)
-PY
-}
-
-# ---------- 1) retrofit ----------
-if [[ "${SKIP_RETROFIT:-0}" == "1" ]]; then
-  log "STAGE retrofit SKIPPED (SKIP_RETROFIT=1)"
-else
-  log "STAGE retrofit --signs 2.5"
-  "$PY" -u "$CT/retrofit_target_speed_expert.py" --signs 2.5 --workers 32 \
-    2>&1 | tee -a "$LOGDIR/retrofit.log"
-fi
-log "STAGE verify measurements"
-verify_measurements
-
-# ---------- 2) extract+patch 2.5 keys from big cache (no full iterkeys / prefill) ----------
+# ---------- 1) extract+patch 2.5 keys from big cache (no full iterkeys / prefill) ----------
 SRC_CACHE="${SRC_CACHE:-/tmp/plant2_ds_cache_spatial_aug}"
 log "STAGE extract_patch src=$SRC_CACHE dst=$DS_LOCAL"
-"$PY" -u "$CT/extract_patch_2p5_cache.py" \
+"$PY" -u "$CT/data/extract_patch_2p5_cache.py" \
   --src "$SRC_CACHE" \
   --dst "$DS_LOCAL" \
   --split "$SPLIT" \
@@ -110,7 +55,7 @@ log "extract done volume=$(du -sh "$DS_LOCAL" 2>/dev/null | awk '{print $1}') ke
   "$PY" -c "from diskcache import Cache; c=Cache('$DS_LOCAL'); print(len(c)); c.close()"
 )"
 
-# ---------- 3) FT ----------
+# ---------- 2) FT ----------
 log "STAGE train"
 declare -a JOBS=(
   "0|1e-4|fvexp30_spatial_2p5_tsfix_lr1e4"
@@ -165,7 +110,7 @@ done
 log "FT finished fail=$fail_train"
 [[ "$fail_train" -eq 0 ]] || exit 1
 
-# ---------- 4) eval best + last ----------
+# ---------- 3) eval best + last ----------
 log "STAGE eval"
 pick_ckpt() {
   local dir="$1" prefer_best="$2"

@@ -11,6 +11,13 @@ Same split rules as make_train_val_split_fv_experts.py (SEED=42, fixed50).
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import gzip
 import json
 import os
@@ -21,7 +28,7 @@ from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-from _paths import shepelev
+from lib.paths import shepelev
 
 SHEPELEV = shepelev()
 SRCS = [

@@ -12,6 +12,13 @@ Sample index formula (seq_len=1, wps_len=8):
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import argparse
 import gzip
 import json
@@ -23,7 +30,7 @@ from pathlib import Path
 
 from diskcache import Cache
 
-from _paths import shepelev
+from lib.paths import shepelev
 
 SHEPELEV = shepelev()
 PLAN_T = SHEPELEV / "traffic-rule-bench/plant2/PlanT"

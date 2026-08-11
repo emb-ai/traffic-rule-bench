@@ -6,7 +6,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from _env import default_ckpt0, hydra_escape, plan_t, resolve_python, shim_path
+from lib.env import default_ckpt0, hydra_escape, plan_t, resolve_python, shim_path
 
 
 @dataclass

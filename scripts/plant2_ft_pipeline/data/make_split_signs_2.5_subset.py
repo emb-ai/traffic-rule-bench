@@ -7,12 +7,19 @@ will lazily re-fill ~2.5 entries into DS_LOCAL (no full re-prefill).
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import json
 import os
 import sys
 from pathlib import Path
 
-from _paths import shepelev
+from lib.paths import shepelev
 
 SHEPELEV = shepelev()
 SRC = SHEPELEV / "plant2_l1_fv_experts_split_signs"

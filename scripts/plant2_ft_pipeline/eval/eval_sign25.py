@@ -8,17 +8,33 @@ Examples:
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import argparse
 import re
 from pathlib import Path
 
-from _env import metrics_root, plan_t, shepelev
-from _eval import SignsEvalConfig, run_signs_eval, setup_metrics_tag, signs_done
+from lib.env import metrics_root, plan_t, shepelev
+from lib.eval_core import (
+    SignsEvalConfig,
+    run_signs_eval,
+    setup_metrics_tag,
+    signs_done,
+    trajectory_done,
+)
 
 
 def pick_ckpt(addon_dir: Path, slot: str) -> Path | None:
     if slot == "best":
         hits = sorted(addon_dir.glob("best_*.ckpt"), key=lambda p: p.stat().st_mtime, reverse=True)
+        return hits[0] if hits else None
+    if slot == "last":
+        hits = sorted(addon_dir.glob("last_*.ckpt"), key=lambda p: p.stat().st_mtime, reverse=True)
         return hits[0] if hits else None
     hits = sorted(addon_dir.glob("epoch=*.ckpt"), key=lambda p: p.stat().st_mtime, reverse=True)
     return hits[0] if hits else None
@@ -54,6 +70,22 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--metrics-root", type=Path, default=shepelev() / "plant2_ft_metrics/spatial_2p5_tsfix_eval_sign25")
     p.add_argument("--max-retries", type=int, default=3)
     p.add_argument("--skip-if-done", action="store_true", default=True)
+    p.add_argument(
+        "--force-rerun",
+        action="store_true",
+        help="Re-run eval even if trajectory report already exists",
+    )
+    p.add_argument(
+        "--trajectory",
+        default=None,
+        help="Single train trajectory / scene_uid (e.g. sign_100062_j0_lane0_seed1974118946_v0_default)",
+    )
+    p.add_argument("--save-gifs", action="store_true", help="Write eval GIF (stop_sign eval_pipeline)")
+    p.add_argument(
+        "--save-predictions",
+        action="store_true",
+        help="Log ego-speed preds, dist to sign 2.5, and x_objs per step (JSONL in metrics tag dir)",
+    )
     return p.parse_args()
 
 
@@ -70,9 +102,17 @@ def main() -> int:
             raise SystemExit(f"ERROR: no ckpt for addon={args.addon} slot={slot}")
         tag = args.tag or make_tag_from_ckpt(args.addon, slot, ckpt)
 
-    if args.skip_if_done and signs_done(tag):
-        print(f"SKIP done: {tag}")
-        return 0
+    predictions_path = None
+    if args.trajectory and args.save_predictions:
+        predictions_path = args.metrics_root / tag / f"{args.trajectory}_predictions.jsonl"
+    if args.skip_if_done and not args.force_rerun:
+        if args.trajectory:
+            if trajectory_done(tag, predictions_path=predictions_path if args.save_predictions else None):
+                print(f"SKIP done: {tag}")
+                return 0
+        elif signs_done(tag):
+            print(f"SKIP done: {tag}")
+            return 0
 
     cfg = SignsEvalConfig(
         ckpt=ckpt,
@@ -83,6 +123,9 @@ def main() -> int:
         scenes_per_job=args.scenes_per_job,
         metrics_root=args.metrics_root,
         max_retries=args.max_retries,
+        trajectory=args.trajectory,
+        save_gifs=args.save_gifs,
+        save_predictions=args.save_predictions,
     )
     setup_metrics_tag(args.metrics_root, tag, ckpt)
     return run_signs_eval(cfg)

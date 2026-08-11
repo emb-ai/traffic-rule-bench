@@ -1,8 +1,10 @@
 """Shared eval helpers: Sign SR, FV-fast, tag/ckpt resolution."""
 from __future__ import annotations
 
+import json
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -10,13 +12,22 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
-from _env import bench_dir, metrics_root, plan_t, resolve_python, setup_eval_thread_env, signs_dir, trb_root
+from lib.env import bench_dir, metrics_root, plan_t, resolve_python, setup_eval_thread_env, shepelev, signs_dir, trb_root
 
 NFS2 = Path("/mnt/virtual_ai0001053-01202_SR006-nfs2/smirnova")
 DEFAULT_MANIFEST = NFS2 / "traffic-rule-bench/pdd-bench/benchmark_output_speed/balanced/run_v61_a6/catalog_fv_test20.jsonl"
 DEFAULT_SCENES = NFS2 / "traffic-rule-bench/pdd-bench/scenes_balanced"
 DEFAULT_MANIFEST_DETOUR = NFS2 / "traffic-rule-bench/pdd-bench/benchmark_output/detour_v1/catalog_fv_test20.jsonl"
 DEFAULT_SCENES_DETOUR = NFS2 / "sdc/pdd-bench/scenes"
+
+
+TRAJECTORY_EXPERTS_2P5 = (
+    lambda: shepelev()
+    / "collected_trajectories/traj-priority-signs/traj_stop_2_5_train80/experts/all_runs_dedup.jsonl"
+)
+STOP_SCENES_2P5 = (
+    lambda: trb_root() / "pdd-bench/scripts/per_sign_bench/stop_sign/scenes/2_5"
+)
 
 
 @dataclass
@@ -30,6 +41,10 @@ class SignsEvalConfig:
     metrics_root: Path | None = None
     max_retries: int = 3
     python: Path | None = None
+    trajectory: str | None = None
+    save_gifs: bool = False
+    save_predictions: bool = False
+    force_rerun: bool = False
 
 
 def signs_output_dir(tag: str) -> Path:
@@ -38,6 +53,90 @@ def signs_output_dir(tag: str) -> Path:
 
 def signs_done(tag: str) -> bool:
     return (signs_output_dir(tag) / "_summary/summary.md").is_file()
+
+
+def trajectory_done(tag: str, *, predictions_path: Path | None = None) -> bool:
+    report = signs_output_dir(tag) / "2_5/eval_out/reports/report_cumulative.md"
+    if not report.is_file():
+        return False
+    if predictions_path is not None and not predictions_path.is_file():
+        return False
+    return True
+
+
+def normalize_trajectory_uid(trajectory: str) -> tuple[str, str]:
+    """Return (scene_uid, plant2_route_name)."""
+    t = trajectory.strip()
+    if t.endswith("_v0_default"):
+        return t[: -len("_default")], t
+    if t.endswith("_v0"):
+        return t, f"{t}_default"
+    if t.endswith("_default"):
+        return t.replace("_default", ""), t
+    return t, f"{t}_default"
+
+
+def build_trajectory_manifest(trajectory: str, work_dir: Path) -> Path:
+    """One-row SUMO manifest for a train dump route (2.5 experts catalog)."""
+    uid, route_name = normalize_trajectory_uid(trajectory)
+    src = TRAJECTORY_EXPERTS_2P5()
+    if not src.is_file():
+        raise FileNotFoundError(f"experts catalog missing: {src}")
+    row = None
+    for line in src.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        cand = json.loads(line)
+        if cand.get("scene_uid") != uid:
+            continue
+        if cand.get("variant") != "default":
+            continue
+        if cand.get("policy") != "comprehensive_rule_expert":
+            continue
+        row = cand
+        break
+    if row is None:
+        raise RuntimeError(f"no comprehensive_rule_expert/default row for scene_uid={uid!r}")
+
+    # Merge eval-critical spawn/route fields from replay sidecar when present.
+    sidecar_path = row.get("sidecar_path")
+    if sidecar_path:
+        sc = Path(str(sidecar_path))
+        if sc.is_file():
+            sidecar = json.loads(sc.read_text(encoding="utf-8"))
+            source = sidecar.get("source_row") or {}
+            for key in (
+                "spawn_distance_before_end",
+                "sign_distance_before_end",
+                "destination_lane_id",
+                "destination_edge_id",
+                "road_id",
+                "spawn_lane_num",
+                "auxiliary_agent",
+                "aux_distance_from_intersection",
+                "aux_convoy_size",
+                "aux_convoy_gap_m",
+                "aux_lanes_occupied",
+                "aux_road_id",
+                "aux_spawn_lane_num",
+                "aux_spawn_lane_index",
+                "aux_destination_lane_id",
+                "aux_destination_edge_id",
+                "sign_spawn_distance",
+                "junction_layout",
+                "spawn_velocity_ms",
+            ):
+                if key in source and source[key] is not None:
+                    row[key] = source[key]
+
+    row = dict(row)
+    row["pdd_code"] = row.get("sign_code") or "2.5"
+    row["plant2_route"] = route_name
+    row.setdefault("spawn_distance_before_end", 20.0)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    out = work_dir / f"trajectory_{route_name}.jsonl"
+    out.write_text(json.dumps(row, default=str) + "\n", encoding="utf-8")
+    return out
 
 
 def fv_done(out_dir: Path) -> bool:
@@ -98,7 +197,107 @@ def make_spatial_tag(lr: str, slot: str, ckpt: Path, suffix: str = "") -> str:
     return base + suffix
 
 
+def run_trajectory_eval(cfg: SignsEvalConfig) -> int:
+    """Sign SR eval on a single train trajectory via stop_sign/eval_pipeline.py."""
+    setup_eval_thread_env()
+    py = resolve_python(str(cfg.python) if cfg.python else None)
+    metrics = cfg.metrics_root or metrics_root()
+    tag_dir = setup_metrics_tag(metrics, cfg.tag, cfg.ckpt)
+    logf = tag_dir / "logs/eval_trajectory.log"
+    (tag_dir / "trajectory.txt").write_text(f"{cfg.trajectory}\n")
+    predictions_path = None
+    if cfg.save_predictions and cfg.trajectory:
+        predictions_path = tag_dir / f"{cfg.trajectory}_predictions.jsonl"
+        if predictions_path.exists():
+            predictions_path.unlink()
+
+    if not cfg.force_rerun and trajectory_done(
+        cfg.tag, predictions_path=predictions_path if cfg.save_predictions else None
+    ):
+        print(f"TRAJECTORY SKIP {cfg.tag}")
+        return 0
+
+    work_dir = tag_dir / "work"
+    manifest = build_trajectory_manifest(cfg.trajectory, work_dir)
+    out_root = signs_output_dir(cfg.tag) / "2_5"
+    out_root.mkdir(parents=True, exist_ok=True)
+    eval_out = out_root / "eval_out"
+    if cfg.save_predictions:
+        ep_cache = eval_out / "benchmark/full/policy_eval/plant2_default/episodes_plant2.jsonl"
+        if ep_cache.is_file():
+            ep_cache.unlink()
+    scenes = STOP_SCENES_2P5()
+    eval_py = trb_root() / "pdd-bench/scripts/per_sign_bench/stop_sign/eval_pipeline.py"
+    if not eval_py.is_file():
+        raise FileNotFoundError(eval_py)
+    if not scenes.is_dir():
+        raise FileNotFoundError(scenes)
+
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = cfg.gpu
+    if cfg.save_predictions and predictions_path is not None:
+        env["PLANT2_DEBUG_LOG_PATH"] = str(predictions_path)
+    cmd = [
+        str(py),
+        "-u",
+        str(eval_py),
+        "--policies",
+        "plant2",
+        "--model-paths",
+        f"plant2:{cfg.ckpt}",
+        "--manifest",
+        str(manifest),
+        "--scenes-root",
+        str(scenes),
+        "--out-dir",
+        str(eval_out),
+        "--jobs",
+        "1",
+        "--scenes-per-job",
+        "1",
+    ]
+    if cfg.save_gifs:
+        cmd.append("--save-gifs")
+
+    print(f"TRAJECTORY START tag={cfg.tag} route={cfg.trajectory} gpu={cfg.gpu}")
+    print("$ " + " ".join(cmd))
+    with logf.open("a") as log:
+        rc = subprocess.run(
+            cmd,
+            cwd=str(eval_py.parent),
+            env=env,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        ).returncode
+    gif_dirs = [
+        eval_out / "benchmark/full/policy_eval/plant2_default/gifs",
+        eval_out / "gifs",
+    ]
+    gifs: list[Path] = []
+    for gif_dir in gif_dirs:
+        if gif_dir.is_dir():
+            gifs.extend(sorted(gif_dir.glob("*.gif")))
+    report = eval_out / "reports/report_cumulative.md"
+    print(f"TRAJECTORY rc={rc} report={report} gifs={len(gifs)}")
+    for g in gifs:
+        print(f"  GIF: {g}")
+    if gifs and cfg.save_gifs:
+        tag_dir = (cfg.metrics_root or metrics_root()) / cfg.tag
+        tag_dir.mkdir(parents=True, exist_ok=True)
+        dst = tag_dir / f"{cfg.trajectory}.gif"
+        if not dst.exists() or dst.stat().st_mtime < gifs[-1].stat().st_mtime:
+            shutil.copy2(gifs[-1], dst)
+            print(f"  copied -> {dst}")
+    if predictions_path is not None and predictions_path.is_file():
+        n_lines = sum(1 for _ in predictions_path.open())
+        print(f"  predictions: {predictions_path} ({n_lines} steps)")
+    return 0 if report.is_file() else rc or 1
+
+
 def run_signs_eval(cfg: SignsEvalConfig) -> int:
+    if cfg.trajectory:
+        return run_trajectory_eval(cfg)
+
     setup_eval_thread_env()
     py = resolve_python(str(cfg.python) if cfg.python else None)
     sd = signs_dir()

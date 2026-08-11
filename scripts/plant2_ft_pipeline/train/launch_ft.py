@@ -11,6 +11,13 @@ Single job: use run_plant2_finetune.py directly, or --job flags below.
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import argparse
 import subprocess
 import sys
@@ -19,8 +26,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from _env import default_ckpt0, plan_t, pipeline_dir, resolve_python, shepelev
-from _finetune import FinetuneConfig, lr_tag, run_finetune
+from lib.env import default_ckpt0, plan_t, pipeline_dir, resolve_python, shepelev
+from lib.finetune import FinetuneConfig, lr_tag, run_finetune
 
 SPLIT_SPATIAL = lambda: shepelev() / "plant2_l1_fv_experts_split_signs"
 SPLIT_2P5 = lambda: shepelev() / "plant2_l1_fv_experts_split_signs_2.5"
@@ -64,7 +71,7 @@ def _base_2p5_cfg(job: SweepJob, args: argparse.Namespace) -> FinetuneConfig:
 
 def _run_bg(cfg: FinetuneConfig, log: Path, logdir: Path | None) -> subprocess.Popen:
     log.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [sys.executable, str(pipeline_dir() / "run_plant2_finetune.py")]
+    cmd = [sys.executable, str(pipeline_dir() / "train" / "run_plant2_finetune.py")]
     cmd.extend([
         "--split", str(cfg.split),
         "--learning-rate", cfg.learning_rate,
@@ -115,7 +122,7 @@ def preset_spatial_lr(args: argparse.Namespace) -> int:
         SweepJob("5", "7e-5", "fvexp30_spatial_lr7e5"),
         SweepJob("6", "1e-4", "fvexp30_spatial_lr1e4"),
     ]
-    run_sh = pipeline_dir() / "run_plant2_finetune.py"
+    run_sh = pipeline_dir() / "train" / "run_plant2_finetune.py"
     py = resolve_python(args.python_exe)
     pt = plan_t()
     fail = 0

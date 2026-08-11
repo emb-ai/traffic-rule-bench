@@ -1,4 +1,4 @@
-"""Shared paths and runtime env for plant2_ft_pipeline Python scripts."""
+"""Shared paths and runtime env for plant2_ft_pipeline."""
 from __future__ import annotations
 
 import os
@@ -48,9 +48,16 @@ def default_ckpt0() -> Path:
 
 
 def shim_path() -> Path:
-    return Path(
-        os.environ.get("SHIM", pipeline_dir() / "plant2_py_shims" / "run_lit_finetune.py")
-    )
+    env_shim = os.environ.get("SHIM")
+    if env_shim:
+        return Path(env_shim)
+    for candidate in (
+        pipeline_dir() / "shims" / "run_lit_finetune.py",
+        pipeline_dir() / "plant2_py_shims" / "run_lit_finetune.py",
+    ):
+        if candidate.is_file():
+            return candidate
+    return pipeline_dir() / "shims" / "run_lit_finetune.py"
 
 
 def metrics_root() -> Path:

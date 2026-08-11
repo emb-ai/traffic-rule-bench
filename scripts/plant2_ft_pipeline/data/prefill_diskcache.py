@@ -35,6 +35,13 @@ Examples::
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import argparse
 import copy
 import os
@@ -43,14 +50,14 @@ import sys
 import time
 from pathlib import Path
 
-from _env import pipeline_dir, resolve_python, shepelev
-from _utils import count_plant2_samples, default_prefill_max_workers, iso_now
+from lib.env import pipeline_dir, resolve_python, shepelev
+from lib.utils import count_plant2_samples, default_prefill_max_workers, iso_now
 
 # --- shard core (from prefill_plant2_diskcache.py) ---
 
 
 def _plan_t():
-    from _env import plan_t
+    from lib.env import plan_t
 
     pt = plan_t()
     os.chdir(pt)
@@ -228,7 +235,7 @@ def cmd_shard(args: argparse.Namespace) -> int:
 
 def cmd_parallel(args: argparse.Namespace) -> int:
     py = resolve_python(args.python_exe)
-    shard_py = pipeline_dir() / "prefill_diskcache.py"
+    shard_py = pipeline_dir() / "data" / "prefill_diskcache.py"
     nproc = os.cpu_count() or 8
     max_workers = args.max_workers or default_prefill_max_workers(nproc)
     args.ds_local.mkdir(parents=True, exist_ok=True)
@@ -297,7 +304,7 @@ def cmd_parallel(args: argparse.Namespace) -> int:
 
 def cmd_2p5(args: argparse.Namespace) -> int:
     """Delegate to extract_patch_2p5_cache."""
-    import extract_patch_2p5_cache as ep
+    from data import extract_patch_2p5_cache as ep
 
     argv = [
         "--src", str(args.src),
