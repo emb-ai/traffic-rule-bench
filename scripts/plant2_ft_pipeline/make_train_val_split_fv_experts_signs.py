@@ -24,6 +24,29 @@ from pathlib import Path
 from _paths import shepelev
 
 SHEPELEV = shepelev()
+# Nodes without the uid->sign jsonls resolve priority-sign routes from the
+# dumped boxes instead (the PDD sign is stored there with its code).
+_PDD_RE = re.compile(r"^\d\.\d+(\.\d+)?$")
+
+
+def sniff_sign(route_dir: Path) -> str | None:
+    boxes = route_dir / "boxes"
+    if not boxes.is_dir():
+        return None
+    frames = sorted(boxes.iterdir())
+    if not frames:
+        return None
+    step = max(1, len(frames) // 12)
+    for f in frames[::step]:
+        try:
+            entries = json.load(gzip.open(f))
+        except Exception:  # noqa: BLE001
+            continue
+        for e in entries:
+            code = e.get("pdd_code") or e.get("class") or ""
+            if _PDD_RE.match(str(code)):
+                return str(code)
+    return None
 SRCS = [
     ("fv", SHEPELEV / "plant2_l1_traj_fv_nodeA_signs"),
     ("exp", SHEPELEV / "plant2_l1_from_experts_signs"),
@@ -159,7 +182,13 @@ def main() -> None:
     for tag, src in SRCS:
         data = src / "data"
         if not data.is_dir():
-            raise SystemExit(f"missing {data} — run dump first")
+            # A node that only carries some of the source trees can still build
+            # a (smaller) split; the per-sign counts printed below make any
+            # missing source obvious.
+            if os.environ.get("ALLOW_MISSING_SRCS", "").strip() in ("1", "true"):
+                print(f"skipping missing source {data}", flush=True)
+                continue
+            raise SystemExit(f"missing {data} — run dump first (or ALLOW_MISSING_SRCS=1)")
         print(f"scanning {tag}: {data}", flush=True)
         for p in sorted(data.iterdir()):
             if not p.is_dir():
@@ -171,6 +200,8 @@ def main() -> None:
                 skipped_bad += 1
                 continue
             sign = route_sign(p.name, uid2sign)
+            if sign is None:
+                sign = sniff_sign(p)
             if sign is None:
                 unknown += 1
                 continue
