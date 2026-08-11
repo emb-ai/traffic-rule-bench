@@ -84,6 +84,9 @@ from lib.top_down_renderer_patch import (
 )
 
 apply_roundabout_top_down_renderer_patch()
+from bench.top_down_text_patch import apply_top_down_violations_text_patch  # noqa: E402
+apply_top_down_violations_text_patch()
+
 
 BENCH_DIR = Path(__file__).resolve().parent
 PER_SIGN_BENCH_DIR = BENCH_DIR.parent
