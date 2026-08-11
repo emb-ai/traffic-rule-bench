@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# collect_trajectories.sh — priority_bench (2.1 / 2.3 / 2.4 / 2.5)
+# collect_trajectories.sh — priority_bench (2.1 / 2.3 / 2.4 / 2.5 / 4.3)
 #
 # Profile-driven collector. Same invocation style as yield_sign/main_sign
 # collectors, but scenes go through priority_bench/run_benchmark with aux agents.
 #
-#   SIGN=yield|main|stop|secondary
-#   (aliases: 2.4|2_4|2.1|2_1|main_road|2.5|2_5|stop_sign|2.3|2_3|secondary_road)
+#   SIGN=yield|main|stop|secondary|roundabout
+#   (aliases: 2.4|2_4|2.1|2_1|main_road|2.5|2_5|stop_sign|2.3|2_3|secondary_road|4.3|4_3)
 #
 # Colleague-equivalent (yield):
 #   SIGN=yield \
@@ -63,8 +63,14 @@ case "$SIGN" in
         PDD_CODE=2.3
         DATA_SUBDIR=secondary_road
         ;;
+    roundabout|4.3|4_3)
+        SIGN=roundabout
+        SIGN_SLUG=4_3
+        PDD_CODE=4.3
+        DATA_SUBDIR=roundabout
+        ;;
     *)
-        echo "[FAIL] unknown SIGN='$SIGN' (expected yield|main|stop|secondary or 2.4|2.1|2.5|2.3)"
+        echo "[FAIL] unknown SIGN='$SIGN' (expected yield|main|stop|secondary|roundabout or 2.4|2.1|2.5|2.3|4.3)"
         exit 1
         ;;
 esac

@@ -13,8 +13,8 @@ from .auxiliary_agent import (
     viable_right_aux_lane_keys,
 )
 from .junction_priority_layout import (
-    ALLOWED_PRIORITY_JUNCTION_SHAPES,
     JunctionLayoutError,
+    allowed_shapes_for_mode,
     build_junction_priority_layout,
     right_arm_for_layout,
 )
@@ -29,6 +29,7 @@ from .scene_augmentation import (
     _is_valid_departure,
     _lane_keys_lookup,
     _pick_outgoing_lane_key,
+    _roundabout_meta_ring_kwargs,
     augment_layout_for_scene,
     build_spawn_lanes_by_edge,
     lane_lengths_from_spawn_lanes,
@@ -64,6 +65,14 @@ def _layout_kwargs_from_meta(
         kwargs["sign_lat"] = float(sign_lat)
         kwargs["sign_lon"] = float(sign_lon)
     return kwargs
+
+
+def _layout_mode_for_strategy(strategy: SpawnStrategy) -> str:
+    if strategy == "roundabout":
+        return "roundabout"
+    if strategy == "yield":
+        return "main_secondary"
+    return "main_main"
 
 
 def has_any_viable_right_aux_arm(
@@ -342,12 +351,22 @@ def check_manifest_viability(
 ) -> ManifestViabilityResult:
     """Return whether a cropped scene would survive generate_manifest filters."""
     result = ManifestViabilityResult(viable=True, reason="", detail="")
-    layout_mode = "main_secondary" if strategy == "yield" else "main_main"
+    layout_mode = _layout_mode_for_strategy(strategy)
 
     try:
-        layout = build_junction_priority_layout(
-            net_path, **_layout_kwargs_from_meta(meta, mode=layout_mode)
-        )
+        if strategy == "roundabout":
+            from .roundabout_topology import build_roundabout_layout
+
+            layout = build_roundabout_layout(
+                net_path,
+                sign_edge_id=(meta or {}).get("catalog_sign_road_id")
+                or (meta or {}).get("road_id"),
+                **_roundabout_meta_ring_kwargs(meta),
+            )
+        else:
+            layout = build_junction_priority_layout(
+                net_path, **_layout_kwargs_from_meta(meta, mode=layout_mode)
+            )
     except JunctionLayoutError as exc:
         return ManifestViabilityResult(
             viable=False,
@@ -355,13 +374,14 @@ def check_manifest_viability(
             detail=str(exc),
         )
 
-    if layout.shape not in ALLOWED_PRIORITY_JUNCTION_SHAPES:
+    allowed = allowed_shapes_for_mode(layout_mode)
+    if layout.shape not in allowed:
         return ManifestViabilityResult(
             viable=False,
             reason="unsupported_junction_shape",
             detail=(
-                f"shape={layout.shape!r}; priority signs 2.1/2.3/2.4/2.5 require "
-                f"{sorted(ALLOWED_PRIORITY_JUNCTION_SHAPES)}"
+                f"shape={layout.shape!r}; strategy={strategy!r} requires "
+                f"{sorted(allowed)}"
             ),
         )
 
@@ -370,13 +390,16 @@ def check_manifest_viability(
 
     junction_layout = layout.to_dict()
     if auxiliary_enabled:
-        if strategy == "yield":
+        if strategy in ("yield", "roundabout"):
             if not has_viable_aux_lanes(junction_layout, aux_distance_from_intersection):
                 min_aux_lane = min_aux_spawn_lane_length(aux_distance_from_intersection)
                 return ManifestViabilityResult(
                     viable=False,
                     reason="no_viable_aux_arm",
-                    detail=f"no main-road aux arm with lane length >= {min_aux_lane:.0f}m",
+                    detail=(
+                        f"no {'conflict-arc ring' if strategy == 'roundabout' else 'main-road'} "
+                        f"aux arm with lane length >= {min_aux_lane:.0f}m"
+                    ),
                     spawn_lane_count=result.spawn_lane_count,
                 )
         else:
@@ -401,23 +424,30 @@ def check_manifest_viability(
         aux_distance_from_intersection=aux_distance_from_intersection,
         sign_lat=float(sign_lat) if sign_lat is not None else None,
         sign_lon=float(sign_lon) if sign_lon is not None else None,
+        scene_meta=meta,
     )
     result.scenario_count = len(scenarios)
     if scenarios:
         return result
 
-    explain = (
-        _explain_no_scenarios_yield
-        if strategy == "yield"
-        else _explain_no_scenarios_equal_priority
-    )
-    reason, detail = explain(
-        layout,
-        spawn_lanes,
-        net_path,
-        min_ego_lane_m=min_ego_lane_m,
-        aux_distance_from_intersection=aux_distance_from_intersection,
-    )
+    if strategy == "roundabout":
+        reason, detail = (
+            "no_valid_scenario_combo",
+            "no spoke×conflict-arc spawn scenarios for roundabout",
+        )
+    else:
+        explain = (
+            _explain_no_scenarios_yield
+            if strategy == "yield"
+            else _explain_no_scenarios_equal_priority
+        )
+        reason, detail = explain(
+            layout,
+            spawn_lanes,
+            net_path,
+            min_ego_lane_m=min_ego_lane_m,
+            aux_distance_from_intersection=aux_distance_from_intersection,
+        )
     return ManifestViabilityResult(
         viable=False,
         reason=reason,

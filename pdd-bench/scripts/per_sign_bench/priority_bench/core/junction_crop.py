@@ -1,4 +1,10 @@
-"""Find a 3- or 4-arm junction in a SUMO net and crop the network around it."""
+"""Find a 3- or 4-arm junction in a SUMO net and crop the network around it.
+
+T/X crops live here. Roundabout (shape O / PDD 4.3) scenes are cropped by
+``moscow_junctions`` and materialized via ``build_scenes/materialize_scenes.py``
+from ``scenes/O/``. Shape filters: ``ALLOWED_PRIORITY_JUNCTION_SHAPES`` (T/X)
+vs ``ALLOWED_ROUNDABOUT_SHAPES`` (O) in ``junction_priority_layout``.
+"""
 
 from __future__ import annotations
 

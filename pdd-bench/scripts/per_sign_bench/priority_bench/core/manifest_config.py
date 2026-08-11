@@ -11,6 +11,8 @@ from typing import Any
 DEFAULT_SPAWN_DISTANCE_BEFORE_END = 12.0
 DEFAULT_AUX_DISTANCE_FROM_INTERSECTION = 20.0
 DEFAULT_AUX_LANES_OCCUPIED_MAX = 4
+# Cap ego travel along the destination exit lane (roundabout / 4.3 only).
+DEFAULT_DESTINATION_MAX_ALONG_M = 100.0
 # Expert mandatory dwell at stop line after speed≈0 (sim steps; ×0.1 s ≈ seconds).
 # Was 30 (~3.0 s); halved to 15 (~1.5 s).
 DEFAULT_STOP_WAIT_STEPS = 15
@@ -28,6 +30,8 @@ EXPERIMENT_DEFAULT_KEYS = (
     "aux_convoy_gap_m",
     "aux_lanes_occupied_max",
     "stop_wait_steps",
+    # Roundabout-only; only copied when present in experiment config.
+    "destination_max_along_m",
 )
 
 
@@ -58,6 +62,10 @@ def enrich_manifest_row(row: dict[str, Any], config: dict[str, Any] | None = Non
         raw = config.get("spawn_distance_before_end", DEFAULT_SPAWN_DISTANCE_BEFORE_END)
         out["spawn_distance_before_end"] = float(raw)
 
+    # Roundabout-only: never invent a default for yield/main/stop rows.
+    if out.get("destination_max_along_m") is None and "destination_max_along_m" in config:
+        out["destination_max_along_m"] = float(config["destination_max_along_m"])
+
     if out.get("aux_distance_from_intersection") is None:
         raw = config.get(
             "aux_distance_from_intersection", DEFAULT_AUX_DISTANCE_FROM_INTERSECTION
@@ -71,6 +79,7 @@ def enrich_manifest_row(row: dict[str, Any], config: dict[str, Any] | None = Non
     for key in EXPERIMENT_DEFAULT_KEYS:
         if key in (
             "spawn_distance_before_end",
+            "destination_max_along_m",
             "aux_distance_from_intersection",
             "stop_wait_steps",
         ):

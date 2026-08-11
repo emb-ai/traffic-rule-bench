@@ -127,10 +127,22 @@ class VehicleRouteIndex:
         max_hops: int = 8,
     ) -> list[str]:
         """Real (non-internal) edges reachable from this lane, BFS order."""
+        return [edge for edge, _hops in self.reachable_real_edges_with_hops(
+            from_edge, from_lane, max_hops=max_hops
+        )]
+
+    def reachable_real_edges_with_hops(
+        self,
+        from_edge: str,
+        from_lane: int,
+        *,
+        max_hops: int = 8,
+    ) -> list[tuple[str, int]]:
+        """Real edges reachable from this lane as ``(edge_id, min_hops)`` BFS order."""
         start = (from_edge, int(from_lane))
         queue: deque[tuple[tuple[str, int], int]] = deque([(start, 0)])
         visited = {start}
-        found: list[str] = []
+        found: list[tuple[str, int]] = []
         seen_edges: set[str] = set()
 
         while queue:
@@ -142,7 +154,7 @@ class VehicleRouteIndex:
                     continue
                 if is_real_sumo_edge_id(next_edge) and next_edge not in seen_edges:
                     seen_edges.add(next_edge)
-                    found.append(next_edge)
+                    found.append((next_edge, depth + 1))
                 state = (next_edge, next_lane)
                 if state in visited:
                     continue

@@ -1,8 +1,9 @@
-# Priority junction bench — 2.1 main / 2.3 secondary / 2.4 yield / 2.5 stop
+# Priority junction bench — 2.1 main / 2.3 secondary / 2.4 yield / 2.5 stop / 4.3 roundabout
 #   python generate_manifest.py
 #   python generate_manifest.py sign=secondary
 #   python generate_manifest.py sign=yield
 #   python generate_manifest.py sign=stop
+#   python generate_manifest.py sign=roundabout
 
 defaults:
   - _self_
@@ -53,3 +54,4 @@ gif:
   dir: null
   run_name: null
   scaling: 12.0   # pixels per meter (higher = more zoomed in)
+  draw_path_conflict: false  # cyan/magenta routes + yellow conflict X on GIFs

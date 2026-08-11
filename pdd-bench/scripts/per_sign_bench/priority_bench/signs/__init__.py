@@ -2,6 +2,7 @@
 
 from .base import (
     MAIN_ROAD,
+    ROUNDABOUT,
     SECONDARY_ROAD,
     STOP,
     YIELD,
@@ -17,6 +18,7 @@ __all__ = [
     "SECONDARY_ROAD",
     "YIELD",
     "STOP",
+    "ROUNDABOUT",
     "SignProfile",
     "get_profile",
     "list_profiles",

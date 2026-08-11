@@ -28,7 +28,6 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
-import shutil
 import sys
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -51,6 +50,7 @@ from core.scene_selection import (  # noqa: E402
     VERDICT_KEEP,
     VERDICT_PENDING,
     VERDICT_REJECT,
+    apply_rejected_scenes,
     load_scene_selection,
     save_scene_selection,
     set_scene_verdict,
@@ -173,31 +173,8 @@ def apply_selection(
     preview_name: str,
     dry_run: bool,
 ) -> tuple[int, int]:
-    records = scene_records(scenes_root, preview_name=preview_name)
-    rejected = [r["name"] for r in records if r["verdict"] == VERDICT_REJECT]
-    if not rejected:
-        return 0, 0
-
-    dest_root = scenes_root / REJECTED_SUBDIR
-    if not dry_run:
-        dest_root.mkdir(parents=True, exist_ok=True)
-
-    moved = 0
-    for name in rejected:
-        src = scenes_root / name
-        dst = dest_root / name
-        if not src.is_dir():
-            continue
-        if dry_run:
-            print(f"  would move {name} -> {REJECTED_SUBDIR}/{name}")
-            moved += 1
-            continue
-        if dst.exists():
-            shutil.rmtree(dst)
-        shutil.move(str(src), str(dst))
-        print(f"  moved {name} -> {REJECTED_SUBDIR}/{name}")
-        moved += 1
-    return moved, len(rejected)
+    del preview_name  # kept for CLI compatibility; apply uses scene_selection.json
+    return apply_rejected_scenes(scenes_root, dry_run=dry_run)
 
 
 REVIEW_HTML = """<!DOCTYPE html>

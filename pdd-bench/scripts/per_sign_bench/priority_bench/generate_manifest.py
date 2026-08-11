@@ -23,8 +23,8 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from core.junction_priority_layout import (
-    ALLOWED_PRIORITY_JUNCTION_SHAPES,
     JunctionLayoutError,
+    allowed_shapes_for_mode,
     build_junction_priority_layout,
 )
 from core.lane_keys import lane_edge_id, lane_num_from_key, make_lane_key
@@ -50,8 +50,10 @@ from core.manifest_expansion import (
 from core.scene_augmentation import (
     SpawnScenario,
     pick_default_main_spawn_meta_for_net,
+    pick_default_roundabout_spawn_meta_for_net,
     pick_default_yield_spawn_meta_for_net,
 )
+from core.roundabout_topology import build_roundabout_layout
 from core.scene_selection import is_reserved_scene_dir, unapplied_rejected_scenes, load_scene_selection
 from core.moscow_pool import (
     count_splits,
@@ -81,7 +83,7 @@ PROFILE: SignProfile | None = None
 def _profile() -> SignProfile:
     if PROFILE is None:
         raise RuntimeError(
-            "PROFILE is not set; call main() with sign=main|secondary|yield|stop"
+            "PROFILE is not set; call main() with sign=main|secondary|yield|stop|roundabout"
         )
     return PROFILE
 
@@ -133,6 +135,8 @@ class SimulationConfig:
     horizon: int = 600
     sign_distance_before_end: float = 0.0
     spawn_distance_before_end: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END
+    # Roundabout-only: set via configs/sign/roundabout.yaml.
+    destination_max_along_m: Optional[float] = None
 
 
 @dataclass
@@ -162,6 +166,7 @@ class GifConfig:
     dir: Optional[str] = None
     run_name: Optional[str] = None
     scaling: float = 24.0
+    draw_path_conflict: bool = False
 
 
 @dataclass
@@ -265,15 +270,27 @@ def build_junction_layout_for_scene(
     *,
     sign_lat: Optional[float] = None,
     sign_lon: Optional[float] = None,
+    scene_meta: Optional[dict] = None,
 ) -> Optional[dict]:
     """Build junction layout using the active sign profile's layout mode."""
     try:
-        layout = build_junction_priority_layout(
-            net_path,
-            mode=_profile().layout_mode,
-            sign_lat=sign_lat,
-            sign_lon=sign_lon,
-        )
+        if _profile().layout_mode == "roundabout":
+            from core.scene_augmentation import _roundabout_meta_ring_kwargs
+
+            meta = scene_meta or {}
+            prefer_ego = meta.get("catalog_sign_road_id") or meta.get("road_id")
+            layout = build_roundabout_layout(
+                net_path,
+                sign_edge_id=prefer_ego,
+                **_roundabout_meta_ring_kwargs(meta),
+            )
+        else:
+            layout = build_junction_priority_layout(
+                net_path,
+                mode=_profile().layout_mode,
+                sign_lat=sign_lat,
+                sign_lon=sign_lon,
+            )
     except JunctionLayoutError as exc:
         print(f"  [junction_layout] {net_path.parent.name}: {exc}")
         return None
@@ -573,6 +590,11 @@ def build_manifest_entry(
         entry["stop_wait_steps"] = int(
             (expert_cfg or ExpertConfig()).stop_wait_steps
         )
+    if (
+        _profile().layout_mode == "roundabout"
+        and sim_cfg.destination_max_along_m is not None
+    ):
+        entry["destination_max_along_m"] = float(sim_cfg.destination_max_along_m)
 
     if spawn_scenario is not None:
         entry.update(spawn_scenario.to_manifest_fields())
@@ -640,15 +662,24 @@ def build_manifest_entry(
         if meta.get("destination_edge_id"):
             entry["destination_edge_id"] = meta["destination_edge_id"]
     elif spawn_scenario is None and entry.get("road_id"):
-        picker = (
-            pick_default_yield_spawn_meta_for_net
-            if _profile().spawn_strategy == "yield"
-            else pick_default_main_spawn_meta_for_net
-        )
-        spawn_meta = picker(
-            net_full_path,
-            prefer_ego_edge_id=str(entry["road_id"]),
-        )
+        strategy = _profile().spawn_strategy
+        if strategy == "roundabout":
+            picker = pick_default_roundabout_spawn_meta_for_net
+            spawn_meta = picker(
+                net_full_path,
+                prefer_ego_edge_id=str(entry["road_id"]),
+                scene_meta=meta,
+            )
+        else:
+            picker = (
+                pick_default_yield_spawn_meta_for_net
+                if strategy == "yield"
+                else pick_default_main_spawn_meta_for_net
+            )
+            spawn_meta = picker(
+                net_full_path,
+                prefer_ego_edge_id=str(entry["road_id"]),
+            )
         if spawn_meta:
             entry["destination_lane_id"] = spawn_meta["destination_lane_id"]
             entry["destination_edge_id"] = spawn_meta["destination_edge_id"]
@@ -657,7 +688,7 @@ def build_manifest_entry(
 
     if junction_layout_cache is not None:
         entry["junction_layout"] = junction_layout_cache
-        if _profile().spawn_strategy == "yield":
+        if _profile().spawn_strategy in ("yield", "roundabout"):
             entry["main_lane_keys"] = [
                 lane_key
                 for arm in junction_layout_cache.get("arms", [])
@@ -823,15 +854,17 @@ def generate_manifest(
             net_full_path,
             sign_lat=float(sign_lat) if sign_lat is not None else None,
             sign_lon=float(sign_lon) if sign_lon is not None else None,
+            scene_meta=meta,
         )
         if junction_layout is None:
             print(f"  Skipping {scene_name}: no junction layout")
             continue
         shape = junction_layout.get("shape")
-        if shape not in ALLOWED_PRIORITY_JUNCTION_SHAPES:
+        allowed_shapes = allowed_shapes_for_mode(_profile().layout_mode)
+        if shape not in allowed_shapes:
             print(
                 f"  Skipping {scene_name}: junction shape {shape!r} "
-                f"(need {sorted(ALLOWED_PRIORITY_JUNCTION_SHAPES)})"
+                f"(need {sorted(allowed_shapes)})"
             )
             continue
 
@@ -848,6 +881,10 @@ def generate_manifest(
             build_entry=partial(build_manifest_entry, expert_cfg=expert_cfg),
             aux_cfg_for_entry=aux_for_entry,
         )
+        if not scene_entries:
+            print(f"  Skipping {scene_name}: no manifest entries after expansion")
+            continue
+
         scene_split = split_by_id.get(scene_name) or split_by_id.get(scene_dir.name)
         for entry in scene_entries:
             entry["split"] = scene_split
@@ -911,6 +948,11 @@ def generate_manifest(
     }
     if _profile().id == STOP.id:
         summary["stop_wait_steps"] = int(expert_cfg.stop_wait_steps)
+    if (
+        _profile().layout_mode == "roundabout"
+        and sim_cfg.destination_max_along_m is not None
+    ):
+        summary["destination_max_along_m"] = float(sim_cfg.destination_max_along_m)
 
     summary_path = output_dir / "real_manifest_summary.json"
     with open(summary_path, "w", encoding="utf-8") as f:
@@ -1014,6 +1056,8 @@ def render_gifs_from_manifest(
         ]
         if gif_cfg.hide_signs:
             cmd.append("--hide-signs")
+        if gif_cfg.draw_path_conflict:
+            cmd.append("--draw-path-conflict")
         if gif_cfg.scaling:
             cmd.extend(["--gif-scaling", str(float(gif_cfg.scaling))])
         
@@ -1113,6 +1157,11 @@ def main(cfg: DictConfig) -> None:
         horizon=cfg.simulation.horizon,
         sign_distance_before_end=cfg.simulation.sign_distance_before_end,
         spawn_distance_before_end=cfg.simulation.spawn_distance_before_end,
+        destination_max_along_m=(
+            float(cfg.simulation.destination_max_along_m)
+            if getattr(cfg.simulation, "destination_max_along_m", None) is not None
+            else None
+        ),
     )
     expert_cfg = ExpertConfig(
         stop_wait_steps=int(
@@ -1160,6 +1209,7 @@ def main(cfg: DictConfig) -> None:
         dir=cfg.gif.dir,
         run_name=cfg.gif.run_name,
         scaling=float(getattr(cfg.gif, "scaling", 24.0) or 24.0),
+        draw_path_conflict=bool(getattr(cfg.gif, "draw_path_conflict", False)),
     )
 
     split = normalize_split(getattr(cfg.paths, "split", "all"))

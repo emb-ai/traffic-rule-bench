@@ -17,11 +17,20 @@ INTERSECTION_JUNCTION_TYPES = {
 }
 
 RoadClass = Literal["main", "secondary"]
-LayoutMode = Literal["main_secondary", "main_main"]
-JunctionShape = Literal["2", "T", "X"]
+LayoutMode = Literal["main_secondary", "main_main", "roundabout"]
+JunctionShape = Literal["2", "T", "X", "O"]
 
-# Priority signs 2.1 / 2.4 need a proper conflict table; 2-arm stubs are rejected.
+# Priority signs 2.1 / 2.3 / 2.4 / 2.5 need a proper conflict table; 2-arm stubs are rejected.
 ALLOWED_PRIORITY_JUNCTION_SHAPES: frozenset[str] = frozenset({"T", "X"})
+# Roundabout (4.3) uses traffic-circle topology (shape O).
+ALLOWED_ROUNDABOUT_SHAPES: frozenset[str] = frozenset({"O"})
+
+
+def allowed_shapes_for_mode(mode: str) -> frozenset[str]:
+    """Junction shapes permitted for a layout / spawn mode."""
+    if mode == "roundabout":
+        return ALLOWED_ROUNDABOUT_SHAPES
+    return ALLOWED_PRIORITY_JUNCTION_SHAPES
 
 
 @dataclass
@@ -59,6 +68,7 @@ class ApproachArm:
     left_to: List[str] = field(default_factory=list)
     right_to: List[str] = field(default_factory=list)
     from_node: str = ""
+    to_node: str = ""
     min_lane_length: float = 0.0
 
     def to_dict(self) -> dict:
@@ -74,6 +84,7 @@ class ApproachArm:
             "left_to": list(self.left_to),
             "right_to": list(self.right_to),
             "from_node": self.from_node,
+            "to_node": self.to_node,
             "min_lane_length": float(self.min_lane_length),
         }
 
@@ -481,6 +492,7 @@ def _build_arms(
                 left_to=sorted(left_map.get(edge.edge_id, set())),
                 right_to=sorted(right_map.get(edge.edge_id, set())),
                 from_node=edge.from_node,
+                to_node=edge.to_node,
                 min_lane_length=min_lane_length,
             )
         )
@@ -854,6 +866,7 @@ def load_junction_priority_layout(path: Path | str) -> JunctionPriorityLayout:
             left_to=list(arm.get("left_to", [])),
             right_to=list(arm.get("right_to", [])),
             from_node=arm.get("from_node", ""),
+            to_node=arm.get("to_node", ""),
             min_lane_length=float(arm.get("min_lane_length", 0.0) or 0.0),
         )
         for arm in data["arms"]

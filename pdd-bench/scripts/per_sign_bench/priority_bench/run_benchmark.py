@@ -28,9 +28,15 @@ if str(_PDD_BENCH) not in sys.path:
 # Keep metadrive package unmodified: strip split-via shortcuts at graph build.
 from core.metadrive_sumo_patch import apply_metadrive_sumo_via_patch  # noqa: E402
 from bench.top_down_text_patch import apply_top_down_violations_text_patch  # noqa: E402
+from bench.top_down_path_conflict_patch import (  # noqa: E402
+    apply_top_down_path_conflict_overlay_patch,
+    is_path_conflict_overlay_enabled,
+    set_path_conflict_overlay_enabled,
+)
 
 apply_metadrive_sumo_via_patch()
 apply_top_down_violations_text_patch()
+apply_top_down_path_conflict_overlay_patch()
 
 from envs.sumo_env import TrafficSignSumoEnv
 from envs.sumo_traffic_manager import SumoTrafficManager
@@ -48,13 +54,15 @@ from scripts.per_sign_bench.factorized_space.ego_defaults import (
 from traffic_signs.priority_signs import (
     MainRoadSign,
     RightHandYieldSign,
+    RoundaboutSign,
+    RoundaboutYieldSign,
     SecondaryRoadLeftSign,
     SecondaryRoadRightSign,
     SecondaryRoadSign,
     StopSign,
     YieldSign,
 )
-from core.lane_keys import clamp_lane_key_to_graph, make_lane_key
+from core.lane_keys import clamp_lane_key_to_graph, lane_edge_id, make_lane_key
 from core.junction_priority_layout import right_arm_edge_id, straight_arm_edge_id
 from core.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
@@ -64,7 +72,10 @@ from core.auxiliary_agent import (
     add_auxiliary_agents,
     resolve_aux_spawn_plan,
 )
-from core.manifest_config import DEFAULT_AUX_LANES_OCCUPIED_MAX
+from core.manifest_config import (
+    DEFAULT_AUX_LANES_OCCUPIED_MAX,
+    DEFAULT_DESTINATION_MAX_ALONG_M,
+)
 from core.junction_sign_placement import (
     SIGN_SHOULDER_OFFSET_M,
     arms_for_road_class,
@@ -79,6 +90,16 @@ from core.junction_priority_layout import (
     build_junction_priority_layout,
     secondary_side_from_main_arm,
 )
+from core.roundabout_topology import build_roundabout_layout
+from core.roundabout_yield_zone import (
+    all_entry_conflict_ring_edges,
+    collect_all_entry_conflict_lanes,
+    collect_entry_conflict_lanes,
+    collect_lanes_for_edge_ids,
+    conflict_aux_ring_edge_ids,
+    entry_conflict_ring_edges,
+)
+from core.scene_augmentation import _roundabout_meta_ring_kwargs
 from core.manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     DEFAULT_STOP_WAIT_STEPS,
@@ -859,10 +880,159 @@ def _apply_manifest_ego_destination(env, row: dict) -> Optional[str]:
         spawn_key = getattr(vehicle.lane, "index", None)
         if spawn_key and vehicle.navigation is not None:
             vehicle.navigation.set_route(spawn_key, clamped)
+        _apply_roundabout_destination_cap(env, row)
         return clamped
     except Exception as exc:
         print(f"[EgoDest] Could not apply destination {dest}: {exc}")
         return None
+
+
+def _apply_roundabout_destination_cap(env, row: dict) -> None:
+    """Move ego finish point to ``min(cap, final_lane.length-5)`` on roundabouts.
+
+    MetaDrive navigation still ends on the exit lane, but the visual dest mark
+    and path sampling stop at the capped longitude (stored on the vehicle).
+    """
+    if not _row_is_roundabout(row):
+        return
+    raw = row.get("destination_max_along_m")
+    try:
+        cap = float(DEFAULT_DESTINATION_MAX_ALONG_M if raw is None else raw)
+    except (TypeError, ValueError):
+        return
+    if cap <= 0.0:
+        return
+
+    vehicle = getattr(env, "agent", None) or getattr(env, "vehicle", None)
+    if vehicle is None:
+        return
+    nav = getattr(vehicle, "navigation", None)
+    final = getattr(nav, "final_lane", None) if nav is not None else None
+    if final is None:
+        return
+    try:
+        target = min(cap, max(0.5, float(final.length) - 5.0))
+    except Exception:
+        return
+
+    # Used by arrive check + path overlay truncation.
+    try:
+        vehicle._priority_bench_dest_along_m = float(target)
+    except Exception:
+        pass
+
+    # Move MetaDrive destination marker (if shown) to the capped point.
+    try:
+        from metadrive.utils.coordinates_shift import panda_vector
+
+        dest_path = getattr(nav, "_dest_node_path", None)
+        if dest_path is not None:
+            check_point = final.position(target, 0.0)
+            height = float(getattr(nav, "MARK_HEIGHT", 1.0) or 1.0)
+            dest_path.setPos(
+                panda_vector(float(check_point[0]), float(check_point[1]), height)
+            )
+    except Exception:
+        pass
+
+    try:
+        print(
+            f"[EgoDest] Roundabout destination cap at {target:.1f}m "
+            f"on final lane (len={float(final.length):.1f}m)"
+        )
+    except Exception:
+        pass
+
+
+def _lane_index_road_key(lane_index) -> tuple | str | None:
+    """Comparable road identity for a MetaDrive / SUMO lane index."""
+    if lane_index is None:
+        return None
+    if isinstance(lane_index, str):
+        try:
+            return lane_edge_id(lane_index) or lane_index
+        except Exception:
+            return lane_index
+    try:
+        if len(lane_index) >= 2:
+            return (lane_index[0], lane_index[1])
+    except Exception:
+        pass
+    return lane_index
+
+
+def _same_road_lane_index(a, b) -> bool:
+    if a is None or b is None:
+        return False
+    if a == b:
+        return True
+    return _lane_index_road_key(a) == _lane_index_road_key(b)
+
+
+def _ego_reached_capped_destination(
+    vehicle,
+    *,
+    max_along_m: float,
+    arrive_tol_m: float = 2.0,
+) -> bool:
+    """True when ego is on the route's final exit lane at/after the cap.
+
+    Destination point = ``min(max_along_m, final_lane.length - 5)`` along the
+    navigation final lane (MetaDrive end criterion, capped when the exit is
+    longer). Works with ``EdgeNetworkNavigation`` (SUMO: checkpoints are lane
+    indices) and node-network checkpoints.
+
+    ``max_along_m <= 0`` disables the cap.
+    """
+    if vehicle is None:
+        return False
+    try:
+        cap = float(max_along_m)
+    except (TypeError, ValueError):
+        return False
+    if cap <= 0.0:
+        return False
+
+    nav = getattr(vehicle, "navigation", None)
+    final = getattr(nav, "final_lane", None) if nav else None
+    lane = getattr(vehicle, "lane", None)
+    if nav is None or final is None or lane is None:
+        return False
+
+    lane_idx = getattr(lane, "index", None)
+    final_idx = getattr(final, "index", None)
+    if lane_idx is None or final_idx is None:
+        return False
+
+    checkpoints = list(getattr(nav, "checkpoints", None) or [])
+    if checkpoints:
+        first_cp = checkpoints[0]
+        last_cp = checkpoints[-1]
+        # Degenerate route (spawn lane == dest lane) — never early-arrive.
+        if _same_road_lane_index(first_cp, last_cp) and len(checkpoints) <= 2:
+            return False
+        # Must be on the final checkpoint / final_lane road — not the approach.
+        on_final = _same_road_lane_index(lane_idx, last_cp) or _same_road_lane_index(
+            lane_idx, final_idx
+        )
+        if not on_final:
+            return False
+        if not _same_road_lane_index(first_cp, last_cp) and _same_road_lane_index(
+            lane_idx, first_cp
+        ):
+            return False
+    elif not _same_road_lane_index(lane_idx, final_idx):
+        return False
+
+    try:
+        lane_len = float(final.length)
+        # Use the vehicle's current lane coords (same road as final).
+        long, _lat = lane.local_coordinates(vehicle.position)
+    except Exception:
+        return False
+
+    target = min(cap, max(0.5, lane_len - 5.0))
+    return float(long) >= (target - float(arrive_tol_m))
 
 
 def _reposition_ego_before_lane_end(env, distance_before_end: float) -> bool:
@@ -938,15 +1108,31 @@ def _row_is_secondary_road(row: dict) -> bool:
     } or sign_type in {"secondary", "secondary_road"}
 
 
+def _row_is_roundabout(row: dict) -> bool:
+    code = str(row.get("pdd_code") or row.get("sign_code") or "")
+    sign_type = str(row.get("sign_type") or "")
+    return code in {"4.3", "4_3"} or sign_type == "roundabout"
+
+
 def _row_is_main_secondary(row: dict) -> bool:
-    """Yield / stop / 2.3 share main/secondary layout + secondary ego."""
-    return _row_is_yield(row) or _row_is_stop(row) or _row_is_secondary_road(row)
+    """Yield / stop / 2.3 / roundabout share secondary-ego road_class."""
+    return (
+        _row_is_yield(row)
+        or _row_is_stop(row)
+        or _row_is_secondary_road(row)
+        or _row_is_roundabout(row)
+    )
 
 
 def _get_junction_layout(row: dict, scenes_root: Path) -> dict | None:
     """Load junction layout from manifest row or build from scene net.xml."""
     if row.get("junction_layout"):
-        return row["junction_layout"]
+        layout = row["junction_layout"]
+        if _row_is_roundabout(row):
+            if layout.get("shape") == "O" and layout.get("mode") == "roundabout":
+                return layout
+        else:
+            return layout
 
     net_path = row.get("net_path")
     if not net_path:
@@ -954,6 +1140,39 @@ def _get_junction_layout(row: dict, scenes_root: Path) -> dict | None:
 
     net_file = Path(str(net_path))
     full_path = net_file if net_file.is_absolute() else scenes_root / net_file
+
+    if _row_is_roundabout(row):
+        scene_meta: dict | None = None
+        meta_path = full_path.parent / "meta.json"
+        if meta_path.is_file():
+            try:
+                scene_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                scene_meta = None
+        ego_edge = row.get("road_id")
+        if scene_meta:
+            ego_edge = (
+                scene_meta.get("catalog_sign_road_id")
+                or scene_meta.get("road_id")
+                or ego_edge
+            )
+        try:
+            layout_obj = build_roundabout_layout(
+                full_path,
+                sign_edge_id=ego_edge,
+                **_roundabout_meta_ring_kwargs(scene_meta),
+            )
+        except JunctionLayoutError as exc:
+            print(f"[JunctionLayout] Failed to build roundabout layout: {exc}")
+            return None
+        if layout_obj.shape != "O" or layout_obj.mode != "roundabout":
+            print(
+                f"[JunctionLayout] Rejecting non-roundabout layout "
+                f"(shape={layout_obj.shape}, mode={layout_obj.mode})"
+            )
+            return None
+        return layout_obj.to_dict()
+
     mode = "main_secondary" if _row_is_main_secondary(row) else "main_main"
     try:
         layout = build_junction_priority_layout(full_path, mode=mode)
@@ -964,7 +1183,7 @@ def _get_junction_layout(row: dict, scenes_root: Path) -> dict | None:
 
 
 def _ensure_secondary_ego_spawn(row: dict, scenes_root: Path) -> None:
-    """Ensure manifest spawn edge is on a secondary junction arm (yield/stop)."""
+    """Ensure manifest spawn edge is on a secondary / spoke junction arm."""
     if not _row_is_main_secondary(row):
         return
     layout = _get_junction_layout(row, scenes_root)
@@ -994,7 +1213,8 @@ def _ensure_secondary_ego_spawn(row: dict, scenes_root: Path) -> None:
             pool.append((edge_id, lane_num))
 
     if not pool:
-        print("[EgoSpawn] No secondary arms in layout; keeping original spawn")
+        label = "spoke" if _row_is_roundabout(row) else "secondary"
+        print(f"[EgoSpawn] No {label} arms in layout; keeping original spawn")
         return
 
     edge_id, lane_num = pool[seed % len(pool)]
@@ -1584,6 +1804,177 @@ def _place_secondary_road_junction_signs(
     return bool(placed_by_plate) or placed_yield > 0
 
 
+def _place_roundabout_sign_on_spawn_lane(
+    env, distance_before_end: float = 20.0, show_model: bool = True
+) -> bool:
+    """Fallback: place a single RoundaboutSign beside the ego approach road."""
+    try:
+        vehicle = env.agent
+        if vehicle is None or vehicle.lane is None:
+            return False
+
+        sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
+        if sign_mgr is None:
+            return False
+
+        _clear_sign_manager(sign_mgr)
+        lane = vehicle.lane
+        placement_long = sign_placement_long(lane, distance_before_end)
+        sign = sign_mgr.add_sign(
+            RoundaboutSign,
+            lane=lane,
+            longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
+            lateral_offset=lateral_offset_beside_lane(lane, placement_long),
+            show_model=show_model,
+            use_random_lane=False,
+            auto_detect_main_roads=False,
+        )
+        if sign is not None:
+            sign.is_priority_sign = False
+        return sign is not None
+    except Exception as e:
+        print(f"[RoundaboutSign] Failed to place sign: {e}")
+        return False
+
+
+def _place_roundabout_signs(
+    env,
+    row: dict,
+    scenes_root: Path,
+    distance_before_end: float = 20.0,
+    show_model: bool = True,
+) -> bool:
+    """Place RoundaboutSign (4.3) on ego spoke + invisible RoundaboutYieldSign tracker."""
+    layout = _get_junction_layout(row, scenes_root)
+    if layout is None:
+        print("[RoundaboutSigns] No layout available, falling back to ego-only sign")
+        return _place_roundabout_sign_on_spawn_lane(
+            env, distance_before_end=distance_before_end, show_model=show_model
+        )
+
+    sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
+    if sign_mgr is None:
+        return False
+
+    _clear_sign_manager(sign_mgr)
+
+    main_arms = arms_for_road_class(layout, "main")
+    secondary_arms = arms_for_road_class(layout, "secondary")
+    if not main_arms:
+        print("[RoundaboutSigns] No ring arms in layout, falling back to ego-only sign")
+        return _place_roundabout_sign_on_spawn_lane(
+            env, distance_before_end=distance_before_end, show_model=show_model
+        )
+
+    ring_lanes = []
+    for arm in main_arms:
+        ring_lanes.extend(collect_lanes_for_keys(env, arm.get("lane_keys", [])))
+
+    if not ring_lanes:
+        print("[RoundaboutSigns] Could not resolve ring lanes, falling back to ego-only sign")
+        return _place_roundabout_sign_on_spawn_lane(
+            env, distance_before_end=distance_before_end, show_model=show_model
+        )
+
+    ego_edge = str(row.get("road_id") or "")
+    ego_arm = next((a for a in secondary_arms if a.get("edge_id") == ego_edge), None)
+    entry_junction = (ego_arm or {}).get("to_node") or row.get("roundabout_entry_junction")
+    incoming_edges = entry_conflict_ring_edges(
+        layout,
+        ego_edge,
+        entry_junction_id=entry_junction,
+    )
+    entry_incoming_lanes = collect_entry_conflict_lanes(
+        env,
+        layout,
+        ego_edge,
+        entry_junction_id=entry_junction,
+    )
+    ego_main_traffic_edges = conflict_aux_ring_edge_ids(
+        layout,
+        ego_edge,
+        entry_junction_id=entry_junction,
+    )
+    ego_main_traffic_lanes = collect_lanes_for_edge_ids(
+        env,
+        layout,
+        ego_main_traffic_edges,
+    )
+    all_incoming_edges = all_entry_conflict_ring_edges(layout)
+    all_entry_incoming_lanes = collect_all_entry_conflict_lanes(env, layout)
+    print(
+        f"[RoundaboutSigns] Yield conflict zone: "
+        f"ego_entry={len(incoming_edges)} edge(s) "
+        f"({', '.join(incoming_edges) or 'none'}), "
+        f"ego_main_traffic={len(ego_main_traffic_edges)} edge(s) "
+        f"({', '.join(ego_main_traffic_edges) or 'none'}), "
+        f"{len(ego_main_traffic_lanes)} lane(s), "
+        f"all_entries={len(all_incoming_edges)} edge(s), "
+        f"{len(all_entry_incoming_lanes)} lane(s)"
+    )
+
+    junction_id = layout.get("junction_id", "")
+    placed_plate = 0
+
+    plate_arms = secondary_arms
+    if ego_edge:
+        if ego_arm is not None:
+            plate_arms = [ego_arm]
+        elif ego_edge not in layout.get("main_edge_ids", []):
+            plate_arms = [{"edge_id": ego_edge, "lane_keys": []}]
+
+    for arm in plate_arms:
+        edge_id = arm.get("edge_id", "")
+        lane = resolve_sign_lane_for_edge(env, edge_id, arm.get("lane_keys", []))
+        if lane is None:
+            print(f"[RoundaboutSigns] Skipping plate, lane not found for edge: {edge_id}")
+            continue
+        placement_long = sign_placement_long(lane, distance_before_end)
+        try:
+            sign = sign_mgr.add_sign(
+                RoundaboutSign,
+                lane=lane,
+                longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
+                lateral_offset=lateral_offset_beside_lane(lane, placement_long),
+                show_model=show_model,
+                use_random_lane=False,
+                intersection_name=junction_id,
+            )
+            if sign is not None:
+                sign.is_priority_sign = False
+            placed_plate += 1
+        except Exception as exc:
+            print(f"[RoundaboutSigns] Failed RoundaboutSign on edge {edge_id}: {exc}")
+
+    ego_lane = getattr(env.agent, "lane", None)
+    if ego_lane is not None:
+        placement_long = sign_placement_long(ego_lane, distance_before_end)
+        try:
+            tracker = sign_mgr.add_sign(
+                RoundaboutYieldSign,
+                lane=ego_lane,
+                longitudinal_offset=sign_longitudinal_offset(ego_lane, distance_before_end),
+                lateral_offset=lateral_offset_beside_lane(ego_lane, placement_long),
+                show_model=False,
+                use_random_lane=False,
+                intersection_name=junction_id,
+                ring_road_lanes=ring_lanes,
+                entry_incoming_lanes=ego_main_traffic_lanes or entry_incoming_lanes,
+                entry_junction_xy=None,
+            )
+            if tracker is not None:
+                tracker.is_priority_sign = False
+        except Exception as exc:
+            print(f"[RoundaboutSigns] Failed yield tracker on ego lane: {exc}")
+
+    print(
+        f"[RoundaboutSigns] Placed {placed_plate} RoundaboutSign(s) + yield tracker "
+        f"at entry {junction_id} (shape={layout.get('shape')}), "
+        f"ring_lanes={len(ring_lanes)}, shoulder offset={SIGN_SHOULDER_OFFSET_M}m"
+    )
+    return placed_plate > 0
+
+
 def _place_junction_priority_signs(
     env,
     row: dict,
@@ -1592,6 +1983,14 @@ def _place_junction_priority_signs(
     show_model: bool = True,
 ) -> bool:
     """Dispatch sign placement by row pdd_code / sign_type."""
+    if _row_is_roundabout(row):
+        return _place_roundabout_signs(
+            env,
+            row,
+            scenes_root=scenes_root,
+            distance_before_end=distance_before_end,
+            show_model=show_model,
+        )
     if _row_is_stop(row):
         return _place_stop_junction_signs(
             env,
@@ -1637,6 +2036,7 @@ def run_one_episode(
     save_gif: Path | None = None,
     gif_scaling: float = 24.0,
     hide_signs: bool = False,
+    draw_path_conflict: bool = False,
     auxiliary_agent: bool = False,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     aux_policy: str = "idm",
@@ -1648,6 +2048,7 @@ def run_one_episode(
     record_episode: bool = False,
 ) -> dict:
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
+    set_path_conflict_overlay_enabled(bool(draw_path_conflict) and save_gif is not None)
     np.random.seed(numpy_legacy_seed(seed))
     random.seed(seed)
     try:
@@ -1828,7 +2229,7 @@ def run_one_episode(
                 else str(getattr(base_env.vehicle.lane, "index", ""))
             )
 
-            aux_spawn_lanes, aux_destination_lanes, alternate_spawn_dest_map = (
+            aux_spawn_lanes, aux_destination_lanes, alternate_spawn_dest_map, aux_spawn_longs, ring_circulate = (
                 resolve_aux_spawn_plan(
                     row,
                     ego_lane_index=str(ego_lane_index),
@@ -1864,6 +2265,9 @@ def run_one_episode(
                     convoy_size=aux_convoy_size,
                     convoy_gap_m=aux_convoy_gap_m,
                     alternate_spawn_dest_map=alternate_spawn_dest_map,
+                    spawn_longitudinal_by_lane=aux_spawn_longs,
+                    ring_circulate_by_lane=ring_circulate,
+                    junction_layout=row.get("junction_layout"),
                 )
                 if aux_agent_mgr is not None:
                     print(
@@ -2054,11 +2458,26 @@ def run_one_episode(
                 prev_speed_mps = speed_mps
                 prev_heading = heading
 
-            if terminated or truncated:
-                reached_dest = bool(info.get("arrive_dest", False))
-                out_of_road = bool(info.get("out_of_road", False))
-                crashed = bool(info.get("crash", False) or out_of_road)
-                break
+            # Roundabout-only: cap travel along the exit spoke.
+            dest_cap_m = 0.0
+            if _row_is_roundabout(row):
+                raw_cap = row.get("destination_max_along_m")
+                if raw_cap is None:
+                    dest_cap_m = float(DEFAULT_DESTINATION_MAX_ALONG_M)
+                else:
+                    dest_cap_m = float(raw_cap or 0.0)
+                # Prefer the along-lane cap stored when destination was applied.
+                stored = getattr(vehicle, "_priority_bench_dest_along_m", None)
+                if stored is not None:
+                    try:
+                        dest_cap_m = float(stored)
+                    except (TypeError, ValueError):
+                        pass
+            capped_arrive = _ego_reached_capped_destination(
+                vehicle,
+                max_along_m=dest_cap_m,
+            )
+            natural_done = bool(terminated or truncated)
 
             text_dict: dict = {}
             if save_gif:
@@ -2070,14 +2489,17 @@ def run_one_episode(
                         aux_vehicles = []
                 text_dict = {
                     "Step": step,
-                    "Speed": f"{vehicle.speed_km_h:.2f} km/h",
+                    "Speed": f"{vehicle.speed_km_h:.2f} km/h" if vehicle else "n/a",
                     "Violations": sign_violations,
                     "is_aux_in_main_zone": _is_aux_in_main_zone(
                         sign_mgr, aux_vehicles, ego_vehicle=vehicle
                     ),
                     "is_ego_in_yield_zone": _is_ego_in_yield_zone(sign_mgr, vehicle),
                 }
+                if draw_path_conflict or is_path_conflict_overlay_enabled():
+                    text_dict["paths"] = "cyan=ego magenta=auxX yellow=X amber=zone"
 
+            # Render before breaking so arrive/terminate frames are in the GIF.
             if save_gif:
                 try:
                     base_env.render(
@@ -2094,6 +2516,18 @@ def run_one_episode(
                     )
                 except Exception:
                     pass
+
+            if capped_arrive:
+                reached_dest = True
+                info["arrive_dest"] = True
+                last_info = info
+                break
+
+            if natural_done:
+                reached_dest = bool(info.get("arrive_dest", False))
+                out_of_road = bool(info.get("out_of_road", False))
+                crashed = bool(info.get("crash", False) or out_of_road)
+                break
 
         route_completion_pct = _route_completion_percent(last_info, reached_dest)
         infraction_penalty = _infraction_penalty(crashed=crashed, out_of_road=out_of_road, violations=violations)
@@ -2483,6 +2917,11 @@ def main():
                         help="How PlanT2 converts pred_plan -> action")
     parser.add_argument("--hide-signs", action="store_true",
                         help="Hide traffic sign visual models (signs still affect behavior)")
+    parser.add_argument(
+        "--draw-path-conflict",
+        action="store_true",
+        help="Overlay ego/aux route polylines + conflict point on top-down GIFs",
+    )
 
     # Auxiliary agent options
     parser.add_argument("--auxiliary-agent", action="store_true", default=True,
@@ -2709,6 +3148,7 @@ def main():
                 save_gif=gif_path,
                 gif_scaling=args.gif_scaling,
                 hide_signs=args.hide_signs,
+                draw_path_conflict=bool(args.draw_path_conflict),
                 auxiliary_agent=args.auxiliary_agent,
                 aux_distance_from_intersection=args.aux_distance_from_intersection,
                 aux_policy=args.aux_policy,

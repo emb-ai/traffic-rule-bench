@@ -15,13 +15,14 @@ cd traffic-rule-bench/pdd-bench/scripts/per_sign_bench/priority_bench
 ```
 priority_bench/
 ├── core/                 # shared libs (layout, crop, aux, augmentation, viability, …)
-├── signs/                # SignProfile registry (main=2.1, secondary=2.3, yield=2.4, stop=2.5)
-├── configs/              # Hydra (configs/sign/{main,secondary,yield,stop}.yaml)
+├── signs/                # SignProfile registry (main=2.1, secondary=2.3, yield=2.4, stop=2.5, roundabout=4.3)
+├── configs/              # Hydra (configs/sign/{main,secondary,yield,stop,roundabout}.yaml)
 ├── data/
 │   ├── main_road/{scenes,output,trajectories}
 │   ├── secondary_road/{scenes,output,trajectories}
 │   ├── yield/{scenes,output,trajectories}
-│   └── stop/{scenes,output,trajectories}
+│   ├── stop/{scenes,output,trajectories}
+│   └── roundabout/{scenes,output,trajectories}
 ├── build_scenes/         # materialize moscow allocations → review pool
 │   ├── materialize_scenes.py
 │   ├── review_scenes.py
@@ -36,7 +37,7 @@ priority_bench/
 Compatibility shims remain under `main_sign/` and `yield_sign/`.
 
 Trajectory collection (oracle / PlanT2):
-`[collect_trajectories/](collect_trajectories/README.md)` — set `SIGN=yield|main|stop|secondary`.
+`[collect_trajectories/](collect_trajectories/README.md)` — set `SIGN=yield|main|stop|secondary|roundabout`.
 Old paths under `yield_sign/` / `main_sign/` forward here.
 
 ## Sign rules
@@ -86,6 +87,15 @@ Same junction geometry / ego / aux axes as yield (2.4). Secondary **ego** arm ge
 **T** junctions keep a single StopSign on the secondary stem. Main-road arms get
 **MainRoadSign**. Ego must yield to main traffic **and** make a mandatory full stop
 before the stop line (`StopSign` in `traffic_signs/priority_signs.py`).
+
+### 4.3 — roundabout (`sign=roundabout`)
+
+Ego spawns on a **spoke** (secondary). Ring edges are **main**. Visible
+**RoundaboutSign** on the ego spoke; invisible **RoundaboutYieldSign** tracks
+violations against the conflict-arc ring (20 m ENTRY_CONFLICT). Aux agents spawn
+on the **left** ring segment at ego's entry (upstream extension only when that
+segment is short) and share **ego's destination exit**.
+Scenes: moscow `scenes/O/` → `data/roundabout/scenes`.
 
 ## Workflow
 
@@ -142,6 +152,10 @@ python generate_manifest.py sign=secondary paths.split=train
 python generate_manifest.py sign=stop
 python generate_manifest.py sign=stop paths.split=train
 
+# Roundabout (4.3)
+python generate_manifest.py sign=roundabout
+python generate_manifest.py sign=roundabout paths.split=train
+
 # Common overrides
 python generate_manifest.py sign=stop gif.enabled=true gif.policy=comprehensive_rule_expert
 python generate_manifest.py sign=stop auxiliary.lanes_occupied=2 auxiliary.convoy_size=2
@@ -182,7 +196,7 @@ python tools/review_benchmark_gifs.py data/stop/output/<timestamp>
 
 ## Trajectory collection + oracle (aux agents)
 
-See `[collect_trajectories/](collect_trajectories/README.md)` — set `SIGN=yield|main|stop|secondary`.
+See `[collect_trajectories/](collect_trajectories/README.md)` — set `SIGN=yield|main|stop|secondary|roundabout`.
 
 Quick visual smoke test (stop):
 
@@ -194,7 +208,7 @@ SIGN=stop SMOKE=1 ./collect_trajectories.sh
 
 ## Configuration
 
-See `configs/config.yaml` and `configs/sign/{main,secondary,yield,stop}.yaml`.
+See `configs/config.yaml` and `configs/sign/{main,secondary,yield,stop,roundabout}.yaml`.
 
 
 | Group            | Key examples                                                                                                                                                                                       |
@@ -204,7 +218,7 @@ See `configs/config.yaml` and `configs/sign/{main,secondary,yield,stop}.yaml`.
 | `augmentation.`* | `enabled`, `layout`, `auxiliary` — which axes run (per sign yaml)                                                                                                                                  |
 | `simulation.`*   | `spawn_velocity_ms`, `horizon`, `spawn_distance_before_end` (default **15 m**)                                                                                                                     |
 | `auxiliary.`*    | Params when `augmentation.auxiliary` is on: `enabled`, `distance_from_intersection`, `convoy_size`, `lanes_occupied`, `convoy_gap_m` (scalar or list, e.g. `[5, 10]`), `release_when_ego_within_m` |
-| `gif.`*          | `enabled`, `policy`, `scaling` (px/m; higher = more zoomed in), `hide_signs`                                                                                                                       |
+| `gif.`*          | `enabled`, `policy`, `scaling` (px/m; higher = more zoomed in), `hide_signs`, `draw_path_conflict` (ego/aux routes + conflict X)                                                                   |
 
 
 Override on the CLI:

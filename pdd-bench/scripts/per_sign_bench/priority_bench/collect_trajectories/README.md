@@ -1,7 +1,7 @@
 # Priority trajectory collection + oracle selection
 
 Unified collector for `priority_bench` signs
-(`yield` 2.4 / `main` 2.1 / `stop` 2.5 / `secondary` 2.3).
+(`yield` 2.4 / `main` 2.1 / `stop` 2.5 / `secondary` 2.3 / `roundabout` 4.3).
 Adapted from `yield_sign/collect_trajectories` and `main_sign/collect_trajectories`:
 
 - episodes go through `priority_bench/run_benchmark.run_one_episode`
@@ -35,7 +35,7 @@ newest yield eval/manifest run and writes under `data/yield/trajectories/…`
 
 ```
 collect_trajectories/
-├── collect_trajectories.sh      # orchestrator (SIGN=yield|main|stop|secondary)
+├── collect_trajectories.sh      # orchestrator (SIGN=yield|main|stop|secondary|roundabout)
 ├── expert_replay_priority.py    # per-policy collector → all_runs + pkl + json
 ├── select_experts_coverage.py   # oracle top-1 / top-2 / map selection
 ├── make_oracle_table.sh         # → oracle_metrics_summary_top2.md

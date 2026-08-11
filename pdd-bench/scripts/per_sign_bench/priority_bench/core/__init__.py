@@ -3,6 +3,7 @@
 from .manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     DEFAULT_AUX_LANES_OCCUPIED_MAX,
+    DEFAULT_DESTINATION_MAX_ALONG_M,
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
 )
 from .junction_priority_layout import (
@@ -20,6 +21,7 @@ from .scene_augmentation import (
 __all__ = [
     "DEFAULT_AUX_DISTANCE_FROM_INTERSECTION",
     "DEFAULT_AUX_LANES_OCCUPIED_MAX",
+    "DEFAULT_DESTINATION_MAX_ALONG_M",
     "DEFAULT_SPAWN_DISTANCE_BEFORE_END",
     "JunctionLayoutError",
     "JunctionPriorityLayout",

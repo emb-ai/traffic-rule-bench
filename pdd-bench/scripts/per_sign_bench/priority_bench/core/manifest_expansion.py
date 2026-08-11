@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .auxiliary_agent import (
-    has_viable_aux_lanes,
     main_lane_keys_for_aux,
     min_aux_spawn_lane_length,
     right_lane_keys_for_aux,
@@ -124,7 +123,7 @@ def _fit_aux_lane_keys(
     convoy_gap_m: Optional[float] = None,
 ) -> List[str]:
     gap = float(aux.convoy_gap_m if convoy_gap_m is None else convoy_gap_m)
-    if spawn_strategy == "yield":
+    if spawn_strategy in ("yield", "roundabout"):
         return viable_aux_lane_keys(
             junction_layout,
             aux.distance_from_intersection,
@@ -151,7 +150,7 @@ def _scene_aux_lane_keys_for_lane_axis(
 ) -> List[str]:
     """Lane pool for the lanes-occupied axis (lead-only length when aux on)."""
     if not auxiliary_on or aux is None:
-        if spawn_strategy == "yield":
+        if spawn_strategy in ("yield", "roundabout"):
             return main_lane_keys_for_aux(junction_layout, ego_edge)
         return right_lane_keys_for_aux(junction_layout, ego_edge)
     return _fit_aux_lane_keys(
@@ -173,7 +172,7 @@ def _print_aux_lane_availability(
     """Log aux slot counts. Return False if the scene should be skipped."""
     aux = expansion.aux
     if not expansion.auxiliary_on or aux is None:
-        if spawn_strategy == "yield":
+        if spawn_strategy in ("yield", "roundabout"):
             print(
                 f"  Main-road lane slots for aux: "
                 f"{len(main_lane_keys_for_aux(junction_layout))} (aux axis off)"
@@ -185,15 +184,18 @@ def _print_aux_lane_availability(
         convoy_size=1,
         convoy_gap_m=min(aux.convoy_gaps_m) if aux.convoy_gaps_m else 10.0,
     )
-    if spawn_strategy == "yield":
-        available = len(
-            viable_aux_lane_keys(junction_layout, aux.distance_from_intersection)
+    if spawn_strategy in ("yield", "roundabout"):
+        available_keys = viable_aux_lane_keys(
+            junction_layout, aux.distance_from_intersection
         )
-        print(f"  Main-road lane slots for aux: {available}")
-        if not has_viable_aux_lanes(junction_layout, aux.distance_from_intersection):
+        available = len(available_keys)
+        label = "Conflict-arc ring" if spawn_strategy == "roundabout" else "Main-road"
+        print(f"  {label} lane slots for aux: {available}")
+        if available <= 0:
             print(
-                f"  [aux] No main-road lanes long enough for aux spawning "
-                f"(need >={min_lane_for_lead:.0f}m); skipping {scene_name}"
+                f"  [aux] No {label.lower()} lanes viable for aux spawning "
+                f"(lead needs >={min_lane_for_lead:.0f}m or ring extension); "
+                f"skipping {scene_name}"
             )
             return False
         return True
@@ -236,7 +238,13 @@ def expand_scene_entries(
     should pass a copy with ``enabled=False``.
     """
     scene_name = meta.get("scene_name", scene_dir.name)
-    if spawn_strategy == "yield":
+    if spawn_strategy == "roundabout":
+        print(
+            f"  Junction layout: {junction_layout['shape']} @ {junction_layout['junction_id']} "
+            f"(ring={len(junction_layout.get('main_edge_ids', []))}, "
+            f"spokes={len(junction_layout.get('secondary_edge_ids', []))})"
+        )
+    elif spawn_strategy == "yield":
         print(
             f"  Junction layout: {junction_layout['shape']} @ {junction_layout['junction_id']} "
             f"(main={len(junction_layout.get('main_edge_ids', []))}, "
@@ -272,6 +280,7 @@ def expand_scene_entries(
             aux_distance_from_intersection=aux_distance,
             sign_lat=float(sign_lat) if sign_lat is not None else None,
             sign_lon=float(sign_lon) if sign_lon is not None else None,
+            scene_meta=meta,
         )
         if not layout_scenarios:
             print(f"  [augment] No valid scenarios for {scene_name}; skipping scene")

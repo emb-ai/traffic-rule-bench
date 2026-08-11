@@ -1,4 +1,4 @@
-"""Sign profiles for priority-junction benches (2.1 / 2.3 / 2.4 / 2.5)."""
+"""Sign profiles for priority-junction benches (2.1 / 2.3 / 2.4 / 2.5 / 4.3)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Literal, Optional
 
 from core.scene_augmentation import SpawnStrategy
 
-LayoutMode = Literal["main_main", "main_secondary"]
+LayoutMode = Literal["main_main", "main_secondary", "roundabout"]
 
 
 @dataclass(frozen=True)
@@ -80,13 +80,26 @@ STOP = SignProfile(
     ego_road_class="secondary",
 )
 
-_PROFILES = (MAIN_ROAD, SECONDARY_ROAD, YIELD, STOP)
+ROUNDABOUT = SignProfile(
+    id="roundabout",
+    pdd_code="4.3",
+    sign_type="roundabout",
+    sign_name="Roundabout circulation (4.3)",
+    layout_mode="roundabout",
+    spawn_strategy="roundabout",
+    data_subdir="roundabout",
+    output_code="4_3",
+    ego_road_class="secondary",
+)
+
+_PROFILES = (MAIN_ROAD, SECONDARY_ROAD, YIELD, STOP, ROUNDABOUT)
 
 _REGISTRY: dict[str, SignProfile] = {
     MAIN_ROAD.id: MAIN_ROAD,
     SECONDARY_ROAD.id: SECONDARY_ROAD,
     YIELD.id: YIELD,
     STOP.id: STOP,
+    ROUNDABOUT.id: ROUNDABOUT,
     # aliases
     "2.1": MAIN_ROAD,
     "2_1": MAIN_ROAD,
@@ -102,6 +115,8 @@ _REGISTRY: dict[str, SignProfile] = {
     "2.5": STOP,
     "2_5": STOP,
     "stop_sign": STOP,
+    "4.3": ROUNDABOUT,
+    "4_3": ROUNDABOUT,
 }
 
 
