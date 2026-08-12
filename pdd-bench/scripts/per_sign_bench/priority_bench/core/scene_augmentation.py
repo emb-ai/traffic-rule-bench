@@ -647,20 +647,20 @@ def enumerate_spawn_scenarios_roundabout(
 ) -> List[SpawnScenario]:
     """Ego on spoke; aux on the left-hand conflict arc; aux dest = ego dest.
 
-    Spawn: ring segment(s) immediately upstream of ego's entry (left of the
-    ego spoke). Short segments may place further upstream for distance only.
-    Destination: always the same exit edge/lane as ego.
+    Spawn: ring segment immediately upstream of ego's entry (left of the ego
+    spoke). Conflict arcs shorter than ``MIN_CONFLICT_ARC_LENGTH_M`` are
+    dropped; otherwise aux lead sits ``aux_distance`` before the entry,
+    clamped to the segment when the arc is shorter than a full offset.
+    Convoy followers may spill onto upstream ring hops.
+    Destination: always the same exit edge/lane as ego (runtime may
+    ring-circulate one hop at a time).
     """
     from .lane_keys import lane_num_from_key, pick_lane_key_on_edge
     from .roundabout_aux import (
-        MAX_UPSTREAM_HOPS,
         merge_lane_lengths_from_layout,
         resolve_aux_spawn_placement,
     )
-    from .roundabout_yield_zone import (
-        conflict_aux_ring_edge_ids,
-        entry_conflict_ring_edges,
-    )
+    from .roundabout_yield_zone import entry_conflict_ring_edges
 
     layout_dict = layout.to_dict()
     lane_lengths = merge_lane_lengths_from_layout(layout_dict, lane_lengths or {})
@@ -693,15 +693,7 @@ def enumerate_spawn_scenarios_roundabout(
         left_conflict_edges = entry_conflict_ring_edges(layout_dict, ego_edge)
         if not left_conflict_edges:
             continue
-        # Upstream hops allowed only so short left segments can still place
-        # aux ``aux_distance`` before the entry.
-        placement_allowed = set(
-            conflict_aux_ring_edge_ids(
-                layout_dict,
-                ego_edge,
-                max_upstream_hops=MAX_UPSTREAM_HOPS,
-            )
-        )
+        placement_allowed = set(left_conflict_edges)
 
         for aux_edge in sorted(left_conflict_edges):
             aux_lane_placements: List[tuple[int, object]] = []

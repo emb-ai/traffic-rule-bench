@@ -184,6 +184,10 @@ def _print_aux_lane_availability(
         convoy_size=1,
         convoy_gap_m=min(aux.convoy_gaps_m) if aux.convoy_gaps_m else 10.0,
     )
+    if spawn_strategy == "roundabout":
+        from .roundabout_aux import MIN_CONFLICT_ARC_LENGTH_M
+
+        min_lane_for_lead = float(MIN_CONFLICT_ARC_LENGTH_M)
     if spawn_strategy in ("yield", "roundabout"):
         available_keys = viable_aux_lane_keys(
             junction_layout, aux.distance_from_intersection
@@ -194,7 +198,7 @@ def _print_aux_lane_availability(
         if available <= 0:
             print(
                 f"  [aux] No {label.lower()} lanes viable for aux spawning "
-                f"(lead needs >={min_lane_for_lead:.0f}m or ring extension); "
+                f"(need >={min_lane_for_lead:.0f}m); "
                 f"skipping {scene_name}"
             )
             return False

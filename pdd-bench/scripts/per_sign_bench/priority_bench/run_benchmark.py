@@ -442,7 +442,12 @@ def _is_ego_in_yield_zone(sign_mgr, vehicle) -> bool:
 
 
 def _is_aux_in_main_zone(sign_mgr, aux_vehicles, ego_vehicle=None) -> bool:
-    """True when any aux blocks yield (main-zone prefilter or sticky path conflict)."""
+    """True when any aux is in the main conflict zone (GIF / debug).
+
+    Uses geometric main-zone presence so gated (not-yet-released) aux still
+    count — matching what the camera shows. Yield decisions continue to ignore
+    gated aux via ``_is_waiting_gated_aux``.
+    """
     if sign_mgr is None or not aux_vehicles:
         return False
     yield_signs = [
@@ -457,10 +462,7 @@ def _is_aux_in_main_zone(sign_mgr, aux_vehicles, ego_vehicle=None) -> bool:
             continue
         for sign in yield_signs:
             try:
-                if ego_vehicle is not None and hasattr(sign, "is_vehicle_blocking_yield"):
-                    if sign.is_vehicle_blocking_yield(ego_vehicle, aux):
-                        return True
-                elif sign.is_vehicle_on_main_road(aux):
+                if sign.is_vehicle_on_main_road(aux):
                     return True
             except Exception:
                 continue
@@ -915,9 +917,14 @@ def _apply_roundabout_destination_cap(env, row: dict) -> None:
     except Exception:
         return
 
-    # Used by arrive check + path overlay truncation.
+    # Used by arrive check + path overlay truncation + top-down red dest mark.
     try:
         vehicle._priority_bench_dest_along_m = float(target)
+    except Exception:
+        pass
+    try:
+        if nav is not None:
+            nav._priority_bench_dest_along_m = float(target)
     except Exception:
         pass
 

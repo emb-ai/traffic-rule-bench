@@ -457,6 +457,130 @@ class AuxiliaryAgentsManager(BaseManager):
             )
             return False
 
+    def _convoy_slots_for_lead_lane(
+        self,
+        lead_lane_key: str,
+        lead_spawn_long: float,
+        road_network,
+    ) -> List[tuple[str, float]]:
+        """Return (lane_key, longitude) per convoy slot; may spill upstream on ring."""
+        n = self._convoy_size
+        gap = self._convoy_gap_m
+        # Default: same lane, decreasing longitude.
+        same_lane: List[tuple[str, float]] = []
+        ok_same = True
+        for i in range(n):
+            spawn_long = lead_spawn_long - i * gap
+            if spawn_long < MIN_SPAWN_LONGITUDE_M:
+                ok_same = False
+                break
+            same_lane.append((lead_lane_key, float(spawn_long)))
+        if ok_same and len(same_lane) == n:
+            return same_lane
+
+        layout = self._junction_layout
+        if not layout or layout.get("mode") != "roundabout":
+            return same_lane  # partial same-lane fallback
+
+        try:
+            from .roundabout_aux import (
+                merge_lane_lengths_from_layout,
+                resolve_convoy_spawn_slots,
+            )
+            from .roundabout_yield_zone import entry_conflict_ring_edges
+        except Exception:
+            return same_lane
+
+        edge_id = lane_edge_id(lead_lane_key)
+        lane_num = lane_num_from_key(lead_lane_key)
+        lengths = merge_lane_lengths_from_layout(layout, {})
+        # Prefer actual MetaDrive lane length when available.
+        try:
+            md_lane = road_network.get_lane(lead_lane_key)
+            if md_lane is not None:
+                lengths[(edge_id, lane_num)] = float(md_lane.length)
+        except Exception:
+            pass
+
+        ego_edge = None
+        if self._ego_spawn_lane_index:
+            ego_edge = lane_edge_id(str(self._ego_spawn_lane_index))
+        left = (
+            set(entry_conflict_ring_edges(layout, ego_edge))
+            if ego_edge
+            else {edge_id}
+        )
+        conflict_edge = edge_id if edge_id in left or not left else next(iter(left))
+        slots = resolve_convoy_spawn_slots(
+            layout,
+            conflict_edge,
+            lane_num,
+            lengths,
+            self._distance_from_intersection,
+            n,
+            gap,
+            allowed_ring_edges=left if left else None,
+        )
+        if not slots:
+            # Retry with lead edge as conflict (manifest may already be remapped).
+            if conflict_edge != edge_id:
+                slots = resolve_convoy_spawn_slots(
+                    layout,
+                    edge_id,
+                    lane_num,
+                    lengths,
+                    self._distance_from_intersection,
+                    n,
+                    gap,
+                    allowed_ring_edges=None,
+                )
+        if not slots:
+            return same_lane
+
+        # Override lead longitude with the resolved sim longitude when present.
+        out: List[tuple[str, float]] = []
+        for slot in slots:
+            key = slot.spawn_lane_key
+            long_val = float(slot.spawn_longitudinal)
+            if slot.convoy_index == 0 and key == lead_lane_key:
+                long_val = float(lead_spawn_long)
+            # Prefer a graph lane that exists (sibling remap).
+            if key not in getattr(road_network, "graph", {}):
+                alt = None
+                for candidate in self._ring_lane_keys:
+                    if lane_edge_id(candidate) == slot.spawn_edge_id and (
+                        candidate in road_network.graph
+                    ):
+                        alt = candidate
+                        break
+                if alt is None:
+                    continue
+                key = alt
+            out.append((key, long_val))
+        return out if len(out) == n else same_lane
+
+    def _destination_for_spawn_lane(
+        self,
+        spawn_lane_index: str,
+        *,
+        lead_lane_index: str,
+        lead_idx: int,
+    ) -> Optional[str]:
+        road_network = self.engine.current_map.road_network
+        if (
+            spawn_lane_index == lead_lane_index
+            and lead_idx < len(self._destination_lanes)
+            and self._destination_lanes[lead_idx]
+        ):
+            destination_lane = self._destination_lanes[lead_idx]
+        elif spawn_lane_index in self._alternate_spawn_dest_map:
+            destination_lane = self._alternate_spawn_dest_map[spawn_lane_index]
+        else:
+            destination_lane = pick_destination_outgoing_lane(
+                spawn_lane_index, self._outgoing_lanes, road_network
+            )
+        return clamp_lane_key_to_graph(destination_lane, road_network.graph)
+
     def _spawn_auxiliary_vehicles(self):
         road_network = self.engine.current_map.road_network
         self._aux_vehicles = []
@@ -497,41 +621,52 @@ class AuxiliaryAgentsManager(BaseManager):
                         )
                     continue
 
-                # Manifest / layout destination wins for the requested spawn lane.
-                # Alternate-map entries are straight-through fallbacks for other arms.
-                if (
-                    candidate_lane == spawn_lane_index
-                    and idx < len(self._destination_lanes)
-                    and self._destination_lanes[idx]
-                ):
-                    destination_lane = self._destination_lanes[idx]
-                elif candidate_lane in self._alternate_spawn_dest_map:
-                    destination_lane = self._alternate_spawn_dest_map[candidate_lane]
-                else:
-                    destination_lane = pick_destination_outgoing_lane(
-                        candidate_lane, self._outgoing_lanes, road_network
-                    )
-
-                destination_lane = clamp_lane_key_to_graph(
-                    destination_lane, road_network.graph
+                slot_spawns = self._convoy_slots_for_lead_lane(
+                    candidate_lane, lead_spawn_long, road_network
                 )
+                if not slot_spawns:
+                    continue
 
                 spawned_on_lane = 0
-                for convoy_idx in range(self._convoy_size):
-                    spawn_long = lead_spawn_long - convoy_idx * self._convoy_gap_m
+                last_dest = None
+                for convoy_idx, (slot_lane, spawn_long) in enumerate(slot_spawns):
+                    if slot_lane not in road_network.graph:
+                        break
+                    slot_lane_obj = road_network.get_lane(slot_lane)
+                    spawn_long = min(float(spawn_long), float(slot_lane_obj.length) - 0.1)
                     if spawn_long < MIN_SPAWN_LONGITUDE_M:
                         break
+                    destination_lane = self._destination_for_spawn_lane(
+                        slot_lane,
+                        lead_lane_index=candidate_lane,
+                        lead_idx=idx,
+                    )
+                    # Spillover followers on the ring always circulate.
+                    if (
+                        slot_lane != candidate_lane
+                        and (self._junction_layout or {}).get("mode") == "roundabout"
+                    ):
+                        self._ring_circulate_by_lane[slot_lane] = True
                     if self._spawn_vehicle_on_lane(
-                        candidate_lane,
+                        slot_lane,
                         spawn_long,
                         destination_lane,
                         convoy_idx,
                     ):
                         spawned_on_lane += 1
+                        last_dest = destination_lane
 
                 if spawned_on_lane:
                     used_lane = candidate_lane
-                    used_destination = destination_lane
+                    used_destination = last_dest
+                    spill = sum(
+                        1 for lane_key, _ in slot_spawns if lane_key != candidate_lane
+                    )
+                    if spill:
+                        print(
+                            f"[AuxAgent] Convoy spillover: {spill} follower(s) "
+                            f"on upstream ring from lead {candidate_lane}"
+                        )
                     break
 
             if spawned_on_lane and used_lane:
@@ -972,21 +1107,22 @@ def viable_aux_arms(
     A lane is viable if
     ``min_lane_length >= aux_distance + (convoy_size-1)*gap + MIN_SPAWN_LONGITUDE_M``.
 
-    For roundabout layouts, only conflict-arc ring edges relative to ego are
-    considered, and short segments may qualify via upstream ring extension.
+    For roundabout layouts, only the left-hand conflict-arc ring edges relative
+    to ego are considered. Arcs shorter than ``MIN_CONFLICT_ARC_LENGTH_M`` are
+    rejected; longer arcs may clamp the lead offset. Convoy followers may
+    spill onto upstream ring hops when the conflict arc is short.
     """
     if not junction_layout:
         return []
 
     if junction_layout.get("mode") == "roundabout":
         from .roundabout_aux import (
-            MAX_UPSTREAM_HOPS,
+            convoy_fits_with_spillover,
             merge_lane_lengths_from_layout,
             resolve_aux_spawn_placement,
         )
         from .roundabout_yield_zone import (
             all_entry_conflict_ring_edges,
-            conflict_aux_ring_edge_ids,
             entry_conflict_ring_edges,
         )
 
@@ -1001,36 +1137,12 @@ def viable_aux_arms(
             candidate_edges = set(
                 entry_conflict_ring_edges(junction_layout, ego_edge_id)
             )
-            placement_allowed = set(
-                conflict_aux_ring_edge_ids(
-                    junction_layout,
-                    ego_edge_id,
-                    max_upstream_hops=MAX_UPSTREAM_HOPS,
-                )
-            )
         else:
             # Scene-level gate (no ego yet): any entry conflict arc that can
-            # place via ring extension counts as viable.
+            # place an aux counts as viable.
             candidate_edges = set(all_entry_conflict_ring_edges(junction_layout))
-            placement_allowed: set[str] = set()
-            for conflict_edge in candidate_edges:
-                entry_j = str(
-                    (arms_by_edge.get(conflict_edge) or {}).get("to_node") or ""
-                )
-                if not entry_j:
-                    placement_allowed.add(conflict_edge)
-                    continue
-                placement_allowed.update(
-                    conflict_aux_ring_edge_ids(
-                        junction_layout,
-                        "",
-                        entry_junction_id=entry_j,
-                        max_upstream_hops=MAX_UPSTREAM_HOPS,
-                    )
-                )
 
-        # Arms for *actual* spawn edges after ring-extension placement (may be
-        # upstream of the conflict segment). Expansion matches prefer_aux here.
+        # Lead stays on the conflict edge; convoy may spill upstream.
         spawn_edge_ids: set[str] = set()
         for conflict_edge in candidate_edges:
             conflict_arm = arms_by_edge.get(conflict_edge)
@@ -1049,10 +1161,22 @@ def viable_aux_arms(
                     lane_num,
                     lengths,
                     aux_distance_from_intersection,
-                    allowed_ring_edges=placement_allowed or None,
+                    allowed_ring_edges=candidate_edges,
                 )
-                if placement is not None:
-                    spawn_edge_ids.add(placement.spawn_edge_id)
+                if placement is None:
+                    continue
+                if not convoy_fits_with_spillover(
+                    junction_layout,
+                    conflict_edge,
+                    lane_num,
+                    lengths,
+                    aux_distance_from_intersection,
+                    convoy_size,
+                    convoy_gap_m,
+                    allowed_ring_edges=candidate_edges,
+                ):
+                    continue
+                spawn_edge_ids.add(placement.spawn_edge_id)
 
         viable: List[dict] = []
         for edge_id in sorted(spawn_edge_ids):
@@ -1108,7 +1232,7 @@ def has_viable_aux_lanes(
     convoy_size: int = 1,
     convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
 ) -> bool:
-    """True when at least one aux spawn lane is viable (incl. ring extension)."""
+    """True when at least one aux spawn lane is viable on the conflict arc."""
     return bool(
         viable_aux_lane_keys(
             junction_layout,
@@ -1218,6 +1342,26 @@ def resolve_aux_spawn_lanes(
                     return [candidate]
         if viable_keys:
             return viable_keys[:1]
+    return []
+
+
+def _sibling_lane_keys(
+    junction_layout: Optional[dict],
+    spawn_lane_key: str,
+) -> List[str]:
+    """Other lane keys on the same edge as ``spawn_lane_key`` (same arm)."""
+    if not junction_layout:
+        return []
+    edge_id = lane_edge_id(spawn_lane_key)
+    for arm in junction_layout.get("arms", []) or []:
+        if arm.get("edge_id") != edge_id:
+            continue
+        keys = [str(k) for k in (arm.get("lane_keys") or []) if k]
+        # Prefer higher lane indices first — on rings the outer (0) lane often
+        # peels to an exit while the inner lane continues circulating.
+        siblings = [k for k in keys if k != str(spawn_lane_key)]
+        siblings.sort(key=lambda k: lane_num_from_key(k), reverse=True)
+        return siblings
     return []
 
 
@@ -1463,15 +1607,134 @@ def resolve_aux_spawn_plan(
         elif row.get("destination_lane_id"):
             ego_dest_preferred = lane_edge_id(str(row["destination_lane_id"]))
 
+    # Roundabout: always spawn on the left-hand conflict arc with the full
+    # aux_distance. Older manifests may still point upstream; short arcs
+    # (insufficient length) clear aux spawn so generation-time rejects stay
+    # consistent at runtime.
+    conflict_spawn_longs: dict = {}
+    if (junction_layout or {}).get("mode") == "roundabout" and ego_edge:
+        try:
+            from .roundabout_aux import (
+                MIN_CONFLICT_ARC_LENGTH_M,
+                merge_lane_lengths_from_layout,
+                resolve_aux_spawn_placement,
+            )
+            from .roundabout_yield_zone import entry_conflict_ring_edges
+
+            left = entry_conflict_ring_edges(junction_layout, ego_edge)
+            left_set = set(left)
+            lengths = merge_lane_lengths_from_layout(junction_layout, {})
+            aux_distance = float(
+                row.get(
+                    "aux_distance_from_intersection",
+                    aux_distance_from_intersection,
+                )
+            )
+            lanes_n = max(1, int(aux_lanes_occupied or 1))
+            needs_rebase = (not spawn_lanes) or any(
+                lane_edge_id(key) not in left_set for key in spawn_lanes
+            )
+
+            def _placements_on_conflict() -> List[tuple[str, float]]:
+                found: List[tuple[str, float]] = []
+                for conflict_edge in left:
+                    arm = None
+                    for candidate in (junction_layout or {}).get("arms", []) or []:
+                        if candidate.get("edge_id") == conflict_edge:
+                            arm = candidate
+                            break
+                    lane_nums = sorted(
+                        {
+                            lane_num_from_key(str(k))
+                            for k in (arm.get("lane_keys") if arm else []) or []
+                        }
+                    ) or [0]
+                    for lane_num in lane_nums:
+                        placement = resolve_aux_spawn_placement(
+                            junction_layout,
+                            conflict_edge,
+                            lane_num,
+                            lengths,
+                            aux_distance,
+                            allowed_ring_edges=left_set,
+                        )
+                        if placement is None:
+                            continue
+                        key = placement.spawn_lane_key
+                        found.append((key, float(placement.spawn_longitudinal)))
+                return found
+
+            placed = _placements_on_conflict() if left else []
+            for key, long_val in placed:
+                conflict_spawn_longs[key] = long_val
+
+            if left and not placed:
+                if spawn_lanes:
+                    logging.info(
+                        "[AuxAgent] Conflict arc too short "
+                        f"(need >= {MIN_CONFLICT_ARC_LENGTH_M:.0f}m); "
+                        f"clearing aux spawn (was {spawn_lanes})"
+                    )
+                spawn_lanes = []
+            elif left and needs_rebase and placed:
+                rebuilt = []
+                for key, _long_val in placed:
+                    if key in rebuilt:
+                        continue
+                    rebuilt.append(key)
+                    if len(rebuilt) >= lanes_n:
+                        break
+                if rebuilt:
+                    logging.info(
+                        "[AuxAgent] Rebased roundabout aux spawn onto conflict "
+                        "arc %s (was %s)",
+                        rebuilt,
+                        spawn_lanes,
+                    )
+                    spawn_lanes = rebuilt[:lanes_n]
+            elif left and spawn_lanes and placed:
+                # Already on the conflict arc (e.g. viable-lane remap): still
+                # refresh longitudes so stale upstream offsets are not reused.
+                for key in spawn_lanes:
+                    if key not in conflict_spawn_longs:
+                        edge = lane_edge_id(key)
+                        for place_key, long_val in placed:
+                            if lane_edge_id(place_key) == edge:
+                                conflict_spawn_longs[key] = long_val
+                                break
+        except Exception as exc:
+            logging.debug("[AuxAgent] Conflict-arc rebase skipped: %s", exc)
+
     # Drop dead-end approach lanes (no SUMO connections — common on outer lanes).
+    # When a requested lane has no exit, prefer a sibling on the same edge that
+    # does (roundabout outer ring lanes often only peel off to an exit spoke).
     if spawn_lanes:
         kept: List[str] = []
+        seen_kept: set[str] = set()
         for lane_key in spawn_lanes:
             edge_id = lane_edge_id(lane_key)
             lane_num = lane_num_from_key(lane_key)
             if route_index.has_exit(edge_id, lane_num):
-                kept.append(lane_key)
-            else:
+                if lane_key not in seen_kept:
+                    kept.append(lane_key)
+                    seen_kept.add(lane_key)
+                continue
+            remapped = False
+            for alt in _sibling_lane_keys(junction_layout, lane_key):
+                if alt in seen_kept:
+                    continue
+                if route_index.has_exit(lane_edge_id(alt), lane_num_from_key(alt)):
+                    logging.info(
+                        "[AuxAgent] Remapping aux spawn %s -> %s "
+                        "(no SUMO exit on requested lane)",
+                        lane_key,
+                        alt,
+                    )
+                    kept.append(alt)
+                    seen_kept.add(alt)
+                    remapped = True
+                    break
+            if not remapped:
                 logging.info(
                     "[AuxAgent] Skipping aux spawn %s: no SUMO exit connections",
                     lane_key,
@@ -1550,13 +1813,31 @@ def resolve_aux_spawn_plan(
         ):
             preferred_edge = lane_edge_id(str(manifest_dest))
 
-        dest = resolve_aux_destination_lane_key(
-            junction_layout,
-            spawn_lane,
-            route_index=route_index,
-            preferred_dest_edge=preferred_edge,
-        )
-        if not dest:
+        candidates = [spawn_lane] + [
+            alt
+            for alt in _sibling_lane_keys(junction_layout, spawn_lane)
+            if alt not in kept_spawns
+        ]
+        chosen_spawn: Optional[str] = None
+        dest: Optional[str] = None
+        for candidate in candidates:
+            dest = resolve_aux_destination_lane_key(
+                junction_layout,
+                candidate,
+                route_index=route_index,
+                preferred_dest_edge=preferred_edge,
+            )
+            if dest:
+                chosen_spawn = candidate
+                if candidate != spawn_lane:
+                    logging.info(
+                        "[AuxAgent] Remapping aux spawn %s -> %s "
+                        "(no reachable ring/exit dest on requested lane)",
+                        spawn_lane,
+                        candidate,
+                    )
+                break
+        if not chosen_spawn or not dest:
             logging.info(
                 "[AuxAgent] No reachable dest for aux spawn %s; skipping lane",
                 spawn_lane,
@@ -1571,9 +1852,9 @@ def resolve_aux_spawn_plan(
                 lane_num_from_key(dest),
                 lane_keys_by_edge,
             )
-        kept_spawns.append(spawn_lane)
+        kept_spawns.append(chosen_spawn)
         destination_lanes.append(dest or "")
-        alternate_spawn_dest_map[spawn_lane] = dest
+        alternate_spawn_dest_map[chosen_spawn] = dest
 
     ring_circulate_by_lane: dict = {}
     if (junction_layout or {}).get("mode") == "roundabout":
@@ -1588,17 +1869,37 @@ def resolve_aux_spawn_plan(
                 ring_circulate_by_lane[spawn_lane] = True
 
     spawn_longitudinal_by_lane: dict = {}
+    if conflict_spawn_longs:
+        for spawn_lane in kept_spawns:
+            if spawn_lane in conflict_spawn_longs:
+                spawn_longitudinal_by_lane[spawn_lane] = float(
+                    conflict_spawn_longs[spawn_lane]
+                )
+            else:
+                # Sibling on same conflict edge: reuse any known longitude.
+                edge = lane_edge_id(spawn_lane)
+                for key, val in conflict_spawn_longs.items():
+                    if lane_edge_id(key) == edge:
+                        spawn_longitudinal_by_lane[spawn_lane] = float(val)
+                        break
     manifest_long = row.get("aux_spawn_longitudinal")
     manifest_spawn = row.get("aux_spawn_lane_index")
-    if manifest_long is not None and manifest_spawn:
-        spawn_key = str(manifest_spawn)
+    if (
+        not spawn_longitudinal_by_lane
+        and manifest_long is not None
+        and kept_spawns
+    ):
         long_val = float(manifest_long)
-        if spawn_key in kept_spawns:
-            spawn_longitudinal_by_lane[spawn_key] = long_val
-        # Sibling occupied lanes on the same edge share the conflict longitude.
-        edge = lane_edge_id(spawn_key)
+        # Prefer applying the manifest longitude onto the (possibly remapped)
+        # spawn lanes that share the manifest edge; fall back to all kept.
+        edge = lane_edge_id(str(manifest_spawn)) if manifest_spawn else None
+        applied = False
         for spawn_lane in kept_spawns:
-            if lane_edge_id(spawn_lane) == edge and spawn_lane not in spawn_longitudinal_by_lane:
+            if edge is None or lane_edge_id(spawn_lane) == edge:
+                spawn_longitudinal_by_lane[spawn_lane] = long_val
+                applied = True
+        if not applied:
+            for spawn_lane in kept_spawns:
                 spawn_longitudinal_by_lane[spawn_lane] = long_val
     if (
         (junction_layout or {}).get("mode") == "roundabout"
@@ -1636,9 +1937,16 @@ def resolve_aux_spawn_plan(
                     spawn_ln,
                     lengths,
                     aux_distance,
-                    allowed_ring_edges=None,
+                    allowed_ring_edges=set(left) if left else None,
                 )
                 if placement is not None and placement.spawn_lane_key == spawn_lane:
+                    spawn_longitudinal_by_lane[spawn_lane] = float(
+                        placement.spawn_longitudinal
+                    )
+                elif placement is not None and lane_edge_id(spawn_lane) == (
+                    placement.spawn_edge_id
+                ):
+                    # Sibling lane on the placement edge: reuse longitude.
                     spawn_longitudinal_by_lane[spawn_lane] = float(
                         placement.spawn_longitudinal
                     )

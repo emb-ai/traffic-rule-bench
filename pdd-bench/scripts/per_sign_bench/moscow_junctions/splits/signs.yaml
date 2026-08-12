@@ -11,7 +11,7 @@
 
 seed: 42
 test_frac: 0.2
-n_train: 100
+n_train: 80
 n_test: 20   # ≈ n_train * test_frac / (1 - test_frac)
 
 signs:

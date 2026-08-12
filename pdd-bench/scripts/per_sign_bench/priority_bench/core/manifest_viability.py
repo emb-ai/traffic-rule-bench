@@ -392,14 +392,26 @@ def check_manifest_viability(
     if auxiliary_enabled:
         if strategy in ("yield", "roundabout"):
             if not has_viable_aux_lanes(junction_layout, aux_distance_from_intersection):
-                min_aux_lane = min_aux_spawn_lane_length(aux_distance_from_intersection)
+                if strategy == "roundabout":
+                    from .roundabout_aux import MIN_CONFLICT_ARC_LENGTH_M
+
+                    min_aux_lane = float(MIN_CONFLICT_ARC_LENGTH_M)
+                    need_msg = (
+                        f"no conflict-arc ring aux arm long enough "
+                        f"(need conflict arc >= {min_aux_lane:.0f}m)"
+                    )
+                else:
+                    min_aux_lane = min_aux_spawn_lane_length(
+                        aux_distance_from_intersection
+                    )
+                    need_msg = (
+                        f"no main-road aux arm long enough for aux_distance "
+                        f"(need lane length >= {min_aux_lane:.0f}m)"
+                    )
                 return ManifestViabilityResult(
                     viable=False,
                     reason="no_viable_aux_arm",
-                    detail=(
-                        f"no {'conflict-arc ring' if strategy == 'roundabout' else 'main-road'} "
-                        f"aux arm with lane length >= {min_aux_lane:.0f}m"
-                    ),
+                    detail=need_msg,
                     spawn_lane_count=result.spawn_lane_count,
                 )
         else:
