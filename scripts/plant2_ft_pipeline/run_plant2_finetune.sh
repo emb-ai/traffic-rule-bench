@@ -75,6 +75,9 @@ MAX_EPOCHS="${MAX_EPOCHS:-30}"
 STOP_SPEED_LOSS_WEIGHT="${STOP_SPEED_LOSS_WEIGHT:-1.0}"
 export CACHE_SIZE_GB="${CACHE_SIZE_GB:-641}"
 export CKPT_EVERY_N_EPOCHS="${CKPT_EVERY_N_EPOCHS:-5}"
+# tok_emb holds one embedding per object class; no single batch contains every
+# class, so plain DDP aborts on "unused parameters" at the first step.
+export DDP_STRATEGY="${DDP_STRATEGY:-ddp_find_unused_parameters_true}"
 
 mkdir -p "$DS_LOCAL"
 mkdir -p "$PLAN_T/log" "$PLAN_T/checkpoints_ft"
