@@ -68,6 +68,7 @@ def reject_unusable(
     aux_distance_from_intersection: float,
     auxiliary_enabled: bool,
     dry_run: bool,
+    pdd_code: str | None = None,
 ) -> list[dict]:
     """Mark non-viable live scenes as reject. Returns audit rows."""
     rejected_rows: list[dict] = []
@@ -78,6 +79,7 @@ def reject_unusable(
             min_ego_lane_m=min_ego_lane_m,
             aux_distance_from_intersection=aux_distance_from_intersection,
             auxiliary_enabled=auxiliary_enabled,
+            pdd_code=pdd_code,
         )
         if result.viable:
             continue
@@ -213,6 +215,7 @@ def main() -> None:
             aux_distance_from_intersection=float(args.aux_distance_m),
             auxiliary_enabled=auxiliary_enabled,
             dry_run=bool(args.dry_run),
+            pdd_code=profile.pdd_code,
         )
         all_audit.extend(rows)
         print(

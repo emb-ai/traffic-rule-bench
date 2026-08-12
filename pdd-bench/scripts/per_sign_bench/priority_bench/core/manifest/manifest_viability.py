@@ -349,6 +349,7 @@ def check_manifest_viability(
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     auxiliary_enabled: bool = True,
+    pdd_code: Optional[str] = None,
 ) -> ManifestViabilityResult:
     """Return whether a cropped scene would survive generate_manifest filters."""
     result = ManifestViabilityResult(viable=True, reason="", detail="")
@@ -390,7 +391,7 @@ def check_manifest_viability(
     result.spawn_lane_count = len(spawn_lanes)
 
     junction_layout = layout.to_dict()
-    if auxiliary_enabled and strategy != "blocked_road":
+    if auxiliary_enabled and strategy not in ("blocked_road", "one_way"):
         if strategy in ("yield", "roundabout"):
             if not has_viable_aux_lanes(junction_layout, aux_distance_from_intersection):
                 if strategy == "roundabout":
@@ -429,6 +430,48 @@ def check_manifest_viability(
 
     sign_lat = meta.get("latitude") or meta.get("center_lat") if meta else None
     sign_lon = meta.get("longitude") or meta.get("center_lon") if meta else None
+
+    if strategy == "one_way":
+        from ..scenarios.one_way_bridge import discover_one_way_dual_paths
+
+        code = str(pdd_code or "").strip()
+        if not code and meta:
+            raw = (
+                meta.get("pdd_code")
+                or meta.get("sign_code")
+                or meta.get("allocated_sign")
+            )
+            if raw:
+                code = str(raw).strip()
+        if not code:
+            code = "5.7.1"
+        preferred_jid = str(layout.junction_id or "").strip() or None
+        duals = discover_one_way_dual_paths(
+            net_path,
+            pdd_code=code,
+            min_lane_length_m=min_ego_lane_m,
+            junction_ids=[preferred_jid] if preferred_jid else None,
+            arm_counts=(3, 4),
+        )
+        if not duals and preferred_jid:
+            duals = discover_one_way_dual_paths(
+                net_path,
+                pdd_code=code,
+                min_lane_length_m=min_ego_lane_m,
+                junction_ids=None,
+                arm_counts=(3, 4),
+            )
+        result.scenario_count = len(duals)
+        if duals:
+            return result
+        return ManifestViabilityResult(
+            viable=False,
+            reason="no_one_way_dual_path",
+            detail="no short-forbidden + long-compliant dual-path on this crop",
+            spawn_lane_count=result.spawn_lane_count,
+            scenario_count=0,
+        )
+
     _, scenarios = augment_layout_for_scene(
         net_path,
         spawn_lanes,
@@ -504,6 +547,7 @@ def check_scene_dir_viability(
     min_ego_lane_m: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     auxiliary_enabled: bool = True,
+    pdd_code: Optional[str] = None,
 ) -> ManifestViabilityResult:
     """Check viability for a scene folder (meta.json + net.xml)."""
     meta_path = scene_dir / "meta.json"
@@ -529,4 +573,5 @@ def check_scene_dir_viability(
         min_ego_lane_m=min_ego_lane_m,
         aux_distance_from_intersection=aux_distance_from_intersection,
         auxiliary_enabled=auxiliary_enabled,
+        pdd_code=pdd_code,
     )

@@ -50,10 +50,11 @@ Which ego/aux spawn + destination combinations exist per scene.
 
 | Module | Role |
 |--------|------|
-| `scene_augmentation.py` | `SpawnStrategy` enumerators (equal / yield / roundabout / blocked_road) |
+| `scene_augmentation.py` | `SpawnStrategy` enumerators (equal / yield / roundabout / blocked_road / one_way) |
 | `auxiliary_agent.py` | Aux convoy spawn, placement, release logic at runtime |
 | `roundabout_aux.py` | Conflict-arc placement + spillover convoy on the ring |
 | `blocked_road_route.py` | Forbidden-lane geometry checks for 3.2 |
+| `one_way_bridge.py` | Read-only import of dual-path discovery from `one_way_signs` |
 
 **Used by:** manifest expansion, viability reject, `run_benchmark` aux spawn.
 
@@ -67,6 +68,7 @@ Turning scenes into `real_manifest.jsonl` rows.
 | `manifest_expansion.py` | Layout × aux cartesian product (2.1 / 2.4 / 4.3) |
 | `manifest_viability.py` | Pre-manifest scene filters (`reject_unusable_scenes`) |
 | `blocked_road_expansion.py` | Layout × `n_variations` nuPlan NPC profiles for 3.2 |
+| `one_way_expansion.py` | Dual-path × `n_variations` NPC profiles for 5.7.1 / 5.7.2 |
 
 **Used by:** `generate_manifest.py`, `build_scenes/reject_unusable_scenes.py`.
 

@@ -1,4 +1,4 @@
-"""Sign profiles for priority-junction benches (2.1 / 2.3 / 2.4 / 2.5 / 4.3 / 3.2 blocked_road)."""
+"""Sign profiles for priority-junction benches (2.1–2.5 / 4.3 / 3.2 / 5.7.x)."""
 
 from __future__ import annotations
 
@@ -104,7 +104,41 @@ BLOCKED_ROAD = SignProfile(
     ego_road_class=None,
 )
 
-_PROFILES = (MAIN_ROAD, SECONDARY_ROAD, YIELD, STOP, ROUNDABOUT, BLOCKED_ROAD)
+# 5.7.1 / 5.7.2 share dual-path spawn; separate data pools + pdd_code.
+ONE_WAY_RIGHT = SignProfile(
+    id="one_way_right",
+    pdd_code="5.7.1",
+    sign_type="one_way",
+    sign_name="Exit onto one-way road (right / 5.7.1)",
+    layout_mode="main_main",
+    spawn_strategy="one_way",
+    data_subdir="one_way_right",
+    output_code="5_7_1",
+    ego_road_class=None,
+)
+
+ONE_WAY_LEFT = SignProfile(
+    id="one_way_left",
+    pdd_code="5.7.2",
+    sign_type="one_way",
+    sign_name="Exit onto one-way road (left / 5.7.2)",
+    layout_mode="main_main",
+    spawn_strategy="one_way",
+    data_subdir="one_way_left",
+    output_code="5_7_2",
+    ego_road_class=None,
+)
+
+_PROFILES = (
+    MAIN_ROAD,
+    SECONDARY_ROAD,
+    YIELD,
+    STOP,
+    ROUNDABOUT,
+    BLOCKED_ROAD,
+    ONE_WAY_RIGHT,
+    ONE_WAY_LEFT,
+)
 
 _REGISTRY: dict[str, SignProfile] = {
     MAIN_ROAD.id: MAIN_ROAD,
@@ -113,6 +147,8 @@ _REGISTRY: dict[str, SignProfile] = {
     STOP.id: STOP,
     ROUNDABOUT.id: ROUNDABOUT,
     BLOCKED_ROAD.id: BLOCKED_ROAD,
+    ONE_WAY_RIGHT.id: ONE_WAY_RIGHT,
+    ONE_WAY_LEFT.id: ONE_WAY_LEFT,
     # aliases
     "2.1": MAIN_ROAD,
     "2_1": MAIN_ROAD,
@@ -133,6 +169,12 @@ _REGISTRY: dict[str, SignProfile] = {
     "3.2": BLOCKED_ROAD,
     "3_2": BLOCKED_ROAD,
     "blocked_road": BLOCKED_ROAD,
+    "5.7.1": ONE_WAY_RIGHT,
+    "5_7_1": ONE_WAY_RIGHT,
+    "one_way_571": ONE_WAY_RIGHT,
+    "5.7.2": ONE_WAY_LEFT,
+    "5_7_2": ONE_WAY_LEFT,
+    "one_way_572": ONE_WAY_LEFT,
 }
 
 

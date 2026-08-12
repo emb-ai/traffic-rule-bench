@@ -55,6 +55,8 @@ python build_scenes/materialize_scenes.py --sign 2.4 --refill
 python generate_manifest.py sign=yield paths.split=train
 python generate_manifest.py sign=roundabout gif.enabled=false
 python generate_manifest.py sign=blocked_road paths.split=train
+python generate_manifest.py sign=one_way_right paths.split=train
+python generate_manifest.py sign=one_way_left paths.split=train
 ```
 
 ### reject_unusable_scenes flags

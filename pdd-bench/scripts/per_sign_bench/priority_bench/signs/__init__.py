@@ -3,6 +3,8 @@
 from .base import (
     BLOCKED_ROAD,
     MAIN_ROAD,
+    ONE_WAY_LEFT,
+    ONE_WAY_RIGHT,
     ROUNDABOUT,
     SECONDARY_ROAD,
     STOP,
@@ -21,6 +23,8 @@ __all__ = [
     "STOP",
     "ROUNDABOUT",
     "BLOCKED_ROAD",
+    "ONE_WAY_RIGHT",
+    "ONE_WAY_LEFT",
     "SignProfile",
     "get_profile",
     "list_profiles",

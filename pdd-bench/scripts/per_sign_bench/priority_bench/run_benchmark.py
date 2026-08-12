@@ -64,6 +64,12 @@ from traffic_signs.priority_signs import (
 )
 from traffic_signs.no_traffic_sign import NoTrafficSign
 from core.sumo.lane_keys import clamp_lane_key_to_graph, lane_edge_id, make_lane_key
+from core.runtime.one_way_support import (
+    OneWaySumoTrafficManager,
+    install_one_way_compliant_nav_route,
+    resolve_row_background_excluded_edges,
+)
+from core.scenarios.one_way_bridge import get_one_way_sign_spec, resolve_sign_class
 from core.layout.junction_priority_layout import right_arm_edge_id, straight_arm_edge_id
 from core.scenarios.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
@@ -247,6 +253,11 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
     horizon = _manifest_horizon(row, fallback=max_steps)
     net_path = str(scenes_root / row["net_path"]) if not str(row["net_path"]).startswith("/") else str(row["net_path"])
     sign_spawn_distance = _resolve_sign_spawn_distance(row, scenes_root)
+    background_excluded_edges = (
+        resolve_row_background_excluded_edges(row, net_path)
+        if _row_is_one_way(row)
+        else []
+    )
 
     vehicle_config: dict = {"show_lidar": False}
     spawn_vel = float(row.get("spawn_velocity_ms", 0.0) or 0.0)
@@ -273,6 +284,7 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         show_lane_arrows=row.get("show_lane_arrows", False),
         show_traffic_lights=row.get("show_traffic_lights", False),
         show_npc_vehicles=row.get("show_npc_vehicles", False),
+        background_excluded_edges=list(background_excluded_edges),
         skip_auto_signs=True,
         use_pedestrian_manager=False,
         use_pedestrian_yield_rule=False,
@@ -284,6 +296,8 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
     if row.get("destination_lane_id"):
         config["vehicle_config"]["destination"] = row["destination_lane_id"]
 
+    is_one_way = _row_is_one_way(row)
+
     class _RealMapEnv(TrafficSignSumoEnv):
         @classmethod
         def default_config(cls):
@@ -293,6 +307,7 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
             cfg["show_traffic_lights"] = True
             cfg["show_npc_vehicles"] = True
             cfg["skip_auto_signs"] = False
+            cfg["background_excluded_edges"] = []
             return cfg
 
         def setup_engine(self):
@@ -300,7 +315,8 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
             # Only add SumoTrafficManager if traffic_density > 0
             # Otherwise keep the default SimpleTrafficManager (no NPC spawning)
             if self.config.get("traffic_density", 0.0) > 0:
-                self.engine.update_manager("traffic_manager", SumoTrafficManager())
+                mgr = OneWaySumoTrafficManager() if is_one_way else SumoTrafficManager()
+                self.engine.update_manager("traffic_manager", mgr)
 
         def reset(self, *, seed=None):
             # Skip TrafficSignSumoEnv.reset() sign creation by calling grandparent directly
@@ -1140,6 +1156,30 @@ def _row_is_blocked_road(row: dict) -> bool:
     code = str(row.get("pdd_code") or row.get("sign_code") or "")
     sign_type = str(row.get("sign_type") or "")
     return code in {"3.2", "3_2"} or sign_type == "blocked_road"
+
+
+def _row_is_one_way(row: dict) -> bool:
+    code = str(row.get("pdd_code") or row.get("sign_code") or "")
+    sign_type = str(row.get("sign_type") or row.get("sign_family") or "")
+    return code in {"5.7.1", "5_7_1", "5.7.2", "5_7_2"} or sign_type in {
+        "one_way",
+        "one_way_right",
+        "one_way_left",
+    }
+
+
+def _resolve_one_way_pdd_code(row: dict) -> str:
+    code = (
+        row.get("_sign_code")
+        or row.get("sign_code")
+        or row.get("pdd_code")
+        or row.get("sign_type")
+        or "5.7.1"
+    )
+    try:
+        return get_one_way_sign_spec(str(code).strip()).pdd_code
+    except ValueError:
+        return "5.7.1"
 
 
 def _row_is_main_secondary(row: dict) -> bool:
@@ -2079,6 +2119,121 @@ def _place_blocked_road_sign(
         return False
 
 
+def _place_one_way_sign_on_spawn_lane(
+    env,
+    pdd_code: str,
+    distance_before_end: float = 20.0,
+    show_model: bool = True,
+) -> bool:
+    """Fallback: place OneWayEntrySign beside the ego approach lane."""
+    try:
+        vehicle = env.agent
+        if vehicle is None or vehicle.lane is None:
+            return False
+        sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
+        if sign_mgr is None:
+            return False
+        _clear_sign_manager(sign_mgr)
+        lane = vehicle.lane
+        sign_cls = resolve_sign_class(pdd_code)
+        placement_long = sign_placement_long(lane, distance_before_end)
+        sign = sign_mgr.add_sign(
+            sign_cls,
+            lane=lane,
+            longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
+            lateral_offset=lateral_offset_beside_lane(lane, placement_long),
+            show_model=show_model,
+            use_random_lane=False,
+        )
+        return sign is not None
+    except Exception as e:
+        print(f"[OneWaySign] Failed to place {pdd_code}: {e}")
+        return False
+
+
+def _place_one_way_signs(
+    env,
+    row: dict,
+    scenes_root: Path,
+    distance_before_end: float = 20.0,
+    show_model: bool = True,
+) -> bool:
+    """Place OneWayEntrySignR/L on the ego approach; attach wrong-way edges."""
+    pdd_code = _resolve_one_way_pdd_code(row)
+    layout = _get_junction_layout(row, scenes_root)
+    if layout is None:
+        print(f"[OneWaySign] No layout; ego-only {pdd_code}")
+        return _place_one_way_sign_on_spawn_lane(
+            env,
+            pdd_code,
+            distance_before_end=distance_before_end,
+            show_model=show_model,
+        )
+
+    sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
+    if sign_mgr is None:
+        return False
+    _clear_sign_manager(sign_mgr)
+
+    ego_edge = row.get("road_id")
+    if not ego_edge:
+        return _place_one_way_sign_on_spawn_lane(
+            env,
+            pdd_code,
+            distance_before_end=distance_before_end,
+            show_model=show_model,
+        )
+
+    arm = next(
+        (a for a in layout.get("arms", []) if a.get("edge_id") == ego_edge),
+        None,
+    )
+    lane = resolve_sign_lane_for_edge(
+        env, str(ego_edge), (arm or {}).get("lane_keys", [])
+    )
+    if lane is None:
+        print(f"[OneWaySign] Lane not found for ego edge {ego_edge}; ego-only fallback")
+        return _place_one_way_sign_on_spawn_lane(
+            env,
+            pdd_code,
+            distance_before_end=distance_before_end,
+            show_model=show_model,
+        )
+
+    sign_cls = resolve_sign_class(pdd_code)
+    placement_long = sign_placement_long(lane, distance_before_end)
+    try:
+        sign = sign_mgr.add_sign(
+            sign_cls,
+            lane=lane,
+            longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
+            lateral_offset=lateral_offset_beside_lane(lane, placement_long),
+            show_model=show_model,
+            use_random_lane=False,
+            intersection_name=str(
+                row.get("junction_id") or layout.get("junction_id") or ""
+            ),
+        )
+        spec = get_one_way_sign_spec(pdd_code)
+        net_path = env.config.get("map_name") or ""
+        forbidden_edges = resolve_row_background_excluded_edges(row, net_path)
+        if sign is not None and forbidden_edges:
+            try:
+                sign.one_way_forbidden_edges = frozenset(str(e) for e in forbidden_edges)
+            except Exception:
+                pass
+        print(
+            f"[OneWaySign] Placed {pdd_code} ({spec.title}) on {ego_edge}, "
+            f"junction={row.get('junction_id') or layout.get('junction_id')}, "
+            f"forbidden={spec.forbidden_dir}, allowed={sorted(spec.allowed_dirs)}, "
+            f"shoulder offset={SIGN_SHOULDER_OFFSET_M}m"
+        )
+        return sign is not None
+    except Exception as exc:
+        print(f"[OneWaySign] Failed {pdd_code} on {ego_edge}: {exc}")
+        return False
+
+
 def _ego_compliant_stop_before_blocked_road(
     env,
     vehicle,
@@ -2129,6 +2284,14 @@ def _place_junction_priority_signs(
     show_model: bool = True,
 ) -> bool:
     """Dispatch sign placement by row pdd_code / sign_type."""
+    if _row_is_one_way(row):
+        return _place_one_way_signs(
+            env,
+            row,
+            scenes_root=scenes_root,
+            distance_before_end=distance_before_end,
+            show_model=show_model,
+        )
     if _row_is_blocked_road(row):
         return _place_blocked_road_sign(
             env,
@@ -2305,7 +2468,11 @@ def run_one_episode(
                 distance_before_end=sign_distance,
                 show_model=not hide_signs,
             )
-            if not _row_is_main_secondary(row) and not _row_is_blocked_road(row):
+            if (
+                not _row_is_main_secondary(row)
+                and not _row_is_blocked_road(row)
+                and not _row_is_one_way(row)
+            ):
                 _place_right_hand_yield_tracker(
                     base_env,
                     row,
@@ -2322,6 +2489,9 @@ def run_one_episode(
                         base_env.engine._spawned_objects.pop(_sid, None)
                 if _rm is not None and _rm_original_add_spawn is not None:
                     _rm.add_spawn_info = _rm_original_add_spawn
+
+        if _row_is_one_way(row):
+            install_one_way_compliant_nav_route(base_env, row)
 
         # Analyze and print junction lanes (for debugging/info only)
         incoming_lanes, outgoing_lanes = _analyze_junction_lanes(base_env)
@@ -2366,7 +2536,7 @@ def run_one_episode(
 
         aux_agent_mgr = None
         aux_spawn_lanes: list[str] = []
-        if auxiliary_agent and not _row_is_blocked_road(row):
+        if auxiliary_agent and not _row_is_blocked_road(row) and not _row_is_one_way(row):
             aux_distance_from_intersection = float(
                 row.get("aux_distance_from_intersection", aux_distance_from_intersection)
             )
