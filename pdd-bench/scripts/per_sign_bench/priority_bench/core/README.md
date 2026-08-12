@@ -66,8 +66,7 @@ Turning scenes into `real_manifest.jsonl` rows.
 | `manifest_config.py` | Shared defaults (`spawn_distance_before_end`, stop wait, …) |
 | `manifest_expansion.py` | Layout × aux cartesian product (2.1 / 2.4 / 4.3) |
 | `manifest_viability.py` | Pre-manifest scene filters (`reject_unusable_scenes`) |
-| `blocked_road_expansion.py` | Layout × traffic-density tiers for 3.2 |
-| `traffic_density_levels.py` | nuPlan p25/p50/p75 → MetaDrive `traffic_density` |
+| `blocked_road_expansion.py` | Layout × `n_variations` nuPlan NPC profiles for 3.2 |
 
 **Used by:** `generate_manifest.py`, `build_scenes/reject_unusable_scenes.py`.
 

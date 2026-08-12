@@ -459,7 +459,7 @@ def check_manifest_viability(
             return ManifestViabilityResult(
                 viable=False,
                 reason="forbidden_edge_too_short",
-                detail="no through-path scenario with long enough forbidden lane",
+                detail="no spawn×exit scenario with long enough forbidden lane",
                 spawn_lane_count=result.spawn_lane_count,
                 scenario_count=len(scenarios),
             )
@@ -467,8 +467,8 @@ def check_manifest_viability(
 
     if strategy == "blocked_road":
         reason, detail = (
-            "no_through_path_scenario",
-            "no ego approach → forbidden outgoing edge combinations",
+            "no_blocked_road_scenario",
+            "no ego spawn arm/lane → destination exit combinations",
         )
     elif strategy == "roundabout":
         reason, detail = (

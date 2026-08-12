@@ -890,22 +890,26 @@ def _apply_manifest_ego_destination(env, row: dict) -> Optional[str]:
         spawn_key = getattr(vehicle.lane, "index", None)
         if spawn_key and vehicle.navigation is not None:
             vehicle.navigation.set_route(spawn_key, clamped)
-        _apply_roundabout_destination_cap(env, row)
+        _apply_destination_along_cap(env, row)
         return clamped
     except Exception as exc:
         print(f"[EgoDest] Could not apply destination {dest}: {exc}")
         return None
 
 
-def _apply_roundabout_destination_cap(env, row: dict) -> None:
-    """Move ego finish point to ``min(cap, final_lane.length-5)`` on roundabouts.
+def _apply_destination_along_cap(env, row: dict) -> None:
+    """Move ego finish point to ``min(cap, final_lane.length-5)`` when capped.
 
-    MetaDrive navigation still ends on the exit lane, but the visual dest mark
-    and path sampling stop at the capped longitude (stored on the vehicle).
+    Used by roundabout (4.3) and blocked_road (3.2). MetaDrive navigation still
+    ends on the exit/forbidden lane, but the visual dest mark and top-down GIF
+    path stop at the capped longitude (stored on the vehicle).
+
+    Blocked-road *success* stays compliant-stop / past-sign; this only caps the
+    drawn destination.
     """
-    if not _row_is_roundabout(row):
-        return
     raw = row.get("destination_max_along_m")
+    if raw is None and not _row_is_roundabout(row):
+        return
     try:
         cap = float(DEFAULT_DESTINATION_MAX_ALONG_M if raw is None else raw)
     except (TypeError, ValueError):
@@ -925,7 +929,7 @@ def _apply_roundabout_destination_cap(env, row: dict) -> None:
     except Exception:
         return
 
-    # Used by arrive check + path overlay truncation + top-down red dest mark.
+    # Used by arrive check (roundabout) + path overlay truncation + red dest mark.
     try:
         vehicle._priority_bench_dest_along_m = float(target)
     except Exception:
@@ -951,12 +955,17 @@ def _apply_roundabout_destination_cap(env, row: dict) -> None:
         pass
 
     try:
+        label = "Blocked-road" if _row_is_blocked_road(row) else "Roundabout"
         print(
-            f"[EgoDest] Roundabout destination cap at {target:.1f}m "
+            f"[EgoDest] {label} destination cap at {target:.1f}m "
             f"on final lane (len={float(final.length):.1f}m)"
         )
     except Exception:
         pass
+
+
+# Back-compat alias (older call sites / notebooks).
+_apply_roundabout_destination_cap = _apply_destination_along_cap
 
 
 def _lane_index_road_key(lane_index) -> tuple | str | None:

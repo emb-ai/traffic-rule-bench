@@ -53,10 +53,6 @@ from core.manifest.blocked_road_expansion import (
     build_blocked_road_manifest_entry,
     expand_blocked_road_scene_entries,
 )
-from core.manifest.traffic_density_levels import (
-    MAX_TRAFFIC_DENSITY_LEVELS,
-    list_traffic_density_levels,
-)
 from core.scenarios.scene_augmentation import (
     SpawnScenario,
     pick_default_main_spawn_meta_for_net,
@@ -150,7 +146,9 @@ class SimulationConfig:
     # Blocked road (3.2) only:
     sign_distance_from_start: float = 10.0
     destination_past_sign_m: float = 8.0
-    traffic_density_augment: bool = False
+    # Combined (lane/dest × n_variations) pool; max_scenarios caps the product.
+    n_variations: int = 3
+    profile_density_cap: float = 1.0
     compliant_stop_success_seconds: float = 3.0
     compliant_stop_max_dist_m: float = 12.0
     compliant_stop_speed_mps: float = 0.5
@@ -806,7 +804,7 @@ def generate_blocked_road_manifest(
     expansion_cfg: ExpansionConfig,
     split: str = "all",
 ) -> List[Dict]:
-    """Generate real_manifest.jsonl for PDD 3.2 (through-path, traffic density)."""
+    """Generate real_manifest.jsonl for PDD 3.2 (through-path × NPC profiles)."""
     split = normalize_split(split)
     assert_rejected_scenes_applied(scenes_dir)
     all_scenes = discover_scenes(scenes_dir)
@@ -828,39 +826,39 @@ def generate_blocked_road_manifest(
             f"{pool_path(scenes_dir).name}: {preview}{more}"
         )
     print(f"Split filter: {split} → {len(scenes)} scene(s)")
+    n_variations = max(1, int(sim_cfg.n_variations))
     print(
         f"Augmentation axes: layout={expansion_cfg.layout_on}, "
-        f"traffic_density={sim_cfg.traffic_density_augment}"
+        f"n_variations={n_variations} (combined with lane/dest; "
+        f"max_scenarios caps the product)"
     )
 
     blocked_road_expansion = BlockedRoadExpansionConfig(
         layout=expansion_cfg.layout_on,
         max_scenarios=scenario_cfg.max_scenarios,
-        traffic_density_augment=sim_cfg.traffic_density_augment,
     )
     sim_params = BlockedRoadSimParams(
         sign_distance_from_start=sim_cfg.sign_distance_from_start,
         destination_past_sign_m=sim_cfg.destination_past_sign_m,
         spawn_distance_before_end=sim_cfg.spawn_distance_before_end,
         spawn_velocity_ms=sim_cfg.spawn_velocity_ms,
-        traffic_density=sim_cfg.traffic_density,
         horizon=sim_cfg.horizon,
         compliant_stop_success_seconds=sim_cfg.compliant_stop_success_seconds,
         compliant_stop_max_dist_m=sim_cfg.compliant_stop_max_dist_m,
         compliant_stop_speed_mps=sim_cfg.compliant_stop_speed_mps,
-        sign_distance_before_end=sim_cfg.sign_distance_before_end,
+        n_variations=n_variations,
+        profile_density_cap=float(sim_cfg.profile_density_cap),
+        destination_max_along_m=sim_cfg.destination_max_along_m,
     )
 
-    density_levels = None
-    if sim_cfg.traffic_density_augment:
-        density_levels = list(list_traffic_density_levels(MAX_TRAFFIC_DENSITY_LEVELS))
-        print("[blocked_road] Traffic density levels (nuPlan):")
-        for level in density_levels:
-            print(f"  td{level.id} {level.describe()}")
+    print(
+        f"[blocked_road] NPC world: sample_one_profile in shared pool with "
+        f"lane/dest (n_variations={n_variations}, "
+        f"density_cap={sim_cfg.profile_density_cap})"
+    )
 
     build_entry = partial(
         build_blocked_road_manifest_entry,
-        stable_seed_fn=_stable_seed,
         pdd_code=PDD_CODE,
         sign_type=SIGN_TYPE,
         sign_class="NoTrafficSign",
@@ -911,7 +909,6 @@ def generate_blocked_road_manifest(
             sim=sim_params,
             expansion=blocked_road_expansion,
             build_entry=build_entry,
-            density_levels=density_levels,
         )
         if not scene_entries:
             print(f"  Skipping {scene_name}: no manifest entries after expansion")
@@ -944,7 +941,6 @@ def generate_blocked_road_manifest(
             f.write(json.dumps(entry, default=str) + "\n")
 
     split_counts = count_splits(used_scene_ids, split_by_id)
-    n_density = len(density_levels) if density_levels else 1
     summary = {
         "pdd_code": PDD_CODE,
         "sign_type": SIGN_TYPE,
@@ -961,25 +957,17 @@ def generate_blocked_road_manifest(
         "total_entries": len(entries),
         "total_entries_before_max_total": pre_total,
         "augmentation_layout": expansion_cfg.layout_on,
-        "traffic_density_augment": sim_cfg.traffic_density_augment,
-        "traffic_density_levels": [
-            {
-                "id": level.id,
-                "name": level.name,
-                "percentile": level.percentile,
-                "nuplan_vehicles_per_frame": level.nuplan_vehicles_per_frame,
-                "traffic_density": level.traffic_density,
-            }
-            for level in (density_levels or [])
-        ],
+        "n_variations": n_variations,
+        "npc_world": "factorized_space.agent_profile_bank.sample_one_profile",
+        "profile_density_cap": sim_cfg.profile_density_cap,
         "max_scenarios": scenario_cfg.max_scenarios,
         "max_total": scenario_cfg.max_total,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
-        "traffic_density": sim_cfg.traffic_density,
         "horizon": sim_cfg.horizon,
         "sign_distance_from_start": sim_cfg.sign_distance_from_start,
         "destination_past_sign_m": sim_cfg.destination_past_sign_m,
         "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
+        "destination_max_along_m": sim_cfg.destination_max_along_m,
         "compliant_stop_success_seconds": sim_cfg.compliant_stop_success_seconds,
         "compliant_stop_max_dist_m": sim_cfg.compliant_stop_max_dist_m,
         "compliant_stop_speed_mps": sim_cfg.compliant_stop_speed_mps,
@@ -1398,8 +1386,9 @@ def main(cfg: DictConfig) -> None:
         destination_past_sign_m=float(
             getattr(cfg.simulation, "destination_past_sign_m", 8.0) or 8.0
         ),
-        traffic_density_augment=bool(
-            getattr(cfg.simulation, "traffic_density_augment", False)
+        n_variations=int(getattr(cfg.simulation, "n_variations", 3) or 3),
+        profile_density_cap=float(
+            getattr(cfg.simulation, "profile_density_cap", 1.0) or 1.0
         ),
         compliant_stop_success_seconds=float(
             getattr(cfg.simulation, "compliant_stop_success_seconds", 3.0) or 3.0

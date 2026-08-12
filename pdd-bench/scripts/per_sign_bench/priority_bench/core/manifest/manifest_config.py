@@ -11,7 +11,7 @@ from typing import Any
 DEFAULT_SPAWN_DISTANCE_BEFORE_END = 12.0
 DEFAULT_AUX_DISTANCE_FROM_INTERSECTION = 20.0
 DEFAULT_AUX_LANES_OCCUPIED_MAX = 4
-# Cap ego travel along the destination exit lane (roundabout / 4.3 only).
+# Cap ego travel / visual finish mark along the destination lane (4.3 / 3.2).
 DEFAULT_DESTINATION_MAX_ALONG_M = 100.0
 # Expert mandatory dwell at stop line after speed≈0 (sim steps; ×0.1 s ≈ seconds).
 # Was 30 (~3.0 s); halved to 15 (~1.5 s).
@@ -38,7 +38,7 @@ EXPERIMENT_DEFAULT_KEYS = (
     "aux_convoy_gap_m",
     "aux_lanes_occupied_max",
     "stop_wait_steps",
-    # Roundabout-only; only copied when present in experiment config.
+    # Roundabout / blocked_road; only copied when present in experiment config.
     "destination_max_along_m",
     # Blocked road (3.2)
     "sign_distance_from_start",

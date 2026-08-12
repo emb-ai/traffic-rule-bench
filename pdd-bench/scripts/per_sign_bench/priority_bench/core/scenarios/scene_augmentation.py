@@ -798,19 +798,27 @@ def _blocked_road_destination_edges(
     layout: JunctionPriorityLayout,
     ego_edge_id: str,
 ) -> List[str]:
-    """Outgoing edges ego may route onto (forbidden lane = destination edge)."""
+    """All reachable exits from the ego approach (forbidden lane = dest edge).
+
+    Spawn arm and lane are enumerated separately; here we list destination arms:
+    typically **T → 2** exits and **X → 3** (left / right / straight), excluding
+    U-turn back onto the same edge. Sign 3.2 is placed on this destination edge.
+    """
     arm = layout.arm_for_edge(ego_edge_id)
     if arm is None:
         return []
-    if layout.shape == "T":
-        candidates = _filter_real_destination_edges(arm.left_to)
-    elif layout.shape == "X":
-        candidates = _filter_real_destination_edges(arm.straight_to)
-    elif layout.shape == "2":
-        candidates = _filter_real_destination_edges(arm.straight_to or arm.outgoing_to)
-    else:
-        candidates = _filter_real_destination_edges(arm.straight_to or arm.left_to)
-    return [edge_id for edge_id in candidates if edge_id != ego_edge_id]
+    raw: List[str] = []
+    for bucket in (arm.left_to, arm.right_to, arm.straight_to):
+        for edge_id in bucket:
+            if edge_id not in raw:
+                raw.append(edge_id)
+    if not raw:
+        raw = list(arm.outgoing_to)
+    return [
+        edge_id
+        for edge_id in _filter_real_destination_edges(raw)
+        if edge_id != ego_edge_id
+    ]
 
 
 def enumerate_spawn_scenarios_blocked_road(
@@ -822,7 +830,12 @@ def enumerate_spawn_scenarios_blocked_road(
     route_index: Optional[VehicleRouteIndex] = None,
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 ) -> List[SpawnScenario]:
-    """Through-path scenarios: ego on approach arm, dest = forbidden outgoing edge."""
+    """Enumerate ego spawn arm × lane × destination arm (no aux).
+
+    - spawn arm: every approach arm on the junction
+    - lane: every spawnable lane on that arm
+    - destination: every reachable other exit (T≈2, X≈3); 3.2 sits on that exit
+    """
     del aux_distance_from_intersection  # no aux for blocked-road
     lane_lengths = lane_lengths or {}
     lane_keys_by_edge = _lane_keys_lookup(layout)
