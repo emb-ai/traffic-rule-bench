@@ -145,7 +145,6 @@ class SimulationConfig:
     destination_max_along_m: Optional[float] = None
     # Blocked road (3.2) only:
     sign_distance_from_start: float = 10.0
-    destination_past_sign_m: float = 8.0
     # Combined (lane/dest × n_variations) pool; max_scenarios caps the product.
     n_variations: int = 3
     profile_density_cap: float = 1.0
@@ -839,7 +838,6 @@ def generate_blocked_road_manifest(
     )
     sim_params = BlockedRoadSimParams(
         sign_distance_from_start=sim_cfg.sign_distance_from_start,
-        destination_past_sign_m=sim_cfg.destination_past_sign_m,
         spawn_distance_before_end=sim_cfg.spawn_distance_before_end,
         spawn_velocity_ms=sim_cfg.spawn_velocity_ms,
         horizon=sim_cfg.horizon,
@@ -965,7 +963,6 @@ def generate_blocked_road_manifest(
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
         "horizon": sim_cfg.horizon,
         "sign_distance_from_start": sim_cfg.sign_distance_from_start,
-        "destination_past_sign_m": sim_cfg.destination_past_sign_m,
         "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
         "destination_max_along_m": sim_cfg.destination_max_along_m,
         "compliant_stop_success_seconds": sim_cfg.compliant_stop_success_seconds,
@@ -1382,9 +1379,6 @@ def main(cfg: DictConfig) -> None:
         ),
         sign_distance_from_start=float(
             getattr(cfg.simulation, "sign_distance_from_start", 10.0) or 10.0
-        ),
-        destination_past_sign_m=float(
-            getattr(cfg.simulation, "destination_past_sign_m", 8.0) or 8.0
         ),
         n_variations=int(getattr(cfg.simulation, "n_variations", 3) or 3),
         profile_density_cap=float(

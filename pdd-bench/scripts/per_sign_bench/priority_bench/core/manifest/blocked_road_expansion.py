@@ -31,7 +31,6 @@ from sumo_space.sumo_catalog import stable_hash  # noqa: E402
 @dataclass(frozen=True)
 class BlockedRoadSimParams:
     sign_distance_from_start: float
-    destination_past_sign_m: float
     spawn_distance_before_end: float
     spawn_velocity_ms: float
     horizon: int
@@ -116,7 +115,7 @@ def expand_blocked_road_scene_entries(
                 net_path,
                 scenario.ego_destination_edge_id,
                 sign_distance_from_start=sim.sign_distance_from_start,
-                destination_past_sign_m=sim.destination_past_sign_m,
+                destination_max_along_m=float(sim.destination_max_along_m or 50.0),
             )
             if not geom_ok:
                 skipped_geometry += 1
@@ -254,7 +253,6 @@ def build_blocked_road_manifest_entry(
         "horizon": horizon,
         "sign_road_id": sign_road_id,
         "sign_distance_from_start": sim.sign_distance_from_start,
-        "destination_past_sign_m": sim.destination_past_sign_m,
         "spawn_distance_before_end": sim.spawn_distance_before_end,
         "compliant_stop_success_seconds": sim.compliant_stop_success_seconds,
         "compliant_stop_max_dist_m": sim.compliant_stop_max_dist_m,

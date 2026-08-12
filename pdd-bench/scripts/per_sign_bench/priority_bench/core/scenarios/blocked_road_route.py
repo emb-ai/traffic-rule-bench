@@ -33,19 +33,23 @@ def forbidden_edge_geometry_ok(
     edge_id: str,
     *,
     sign_distance_from_start: float,
-    destination_past_sign_m: float,
+    destination_max_along_m: float,
 ) -> tuple[bool, str]:
-    """Check destination/forbidden edge is long enough for sign + short route end."""
+    """Check destination/forbidden edge is long enough for sign + finish mark."""
     if not edge_id:
         return False, "missing forbidden edge_id"
     length = edge_length_m(net_path, edge_id)
     if length is None or length <= 0:
         return False, f"edge {edge_id!r} missing or empty"
-    needed = float(sign_distance_from_start) + float(destination_past_sign_m)
+    # Need room for the sign and for the capped finish (leave 5 m like MetaDrive).
+    needed = max(
+        float(sign_distance_from_start) + 1.0,
+        float(destination_max_along_m) + 5.0,
+    )
     if length <= needed:
         return (
             False,
             f"forbidden edge {edge_id!r} length {length:.2f}m <= "
-            f"sign_from_start+past {needed:.2f}m",
+            f"needed {needed:.2f}m (sign/dest cap)",
         )
     return True, "ok"

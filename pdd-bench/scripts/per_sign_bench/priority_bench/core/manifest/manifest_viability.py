@@ -443,7 +443,7 @@ def check_manifest_viability(
     if scenarios:
         if strategy == "blocked_road":
             from .manifest_config import (
-                DEFAULT_DESTINATION_PAST_SIGN_M,
+                DEFAULT_DESTINATION_MAX_ALONG_M,
                 DEFAULT_SIGN_DISTANCE_FROM_START,
             )
 
@@ -452,7 +452,7 @@ def check_manifest_viability(
                     net_path,
                     sc.ego_destination_edge_id,
                     sign_distance_from_start=DEFAULT_SIGN_DISTANCE_FROM_START,
-                    destination_past_sign_m=DEFAULT_DESTINATION_PAST_SIGN_M,
+                    destination_max_along_m=DEFAULT_DESTINATION_MAX_ALONG_M,
                 )
                 if ok:
                     return result

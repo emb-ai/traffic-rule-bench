@@ -79,7 +79,6 @@ from core.manifest.manifest_config import (
     DEFAULT_COMPLIANT_STOP_SPEED_MPS,
     DEFAULT_COMPLIANT_STOP_SUCCESS_SECONDS,
     DEFAULT_DESTINATION_MAX_ALONG_M,
-    DEFAULT_DESTINATION_PAST_SIGN_M,
     DEFAULT_SIGN_DISTANCE_FROM_START,
 )
 from core.layout.junction_sign_placement import (
@@ -898,17 +897,18 @@ def _apply_manifest_ego_destination(env, row: dict) -> Optional[str]:
 
 
 def _apply_destination_along_cap(env, row: dict) -> None:
-    """Move ego finish point to ``min(cap, final_lane.length-5)`` when capped.
+    """Cap ego finish to ``min(cap, final_lane.length-5)`` on the final lane.
 
-    Used by roundabout (4.3) and blocked_road (3.2). MetaDrive navigation still
-    ends on the exit/forbidden lane, but the visual dest mark and top-down GIF
-    path stop at the capped longitude (stored on the vehicle).
-
-    Blocked-road *success* stays compliant-stop / past-sign; this only caps the
-    drawn destination.
+    Used by roundabout (4.3) and blocked_road (3.2): sets
+    ``_priority_bench_dest_along_m`` for GIF/top-down and moves MetaDrive
+    ``_dest_node_path``. Arrive for both signs uses the same cap (compliant-stop
+    remains an alternate success path for 3.2). Violation on 3.2 is driving
+    past the no-entry sign (sign manager), not a separate past-sign distance.
     """
     raw = row.get("destination_max_along_m")
-    if raw is None and not _row_is_roundabout(row):
+    if raw is None and not (
+        _row_is_roundabout(row) or _row_is_blocked_road(row)
+    ):
         return
     try:
         cap = float(DEFAULT_DESTINATION_MAX_ALONG_M if raw is None else raw)
@@ -929,7 +929,6 @@ def _apply_destination_along_cap(env, row: dict) -> None:
     except Exception:
         return
 
-    # Used by arrive check (roundabout) + path overlay truncation + red dest mark.
     try:
         vehicle._priority_bench_dest_along_m = float(target)
     except Exception:
@@ -940,7 +939,6 @@ def _apply_destination_along_cap(env, row: dict) -> None:
     except Exception:
         pass
 
-    # Move MetaDrive destination marker (if shown) to the capped point.
     try:
         from metadrive.utils.coordinates_shift import panda_vector
 
@@ -2041,16 +2039,19 @@ def _place_blocked_road_sign(
             row.get("sign_distance_from_start", DEFAULT_SIGN_DISTANCE_FROM_START)
             or DEFAULT_SIGN_DISTANCE_FROM_START
         )
-        past_sign_m = float(
-            row.get("destination_past_sign_m", DEFAULT_DESTINATION_PAST_SIGN_M)
-            or DEFAULT_DESTINATION_PAST_SIGN_M
-        )
-        needed = distance_from_start + past_sign_m
+        raw_cap = row.get("destination_max_along_m")
+        try:
+            dest_cap = float(
+                DEFAULT_DESTINATION_MAX_ALONG_M if raw_cap is None else raw_cap
+            )
+        except (TypeError, ValueError):
+            dest_cap = float(DEFAULT_DESTINATION_MAX_ALONG_M)
+        needed = max(distance_from_start + 1.0, dest_cap + 5.0)
         lane_len = float(getattr(lane, "length", 0.0) or 0.0)
         if lane_len <= needed:
             print(
                 f"[NoTrafficSign] Forbidden lane too short on {sign_road_id}: "
-                f"{lane_len:.2f}m <= sign_from_start+past {needed:.2f}m"
+                f"{lane_len:.2f}m <= needed {needed:.2f}m (sign/dest cap)"
             )
             return False
 
@@ -2116,38 +2117,6 @@ def _ego_compliant_stop_before_blocked_road(
             continue
         dist_to_line = sign_long - veh_long
         if -0.25 < dist_to_line <= max_dist:
-            return True
-    return False
-
-
-def _ego_past_sign_route_end(
-    env,
-    vehicle,
-    *,
-    past_sign_m: float = DEFAULT_DESTINATION_PAST_SIGN_M,
-) -> bool:
-    """True when ego has driven past the no-entry sign by ``past_sign_m``."""
-    if vehicle is None:
-        return False
-    sign_mgr = getattr(getattr(env, "engine", None), "traffic_sign_manager", None)
-    if sign_mgr is None:
-        return False
-    past = float(past_sign_m)
-    for sign in list(getattr(sign_mgr, "signs", None) or []):
-        if not isinstance(sign, NoTrafficSign):
-            continue
-        sign_lane = getattr(sign, "lane", None)
-        if sign_lane is None:
-            continue
-        sign_long = float(
-            getattr(sign, "sign_line_position", getattr(sign, "placement_long", 0.0))
-            or 0.0
-        )
-        try:
-            veh_long = float(sign_lane.local_coordinates(vehicle.position)[0])
-        except Exception:
-            continue
-        if veh_long >= sign_long + past:
             return True
     return False
 
@@ -2502,7 +2471,6 @@ def run_one_episode(
         is_blocked_road_row = _row_is_blocked_road(row)
         compliant_stop_steps = 0
         compliant_stop_success = False
-        past_sign_arrive = False
         stop_success_s = float(
             row.get(
                 "compliant_stop_success_seconds",
@@ -2519,10 +2487,9 @@ def run_one_episode(
             row.get("compliant_stop_speed_mps", DEFAULT_COMPLIANT_STOP_SPEED_MPS)
             or DEFAULT_COMPLIANT_STOP_SPEED_MPS
         )
-        past_sign_m = float(
-            row.get("destination_past_sign_m", DEFAULT_DESTINATION_PAST_SIGN_M)
-            or DEFAULT_DESTINATION_PAST_SIGN_M
-        )
+
+        # Re-apply after spawn/signs/policy — nav may have been rebuilt.
+        _apply_destination_along_cap(base_env, row)
 
         for step in range(max_steps):
             if policy_obj is not None:
@@ -2667,7 +2634,8 @@ def run_one_episode(
                 prev_speed_mps = speed_mps
                 prev_heading = heading
 
-            # Roundabout-only: cap travel along the exit spoke.
+            # Finish: compliant stop (3.2 success) and/or capped dest (3.2 / 4.3).
+            # Violation on 3.2 is recorded by NoTrafficSign when ego passes the sign.
             dest_cap_m = 0.0
             capped_arrive = False
             if is_blocked_road_row:
@@ -2687,24 +2655,13 @@ def run_one_episode(
                         )
                 else:
                     compliant_stop_steps = 0
-                if not capped_arrive and _ego_past_sign_route_end(
-                    base_env,
-                    vehicle,
-                    past_sign_m=past_sign_m,
-                ):
-                    capped_arrive = True
-                    past_sign_arrive = True
-                    print(
-                        f"[NoTrafficSign] Past sign by {past_sign_m:.1f}m "
-                        f"→ destination (step={steps})"
-                    )
-            elif _row_is_roundabout(row):
+
+            if is_blocked_road_row or _row_is_roundabout(row):
                 raw_cap = row.get("destination_max_along_m")
                 if raw_cap is None:
                     dest_cap_m = float(DEFAULT_DESTINATION_MAX_ALONG_M)
                 else:
                     dest_cap_m = float(raw_cap or 0.0)
-                # Prefer the along-lane cap stored when destination was applied.
                 stored = getattr(vehicle, "_priority_bench_dest_along_m", None)
                 if stored is not None:
                     try:
@@ -2877,7 +2834,11 @@ def run_one_episode(
                     "route_length_m": (float(route_length_m)
                                         if route_length_m is not None else None),
                     "distance_travelled_m": float(distance_travelled_m),
-                    "success": bool(reached_dest and not crashed_flag_raw and not out_of_road),
+                    "success": (
+                        bool(compliant_stop_success and not crashed_flag_raw and not out_of_road)
+                        if is_blocked_road_row
+                        else bool(reached_dest and not crashed_flag_raw and not out_of_road)
+                    ),
                 }
                 sidecar = {
                     "scene_id": scene_id_for_uid,
@@ -2929,7 +2890,11 @@ def run_one_episode(
             "crashed": crashed,
             "out_of_road": out_of_road,
             "reached_dest": reached_dest,
-            "success": reached_dest and not crashed,
+            "success": (
+                bool(compliant_stop_success)
+                if is_blocked_road_row
+                else bool(reached_dest and not crashed)
+            ),
             "route_completion_pct": route_completion_pct,
             "infraction_penalty": infraction_penalty,
             "driving_score": driving_score,

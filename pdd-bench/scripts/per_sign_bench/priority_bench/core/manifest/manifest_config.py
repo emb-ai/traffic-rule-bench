@@ -19,7 +19,6 @@ DEFAULT_STOP_WAIT_STEPS = 15
 
 # Blocked road (3.2) defaults — sign on forbidden lane from its start.
 DEFAULT_SIGN_DISTANCE_FROM_START = 10.0
-DEFAULT_DESTINATION_PAST_SIGN_M = 8.0
 DEFAULT_BLOCKED_ROAD_SPAWN_DISTANCE_BEFORE_END = 25.0
 DEFAULT_COMPLIANT_STOP_SUCCESS_SECONDS = 3.0
 DEFAULT_COMPLIANT_STOP_MAX_DIST_M = 12.0
@@ -42,7 +41,6 @@ EXPERIMENT_DEFAULT_KEYS = (
     "destination_max_along_m",
     # Blocked road (3.2)
     "sign_distance_from_start",
-    "destination_past_sign_m",
     "compliant_stop_success_seconds",
     "compliant_stop_max_dist_m",
     "compliant_stop_speed_mps",
