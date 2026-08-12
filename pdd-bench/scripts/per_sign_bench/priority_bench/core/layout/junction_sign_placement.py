@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from .lane_keys import lane_num_from_key, make_lane_key
+from ..sumo.lane_keys import lane_num_from_key, make_lane_key
 
 # Distance from lane centerline edge to sign anchor (meters beyond pavement).
 SIGN_SHOULDER_OFFSET_M = 1.8
@@ -31,6 +31,20 @@ def sign_placement_long(lane, distance_before_end: float) -> float:
 def sign_longitudinal_offset(lane, distance_before_end: float) -> float:
     """MetaDrive offset from lane end (negative = before intersection)."""
     return sign_placement_long(lane, distance_before_end) - lane.length
+
+
+def sign_placement_long_from_start(lane, distance_from_start: float) -> float:
+    """Longitudinal position measured from the lane start (forbidden-lane entry)."""
+    lane_length = float(getattr(lane, "length", 0.0) or 0.0)
+    dist = max(0.1, float(distance_from_start))
+    if lane_length <= 0.2:
+        return 0.1
+    return max(0.1, min(dist, lane_length - 0.1))
+
+
+def sign_longitudinal_offset_from_start(lane, distance_from_start: float) -> float:
+    """MetaDrive offset placing the sign near the start of ``lane``."""
+    return sign_placement_long_from_start(lane, distance_from_start) - lane.length
 
 
 def lateral_offset_beside_lane(

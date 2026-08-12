@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from .lane_keys import lane_num_from_key, make_lane_key
+from ..sumo.lane_keys import lane_num_from_key, make_lane_key
 
 MIN_SPAWN_LONGITUDE_M = 3.0
 # Conflict arcs shorter than this are rejected at scene generation.

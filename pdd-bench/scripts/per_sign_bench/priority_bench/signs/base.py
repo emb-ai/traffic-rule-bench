@@ -1,4 +1,4 @@
-"""Sign profiles for priority-junction benches (2.1 / 2.3 / 2.4 / 2.5 / 4.3)."""
+"""Sign profiles for priority-junction benches (2.1 / 2.3 / 2.4 / 2.5 / 4.3 / 3.2 blocked_road)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 
-from core.scene_augmentation import SpawnStrategy
+from core.scenarios.scene_augmentation import SpawnStrategy
 
 LayoutMode = Literal["main_main", "main_secondary", "roundabout"]
 
@@ -92,7 +92,19 @@ ROUNDABOUT = SignProfile(
     ego_road_class="secondary",
 )
 
-_PROFILES = (MAIN_ROAD, SECONDARY_ROAD, YIELD, STOP, ROUNDABOUT)
+BLOCKED_ROAD = SignProfile(
+    id="blocked_road",
+    pdd_code="3.2",
+    sign_type="blocked_road",
+    sign_name="Movement prohibited (3.2)",
+    layout_mode="main_main",
+    spawn_strategy="blocked_road",
+    data_subdir="blocked_road",
+    output_code="3_2",
+    ego_road_class=None,
+)
+
+_PROFILES = (MAIN_ROAD, SECONDARY_ROAD, YIELD, STOP, ROUNDABOUT, BLOCKED_ROAD)
 
 _REGISTRY: dict[str, SignProfile] = {
     MAIN_ROAD.id: MAIN_ROAD,
@@ -100,6 +112,7 @@ _REGISTRY: dict[str, SignProfile] = {
     YIELD.id: YIELD,
     STOP.id: STOP,
     ROUNDABOUT.id: ROUNDABOUT,
+    BLOCKED_ROAD.id: BLOCKED_ROAD,
     # aliases
     "2.1": MAIN_ROAD,
     "2_1": MAIN_ROAD,
@@ -117,6 +130,9 @@ _REGISTRY: dict[str, SignProfile] = {
     "stop_sign": STOP,
     "4.3": ROUNDABOUT,
     "4_3": ROUNDABOUT,
+    "3.2": BLOCKED_ROAD,
+    "3_2": BLOCKED_ROAD,
+    "blocked_road": BLOCKED_ROAD,
 }
 
 

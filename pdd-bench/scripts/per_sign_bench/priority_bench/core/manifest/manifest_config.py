@@ -17,6 +17,14 @@ DEFAULT_DESTINATION_MAX_ALONG_M = 100.0
 # Was 30 (~3.0 s); halved to 15 (~1.5 s).
 DEFAULT_STOP_WAIT_STEPS = 15
 
+# Blocked road (3.2) defaults — sign on forbidden lane from its start.
+DEFAULT_SIGN_DISTANCE_FROM_START = 10.0
+DEFAULT_DESTINATION_PAST_SIGN_M = 8.0
+DEFAULT_BLOCKED_ROAD_SPAWN_DISTANCE_BEFORE_END = 25.0
+DEFAULT_COMPLIANT_STOP_SUCCESS_SECONDS = 3.0
+DEFAULT_COMPLIANT_STOP_MAX_DIST_M = 12.0
+DEFAULT_COMPLIANT_STOP_SPEED_MPS = 0.5
+
 # Row fields that may be filled from manifest.json / real_manifest_summary.json.
 EXPERIMENT_DEFAULT_KEYS = (
     "spawn_distance_before_end",
@@ -32,6 +40,12 @@ EXPERIMENT_DEFAULT_KEYS = (
     "stop_wait_steps",
     # Roundabout-only; only copied when present in experiment config.
     "destination_max_along_m",
+    # Blocked road (3.2)
+    "sign_distance_from_start",
+    "destination_past_sign_m",
+    "compliant_stop_success_seconds",
+    "compliant_stop_max_dist_m",
+    "compliant_stop_speed_mps",
 )
 
 

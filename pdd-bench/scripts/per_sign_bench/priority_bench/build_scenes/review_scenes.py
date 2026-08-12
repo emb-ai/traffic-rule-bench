@@ -44,7 +44,7 @@ PREVIEW_NAME_DEFAULT = "custom_cropped.png"
 
 sys.path.insert(0, str(PACKAGE_DIR))
 
-from core.scene_selection import (  # noqa: E402
+from core.pool.scene_selection import (  # noqa: E402
     REJECTED_SUBDIR,
     RESERVED_SCENE_DIRS,
     VERDICT_KEEP,
@@ -55,7 +55,7 @@ from core.scene_selection import (  # noqa: E402
     save_scene_selection,
     set_scene_verdict,
 )
-from core.sumo_utils import load_scene_meta  # noqa: E402
+from core.sumo.sumo_utils import load_scene_meta  # noqa: E402
 
 
 def selection_path(scenes_root: Path) -> Path:

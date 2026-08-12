@@ -1,6 +1,7 @@
 """Priority-sign registry."""
 
 from .base import (
+    BLOCKED_ROAD,
     MAIN_ROAD,
     ROUNDABOUT,
     SECONDARY_ROAD,
@@ -19,6 +20,7 @@ __all__ = [
     "YIELD",
     "STOP",
     "ROUNDABOUT",
+    "BLOCKED_ROAD",
     "SignProfile",
     "get_profile",
     "list_profiles",

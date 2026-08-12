@@ -22,13 +22,13 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from core.junction_priority_layout import (
+from core.layout.junction_priority_layout import (
     JunctionLayoutError,
     allowed_shapes_for_mode,
     build_junction_priority_layout,
 )
-from core.lane_keys import lane_edge_id, lane_num_from_key, make_lane_key
-from core.auxiliary_agent import (
+from core.sumo.lane_keys import lane_edge_id, lane_num_from_key, make_lane_key
+from core.scenarios.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
     resolve_aux_destination_lane_key,
     right_lane_keys_for_aux,
@@ -36,33 +36,43 @@ from core.auxiliary_agent import (
     viable_aux_lane_keys,
     viable_right_aux_lane_keys,
 )
-from core.sumo_utils import load_vehicle_route_index
-from core.manifest_config import (
+from core.sumo.sumo_utils import load_vehicle_route_index
+from core.manifest.manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     DEFAULT_STOP_WAIT_STEPS,
 )
-from core.manifest_expansion import (
+from core.manifest.manifest_expansion import (
     AuxiliaryParams,
     ExpansionConfig,
     expand_scene_entries,
 )
-from core.scene_augmentation import (
+from core.manifest.blocked_road_expansion import (
+    BlockedRoadExpansionConfig,
+    BlockedRoadSimParams,
+    build_blocked_road_manifest_entry,
+    expand_blocked_road_scene_entries,
+)
+from core.manifest.traffic_density_levels import (
+    MAX_TRAFFIC_DENSITY_LEVELS,
+    list_traffic_density_levels,
+)
+from core.scenarios.scene_augmentation import (
     SpawnScenario,
     pick_default_main_spawn_meta_for_net,
     pick_default_roundabout_spawn_meta_for_net,
     pick_default_yield_spawn_meta_for_net,
 )
-from core.roundabout_topology import build_roundabout_layout
-from core.scene_selection import is_reserved_scene_dir, unapplied_rejected_scenes, load_scene_selection
-from core.moscow_pool import (
+from core.layout.roundabout_topology import build_roundabout_layout
+from core.pool.scene_selection import is_reserved_scene_dir, unapplied_rejected_scenes, load_scene_selection
+from core.pool.moscow_pool import (
     count_splits,
     filter_scene_dirs_by_split,
     load_moscow_pool,
     normalize_split,
     pool_path,
 )
-from core.sumo_utils import is_vehicle_drivable_lane
+from core.sumo.sumo_utils import is_vehicle_drivable_lane
 from signs import (
     STOP,
     SignProfile,
@@ -137,6 +147,13 @@ class SimulationConfig:
     spawn_distance_before_end: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END
     # Roundabout-only: set via configs/sign/roundabout.yaml.
     destination_max_along_m: Optional[float] = None
+    # Blocked road (3.2) only:
+    sign_distance_from_start: float = 10.0
+    destination_past_sign_m: float = 8.0
+    traffic_density_augment: bool = False
+    compliant_stop_success_seconds: float = 3.0
+    compliant_stop_max_dist_m: float = 12.0
+    compliant_stop_speed_mps: float = 0.5
 
 
 @dataclass
@@ -275,7 +292,7 @@ def build_junction_layout_for_scene(
     """Build junction layout using the active sign profile's layout mode."""
     try:
         if _profile().layout_mode == "roundabout":
-            from core.scene_augmentation import _roundabout_meta_ring_kwargs
+            from core.scenarios.scene_augmentation import _roundabout_meta_ring_kwargs
 
             meta = scene_meta or {}
             prefer_ego = meta.get("catalog_sign_road_id") or meta.get("road_id")
@@ -779,6 +796,219 @@ def build_manifest_entry(
 
 
 # -----------------------------------------------------------------------------
+# Blocked road (3.2) manifest generation
+# -----------------------------------------------------------------------------
+def generate_blocked_road_manifest(
+    scenes_dir: Path,
+    output_dir: Path,
+    scenario_cfg: ScenarioConfig,
+    sim_cfg: SimulationConfig,
+    expansion_cfg: ExpansionConfig,
+    split: str = "all",
+) -> List[Dict]:
+    """Generate real_manifest.jsonl for PDD 3.2 (through-path, traffic density)."""
+    split = normalize_split(split)
+    assert_rejected_scenes_applied(scenes_dir)
+    all_scenes = discover_scenes(scenes_dir)
+    print(f"Scenes root: {scenes_dir.resolve()}")
+    print(f"Discovered {len(all_scenes)} scene(s) on disk")
+
+    try:
+        scenes, split_by_id, skipped_unknown = filter_scene_dirs_by_split(
+            all_scenes, split=split, scenes_dir=scenes_dir
+        )
+    except FileNotFoundError as exc:
+        raise SystemExit(f"[error] {exc}") from exc
+
+    if skipped_unknown:
+        preview = ", ".join(skipped_unknown[:8])
+        more = f" (+{len(skipped_unknown) - 8} more)" if len(skipped_unknown) > 8 else ""
+        print(
+            f"  [split] Skipping {len(skipped_unknown)} scene(s) not in "
+            f"{pool_path(scenes_dir).name}: {preview}{more}"
+        )
+    print(f"Split filter: {split} → {len(scenes)} scene(s)")
+    print(
+        f"Augmentation axes: layout={expansion_cfg.layout_on}, "
+        f"traffic_density={sim_cfg.traffic_density_augment}"
+    )
+
+    blocked_road_expansion = BlockedRoadExpansionConfig(
+        layout=expansion_cfg.layout_on,
+        max_scenarios=scenario_cfg.max_scenarios,
+        traffic_density_augment=sim_cfg.traffic_density_augment,
+    )
+    sim_params = BlockedRoadSimParams(
+        sign_distance_from_start=sim_cfg.sign_distance_from_start,
+        destination_past_sign_m=sim_cfg.destination_past_sign_m,
+        spawn_distance_before_end=sim_cfg.spawn_distance_before_end,
+        spawn_velocity_ms=sim_cfg.spawn_velocity_ms,
+        traffic_density=sim_cfg.traffic_density,
+        horizon=sim_cfg.horizon,
+        compliant_stop_success_seconds=sim_cfg.compliant_stop_success_seconds,
+        compliant_stop_max_dist_m=sim_cfg.compliant_stop_max_dist_m,
+        compliant_stop_speed_mps=sim_cfg.compliant_stop_speed_mps,
+        sign_distance_before_end=sim_cfg.sign_distance_before_end,
+    )
+
+    density_levels = None
+    if sim_cfg.traffic_density_augment:
+        density_levels = list(list_traffic_density_levels(MAX_TRAFFIC_DENSITY_LEVELS))
+        print("[blocked_road] Traffic density levels (nuPlan):")
+        for level in density_levels:
+            print(f"  td{level.id} {level.describe()}")
+
+    build_entry = partial(
+        build_blocked_road_manifest_entry,
+        stable_seed_fn=_stable_seed,
+        pdd_code=PDD_CODE,
+        sign_type=SIGN_TYPE,
+        sign_class="NoTrafficSign",
+        sign_title="Movement prohibited",
+    )
+
+    entries: List[Dict] = []
+    used_scene_ids: List[str] = []
+    min_lane = min(float(sim_cfg.spawn_distance_before_end), 8.0)
+
+    for scene_dir in scenes:
+        meta = load_scene_metadata(scene_dir)
+        scene_name = meta.get("scene_name", scene_dir.name)
+        net_file = meta.get("net_file", "map.net.xml")
+        net_full_path = scene_dir / net_file
+        print(f"\n=== {scene_name} ===")
+
+        spawn_lanes = parse_sumo_net_for_spawn_lanes(net_full_path, min_length=min_lane)
+        print(f"  Found {len(spawn_lanes)} intersection-approaching lane(s)")
+
+        sign_lat = meta.get("latitude") or meta.get("center_lat")
+        sign_lon = meta.get("longitude") or meta.get("center_lon")
+        junction_layout = build_junction_layout_for_scene(
+            net_full_path,
+            sign_lat=float(sign_lat) if sign_lat is not None else None,
+            sign_lon=float(sign_lon) if sign_lon is not None else None,
+            scene_meta=meta,
+        )
+        if junction_layout is None:
+            print(f"  Skipping {scene_name}: no junction layout")
+            continue
+        shape = junction_layout.get("shape")
+        allowed_shapes = allowed_shapes_for_mode(_profile().layout_mode)
+        if shape not in allowed_shapes:
+            print(
+                f"  Skipping {scene_name}: junction shape {shape!r} "
+                f"(need {sorted(allowed_shapes)})"
+            )
+            continue
+
+        scene_entries = expand_blocked_road_scene_entries(
+            scene_dir=scene_dir,
+            scenes_root=scenes_dir,
+            meta=meta,
+            net_path=net_full_path,
+            spawn_lanes=spawn_lanes,
+            junction_layout=junction_layout,
+            sim=sim_params,
+            expansion=blocked_road_expansion,
+            build_entry=build_entry,
+            density_levels=density_levels,
+        )
+        if not scene_entries:
+            print(f"  Skipping {scene_name}: no manifest entries after expansion")
+            continue
+
+        scene_split = split_by_id.get(scene_name) or split_by_id.get(scene_dir.name)
+        for entry in scene_entries:
+            entry["split"] = scene_split
+        entries.extend(scene_entries)
+        used_scene_ids.append(scene_dir.name)
+
+    pre_total = len(entries)
+    max_total = scenario_cfg.max_total
+    if max_total is not None and max_total >= 0 and pre_total > max_total:
+        rng = random.Random(
+            hash(("max_total_shuffle", int(max_total), split, PDD_CODE)) & 0xFFFFFFFF
+        )
+        rng.shuffle(entries)
+        entries = entries[: int(max_total)]
+        used_scene_ids = sorted({str(e.get("scene_id")) for e in entries if e.get("scene_id")})
+        print(
+            f"[max_total] Retained {len(entries)} of {pre_total} manifest entries "
+            f"(shuffled, cap={max_total})"
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / "real_manifest.jsonl"
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        for entry in entries:
+            f.write(json.dumps(entry, default=str) + "\n")
+
+    split_counts = count_splits(used_scene_ids, split_by_id)
+    n_density = len(density_levels) if density_levels else 1
+    summary = {
+        "pdd_code": PDD_CODE,
+        "sign_type": SIGN_TYPE,
+        "sign_name": SIGN_NAME,
+        "sign_class": "NoTrafficSign",
+        "sign_placement": (
+            "artificial at start of forbidden (destination) lane "
+            "(sign_distance_from_start); ego on approach "
+            "(spawn_distance_before_end)"
+        ),
+        "split_filter": split,
+        "split_counts": split_counts,
+        "total_scenes": len(used_scene_ids),
+        "total_entries": len(entries),
+        "total_entries_before_max_total": pre_total,
+        "augmentation_layout": expansion_cfg.layout_on,
+        "traffic_density_augment": sim_cfg.traffic_density_augment,
+        "traffic_density_levels": [
+            {
+                "id": level.id,
+                "name": level.name,
+                "percentile": level.percentile,
+                "nuplan_vehicles_per_frame": level.nuplan_vehicles_per_frame,
+                "traffic_density": level.traffic_density,
+            }
+            for level in (density_levels or [])
+        ],
+        "max_scenarios": scenario_cfg.max_scenarios,
+        "max_total": scenario_cfg.max_total,
+        "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
+        "traffic_density": sim_cfg.traffic_density,
+        "horizon": sim_cfg.horizon,
+        "sign_distance_from_start": sim_cfg.sign_distance_from_start,
+        "destination_past_sign_m": sim_cfg.destination_past_sign_m,
+        "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
+        "compliant_stop_success_seconds": sim_cfg.compliant_stop_success_seconds,
+        "compliant_stop_max_dist_m": sim_cfg.compliant_stop_max_dist_m,
+        "compliant_stop_speed_mps": sim_cfg.compliant_stop_speed_mps,
+        "auxiliary_agent": False,
+        "generated_at": datetime.now().isoformat(),
+        "scenes": list(used_scene_ids),
+    }
+    summary_path = output_dir / "real_manifest_summary.json"
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+    manifest_meta_path = output_dir / "manifest.json"
+    with open(manifest_meta_path, "w", encoding="utf-8") as f:
+        json.dump({"entries_file": "real_manifest.jsonl", **summary}, f, indent=2)
+
+    repro_dir = write_repro_artifacts(
+        output_dir=output_dir,
+        scenes_dir=scenes_dir,
+        split_filter=split,
+        used_scene_ids=used_scene_ids,
+        split_by_id=split_by_id,
+        pdd_code=PDD_CODE,
+    )
+    print(f"Wrote repro artifacts → {repro_dir}")
+    print(f"\nGenerated {len(entries)} manifest entries from {len(used_scene_ids)} scenes")
+    print(f"  Manifest: {manifest_path}")
+    return entries
+
+
+# -----------------------------------------------------------------------------
 # Manifest generation
 # -----------------------------------------------------------------------------
 def generate_manifest(
@@ -1162,6 +1392,24 @@ def main(cfg: DictConfig) -> None:
             if getattr(cfg.simulation, "destination_max_along_m", None) is not None
             else None
         ),
+        sign_distance_from_start=float(
+            getattr(cfg.simulation, "sign_distance_from_start", 10.0) or 10.0
+        ),
+        destination_past_sign_m=float(
+            getattr(cfg.simulation, "destination_past_sign_m", 8.0) or 8.0
+        ),
+        traffic_density_augment=bool(
+            getattr(cfg.simulation, "traffic_density_augment", False)
+        ),
+        compliant_stop_success_seconds=float(
+            getattr(cfg.simulation, "compliant_stop_success_seconds", 3.0) or 3.0
+        ),
+        compliant_stop_max_dist_m=float(
+            getattr(cfg.simulation, "compliant_stop_max_dist_m", 12.0) or 12.0
+        ),
+        compliant_stop_speed_mps=float(
+            getattr(cfg.simulation, "compliant_stop_speed_mps", 0.5) or 0.5
+        ),
     )
     expert_cfg = ExpertConfig(
         stop_wait_steps=int(
@@ -1215,16 +1463,26 @@ def main(cfg: DictConfig) -> None:
     split = normalize_split(getattr(cfg.paths, "split", "all"))
     print(f"Using paths.split: {split}")
 
-    entries = generate_manifest(
-        scenes_dir=scenes_dir,
-        output_dir=experiment_dir,
-        scenario_cfg=scenario_cfg,
-        sim_cfg=sim_cfg,
-        aux_cfg=aux_cfg,
-        expansion_cfg=expansion_cfg,
-        split=split,
-        expert_cfg=expert_cfg,
-    )
+    if profile.spawn_strategy == "blocked_road":
+        entries = generate_blocked_road_manifest(
+            scenes_dir=scenes_dir,
+            output_dir=experiment_dir,
+            scenario_cfg=scenario_cfg,
+            sim_cfg=sim_cfg,
+            expansion_cfg=expansion_cfg,
+            split=split,
+        )
+    else:
+        entries = generate_manifest(
+            scenes_dir=scenes_dir,
+            output_dir=experiment_dir,
+            scenario_cfg=scenario_cfg,
+            sim_cfg=sim_cfg,
+            aux_cfg=aux_cfg,
+            expansion_cfg=expansion_cfg,
+            split=split,
+            expert_cfg=expert_cfg,
+        )
     
     if gif_cfg.enabled and entries:
         manifest_path = experiment_dir / "real_manifest.jsonl"

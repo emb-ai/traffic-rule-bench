@@ -7,15 +7,15 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from .auxiliary_agent import (
+from ..scenarios.auxiliary_agent import (
     main_lane_keys_for_aux,
     min_aux_spawn_lane_length,
     right_lane_keys_for_aux,
     viable_aux_lane_keys,
     viable_right_aux_lane_keys,
 )
-from .lane_keys import make_lane_key
-from .scene_augmentation import SpawnScenario, SpawnStrategy, augment_layout_for_scene
+from ..sumo.lane_keys import make_lane_key
+from ..scenarios.scene_augmentation import SpawnScenario, SpawnStrategy, augment_layout_for_scene
 
 
 @dataclass(frozen=True)
@@ -185,7 +185,7 @@ def _print_aux_lane_availability(
         convoy_gap_m=min(aux.convoy_gaps_m) if aux.convoy_gaps_m else 10.0,
     )
     if spawn_strategy == "roundabout":
-        from .roundabout_aux import MIN_CONFLICT_ARC_LENGTH_M
+        from ..scenarios.roundabout_aux import MIN_CONFLICT_ARC_LENGTH_M
 
         min_lane_for_lead = float(MIN_CONFLICT_ARC_LENGTH_M)
     if spawn_strategy in ("yield", "roundabout"):
@@ -206,7 +206,7 @@ def _print_aux_lane_availability(
 
     available = 0
     if junction_layout.get("arms"):
-        from .junction_priority_layout import right_arm_edge_id
+        from ..layout.junction_priority_layout import right_arm_edge_id
 
         sample_ego = junction_layout["arms"][0].get("edge_id")
         if sample_ego:

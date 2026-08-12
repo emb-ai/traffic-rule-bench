@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Literal, Optional, Tuple
 
-from .junction_priority_layout import (
+from ..layout.junction_priority_layout import (
     INTERSECTION_JUNCTION_TYPES,
     JunctionPriorityLayout,
     build_junction_priority_layout,
@@ -15,12 +15,12 @@ from .junction_priority_layout import (
     right_arm_for_layout,
     straight_arm_for_layout,
 )
-from .lane_keys import make_lane_key, pick_lane_key_on_edge
-from .sumo_utils import VehicleRouteIndex, is_vehicle_drivable_lane, load_vehicle_route_index
+from ..sumo.lane_keys import make_lane_key, pick_lane_key_on_edge
+from ..sumo.sumo_utils import VehicleRouteIndex, is_vehicle_drivable_lane, load_vehicle_route_index
 
 DEFAULT_AUX_DISTANCE_FROM_INTERSECTION = 20.0
 
-SpawnStrategy = Literal["equal_priority", "yield", "roundabout"]
+SpawnStrategy = Literal["equal_priority", "yield", "roundabout", "blocked_road"]
 EgoManeuver = Literal["left", "right", "straight"]
 AuxSide = Literal["left", "right", "straight", "other"]
 
@@ -53,15 +53,20 @@ class SpawnScenario:
             "spawn_lane_num": self.ego_lane_num,
             "destination_lane_id": self.ego_destination_lane_key,
             "destination_edge_id": self.ego_destination_edge_id,
-            "aux_road_id": self.aux_edge_id,
-            "aux_spawn_lane_num": self.aux_lane_num,
-            "aux_spawn_lane_index": _lane_key(self.aux_edge_id, self.aux_lane_num),
-            "aux_destination_lane_id": self.aux_destination_lane_key,
-            "aux_destination_edge_id": self.aux_destination_edge_id,
             "augmentation_id": self.scenario_id,
         }
-        if self.aux_spawn_longitudinal is not None:
-            fields["aux_spawn_longitudinal"] = float(self.aux_spawn_longitudinal)
+        if self.aux_edge_id:
+            fields.update(
+                {
+                    "aux_road_id": self.aux_edge_id,
+                    "aux_spawn_lane_num": self.aux_lane_num,
+                    "aux_spawn_lane_index": _lane_key(self.aux_edge_id, self.aux_lane_num),
+                    "aux_destination_lane_id": self.aux_destination_lane_key,
+                    "aux_destination_edge_id": self.aux_destination_edge_id,
+                }
+            )
+            if self.aux_spawn_longitudinal is not None:
+                fields["aux_spawn_longitudinal"] = float(self.aux_spawn_longitudinal)
         return fields
 
 
@@ -655,12 +660,12 @@ def enumerate_spawn_scenarios_roundabout(
     Destination: always the same exit edge/lane as ego (runtime may
     ring-circulate one hop at a time).
     """
-    from .lane_keys import lane_num_from_key, pick_lane_key_on_edge
+    from ..sumo.lane_keys import lane_num_from_key, pick_lane_key_on_edge
     from .roundabout_aux import (
         merge_lane_lengths_from_layout,
         resolve_aux_spawn_placement,
     )
-    from .roundabout_yield_zone import entry_conflict_ring_edges
+    from ..layout.roundabout_yield_zone import entry_conflict_ring_edges
 
     layout_dict = layout.to_dict()
     lane_lengths = merge_lane_lengths_from_layout(layout_dict, lane_lengths or {})
@@ -789,6 +794,80 @@ def enumerate_spawn_scenarios_roundabout(
     return scenarios
 
 
+def _blocked_road_destination_edges(
+    layout: JunctionPriorityLayout,
+    ego_edge_id: str,
+) -> List[str]:
+    """Outgoing edges ego may route onto (forbidden lane = destination edge)."""
+    arm = layout.arm_for_edge(ego_edge_id)
+    if arm is None:
+        return []
+    if layout.shape == "T":
+        candidates = _filter_real_destination_edges(arm.left_to)
+    elif layout.shape == "X":
+        candidates = _filter_real_destination_edges(arm.straight_to)
+    elif layout.shape == "2":
+        candidates = _filter_real_destination_edges(arm.straight_to or arm.outgoing_to)
+    else:
+        candidates = _filter_real_destination_edges(arm.straight_to or arm.left_to)
+    return [edge_id for edge_id in candidates if edge_id != ego_edge_id]
+
+
+def enumerate_spawn_scenarios_blocked_road(
+    layout: JunctionPriorityLayout,
+    spawn_lanes_by_edge: Dict[str, List[int]],
+    *,
+    min_lane_length: float = 20.0,
+    lane_lengths: Optional[Dict[Tuple[str, int], float]] = None,
+    route_index: Optional[VehicleRouteIndex] = None,
+    aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+) -> List[SpawnScenario]:
+    """Through-path scenarios: ego on approach arm, dest = forbidden outgoing edge."""
+    del aux_distance_from_intersection  # no aux for blocked-road
+    lane_lengths = lane_lengths or {}
+    lane_keys_by_edge = _lane_keys_lookup(layout)
+    ego_edges = sorted({arm.edge_id for arm in layout.arms})
+    scenarios: List[SpawnScenario] = []
+
+    for ego_edge in ego_edges:
+        ego_lane_nums = spawn_lanes_by_edge.get(ego_edge, [])
+        if not ego_lane_nums:
+            continue
+        ego_dest_edges = _blocked_road_destination_edges(layout, ego_edge)
+        if not ego_dest_edges:
+            continue
+        for ego_lane in ego_lane_nums:
+            if lane_lengths.get((ego_edge, ego_lane), min_lane_length) < min_lane_length:
+                continue
+            for ego_dest_edge in ego_dest_edges:
+                ego_dest_lane_key = _pick_outgoing_lane_key(
+                    ego_dest_edge, ego_lane, lane_keys_by_edge
+                )
+                if not _is_valid_departure(
+                    ego_edge, ego_lane, ego_dest_edge, ego_dest_lane_key
+                ):
+                    continue
+                if route_index is not None and not route_index.can_reach_edge(
+                    ego_edge, ego_lane, ego_dest_edge
+                ):
+                    continue
+                scenario_id = f"ego_{ego_edge}_L{ego_lane}_to_{ego_dest_edge}"
+                scenarios.append(
+                    SpawnScenario(
+                        ego_edge_id=ego_edge,
+                        ego_lane_num=ego_lane,
+                        ego_destination_edge_id=ego_dest_edge,
+                        ego_destination_lane_key=ego_dest_lane_key,
+                        aux_edge_id="",
+                        aux_lane_num=0,
+                        aux_destination_edge_id="",
+                        aux_destination_lane_key="",
+                        scenario_id=scenario_id,
+                    )
+                )
+    return scenarios
+
+
 def enumerate_spawn_scenarios(
     layout: JunctionPriorityLayout,
     spawn_lanes_by_edge: Dict[str, List[int]],
@@ -816,6 +895,14 @@ def enumerate_spawn_scenarios(
             lane_lengths=lane_lengths,
             route_index=route_index,
             aux_distance_from_intersection=aux_distance_from_intersection,
+        )
+    if strategy == "blocked_road":
+        return enumerate_spawn_scenarios_blocked_road(
+            layout,
+            spawn_lanes_by_edge,
+            min_lane_length=min_lane_length,
+            lane_lengths=lane_lengths,
+            route_index=route_index,
         )
     return enumerate_spawn_scenarios_equal_priority(
         layout,
@@ -860,8 +947,8 @@ def augment_layout_for_scene(
 ) -> Tuple[JunctionPriorityLayout, List[SpawnScenario]]:
     """Build layout and enumerate scenarios for one scene."""
     if strategy == "roundabout":
-        from .junction_priority_layout import JunctionLayoutError
-        from .roundabout_topology import build_roundabout_layout
+        from ..layout.junction_priority_layout import JunctionLayoutError
+        from ..layout.roundabout_topology import build_roundabout_layout
 
         meta = scene_meta or {}
         prefer_ego = meta.get("catalog_sign_road_id") or meta.get("road_id")
@@ -1186,7 +1273,7 @@ def pick_default_roundabout_spawn_meta_for_net(
     min_lane_length: float = 20.0,
     scene_meta: Optional[dict] = None,
 ) -> Optional[dict]:
-    from .roundabout_topology import build_roundabout_layout
+    from ..layout.roundabout_topology import build_roundabout_layout
 
     meta = scene_meta or {}
     layout = build_roundabout_layout(

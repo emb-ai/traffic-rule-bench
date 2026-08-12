@@ -7,12 +7,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
-from .auxiliary_agent import (
+from ..scenarios.auxiliary_agent import (
     has_viable_aux_lanes,
     min_aux_spawn_lane_length,
     viable_right_aux_lane_keys,
 )
-from .junction_priority_layout import (
+from ..layout.junction_priority_layout import (
     JunctionLayoutError,
     allowed_shapes_for_mode,
     build_junction_priority_layout,
@@ -22,7 +22,8 @@ from .manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
 )
-from .scene_augmentation import (
+from ..scenarios.blocked_road_route import forbidden_edge_geometry_ok
+from ..scenarios.scene_augmentation import (
     SpawnStrategy,
     _aux_straight_destination,
     _ego_destination_edges,
@@ -35,7 +36,7 @@ from .scene_augmentation import (
     lane_lengths_from_spawn_lanes,
     parse_intersection_approach_lanes,
 )
-from .sumo_utils import load_vehicle_route_index, load_scene_meta, resolve_net_file
+from ..sumo.sumo_utils import load_vehicle_route_index, load_scene_meta, resolve_net_file
 
 
 @dataclass
@@ -355,7 +356,7 @@ def check_manifest_viability(
 
     try:
         if strategy == "roundabout":
-            from .roundabout_topology import build_roundabout_layout
+            from ..layout.roundabout_topology import build_roundabout_layout
 
             layout = build_roundabout_layout(
                 net_path,
@@ -389,11 +390,11 @@ def check_manifest_viability(
     result.spawn_lane_count = len(spawn_lanes)
 
     junction_layout = layout.to_dict()
-    if auxiliary_enabled:
+    if auxiliary_enabled and strategy != "blocked_road":
         if strategy in ("yield", "roundabout"):
             if not has_viable_aux_lanes(junction_layout, aux_distance_from_intersection):
                 if strategy == "roundabout":
-                    from .roundabout_aux import MIN_CONFLICT_ARC_LENGTH_M
+                    from ..scenarios.roundabout_aux import MIN_CONFLICT_ARC_LENGTH_M
 
                     min_aux_lane = float(MIN_CONFLICT_ARC_LENGTH_M)
                     need_msg = (
@@ -440,9 +441,36 @@ def check_manifest_viability(
     )
     result.scenario_count = len(scenarios)
     if scenarios:
+        if strategy == "blocked_road":
+            from .manifest_config import (
+                DEFAULT_DESTINATION_PAST_SIGN_M,
+                DEFAULT_SIGN_DISTANCE_FROM_START,
+            )
+
+            for sc in scenarios:
+                ok, _ = forbidden_edge_geometry_ok(
+                    net_path,
+                    sc.ego_destination_edge_id,
+                    sign_distance_from_start=DEFAULT_SIGN_DISTANCE_FROM_START,
+                    destination_past_sign_m=DEFAULT_DESTINATION_PAST_SIGN_M,
+                )
+                if ok:
+                    return result
+            return ManifestViabilityResult(
+                viable=False,
+                reason="forbidden_edge_too_short",
+                detail="no through-path scenario with long enough forbidden lane",
+                spawn_lane_count=result.spawn_lane_count,
+                scenario_count=len(scenarios),
+            )
         return result
 
-    if strategy == "roundabout":
+    if strategy == "blocked_road":
+        reason, detail = (
+            "no_through_path_scenario",
+            "no ego approach → forbidden outgoing edge combinations",
+        )
+    elif strategy == "roundabout":
         reason, detail = (
             "no_valid_scenario_combo",
             "no spoke×conflict-arc spawn scenarios for roundabout",

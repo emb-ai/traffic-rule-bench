@@ -41,12 +41,12 @@ from allocate_sign_scenes import (  # noqa: E402
     _load_yaml,
     _sample,
 )
-from core.moscow_pool import (  # noqa: E402
+from core.pool.moscow_pool import (  # noqa: E402
     load_moscow_pool,
     save_moscow_pool,
     scene_split_map,
 )
-from core.scene_selection import (  # noqa: E402
+from core.pool.scene_selection import (  # noqa: E402
     REJECTED_SUBDIR,
     VERDICT_REJECT,
     is_reserved_scene_dir,

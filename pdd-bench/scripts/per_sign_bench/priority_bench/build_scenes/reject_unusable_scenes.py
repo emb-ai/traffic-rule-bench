@@ -30,11 +30,11 @@ BUILD_SCENES_DIR = Path(__file__).resolve().parent
 PRIORITY_BENCH = BUILD_SCENES_DIR.parent
 sys.path.insert(0, str(PRIORITY_BENCH))
 
-from core.manifest_config import (  # noqa: E402
+from core.manifest.manifest_config import (  # noqa: E402
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 )
-from core.manifest_viability import check_scene_dir_viability  # noqa: E402
-from core.scene_selection import (  # noqa: E402
+from core.manifest.manifest_viability import check_scene_dir_viability  # noqa: E402
+from core.pool.scene_selection import (  # noqa: E402
     REJECTED_SUBDIR,
     apply_rejected_scenes,
     is_reserved_scene_dir,

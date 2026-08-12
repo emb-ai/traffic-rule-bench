@@ -111,6 +111,8 @@ class YieldSign(BaseTrafficSign):
         self._vehicle_states = {}
         # foe_id -> {"conflict_point": np.ndarray|None} once seen in main zone
         self._path_sticky_foes: dict = {}
+        # Foes already cleared for this passage through the main zone (no re-arm).
+        self._path_released_foes: set = set()
 
         self.main_road_lanes = main_road_lanes or []
         self._main_road_node_set: set[str] | None = None
@@ -532,6 +534,14 @@ class YieldSign(BaseTrafficSign):
                 long0 = max(0.0, min(long0, float(ck_lane.length) - 1e-3))
                 s = long0
                 lane_len = float(ck_lane.length)
+                # Roundabout ego finish cap: stop the sampled path at the
+                # configured longitude on the final navigation lane.
+                dest_cap = getattr(vehicle, "_priority_bench_dest_along_m", None)
+                if dest_cap is not None and i == len(checkpoints) - 1:
+                    try:
+                        lane_len = min(lane_len, float(dest_cap))
+                    except (TypeError, ValueError):
+                        pass
                 while s < lane_len - 1e-3 and remaining > 0.0:
                     try:
                         p = ck_lane.position(s, 0.0)
@@ -729,12 +739,19 @@ class YieldSign(BaseTrafficSign):
         ego_path: list[np.ndarray],
         foe_path: list[np.ndarray],
     ) -> np.ndarray | None:
-        """Conflict point from shared exit merge or near-crossing paths.
+        """Conflict point from near-crossing paths, else shared-exit merge.
 
-        Shared future edges win: lock to the shared-edge *entry* so the point
-        stays at the junction merge even after both vehicles are already on the
-        exit (route polylines then start mid-arm and would otherwise chase).
+        Prefer geometric route intersection (the yield conflict at the junction).
+        Shared-future-edge merge is only a fallback for parallel merges that
+        never literally cross within ``CONFLICT_PATH_TOLERANCE_M``. Preferring
+        shared edges first wrongly locked conflict at a far exit when ego and
+        aux shared a destination (e.g. roundabout), so ego waited until aux
+        cleared the exit instead of the entry crossing.
         """
+        geom = self._paths_conflict_point(ego_path, foe_path)
+        if geom is not None:
+            return geom
+
         shared = self._shared_future_edges(ego_vehicle, foe_vehicle)
         if shared:
             merge = self._first_point_on_shared_edge(foe_vehicle, shared, foe_path)
@@ -743,7 +760,34 @@ class YieldSign(BaseTrafficSign):
             merge = self._first_point_on_shared_edge(ego_vehicle, shared, ego_path)
             if merge is not None:
                 return merge
-        return self._paths_conflict_point(ego_path, foe_path)
+        return None
+
+    def _min_distance_path_to_point(
+        self,
+        path: list[np.ndarray],
+        point: np.ndarray,
+    ) -> float:
+        """Minimum distance from ``point`` to any segment of ``path``."""
+        if not path:
+            return float("inf")
+        pt = np.asarray(point, dtype=float)
+        if len(path) == 1:
+            return float(np.linalg.norm(path[0] - pt))
+        best = float("inf")
+        for i in range(len(path) - 1):
+            a = path[i]
+            b = path[i + 1]
+            ab = b - a
+            denom = float(np.dot(ab, ab))
+            if denom < 1e-9:
+                dist = float(np.linalg.norm(a - pt))
+            else:
+                t = float(np.dot(pt - a, ab) / denom)
+                t = max(0.0, min(1.0, t))
+                dist = float(np.linalg.norm(a + t * ab - pt))
+            if dist < best:
+                best = dist
+        return best
 
     def _has_cleared_conflict_point(
         self,
@@ -751,8 +795,14 @@ class YieldSign(BaseTrafficSign):
         conflict_point: np.ndarray,
         *,
         clearance_m: float | None = None,
+        remaining_path: list[np.ndarray] | None = None,
     ) -> bool:
-        """True when conflict point is behind the vehicle (optionally + clearance)."""
+        """True when the recorded conflict is behind / off the remaining route.
+
+        Heading projection alone fails on sharp roundabout curves (forward axis
+        is tangential while the sticky X sits laterally). Also treat the point
+        as cleared when the remaining route no longer comes near it.
+        """
         pos = self._xy(vehicle)
         if pos is None:
             return False
@@ -762,13 +812,35 @@ class YieldSign(BaseTrafficSign):
         try:
             heading = float(vehicle.heading_theta)
         except Exception:
-            return False
-        forward = np.asarray([np.cos(heading), np.sin(heading)], dtype=float)
-        along = float(np.dot(conflict_point - pos, forward))
-        return along < -clearance
+            heading = None
+        if heading is not None:
+            forward = np.asarray([np.cos(heading), np.sin(heading)], dtype=float)
+            along = float(np.dot(conflict_point - pos, forward))
+            if along < -clearance:
+                return True
+
+        path = remaining_path
+        if path is None:
+            path = self._route_polyline(vehicle)
+        # Past the sticky X: remaining polyline starts at the vehicle and no
+        # longer skirts the recorded entry conflict (shared-exit near-misses
+        # further along must not keep this foe armed).
+        near_tol = float(self.CONFLICT_PATH_TOLERANCE_M) + max(0.0, clearance)
+        if self._min_distance_path_to_point(path, conflict_point) > near_tol:
+            return True
+        return False
 
     def _is_foe_blocking_ego(self, ego_vehicle, foe_vehicle) -> bool:
-        """Main-zone prefilter + sticky path-clearance until conflict is passed."""
+        """Main-zone arm + sticky path-clearance until the conflict is passed.
+
+        Semantics:
+        1. Foe enters the main conflict zone → start tracking if ego/foe routes
+           currently intersect (record conflict point).
+        2. Keep blocking while that foe is tracked.
+        3. Drop the foe once it has cleared the conflict point, or remaining
+           routes no longer geometrically intersect — even if still in the zone.
+        4. Do not re-arm the same foe until it has left the main zone.
+        """
         if self._is_waiting_gated_aux(foe_vehicle):
             return False
 
@@ -777,39 +849,56 @@ class YieldSign(BaseTrafficSign):
             return False
 
         in_main = self._is_vehicle_in_main_road_conflict_zone(foe_vehicle)
+        if not in_main:
+            self._path_released_foes.discard(foe_id)
+
+        if foe_id in self._path_released_foes:
+            return False
+
         ego_path = self._route_polyline(ego_vehicle)
         foe_path = self._route_polyline(foe_vehicle)
-        conflict = self._resolve_path_conflict_point(
+        # Arming may use shared-exit merge; release must not — otherwise a
+        # common destination keeps the foe sticky after the entry crossing.
+        geom_conflict = self._paths_conflict_point(ego_path, foe_path)
+        arm_conflict = self._resolve_path_conflict_point(
             ego_vehicle, foe_vehicle, ego_path, foe_path
         )
 
         sticky = self._path_sticky_foes.get(foe_id)
 
-        if in_main:
-            if sticky is None:
-                self._path_sticky_foes[foe_id] = {"conflict_point": conflict}
-            elif sticky.get("conflict_point") is None and conflict is not None:
-                # Fill once; never slide the point along a shared exit arm.
-                sticky["conflict_point"] = conflict
-            return True
+        # Arm tracking on first entry into the main zone with a path conflict.
+        if in_main and sticky is None:
+            if arm_conflict is None:
+                return False
+            self._path_sticky_foes[foe_id] = {"conflict_point": arm_conflict}
+            sticky = self._path_sticky_foes[foe_id]
 
         if sticky is None:
             return False
 
-        # Freeze conflict_point after first resolve — refreshing to "closest
-        # midpoint" while both are on the same exit edge made ego wait until
-        # aux despawned at road end.
-        if sticky.get("conflict_point") is None and conflict is not None:
-            sticky["conflict_point"] = conflict
+        # Fill conflict point once (do not chase along a shared exit arm).
+        if sticky.get("conflict_point") is None and arm_conflict is not None:
+            sticky["conflict_point"] = arm_conflict
 
         conflict_point = sticky.get("conflict_point")
-        if conflict_point is None:
+
+        def _release() -> bool:
             self._path_sticky_foes.pop(foe_id, None)
+            self._path_released_foes.add(foe_id)
             return False
 
-        if self._has_cleared_conflict_point(foe_vehicle, conflict_point):
-            self._path_sticky_foes.pop(foe_id, None)
-            return False
+        if conflict_point is None:
+            return _release()
+
+        # Foe has driven past the recorded conflict → stop tracking.
+        if self._has_cleared_conflict_point(
+            foe_vehicle, conflict_point, remaining_path=foe_path
+        ):
+            return _release()
+
+        # Remaining trajectories no longer intersect (geometry only).
+        if geom_conflict is None:
+            return _release()
 
         return True
 
@@ -818,7 +907,67 @@ class YieldSign(BaseTrafficSign):
         if self._auto_detect and not self._pg_initialized:
             self._identify_main_roads()
         return self._is_foe_blocking_ego(ego_vehicle, foe_vehicle)
-    
+
+    def get_top_down_path_conflict_overlay(self, ego_vehicle) -> dict:
+        """Snapshot for GIF debug: ego/foe route polylines + conflict points.
+
+        Uses the same geometry as ``_is_foe_blocking_ego`` (route sample + sticky
+        conflict point). Does not change sticky state beyond a normal yield check.
+        """
+        if self._auto_detect and not self._pg_initialized:
+            self._identify_main_roads()
+
+        ego_path = self._route_polyline(ego_vehicle)
+        foes: list[dict] = []
+        for v in self._get_all_vehicles():
+            if getattr(v, "id", None) == getattr(ego_vehicle, "id", None):
+                continue
+            # Draw gated (held) aux too — GIF debug must show their planned path
+            # even before release. Yield / traffic checks still ignore them.
+            foe_path = self._route_polyline(v)
+            conflict = self._resolve_path_conflict_point(
+                ego_vehicle, v, ego_path, foe_path
+            )
+            sticky = self._path_sticky_foes.get(getattr(v, "id", None)) or {}
+            sticky_pt = sticky.get("conflict_point")
+            waiting = bool(self._is_waiting_gated_aux(v))
+            blocking = (
+                False
+                if waiting
+                else bool(self._is_foe_blocking_ego(ego_vehicle, v))
+            )
+            # After the blocking call, sticky may have been updated/cleared.
+            sticky = self._path_sticky_foes.get(getattr(v, "id", None)) or {}
+            sticky_pt = sticky.get("conflict_point")
+            draw_pt = sticky_pt if sticky_pt is not None else conflict
+            foes.append(
+                {
+                    "vehicle_id": getattr(v, "id", None),
+                    "path": foe_path,
+                    # Only show the X while this foe is still yielding-relevant.
+                    "conflict_point": draw_pt if blocking else None,
+                    "in_main_zone": bool(
+                        self._is_vehicle_in_main_road_conflict_zone(v)
+                    ),
+                    "blocking": blocking,
+                    "waiting_gated": waiting,
+                    "sticky": bool(sticky_pt is not None),
+                }
+            )
+
+        zones: list[dict] = []
+        if hasattr(self, "get_top_down_aux_conflict_zones"):
+            try:
+                zones = list(self.get_top_down_aux_conflict_zones() or [])
+            except Exception:
+                zones = []
+
+        return {
+            "ego_path": ego_path,
+            "foes": foes,
+            "zones": zones,
+        }
+
     def has_main_road_traffic(self, exclude_vehicle=None) -> tuple:
         """
         Public method to check if there's traffic on the main road.
@@ -883,11 +1032,14 @@ class YieldSign(BaseTrafficSign):
             if self._is_foe_blocking_ego(ego_vehicle, v):
                 conflicting.append(v)
 
-        # Drop sticky entries for despawned vehicles.
+        # Drop sticky / released entries for despawned vehicles.
         for foe_id in list(self._path_sticky_foes.keys()):
             if foe_id not in live_ids:
                 self._path_sticky_foes.pop(foe_id, None)
-        
+        for foe_id in list(self._path_released_foes):
+            if foe_id not in live_ids:
+                self._path_released_foes.discard(foe_id)
+
         return len(conflicting) > 0, conflicting
 
     def _vehicle_half_length(self, vehicle) -> float:
@@ -1191,7 +1343,7 @@ class RoundaboutYieldSign(YieldSign):
         **kwargs,
     ):
         kwargs.setdefault("show_model", False)
-        kwargs.setdefault("icon_path", "4.3.png")
+        kwargs["icon_path"] = None
         incoming = list(entry_incoming_lanes or [])
         conflict_lanes = incoming
         if not conflict_lanes:
@@ -1204,6 +1356,7 @@ class RoundaboutYieldSign(YieldSign):
             **kwargs,
         )
         self.priority_type = "roundabout_yield"
+        self.icon_path = None
         if entry_junction_xy is not None:
             self._entry_junction_xy = np.array(
                 [float(entry_junction_xy[0]), float(entry_junction_xy[1])],

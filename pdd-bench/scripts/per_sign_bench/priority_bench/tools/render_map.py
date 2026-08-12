@@ -21,7 +21,7 @@ TOOLS_DIR = Path(__file__).resolve().parent
 PACKAGE_DIR = TOOLS_DIR.parent
 sys.path.insert(0, str(PACKAGE_DIR))
 
-from core.sumo_utils import resolve_net_file, load_scene_meta, resolve_scene_dir
+from core.sumo.sumo_utils import resolve_net_file, load_scene_meta, resolve_scene_dir
 
 SCENES_DIR_DEFAULT = PACKAGE_DIR / "data" / "yield" / "scenes"
 

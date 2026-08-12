@@ -82,7 +82,7 @@ _PACKAGE_DIR = _PathForPath(__file__).resolve().parent
 if str(_PACKAGE_DIR) not in sys.path:
     sys.path.insert(0, str(_PACKAGE_DIR))
 
-from core.metadrive_sumo_patch import apply_metadrive_sumo_via_patch  # noqa: E402
+from core.runtime.metadrive_sumo_patch import apply_metadrive_sumo_via_patch  # noqa: E402
 
 apply_metadrive_sumo_via_patch()
 
@@ -105,7 +105,7 @@ BENCH_DIR = Path(__file__).resolve().parent
 PDD_BENCH_DIR = BENCH_DIR.parent.parent.parent
 CHECKPOINTS_DIR = PDD_BENCH_DIR / "checkpoints"
 
-from core.manifest_config import (
+from core.manifest.manifest_config import (
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
     enrich_manifest_row,
     load_manifest_config,

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from .sumo_utils import CORE_SCENES_SUBDIR
+from ..sumo.sumo_utils import CORE_SCENES_SUBDIR
 
 SELECTION_FILE = "scene_selection.json"
 REJECTED_SUBDIR = "_rejected"

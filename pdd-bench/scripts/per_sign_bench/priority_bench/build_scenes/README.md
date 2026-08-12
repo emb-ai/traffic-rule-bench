@@ -20,7 +20,7 @@ build_scenes/
     └── build_scene_pool.py
 ```
 
-## Flow (example: 2.4 yield; same for 2.1 / 2.3 / 2.5 / 4.3)
+## Flow (example: 2.4 yield; same for 2.1 / 2.3 / 2.5 / 3.2 / 4.3)
 
 Prereq: `moscow_junctions` has `nets/moscow.net.xml`, `index/junctions.jsonl`,
 and `splits/sign_allocations.json` (see `../moscow_junctions/README.md`).
@@ -30,7 +30,7 @@ Map quotas live in `moscow_junctions/splits/signs.yaml` (`n_train` / `n_test`).
 cd traffic-rule-bench/pdd-bench/scripts/per_sign_bench/priority_bench
 
 # 1) Link allocated maps (train+test) into data/<sign>/scenes/
-python build_scenes/materialize_scenes.py --sign 2.4   # or 2.1 / 2.3 / 2.5 / 4.3
+python build_scenes/materialize_scenes.py --sign 2.4   # or 2.1 / 2.3 / 2.5 / 3.2 / 4.3
 # Roundabout: moscow scenes/O/ → data/roundabout/scenes
 
 # 2) Drop maps that cannot produce scenarios; refill to signs.yaml quotas
@@ -54,6 +54,7 @@ python build_scenes/materialize_scenes.py --sign 2.4 --refill
 # 6) Manifest / bench (filter train or test via Hydra) — no scene pool edits
 python generate_manifest.py sign=yield paths.split=train
 python generate_manifest.py sign=roundabout gif.enabled=false
+python generate_manifest.py sign=blocked_road paths.split=train
 ```
 
 ### reject_unusable_scenes flags

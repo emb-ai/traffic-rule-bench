@@ -568,7 +568,7 @@ def crop_net_around_latlon(
 
 def resolve_full_source_net(scene_dir: Path, meta: dict) -> Path:
     """Return the uncropped SUMO net for a scene (backup or catalog net)."""
-    from .sumo_utils import resolve_net_file
+    from ..sumo.sumo_utils import resolve_net_file
 
     scene_dir = scene_dir.resolve()
     scene_name = meta.get("scene_name", scene_dir.name)
@@ -607,7 +607,7 @@ def crop_scene_to_junction_pick(
     core_scene_name: Optional[str] = None,
 ) -> JunctionPick:
     """Crop ``source_net`` around ``pick``; write center.json and meta into ``output_dir``."""
-    from .sumo_utils import load_scene_meta
+    from ..sumo.sumo_utils import load_scene_meta
 
     scene_dir = scene_dir.resolve()
     output_dir = (output_dir or scene_dir).resolve()
@@ -665,7 +665,7 @@ def crop_scene_to_junction_pick(
     if junction_rank is not None:
         meta["junction_rank"] = junction_rank
 
-    from .scene_augmentation import (
+    from ..scenarios.scene_augmentation import (
         pick_default_main_spawn_meta_for_net,
         pick_default_yield_spawn_meta_for_net,
     )
@@ -720,7 +720,7 @@ def crop_scene_to_junction(
     backup_original: bool = True,
 ) -> JunctionPick:
     """Crop scene net around the best 4- or 3-arm junction; write center.json."""
-    from .sumo_utils import load_scene_meta
+    from ..sumo.sumo_utils import load_scene_meta
 
     scene_dir = scene_dir.resolve()
     meta = load_scene_meta(scene_dir)

@@ -219,7 +219,7 @@ class GatedAuxiliaryIDMPolicy(AuxiliaryIDMPolicy):
         return super().act(*args, **kwargs)
 
 
-from .lane_keys import (
+from ..sumo.lane_keys import (
     clamp_lane_key_to_graph,
     lane_edge_id,
     lane_num_from_key,
@@ -487,7 +487,7 @@ class AuxiliaryAgentsManager(BaseManager):
                 merge_lane_lengths_from_layout,
                 resolve_convoy_spawn_slots,
             )
-            from .roundabout_yield_zone import entry_conflict_ring_edges
+            from ..layout.roundabout_yield_zone import entry_conflict_ring_edges
         except Exception:
             return same_lane
 
@@ -1030,7 +1030,7 @@ def select_occupied_main_lanes(
     return ordered[:n]
 
 
-from .junction_priority_layout import right_arm_edge_id
+from ..layout.junction_priority_layout import right_arm_edge_id
 
 
 def right_lane_keys_for_aux(
@@ -1121,7 +1121,7 @@ def viable_aux_arms(
             merge_lane_lengths_from_layout,
             resolve_aux_spawn_placement,
         )
-        from .roundabout_yield_zone import (
+        from ..layout.roundabout_yield_zone import (
             all_entry_conflict_ring_edges,
             entry_conflict_ring_edges,
         )
@@ -1567,7 +1567,7 @@ def _load_route_index_from_row(row: dict, scenes_root: Optional[Path | str] = No
             f"tried={[str(c) for c in unique_candidates]}"
         )
 
-    from .sumo_utils import load_vehicle_route_index
+    from ..sumo.sumo_utils import load_vehicle_route_index
 
     return load_vehicle_route_index(resolved)
 
@@ -1619,7 +1619,7 @@ def resolve_aux_spawn_plan(
                 merge_lane_lengths_from_layout,
                 resolve_aux_spawn_placement,
             )
-            from .roundabout_yield_zone import entry_conflict_ring_edges
+            from ..layout.roundabout_yield_zone import entry_conflict_ring_edges
 
             left = entry_conflict_ring_edges(junction_layout, ego_edge)
             left_set = set(left)
@@ -1913,7 +1913,7 @@ def resolve_aux_spawn_plan(
                 merge_lane_lengths_from_layout,
                 resolve_aux_spawn_placement,
             )
-            from .roundabout_yield_zone import entry_conflict_ring_edges
+            from ..layout.roundabout_yield_zone import entry_conflict_ring_edges
 
             lengths = merge_lane_lengths_from_layout(junction_layout, {})
             left = entry_conflict_ring_edges(junction_layout, ego_edge)

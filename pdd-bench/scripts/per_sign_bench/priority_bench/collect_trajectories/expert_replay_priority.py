@@ -37,13 +37,13 @@ if str(PRIORITY_DIR) in sys.path:
     sys.path.remove(str(PRIORITY_DIR))
 sys.path.insert(0, str(PRIORITY_DIR))
 
-from core.manifest_config import (  # noqa: E402
+from core.manifest.manifest_config import (  # noqa: E402
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     DEFAULT_AUX_LANES_OCCUPIED_MAX,
     enrich_manifest_row,
     load_manifest_config,
 )
-from core.auxiliary_agent import (  # noqa: E402
+from core.scenarios.auxiliary_agent import (  # noqa: E402
     DEFAULT_CONVOY_GAP_M,
     DEFAULT_CONVOY_SIZE,
     DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END,

@@ -22,11 +22,11 @@ CHECKPOINTS_DIR = PDD_BENCH_DIR / "checkpoints"
 sys.path.insert(0, str(PDD_BENCH_DIR))
 sys.path.insert(0, str(PACKAGE_DIR))
 
-from core.metadrive_sumo_patch import apply_metadrive_sumo_via_patch
+from core.runtime.metadrive_sumo_patch import apply_metadrive_sumo_via_patch
 
 apply_metadrive_sumo_via_patch()
 
-from core.sumo_utils import resolve_net_file, load_scene_meta, find_first_edge_id, DEFAULT_NET_FILE
+from core.sumo.sumo_utils import resolve_net_file, load_scene_meta, find_first_edge_id, DEFAULT_NET_FILE
 
 # Policy categories
 IDM_FAMILY = {"idm", "modified_idm", "comprehensive_rule_expert"}
