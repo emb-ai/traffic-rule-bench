@@ -16,13 +16,13 @@ for p in (str(SCRIPTS), str(PRIORITY_BENCH)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from core.junction_crop import (  # noqa: E402
+from core.layout.junction_crop import (  # noqa: E402
     JunctionPick,
     _find_netconvert,
     crop_net_to_junction_only,
     json_dumps,
 )
-from core.junction_priority_layout import JunctionLayoutError  # noqa: E402
+from core.layout.junction_priority_layout import JunctionLayoutError  # noqa: E402
 
 DEFAULT_NET = ROOT / "nets" / "moscow.net.xml"
 DEFAULT_INDEX = ROOT / "index" / "junctions.jsonl"

@@ -20,6 +20,7 @@ signs:
   "2.3": { shapes: [T, X], x_share: 0.5 }
   "2.4": { shapes: [T, X], x_share: 0.5 }
   "2.5": { shapes: [T, X], x_share: 0.5 }
+  "3.2": { shapes: [T, X], x_share: 0.5 }
   "3.18.1": { shapes: [T, X], x_share: 0.5 }
   "3.18.2": { shapes: [T, X], x_share: 0.5 }
   "4.1.1": { shapes: [T, X], x_share: 0.5 }

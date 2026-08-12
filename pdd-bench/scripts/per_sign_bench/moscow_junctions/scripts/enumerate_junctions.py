@@ -18,10 +18,10 @@ for p in (str(SCRIPTS), str(PRIORITY_BENCH)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from core.junction_crop import (  # noqa: E402
+from core.layout.junction_crop import (  # noqa: E402
     collect_intersection_junction_candidates,
 )
-from core.junction_priority_layout import INTERSECTION_JUNCTION_TYPES  # noqa: E402
+from core.layout.junction_priority_layout import INTERSECTION_JUNCTION_TYPES  # noqa: E402
 
 from geo_utils import net_xy_to_latlon_proj  # noqa: E402
 
