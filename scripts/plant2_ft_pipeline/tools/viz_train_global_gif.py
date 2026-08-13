@@ -27,7 +27,8 @@ from PIL import Image
 from torchvision.transforms.functional import pil_to_tensor
 
 PIPELINE_DIR = Path(__file__).resolve().parent
-TRB_ROOT = PIPELINE_DIR.parent.parent
+# _ROOT is plant2_ft_pipeline/; parents[1] is traffic-rule-bench repo root.
+TRB_ROOT = _ROOT.parents[1]
 PLAN_T = TRB_ROOT / "plant2" / "PlanT"
 sys.path.insert(0, str(PLAN_T))
 
@@ -135,8 +136,8 @@ def carla_ego_to_model_bev_pixel(
     ey_md = -y_right
     px256 = _RAW_BEV_RES // 2 - int(ey_md * scale)
     py256 = _RAW_BEV_RES // 2 - int(fwd_x * scale)
-    row128 = px256 - _BEV_CROP
-    col128 = (_RAW_BEV_RES - 1 - py256) - _BEV_CROP
+    row128 = (_RAW_BEV_RES - 1 - px256) - _BEV_CROP
+    col128 = py256 - _BEV_CROP
     if not (0 <= col128 < _MODEL_BEV_SIDE and 0 <= row128 < _MODEL_BEV_SIDE):
         return None
     if upscale == 1:
@@ -182,8 +183,8 @@ def get_coords_bb_px(cx, cy, angle_deg, extent_x, extent_y):
 
 def bev_pixel_to_ego_carla(col: int, row: int) -> tuple[float, float]:
     """Inverse of carla_ego_to_model_bev_pixel (128² model BEV grid)."""
-    px256 = row + _BEV_CROP
-    py256 = _RAW_BEV_RES - 1 - col - _BEV_CROP
+    px256 = _RAW_BEV_RES - 1 - (row + _BEV_CROP)
+    py256 = col + _BEV_CROP
     scale = _RAW_BEV_RES / 64.0
     ey_md = (_RAW_BEV_RES // 2 - px256) / scale
     fwd_x = (_RAW_BEV_RES // 2 - py256) / scale

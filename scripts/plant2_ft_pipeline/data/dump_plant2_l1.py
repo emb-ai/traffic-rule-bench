@@ -134,6 +134,32 @@ def _expert_row_candidates(experts_path: Path, backends: str) -> list[tuple[int,
     return out
 
 
+def _pick_expert_at_line(
+    experts_path: Path,
+    line_idx: int,
+    *,
+    backends: str,
+) -> tuple[int, dict]:
+    allowed = {b.strip() for b in backends.split(",") if b.strip()}
+    with open(experts_path, encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            if i != line_idx:
+                continue
+            row = json.loads(line)
+            pkl_path, _, _, _, backend = _load_expert_replay().resolve_expert_paths(row)
+            if backend not in allowed:
+                raise SystemExit(
+                    f"ERROR: experts line {line_idx} backend={backend!r} not in {allowed}"
+                )
+            return i, row
+    raise SystemExit(f"ERROR: experts line {line_idx} not found in {experts_path}")
+
+
+def _enable_dump_debug(enabled: bool) -> None:
+    if enabled:
+        os.environ["PLANT2_DUMP_DEBUG"] = "1"
+
+
 def _pick_random_expert(
     experts_path: Path,
     *,
@@ -262,7 +288,11 @@ def _run_one(args: argparse.Namespace) -> int:
         if not path.exists():
             raise SystemExit(f"ERROR: missing {label}: {path}")
 
-    line_idx, row = _pick_random_expert(experts, backends=args.backends, seed=args.seed)
+    line_idx, row = (
+        _pick_expert_at_line(experts, args.line, backends=args.backends)
+        if args.line is not None
+        else _pick_random_expert(experts, backends=args.backends, seed=args.seed)
+    )
     pkl_path, sidecar_path, scene_uid, variant, backend = mod.resolve_expert_paths(row)
     route_dir = plant2_route_dir(args.out_dir, scene_uid, variant)
 
@@ -610,6 +640,11 @@ def _common_parser(sub: argparse._SubParsersAction) -> None:
         p.add_argument("--backends", default="sumo")
         p.add_argument("--save-gifs", action="store_true")
         p.add_argument("--dry-run", action="store_true")
+        p.add_argument(
+            "--debug",
+            action="store_true",
+            help="PLANT2_DUMP_DEBUG=1: verbose engine/boxes/BEV logging in plant2_frames",
+        )
         p.add_argument("--experts-rank", default="top1", choices=("top1", "top2"))
         p.add_argument(
             "--zink-bench", type=Path, default=ZINK_BENCH_DEFAULT,
@@ -665,6 +700,12 @@ def main(argv: list[str] | None = None) -> int:
     one.add_argument("--experts", type=Path, default=None, help="override experts jsonl")
     one.add_argument("--scenes-root", type=Path, default=None, help="override scenes dir")
     one.add_argument("--seed", type=int, default=None, help="RNG seed")
+    one.add_argument(
+        "--line",
+        type=int,
+        default=None,
+        help="experts jsonl line index (overrides --seed random pick)",
+    )
     one.add_argument("--max-steps", type=int, default=1500)
     one.add_argument(
         "--force",
@@ -689,6 +730,8 @@ def main(argv: list[str] | None = None) -> int:
     ln.add_argument("--n-shards", type=int, default=8)
 
     args = parser.parse_args(argv)
+    if getattr(args, "debug", False):
+        _enable_dump_debug(True)
     handlers = {
         "rebuild-signs": _run_rebuild_signs,
         "experts": _run_experts,

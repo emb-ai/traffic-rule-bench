@@ -21,10 +21,70 @@ from __future__ import annotations
 import gzip
 import json
 import math
+import os
 import re
 from pathlib import Path
 
 import numpy as np
+
+_DUMP_DEBUG = os.environ.get("PLANT2_DUMP_DEBUG", "").lower() in ("1", "true", "yes")
+
+
+def _dbg(msg: str) -> None:
+    if _DUMP_DEBUG:
+        print(f"[plant2_frames] {msg}", flush=True)
+
+
+def _iter_traffic_vehicles(traffic_mgr) -> list:
+    """NPC list from traffic manager (PGTrafficManager vs SumoTrafficManager)."""
+    if traffic_mgr is None:
+        return []
+    for attr in ("vehicles", "traffic_vehicles", "_traffic_vehicles"):
+        val = getattr(traffic_mgr, attr, None)
+        if val is None:
+            continue
+        if callable(val) and not isinstance(val, list):
+            try:
+                val = val()
+            except TypeError:
+                continue
+        if val:
+            return list(val)
+    return []
+
+
+def _iter_auxiliary_vehicles(engine) -> list:
+    """Convoy NPCs spawned by ``AuxiliaryAgentsManager`` (2.5 stop/yield scenes)."""
+    mgr = getattr(engine, "auxiliary_agent_manager", None)
+    if mgr is None:
+        return []
+    val = getattr(mgr, "auxiliary_vehicles", None)
+    if val is None:
+        return []
+    if callable(val) and not isinstance(val, list):
+        try:
+            val = val()
+        except TypeError:
+            return []
+    return list(val)
+
+
+def _engine_object_sources(engine) -> dict[str, list]:
+    """Live object inventory for debug (no side effects)."""
+    out: dict[str, list] = {}
+    traffic_mgr = getattr(engine, "traffic_manager", None)
+    out["traffic_mgr"] = _iter_traffic_vehicles(traffic_mgr)
+    out["aux_mgr"] = _iter_auxiliary_vehicles(engine)
+    if hasattr(engine, "get_objects"):
+        out["get_objects"] = list(
+            engine.get_objects(lambda o: hasattr(o, "position")).values()
+        )
+    obj_mgr = getattr(engine, "object_manager", None)
+    if obj_mgr is not None:
+        out["object_manager"] = list(getattr(obj_mgr, "spawned_objects", {}).values())
+    sign_mgr = getattr(engine, "traffic_sign_manager", None)
+    out["sign_mgr"] = list(getattr(sign_mgr, "signs", []) or [])
+    return out
 
 _MAX_TARGET_SPEED = 20.0  # max from PlanTVariables.target_speeds (m/s)
 # Near-stop threshold (m/s): PlanTDataset zeros target_speed when brake=True.
@@ -223,23 +283,49 @@ def collect_boxes(engine, vehicle,
         boxes.append(entry)
         obj_id += 1
 
+    n_from_traffic = n_from_aux = n_from_engine = n_from_obj_mgr = 0
     traffic_mgr = getattr(engine, "traffic_manager", None)
     if traffic_mgr is not None:
-        for v in list(getattr(traffic_mgr, "vehicles", [])):
+        tm_type = type(traffic_mgr).__name__
+        tm_vehicles = _iter_traffic_vehicles(traffic_mgr)
+        _dbg(f"traffic_manager={tm_type} n_vehicles={len(tm_vehicles)} "
+             f"(Sumo uses .traffic_vehicles; 0 is normal when convoy is aux-only)")
+        for v in tm_vehicles:
+            before = len(boxes)
             _add(v)
+            if len(boxes) > before:
+                n_from_traffic += 1
+    aux_vehicles = _iter_auxiliary_vehicles(engine)
+    if aux_vehicles or _DUMP_DEBUG:
+        _dbg(f"auxiliary_agent_manager n_vehicles={len(aux_vehicles)}")
+    for v in aux_vehicles:
+        before = len(boxes)
+        _add(v)
+        if len(boxes) > before:
+            n_from_aux += 1
     if hasattr(engine, "get_objects"):
-        try:
-            for obj in engine.get_objects(lambda o: hasattr(o, "position")).values():
-                _add(obj)
-        except Exception:
-            pass
+        engine_objs = engine.get_objects(lambda o: hasattr(o, "position")).values()
+        _dbg(f"engine.get_objects n={len(list(engine_objs))}")
+        for obj in engine_objs:
+            before = len(boxes)
+            _add(obj)
+            if len(boxes) > before:
+                n_from_engine += 1
     obj_mgr = getattr(engine, "object_manager", None)
     if obj_mgr is not None:
-        for obj in getattr(obj_mgr, "spawned_objects", {}).values():
+        spawned = getattr(obj_mgr, "spawned_objects", {})
+        _dbg(f"object_manager.spawned_objects n={len(spawned)}")
+        for obj in spawned.values():
+            before = len(boxes)
             _add(obj)
+            if len(boxes) > before:
+                n_from_obj_mgr += 1
+    elif _DUMP_DEBUG:
+        _dbg("object_manager: absent on engine (using get_objects only)")
 
     # Explicit PDD signs (spatial tokens for PlanT tok_emb).
     sign_mgr = getattr(engine, "traffic_sign_manager", None)
+    n_signs_added = 0
     for sign in list(getattr(sign_mgr, "signs", []) or []):
         if sign is None or not hasattr(sign, "position"):
             continue
@@ -248,10 +334,14 @@ def collect_boxes(engine, vehicle,
             continue
         seen.add(oid)
         pdd = resolve_pdd_code_from_sign(sign)
+        sign_type = type(sign).__name__
+        sign_id = getattr(sign, "id", None) or getattr(sign, "name", None)
         if not pdd or pdd not in known_pdd:
+            _dbg(f"sign skip: type={sign_type} id={sign_id} pdd={pdd!r} (unknown)")
             continue
         x, y = _ego_xy(sign)
         if x * x + y * y > 900.0:  # 30m, same as stop_sign / TL in PlanTDataset
+            _dbg(f"sign skip: pdd={pdd} id={sign_id} dist={math.hypot(x, y):.1f}m > 30m")
             continue
         if hasattr(sign, "_fallback_heading"):
             heading = float(sign._fallback_heading())
@@ -272,6 +362,18 @@ def collect_boxes(engine, vehicle,
             "affects_ego": True,
         })
         obj_id += 1
+        n_signs_added += 1
+        _dbg(f"sign added: pdd={pdd} id={sign_id} type={sign_type} "
+             f"ego_xy=({x:.1f},{y:.1f}) box_id={obj_id - 1}")
+
+    if _DUMP_DEBUG:
+        classes = [b["class"] for b in boxes]
+        _dbg(
+            f"collect_boxes: total={len(boxes)} cars={classes.count('car')} "
+            f"from_traffic={n_from_traffic} from_aux={n_from_aux} "
+            f"from_engine={n_from_engine} from_obj_mgr={n_from_obj_mgr} "
+            f"signs={n_signs_added} classes={classes}"
+        )
 
     return boxes
 
@@ -389,6 +491,14 @@ def write_bev_png(path: Path, sem_map: np.ndarray) -> None:
     Image.fromarray(np.asarray(sem_map, dtype=np.uint8), mode="L").save(str(path))
 
 
+def known_pdd_codes() -> set[str]:
+    try:
+        from util.sign_id import SIGN_CODES
+        return set(SIGN_CODES)
+    except Exception:
+        return set(_CLASS_TO_PDD.values())
+
+
 class Plant2FrameCollector:
     """Accumulate pre-step PlanT2 boxes/measurements(/BEV) and flush to disk."""
 
@@ -403,8 +513,20 @@ class Plant2FrameCollector:
         row = row if row is not None else self.row
         vehicle = getattr(base_env, "vehicle", None) or getattr(base_env, "agent", None)
         engine = getattr(base_env, "engine", None)
+        step_idx = len(self.step_records)
         if vehicle is None or engine is None:
+            _dbg(f"step={step_idx}: skip (vehicle={vehicle is not None} engine={engine is not None})")
             return
+
+        if _DUMP_DEBUG and step_idx % 10 == 0:
+            src = _engine_object_sources(engine)
+            _dbg(
+                f"step={step_idx}: engine sources "
+                f"traffic={len(src.get('traffic_mgr', []))} "
+                f"aux={len(src.get('aux_mgr', []))} "
+                f"get_objects={len(src.get('get_objects', []))} "
+                f"signs={len(src.get('sign_mgr', []))}"
+            )
 
         pos = vehicle.position
         heading = float(vehicle.heading_theta)
@@ -446,6 +568,24 @@ class Plant2FrameCollector:
         sem_map = None
         if self.save_bev:
             sem_map = render_bev_semantics(engine, vehicle)
+            if _DUMP_DEBUG and step_idx % 10 == 0:
+                if sem_map is None:
+                    _dbg(f"step={step_idx}: BEV render returned None")
+                else:
+                    uniq = np.unique(sem_map)
+                    _dbg(f"step={step_idx}: BEV shape={sem_map.shape} classes={uniq.tolist()}")
+
+        if _DUMP_DEBUG and step_idx % 10 == 0:
+            npc = [b for b in boxes[1:] if b.get("class") == "car"]
+            signs = [b for b in boxes if str(b.get("class", "")) in known_pdd_codes()]
+            _dbg(
+                f"step={step_idx}: boxes n={len(boxes)} npc_cars={len(npc)} signs={len(signs)} "
+                f"target_speed={target_speed:.2f} brake={brake} route_pts={len(route_pts)}"
+            )
+            for s in signs:
+                _dbg(f"  sign box: class={s.get('class')} id={s.get('id')} "
+                     f"pdd_code={s.get('pdd_code')} pos={s.get('position')[:2]}")
+
         self.step_records.append((boxes, measurements, sem_map))
 
     def flush(self, route_dir: Path, success: bool) -> int:

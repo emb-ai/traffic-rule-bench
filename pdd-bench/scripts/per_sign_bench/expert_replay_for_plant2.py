@@ -103,23 +103,45 @@ def apply_state(live_obj, state) -> None:
         live_obj.set_velocity(state["velocity"])
 
 
-def match_recorded_to_live(frame_data, live_objs, ego_live, ego_rec_id):
+def match_recorded_to_live(frame_data, live_objs, ego_live, ego_rec_id, engine=None):
+    from metadrive.component.vehicle.base_vehicle import BaseVehicle
+
     obj_map: dict = {}
     used_live: set = set()
     if ego_rec_id and ego_rec_id in frame_data and ego_live is not None:
         obj_map[ego_rec_id] = ego_live
         used_live.add(getattr(ego_live, "id", None) or id(ego_live))
 
-    candidates = []
+    candidates: list = []
+    seen_vehicle_ids: set[int] = set()
     ego_id = getattr(ego_live, "id", None)
-    for lid, lobj in live_objs.items():
+
+    def _add_vehicle(lid, lobj) -> None:
+        if lobj is ego_live:
+            return
         if ego_id is not None and lid == ego_id:
-            continue
+            return
+        if not isinstance(lobj, BaseVehicle):
+            return
+        vid = id(lobj)
+        if vid in seen_vehicle_ids:
+            return
+        seen_vehicle_ids.add(vid)
         candidates.append((lid, lobj, xy(lobj.position)))
+
+    for lid, lobj in live_objs.items():
+        _add_vehicle(lid, lobj)
+    if engine is not None:
+        aux_mgr = getattr(engine, "auxiliary_agent_manager", None)
+        if aux_mgr is not None:
+            for lobj in getattr(aux_mgr, "auxiliary_vehicles", []) or []:
+                _add_vehicle(getattr(lobj, "id", id(lobj)), lobj)
 
     rec_items = []
     for rid, state in frame_data.items():
         if rid == ego_rec_id:
+            continue
+        if "Vehicle" not in str(state.get("type", "")):
             continue
         rec_items.append((rid, state, xy(state["position"])))
 
@@ -150,14 +172,25 @@ def match_recorded_to_live(frame_data, live_objs, ego_live, ego_rec_id):
     return obj_map
 
 
-def park_unmatched_live(live_objs, obj_map, ego_live) -> None:
+def park_unmatched_live(live_objs, obj_map, ego_live, engine=None) -> None:
+    from metadrive.component.vehicle.base_vehicle import BaseVehicle
+
     used = {id(o) for o in obj_map.values()}
     if ego_live is not None:
         used.add(id(ego_live))
+    aux_ids: set[int] = set()
+    if engine is not None:
+        aux_mgr = getattr(engine, "auxiliary_agent_manager", None)
+        if aux_mgr is not None:
+            for v in getattr(aux_mgr, "auxiliary_vehicles", []) or []:
+                aux_ids.add(id(v))
     park = np.array([-10000.0, -10000.0, 1.0])
     for lobj in live_objs.values():
-        if id(lobj) not in used:
-            lobj.set_position(park)
+        if id(lobj) in used or id(lobj) in aux_ids:
+            continue
+        if not isinstance(lobj, BaseVehicle):
+            continue
+        lobj.set_position(park)
 
 
 def pause_traffic_managers(env) -> list:
@@ -198,6 +231,90 @@ def npc_frames_from_scenario(scenario) -> list[dict]:
     for frame_group in scenario["frame"]:
         frames.append(frame_group[0].step_info if frame_group else {})
     return frames
+
+
+def spawn_auxiliary_from_row(env, row: dict, scenes_root: Path) -> None:
+    """Spawn convoy NPCs via ``AuxiliaryAgentsManager`` (same as run_benchmark)."""
+    if not row.get("auxiliary_agent"):
+        return
+
+    inserted: list[str] = []
+    for root in _sign_lib_roots(scenes_root):
+        s = str(root)
+        if s not in sys.path:
+            sys.path.insert(0, s)
+            inserted.append(s)
+    try:
+        from lib.auxiliary_agent import (
+            DEFAULT_CONVOY_GAP_M,
+            DEFAULT_CONVOY_SIZE,
+            DEFAULT_DISTANCE_FROM_INTERSECTION,
+            DEFAULT_SPAWN_VELOCITY_MS,
+            add_auxiliary_agents,
+            resolve_aux_spawn_plan,
+        )
+        from lib.lane_keys import make_lane_key
+
+        aux_distance_from_intersection = float(
+            row.get("aux_distance_from_intersection", DEFAULT_DISTANCE_FROM_INTERSECTION)
+        )
+        aux_spawn_velocity_ms = float(
+            row.get("aux_spawn_velocity_ms", DEFAULT_SPAWN_VELOCITY_MS)
+        )
+        aux_convoy_size = int(row.get("aux_convoy_size", DEFAULT_CONVOY_SIZE))
+        aux_convoy_gap_m = float(row.get("aux_convoy_gap_m", DEFAULT_CONVOY_GAP_M))
+        aux_lanes_occupied = int(row.get("aux_lanes_occupied", 1))
+        aux_policy = str(row.get("aux_policy", "idm"))
+        aux_release_when_ego_within_m = float(row.get("aux_release_when_ego_within_m", 20.0))
+
+        ego_lane_index = (
+            make_lane_key(str(row.get("road_id")), int(row.get("spawn_lane_num", 0) or 0))
+            if row.get("road_id")
+            else str(getattr(env.vehicle.lane, "index", ""))
+        )
+
+        aux_spawn_lanes, aux_destination_lanes, alternate_spawn_dest_map = (
+            resolve_aux_spawn_plan(
+                row,
+                ego_lane_index=str(ego_lane_index),
+                incoming_lanes=None,
+                aux_lanes_occupied=aux_lanes_occupied,
+                aux_distance_from_intersection=aux_distance_from_intersection,
+            )
+        )
+        aux_destination_lanes = [dest or None for dest in aux_destination_lanes]
+
+        if not aux_spawn_lanes:
+            print("[plant2_dump] aux: no spawn lanes resolved", flush=True)
+            return
+
+        mgr = add_auxiliary_agents(
+            env,
+            spawn_lane_indices=aux_spawn_lanes,
+            outgoing_lanes=None,
+            distance_from_intersection=aux_distance_from_intersection,
+            policy=aux_policy,
+            spawn_velocity_ms=aux_spawn_velocity_ms,
+            destination_lanes=aux_destination_lanes,
+            ego_vehicle=env.vehicle,
+            ego_spawn_lane_index=ego_lane_index,
+            ego_release_distance_before_end=aux_release_when_ego_within_m,
+            convoy_size=aux_convoy_size,
+            convoy_gap_m=aux_convoy_gap_m,
+            alternate_spawn_dest_map=alternate_spawn_dest_map,
+        )
+        if mgr is not None:
+            print(
+                f"[plant2_dump] aux spawned: lanes={len(aux_spawn_lanes)} "
+                f"vehicles={len(mgr.auxiliary_vehicles)}",
+                flush=True,
+            )
+    finally:
+        for s in inserted:
+            sys.path.remove(s)
+        for mod in list(sys.modules):
+            if mod == "lib" or mod.startswith("lib."):
+                del sys.modules[mod]
 
 
 def readd_signs(env, sidecar, backend) -> None:
@@ -269,6 +386,7 @@ def dump_plant2(
     patched = []
     env.reset(seed=env_seed)
     readd_signs(env, sidecar, backend)
+    spawn_auxiliary_from_row(env, row, scenes_root)
 
     ego_rec_id = resolve_ego_rec_id(scenario, npc_frames)
     if ego_rec_id is None:
@@ -285,12 +403,12 @@ def dump_plant2(
     def teleport(frame_data: dict) -> None:
         live_objs = dict(env.engine.get_objects())
         obj_map = match_recorded_to_live(
-            frame_data, live_objs, env.vehicle, ego_rec_id)
+            frame_data, live_objs, env.vehicle, ego_rec_id, engine=env.engine)
         for rid, live_obj in obj_map.items():
             state = frame_data.get(rid)
             if state is not None:
                 apply_state(live_obj, state)
-        park_unmatched_live(live_objs, obj_map, env.vehicle)
+        park_unmatched_live(live_objs, obj_map, env.vehicle, engine=env.engine)
 
     for step in range(n_frames):
         if step < len(npc_frames):
