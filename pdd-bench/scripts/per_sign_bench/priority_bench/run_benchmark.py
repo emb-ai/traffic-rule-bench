@@ -66,6 +66,7 @@ from traffic_signs.no_traffic_sign import NoTrafficSign
 from core.sumo.lane_keys import clamp_lane_key_to_graph, lane_edge_id, make_lane_key
 from core.runtime.one_way_support import (
     OneWaySumoTrafficManager,
+    install_one_way_baseline_nav_route,
     install_one_way_compliant_nav_route,
     resolve_row_background_excluded_edges,
 )
@@ -124,6 +125,29 @@ BENCH_DIR = Path(__file__).resolve().parent
 PER_SIGN_BENCH_DIR = BENCH_DIR.parent
 PDD_BENCH_DIR = PER_SIGN_BENCH_DIR.parent.parent
 SDC_ROOT = PDD_BENCH_DIR.parent
+CHECKPOINTS_DIR = PDD_BENCH_DIR / "checkpoints"
+
+NN_NEED_CHECKPOINT = {"carl", "carl_rule", "plant2", "plant2_rule"}
+# Repo pretrained defaults (override with --model-path).
+DEFAULT_MODEL_PATHS: dict[str, Path] = {
+    "carl": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
+    "carl_rule": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
+    "plant2": CHECKPOINTS_DIR / "plant2_pretrain" / "epoch=029_final_3.ckpt",
+    "plant2_rule": CHECKPOINTS_DIR / "plant2_pretrain" / "epoch=029_final_3.ckpt",
+}
+
+
+def resolve_model_path(policy: str, model_path: str | None) -> str | None:
+    """Use ``--model-path`` when set; else fall back to pretrained repo defaults."""
+    if model_path:
+        return model_path
+    if policy not in NN_NEED_CHECKPOINT:
+        return None
+    default = DEFAULT_MODEL_PATHS.get(policy)
+    if default is not None and default.is_file():
+        print(f"Using default checkpoint for {policy}: {default}")
+        return str(default)
+    return None
 
 _SUMO_SIGN_DISTANCE_CACHE: dict[Path, float] = {}
 _PROFILE_KEYS = (
@@ -923,8 +947,10 @@ def _apply_destination_along_cap(env, row: dict) -> None:
     """
     raw = row.get("destination_max_along_m")
     if raw is None and not (
-        _row_is_roundabout(row) or _row_is_blocked_road(row)
+        _row_is_roundabout(row) or _row_is_blocked_road(row) or _row_is_one_way(row)
     ):
+        return
+    if raw is None and _row_is_one_way(row):
         return
     try:
         cap = float(DEFAULT_DESTINATION_MAX_ALONG_M if raw is None else raw)
@@ -969,7 +995,12 @@ def _apply_destination_along_cap(env, row: dict) -> None:
         pass
 
     try:
-        label = "Blocked-road" if _row_is_blocked_road(row) else "Roundabout"
+        if _row_is_blocked_road(row):
+            label = "Blocked-road"
+        elif _row_is_one_way(row):
+            label = "One-way"
+        else:
+            label = "Roundabout"
         print(
             f"[EgoDest] {label} destination cap at {target:.1f}m "
             f"on final lane (len={float(final.length):.1f}m)"
@@ -1166,6 +1197,43 @@ def _row_is_one_way(row: dict) -> bool:
         "one_way_right",
         "one_way_left",
     }
+
+
+_ONE_WAY_COMPLIANT_NAV_POLICIES = frozenset({
+    "modified_idm",
+    "comprehensive_rule_expert",
+    "rule_compliant",
+    "carl_rule",
+    "plant2_rule",
+})
+
+
+def _resolve_one_way_row_for_policy(row: dict, policy_type: str) -> dict:
+    """Pick baseline vs compliant dest (and along-cap) for the active policy."""
+    if not _row_is_one_way(row):
+        return row
+    out = dict(row)
+    use_compliant = policy_type in _ONE_WAY_COMPLIANT_NAV_POLICIES
+    if use_compliant:
+        dest = row.get("compliant_destination_lane_id") or row.get("destination_lane_id")
+        along = row.get("compliant_destination_max_along_m")
+        if along is None:
+            along = row.get("destination_max_along_m")
+    else:
+        dest = row.get("baseline_destination_lane_id") or row.get("destination_lane_id")
+        along = row.get("baseline_destination_max_along_m")
+        if along is None:
+            along = row.get("destination_max_along_m")
+    if dest:
+        out["destination_lane_id"] = dest
+        edge = lane_edge_id(str(dest))
+        if edge:
+            out["destination_edge_id"] = edge
+    if along is not None:
+        out["destination_max_along_m"] = float(along)
+    else:
+        out.pop("destination_max_along_m", None)
+    return out
 
 
 def _resolve_one_way_pdd_code(row: dict) -> str:
@@ -2429,11 +2497,23 @@ def run_one_episode(
             pass
 
         # Manifest spawn lane + distance before intersection
+        if _row_is_one_way(row):
+            row = _resolve_one_way_row_for_policy(row, policy_type)
         _apply_manifest_ego_spawn_lane(base_env, row)
         spawn_distance = float(row.get("spawn_distance_before_end", 0) or 0)
         if spawn_distance > 0:
             _reposition_ego_before_lane_end(base_env, spawn_distance)
         _apply_manifest_ego_destination(base_env, row)
+
+        # One-way (5.7): plain baselines keep short temptation route; sign-aware
+        # policies get the compliant (possibly budget-truncated) detour.
+        if _row_is_one_way(row):
+            if policy_type in _ONE_WAY_COMPLIANT_NAV_POLICIES:
+                install_one_way_compliant_nav_route(base_env, row)
+            else:
+                install_one_way_baseline_nav_route(base_env, row)
+            # Re-apply along-cap after nav install (final_lane may have changed).
+            _apply_destination_along_cap(base_env, row)
 
         # Validate route: check that destination is different from spawn
         nav = getattr(base_env.vehicle, "navigation", None)
@@ -2489,9 +2569,6 @@ def run_one_episode(
                         base_env.engine._spawned_objects.pop(_sid, None)
                 if _rm is not None and _rm_original_add_spawn is not None:
                     _rm.add_spawn_info = _rm_original_add_spawn
-
-        if _row_is_one_way(row):
-            install_one_way_compliant_nav_route(base_env, row)
 
         # Analyze and print junction lanes (for debugging/info only)
         incoming_lanes, outgoing_lanes = _analyze_junction_lanes(base_env)
@@ -2826,7 +2903,9 @@ def run_one_episode(
                 else:
                     compliant_stop_steps = 0
 
-            if is_blocked_road_row or _row_is_roundabout(row):
+            if is_blocked_road_row or _row_is_roundabout(row) or (
+                _row_is_one_way(row) and row.get("destination_max_along_m") is not None
+            ):
                 raw_cap = row.get("destination_max_along_m")
                 if raw_cap is None:
                     dest_cap_m = float(DEFAULT_DESTINATION_MAX_ALONG_M)
@@ -3236,7 +3315,7 @@ def main():
                                  "carl", "carl_rule",
                                  "plant2", "plant2_rule"])
     parser.add_argument("--model-path", type=str, default=None,
-                        help="Required for carl/plant2")
+                        help="Checkpoint for carl/plant2 (defaults to pretrained under pdd-bench/checkpoints/)")
     parser.add_argument("--run-name", type=str, required=True)
     parser.add_argument("--preset", type=str, default="full", choices=["full", "full_last"])
     parser.add_argument("--benchmark-output", type=str, default="benchmark_output",
@@ -3439,8 +3518,15 @@ def main():
             "--scene-id/--scene-uid/--manifest")
 
     print(f"Selected scenes: {len(rows)}")
+    model_path = resolve_model_path(args.policy, args.model_path)
+    if args.policy in NN_NEED_CHECKPOINT and not model_path:
+        default = DEFAULT_MODEL_PATHS.get(args.policy)
+        raise ValueError(
+            f"--model-path is required for --policy {args.policy}"
+            + (f" (default missing: {default})" if default else "")
+        )
     models = _load_policy_models(
-        args.policy, args.model_path, plant2_action_mode=args.plant2_action_mode,
+        args.policy, model_path, plant2_action_mode=args.plant2_action_mode,
     )
 
     if args.output_dir:

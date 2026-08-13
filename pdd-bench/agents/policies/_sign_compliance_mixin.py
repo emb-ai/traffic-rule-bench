@@ -44,6 +44,7 @@ from traffic_signs.end_of_zone_signs import BaseEndOfZoneSign
 from traffic_signs.priority_signs import (
     MainRoadSign, EndMainRoadSign, YieldSign, RightHandYieldSign, StopSign,
     SecondaryRoadSign, SecondaryRoadLeftSign, SecondaryRoadRightSign,
+    RoundaboutSign,
 )
 
 from traffic_signs.pedestrian_yield_rule import PedestrianYieldRule
@@ -3589,6 +3590,8 @@ class SignComplianceMixin:
                     # 2.3.x on the ego approach = has priority (same as 2.1).
                     # Ego on a secondary arm still yields via YieldSign (2.4).
                     self._handle_main_road(sign)
+                elif isinstance(sign, RoundaboutSign):
+                    pass  # informational 4.3 plate — yield via RoundaboutYieldSign
                 elif isinstance(sign, BaseEndOfZoneSign):
                     pass  # informational — no action needed
             except Exception as exc:

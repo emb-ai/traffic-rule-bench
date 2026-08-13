@@ -22,6 +22,17 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+PDD_BENCH_DIR = SCRIPT_DIR.parent.parent.parent
+CHECKPOINTS_DIR = PDD_BENCH_DIR / "checkpoints"
+NN_NEED_CHECKPOINT = {"carl", "carl_rule", "plant2", "plant2_rule"}
+# Pretrained defaults (same as run_benchmark / eval_pipeline).
+DEFAULT_MODEL_PATHS: dict[str, Path] = {
+    "carl": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
+    "carl_rule": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
+    "plant2": CHECKPOINTS_DIR / "plant2_pretrain" / "epoch=029_final_3.ckpt",
+    "plant2_rule": CHECKPOINTS_DIR / "plant2_pretrain" / "epoch=029_final_3.ckpt",
+}
+
 from core.layout.junction_priority_layout import (
     JunctionLayoutError,
     allowed_shapes_for_mode,
@@ -84,7 +95,7 @@ from signs import (
 )
 
 RUN_BENCH_SCRIPT = SCRIPT_DIR / "run_benchmark.py"
-MOSCOW_ROOT = SCRIPT_DIR.parent / "moscow_junctions"
+MOSCOW_ROOT = SCRIPT_DIR.parent / "moscow_scenes"
 DEFAULT_ALLOCATIONS = MOSCOW_ROOT / "splits" / "sign_allocations.json"
 DEFAULT_SIGNS_YAML = MOSCOW_ROOT / "splits" / "signs.yaml"
 
@@ -131,6 +142,8 @@ class ScenarioConfig:
     max_total: Optional[int] = None
     # One-way (5.7.x): min length gain compliant − baseline (m).
     min_dual_path_gain_m: float = 20.0
+    # Shared travel budget (m) for truncating dual-path routes; None = no cut.
+    dual_path_route_budget_m: Optional[float] = None
 
 
 @dataclass
@@ -189,6 +202,27 @@ class GifConfig:
     run_name: Optional[str] = None
     scaling: float = 24.0
     draw_path_conflict: bool = False
+    # Optional override; carl/plant2* fall back to pretrained defaults.
+    model_path: Optional[str] = None
+
+
+def resolve_gif_model_path(policy: str, model_path: Optional[str]) -> Optional[str]:
+    """Resolve checkpoint for GIF NN policies (carl / plant2 + *_rule)."""
+    if model_path:
+        return str(model_path)
+    if policy not in NN_NEED_CHECKPOINT:
+        return None
+    default = DEFAULT_MODEL_PATHS.get(policy)
+    if default is not None and default.is_file():
+        print(f"[GIF] Using default checkpoint for {policy}: {default}")
+        return str(default)
+    if default is not None:
+        print(
+            f"[GIF] Default checkpoint missing for {policy}: {default} "
+            f"(pass gif.model_path=...)",
+            file=sys.stderr,
+        )
+    return None
 
 
 @dataclass
@@ -1055,13 +1089,16 @@ def generate_one_way_manifest(
         profile_density_cap=float(sim_cfg.profile_density_cap),
         min_dual_path_gain_m=float(scenario_cfg.min_dual_path_gain_m),
         min_ego_lane_m=min(float(sim_cfg.spawn_distance_before_end), 8.0),
+        dual_path_route_budget_m=scenario_cfg.dual_path_route_budget_m,
     )
 
     print(
         f"[one_way] NPC world: sample_one_profile in shared pool with "
         f"dual-path (n_variations={n_variations}, "
         f"density_cap={sim_cfg.profile_density_cap}, "
-        f"min_gain={scenario_cfg.min_dual_path_gain_m}m)"
+        f"min_gain={scenario_cfg.min_dual_path_gain_m}m, "
+        f"route_budget_m={scenario_cfg.dual_path_route_budget_m}, "
+        f"horizon={sim_cfg.horizon})"
     )
 
     build_entry = partial(
@@ -1456,7 +1493,15 @@ def render_gifs_from_manifest(
         return 0, 0
     
     print(f"\n[GIF] Rendering {len(rows)} scene(s)...")
-    
+    model_path = resolve_gif_model_path(gif_cfg.policy, gif_cfg.model_path)
+    if gif_cfg.policy in NN_NEED_CHECKPOINT and not model_path:
+        print(
+            f"[GIF] No checkpoint for policy={gif_cfg.policy}; "
+            f"set gif.model_path=... or place defaults under {CHECKPOINTS_DIR}",
+            file=sys.stderr,
+        )
+        return 0, 1
+
     rendered = 0
     failed = 0
     for i, row in enumerate(rows, start=1):
@@ -1473,6 +1518,8 @@ def render_gifs_from_manifest(
             "--scenes-root", str(scenes_root),
             "--policy", gif_cfg.policy,
         ]
+        if model_path:
+            cmd.extend(["--model-path", model_path])
         if gif_cfg.hide_signs:
             cmd.append("--hide-signs")
         if gif_cfg.draw_path_conflict:
@@ -1572,6 +1619,11 @@ def main(cfg: DictConfig) -> None:
         min_dual_path_gain_m=float(
             getattr(cfg.scenario, "min_dual_path_gain_m", 20.0) or 20.0
         ),
+        dual_path_route_budget_m=(
+            float(cfg.scenario.dual_path_route_budget_m)
+            if getattr(cfg.scenario, "dual_path_route_budget_m", None) is not None
+            else None
+        ),
     )
     sim_cfg = SimulationConfig(
         spawn_velocity_ms=cfg.simulation.spawn_velocity_ms,
@@ -1648,6 +1700,7 @@ def main(cfg: DictConfig) -> None:
         run_name=cfg.gif.run_name,
         scaling=float(getattr(cfg.gif, "scaling", 24.0) or 24.0),
         draw_path_conflict=bool(getattr(cfg.gif, "draw_path_conflict", False)),
+        model_path=getattr(cfg.gif, "model_path", None) or None,
     )
 
     split = normalize_split(getattr(cfg.paths, "split", "all"))

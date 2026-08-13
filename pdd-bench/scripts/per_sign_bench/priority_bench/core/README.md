@@ -1,7 +1,7 @@
 # `core/` — shared library for priority-junction benches
 
 Python package used by `priority_bench` (manifest generation, simulation,
-scene pool) and by `moscow_junctions` crop scripts. Imports always go through
+scene pool) and by `moscow_scenes` crop scripts. Imports always go through
 `core.<subpackage>.<module>` — there are no flat modules at the `core/` root.
 
 ## Layout
@@ -42,7 +42,7 @@ Junction structure derived from a cropped net.
 | `roundabout_topology.py` | Ring + spoke layout for 4.3 |
 | `roundabout_yield_zone.py` | Entry conflict arcs / yield zones on the ring |
 
-**Used by:** `generate_manifest`, `run_benchmark`, `moscow_junctions/scripts/crop_scenes.py`.
+**Used by:** `generate_manifest`, `run_benchmark`, `moscow_scenes/scripts/crop_scenes.py`.
 
 ### `scenarios/`
 

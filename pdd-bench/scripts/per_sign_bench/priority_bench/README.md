@@ -117,9 +117,9 @@ python build_scenes/materialize_scenes.py --sign 2.5 --refill
 ```
 
 Prereq: shared harvest + allocations under  
-`[../moscow_junctions/](../moscow_junctions/README.md)`.  
+`[../moscow_scenes/](../moscow_scenes/README.md)`.  
 Quotas (`n_train` / `n_test`) live in  
-`[../moscow_junctions/splits/signs.yaml](../moscow_junctions/splits/signs.yaml)`.  
+`[../moscow_scenes/splits/signs.yaml](../moscow_scenes/splits/signs.yaml)`.  
 Old catalog/Overpass scripts live in `build_scenes/legacy/` (do not use for new pools).
 
 ### Step 2: Generate evaluation manifest

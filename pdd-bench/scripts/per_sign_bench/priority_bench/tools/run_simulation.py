@@ -38,8 +38,8 @@ ALL_POLICIES = IDM_FAMILY | NN_NEED_CHECKPOINT | NN_NO_CHECKPOINT
 DEFAULT_MODEL_PATHS = {
     "carl": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
     "carl_rule": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
-    "plant2": CHECKPOINTS_DIR / "plant2_finetuned" / "plant2_supervised_2nd_final.pt",
-    "plant2_rule": CHECKPOINTS_DIR / "plant2_finetuned" / "plant2_supervised_2nd_final.pt",
+    "plant2": CHECKPOINTS_DIR / "plant2_pretrain" / "epoch=029_final_3.ckpt",
+    "plant2_rule": CHECKPOINTS_DIR / "plant2_pretrain" / "epoch=029_final_3.ckpt",
 }
 
 

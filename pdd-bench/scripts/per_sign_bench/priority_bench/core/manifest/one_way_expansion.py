@@ -23,6 +23,10 @@ from ..scenarios.one_way_bridge import (
     get_one_way_sign_spec,
 )
 from ..scenarios.scene_augmentation import SpawnScenario
+from .dual_path_budget import (
+    apply_dual_path_route_budget,
+    load_sumo_edge_lengths,
+)
 
 _PER_SIGN_BENCH = Path(__file__).resolve().parents[3]
 if str(_PER_SIGN_BENCH) not in sys.path:
@@ -42,6 +46,8 @@ class OneWaySimParams:
     profile_density_cap: float = 1.0
     min_dual_path_gain_m: float = 20.0
     min_ego_lane_m: float = 8.0
+    # Shared travel budget (m) for baseline + compliant truncations; None = no cut.
+    dual_path_route_budget_m: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -276,7 +282,8 @@ def build_one_way_manifest_entry(
 
     if dual_path is not None:
         meta_fields = dual_path.to_meta_fields()
-        entry["dual_path"] = meta_fields["dual_path"]
+        dual_meta = dict(meta_fields["dual_path"])
+        entry["dual_path"] = dual_meta
         entry["baseline_turn_dir"] = dual_path.turn_dir
         entry["turn_length_m"] = dual_path.turn_length_m
         entry["straight_length_m"] = dual_path.straight_length_m
@@ -287,7 +294,48 @@ def build_one_way_manifest_entry(
         entry["baseline_first_exit"] = dual_path.turn_first_exit
         entry["background_excluded_edges"] = list(dual_path.wrong_dir_edges)
         entry["junction_id"] = dual_path.junction_id
-        entry["forbidden_dir"] = meta_fields["dual_path"]["forbidden_dir"]
+        entry["forbidden_dir"] = dual_meta["forbidden_dir"]
+
+        budget = sim.dual_path_route_budget_m
+        if budget is not None and float(budget) > 0.0:
+            net_full = scene_dir / str(meta.get("net_file", "map.net.xml"))
+            edge_lengths = load_sumo_edge_lengths(net_full)
+            spawn_rem = float(sim.spawn_distance_before_end)
+            if selected_lane is not None:
+                spawn_rem = min(spawn_rem, float(selected_lane.length))
+            trimmed = apply_dual_path_route_budget(
+                dual_meta,
+                ego_edge_id=str(dual_path.ego_edge_id),
+                edge_lengths=edge_lengths,
+                budget_m=float(budget),
+                spawn_remaining_on_ego_m=spawn_rem,
+                dest_lane_num=int(dual_path.dest_lane_num),
+            )
+            entry.update(trimmed)
+            # Prefer truncated dest over full-path spawn_scenario fields.
+            for key in (
+                "destination_lane_id",
+                "destination_edge_id",
+                "baseline_destination_lane_id",
+                "compliant_destination_lane_id",
+            ):
+                if trimmed.get(key) is None:
+                    entry.pop(key, None)
+            for key in (
+                "baseline_destination_max_along_m",
+                "compliant_destination_max_along_m",
+            ):
+                if trimmed.get(key) is None:
+                    entry.pop(key, None)
+            print(
+                f"  [dual-path budget] L={float(budget):.0f}m → "
+                f"base={entry['turn_length_m']:.0f}m"
+                f"{' (cut)' if trimmed.get('baseline_truncated') else ''} "
+                f"dest={entry.get('baseline_destination_lane_id')}; "
+                f"comp={entry['straight_length_m']:.0f}m"
+                f"{' (cut)' if trimmed.get('compliant_truncated') else ''} "
+                f"dest={entry.get('compliant_destination_lane_id')}"
+            )
 
     if junction_layout_cache is not None:
         # Prefer dual-path junction when it differs from lat/lon layout pick.

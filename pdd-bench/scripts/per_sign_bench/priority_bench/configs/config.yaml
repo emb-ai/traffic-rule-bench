@@ -44,7 +44,7 @@ auxiliary:
 simulation:
   spawn_velocity_ms: 2.5
   traffic_density: 0.0
-  horizon: 600
+  horizon: 800
   sign_distance_before_end: 0.0
   spawn_distance_before_end: 15.0
 
@@ -58,3 +58,7 @@ gif:
   run_name: null
   scaling: 12.0   # pixels per meter (higher = more zoomed in)
   draw_path_conflict: false  # cyan/magenta routes + yellow conflict X on GIFs
+  # Optional; carl/carl_rule/plant2/plant2_rule default to pretrained:
+  #   carl*:    pdd-bench/checkpoints/carl/nuplan_51479_1B/model_best.pth
+  #   plant2*:  pdd-bench/checkpoints/plant2_pretrain/epoch=029_final_3.ckpt
+  model_path: null

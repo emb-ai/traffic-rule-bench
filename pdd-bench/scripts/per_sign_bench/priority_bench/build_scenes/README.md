@@ -1,7 +1,7 @@
 # build_scenes — sign scene pool (materialize → viability reject → review)
 
 First-class pipeline stage for `priority_bench`. Pulls allocated junctions from
-the shared **`moscow_junctions`** harvest into `data/<sign>/scenes/`, drops maps
+the shared **`moscow_scenes`** harvest into `data/<sign>/scenes/`, drops maps
 that cannot produce scenarios, then optional visual review keep/reject.
 
 Ad-hoc debug helpers stay under [`../tools/`](../tools/).
@@ -22,9 +22,9 @@ build_scenes/
 
 ## Flow (example: 2.4 yield; same for 2.1 / 2.3 / 2.5 / 3.2 / 4.3)
 
-Prereq: `moscow_junctions` has `nets/moscow.net.xml`, `index/junctions.jsonl`,
-and `splits/sign_allocations.json` (see `../moscow_junctions/README.md`).
-Map quotas live in `moscow_junctions/splits/signs.yaml` (`n_train` / `n_test`).
+Prereq: `moscow_scenes` has `nets/moscow.net.xml`, `index/junctions.jsonl`,
+and `splits/sign_allocations.json` (see `../moscow_scenes/README.md`).
+Map quotas live in `moscow_scenes/splits/signs.yaml` (`n_train` / `n_test`).
 
 ```bash
 cd traffic-rule-bench/pdd-bench/scripts/per_sign_bench/priority_bench
@@ -78,17 +78,17 @@ Reasons are stored in `scenes/scene_selection.json` under `reject_reasons`.
 | `--split train\|test\|all` | Which half of the allocation (default `all`) |
 | `--refill` | Add unused maps until kept train/test hit `signs.yaml` quotas |
 | `--mode symlink\|copy` | Symlink into sign pool (default) or full copy |
-| `--crop-missing` / `--no-crop-missing` | Crop from city net if missing under `moscow_junctions/scenes` (default: crop) |
+| `--crop-missing` / `--no-crop-missing` | Crop from city net if missing under `moscow_scenes/scenes` (default: crop) |
 | `--force-preview` | Rebuild `custom_cropped.png` for the review UI |
 
 Pool bookkeeping: `data/yield/scenes/moscow_pool.json` (per-scene `split`).
 Keep train+test in one `scenes/` folder; choose half at manifest time with
 `paths.split`.
 
-## Relation to moscow_junctions
+## Relation to moscow_scenes
 
 ```
-moscow_junctions/scenes/{T,X,O}/…   ← city harvest (shared)
+moscow_scenes/scenes/{T,X,O}/…   ← city harvest (shared)
         │  allocate (splits/sign_allocations.json)
         ▼
 build_scenes/materialize_scenes.py --sign 4.3

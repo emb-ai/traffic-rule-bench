@@ -1,21 +1,14 @@
 #!/usr/bin/env python3
-"""Materialize Moscow-allocated junction scenes into a sign pool (e.g. 2.4 yield).
+"""Materialize Moscow-allocated scenes into a sign pool (e.g. 2.4 yield / 5.7.1).
 
-Replaces catalog import + Overpass download. Reads
-``moscow_junctions/splits/sign_allocations.json``, ensures each allocated
-scene exists under ``moscow_junctions/scenes/{T,X,O}/`` (crops on demand),
+Reads ``moscow_scenes/splits/sign_allocations.json``, resolves each allocated
+scene under either:
+
+* ``scenes/{T,X,O}/`` for ``crop_kind: junction``
+* ``scenes/dual_path/{T,X}/{slot}/`` for ``crop_kind: dual_path`` (5.7 / 4.1 / …)
+
 then symlinks (or copies) them into ``data/<sign>/scenes/`` for review and
 ``generate_manifest.py``.
-
-Examples:
-    # Yield 2.4 — train+test into data/yield/scenes
-    python build_scenes/materialize_scenes.py --sign 2.4
-
-    # Only train half; regenerate previews
-    python build_scenes/materialize_scenes.py --sign 2.4 --split train --force-preview
-
-    # After review --apply: top up kept counts to signs.yaml quotas
-    python build_scenes/materialize_scenes.py --sign 2.4 --refill
 """
 
 from __future__ import annotations
@@ -30,7 +23,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 BUILD_SCENES_DIR = Path(__file__).resolve().parent
 PRIORITY_BENCH = BUILD_SCENES_DIR.parent
-MOSCOW_ROOT = PRIORITY_BENCH.parent / "moscow_junctions"
+MOSCOW_ROOT = PRIORITY_BENCH.parent / "moscow_scenes"
 MOSCOW_SCRIPTS = MOSCOW_ROOT / "scripts"
 
 sys.path.insert(0, str(PRIORITY_BENCH))
@@ -81,6 +74,62 @@ def _moscow_scene_dir(moscow_scenes: Path, shape: str, scene_id: str) -> Path:
     return moscow_scenes / shape / scene_id
 
 
+def _is_dual_path_scene_id(scene_id: str) -> bool:
+    return str(scene_id).startswith("dual_")
+
+
+def _index_dual_path_scenes(moscow_scenes: Path) -> Dict[str, dict]:
+    """Build scene_id → meta(+path) for ``scenes/dual_path/{T,X}/{slot}/…``."""
+    root = moscow_scenes / "dual_path"
+    out: Dict[str, dict] = {}
+    if not root.is_dir():
+        return out
+    for shape_dir in sorted(root.iterdir()):
+        if not shape_dir.is_dir() or shape_dir.name not in {"T", "X"}:
+            continue
+        for slot_dir in sorted(shape_dir.iterdir()):
+            if not slot_dir.is_dir():
+                continue
+            for scene_dir in sorted(slot_dir.iterdir()):
+                if not scene_dir.is_dir():
+                    continue
+                meta_path = scene_dir / "meta.json"
+                if not meta_path.is_file():
+                    continue
+                try:
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                sid = str(meta.get("scene_id") or scene_dir.name)
+                row = dict(meta)
+                row["scene_id"] = sid
+                row["shape"] = str(meta.get("shape") or shape_dir.name).upper()
+                row["slot"] = str(meta.get("slot") or slot_dir.name)
+                row["crop_kind"] = "dual_path"
+                row["_path"] = str(scene_dir)
+                out[sid] = row
+    return out
+
+
+def _resolve_scene_row(
+    sid: str,
+    *,
+    junction_index: Dict[str, dict],
+    dual_index: Dict[str, dict],
+) -> dict:
+    if sid in dual_index:
+        return dual_index[sid]
+    if sid in junction_index:
+        row = dict(junction_index[sid])
+        row.setdefault("crop_kind", "junction")
+        return row
+    if _is_dual_path_scene_id(sid):
+        raise KeyError(
+            f"dual_path scene not found under scenes/dual_path/: {sid}"
+        )
+    raise KeyError(f"not in junction index: {sid}")
+
+
 def _ensure_cropped(
     row: dict,
     *,
@@ -93,6 +142,22 @@ def _ensure_cropped(
 
     shape = str(row["shape"])
     scene_id = str(row["scene_id"])
+    crop_kind = str(row.get("crop_kind") or "junction")
+    if crop_kind == "dual_path" or _is_dual_path_scene_id(scene_id):
+        # Dual-path crops are produced by crop_dual_path_scenes.py; never
+        # re-crop with junction-only radius here.
+        if row.get("_path"):
+            dest = Path(str(row["_path"]))
+        else:
+            slot = str(row.get("slot") or "")
+            dest = moscow_scenes / "dual_path" / shape / slot / scene_id
+        if not (dest / "map.net.xml").is_file():
+            raise FileNotFoundError(
+                f"Missing dual_path crop {dest} "
+                "(run moscow_scenes/scripts/crop_dual_path_scenes.py)"
+            )
+        return dest
+
     dest = _moscow_scene_dir(moscow_scenes, shape, scene_id)
     if (dest / "map.net.xml").is_file():
         return dest
@@ -121,16 +186,34 @@ def _ensure_cropped(
     return dest
 
 
-def _render_preview(net_path: Path, out_png: Path) -> None:
-    """Top-down PNG for review UI (junction fill + lanes via render_map)."""
+def _render_preview(net_path: Path, out_png: Path, *, meta: Optional[dict] = None) -> None:
+    """Top-down PNG for review UI (junction fill + lanes via render_map).
+
+    For dual_path scenes, overlays short baseline (red) and long compliant (green).
+    """
     import matplotlib
 
     matplotlib.use("Agg")
-    from tools.render_map import parse_sumo_net, render_network
+    from tools.render_map import (
+        parse_sumo_net,
+        render_network,
+        routes_from_dual_path_meta,
+    )
 
     edges, junctions = parse_sumo_net(net_path)
     out_png.parent.mkdir(parents=True, exist_ok=True)
-    render_network(edges, junctions, out_png, figsize=(6, 6), dpi=120)
+    baseline = compliant = None
+    if meta:
+        baseline, compliant, _spawn = routes_from_dual_path_meta(meta)
+    render_network(
+        edges,
+        junctions,
+        out_png,
+        figsize=(6, 6),
+        dpi=120,
+        baseline_edge_ids=baseline,
+        compliant_edge_ids=compliant,
+    )
 
 
 def _link_or_copy(src: Path, dst: Path, *, mode: str) -> None:
@@ -151,7 +234,8 @@ def _materialize_one(
     sid: str,
     *,
     half: str,
-    index: Dict[str, dict],
+    junction_index: Dict[str, dict],
+    dual_index: Dict[str, dict],
     dest_scenes: Path,
     moscow_scenes: Path,
     moscow_net: Path,
@@ -160,10 +244,11 @@ def _materialize_one(
     crop_missing: bool,
     mode: str,
 ) -> dict:
-    row = index.get(sid)
-    if row is None:
-        raise KeyError(f"not in junction index: {sid}")
-    if crop_missing:
+    row = _resolve_scene_row(
+        sid, junction_index=junction_index, dual_index=dual_index
+    )
+    crop_kind = str(row.get("crop_kind") or "junction")
+    if crop_missing or crop_kind == "dual_path" or _is_dual_path_scene_id(sid):
         src = _ensure_cropped(
             row,
             moscow_scenes=moscow_scenes,
@@ -178,12 +263,14 @@ def _materialize_one(
             )
     preview = src / PREVIEW_NAME
     if force_preview or not preview.is_file():
-        _render_preview(src / "map.net.xml", preview)
+        _render_preview(src / "map.net.xml", preview, meta=row)
     dst = dest_scenes / sid
     _link_or_copy(src, dst, mode=mode)
     return {
         "scene_id": sid,
         "shape": row["shape"],
+        "crop_kind": crop_kind,
+        "slot": row.get("slot"),
         "split": half,
         "path": str(dst),
         "moscow_path": str(src),
@@ -211,7 +298,8 @@ def materialize(
             f"Known: {sorted((alloc_doc.get('signs') or {}))}"
         )
     block = alloc_doc["signs"][sign]
-    index = _index_by_scene_id(index_path)
+    junction_index = _index_by_scene_id(index_path)
+    dual_index = _index_dual_path_scenes(moscow_scenes)
 
     halves = ["train", "test"] if split == "all" else [split]
     scene_ids: List[str] = []
@@ -230,7 +318,8 @@ def materialize(
             rec = _materialize_one(
                 sid,
                 half=half_of[sid],
-                index=index,
+                junction_index=junction_index,
+                dual_index=dual_index,
                 dest_scenes=dest_scenes,
                 moscow_scenes=moscow_scenes,
                 moscow_net=moscow_net,
@@ -249,6 +338,7 @@ def materialize(
         "sign": sign,
         "split": split,
         "mode": mode,
+        "crop_kind": block.get("crop_kind", "junction"),
         "allocations_file": str(allocations_path),
         "n_ok": ok,
         "n_fail": fail,
@@ -400,7 +490,8 @@ def refill(
 
     kept = _kept_by_split(dest_scenes)
     excluded = _excluded_ids(dest_scenes, block)
-    index = _index_by_scene_id(index_path)
+    junction_index = _index_by_scene_id(index_path)
+    dual_index = _index_dual_path_scenes(moscow_scenes)
 
     print(
         f"[refill] targets train={n_train} test={n_test}; "
@@ -445,7 +536,8 @@ def refill(
                 rec = _materialize_one(
                     sid,
                     half=half,
-                    index=index,
+                    junction_index=junction_index,
+                    dual_index=dual_index,
                     dest_scenes=dest_scenes,
                     moscow_scenes=moscow_scenes,
                     moscow_net=moscow_net,
