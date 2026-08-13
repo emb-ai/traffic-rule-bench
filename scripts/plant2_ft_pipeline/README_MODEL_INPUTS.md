@@ -4,8 +4,6 @@
 `plant2_ft_pipeline`. Источник правды: `plant2/PlanT/dataset.py` → `generate_batch()`
 → `model.py:forward()`.
 
-> **Запуск скриптов и структура папок:** [README.md](README.md)
-
 ---
 
 ## Общая схема одного training sample
