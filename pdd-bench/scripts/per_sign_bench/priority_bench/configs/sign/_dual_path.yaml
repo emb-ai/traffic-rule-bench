@@ -1,5 +1,5 @@
 # @package _global_
-# Private base for 5.7.x (one_way_*) and 4.1.x (direction_*).
+# Private base for dual-path signs: 5.7.x, 4.1.x, 3.18.x, 3.1.
 # Sign yamls: `defaults: [_dual_path]` then only `sign` + `paths.output_base`.
 # Override once here, or on the CLI:
 #   python generate_manifest.py sign=direction_straight scenario.dual_path_route_budget_m=200

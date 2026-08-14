@@ -1,4 +1,4 @@
-"""Sign profiles for priority-junction benches (2.1–2.5 / 4.1.x / 4.3 / 3.2 / 5.7.x)."""
+"""Sign profiles for priority-junction benches (2.1–2.5 / 3.1 / 3.18 / 4.1.x / 4.3 / 3.2 / 5.7.x)."""
 
 from __future__ import annotations
 
@@ -202,6 +202,44 @@ DIRECTION_LEFT_RIGHT = SignProfile(
     ego_road_class=None,
 )
 
+# 3.18.1 / 3.18.2: dual-path; baseline = forbidden turn; plate on ego approach.
+NO_TURN_RIGHT = SignProfile(
+    id="no_turn_right",
+    pdd_code="3.18.1",
+    sign_type="no_turn",
+    sign_name="No right turn (3.18.1)",
+    layout_mode="main_main",
+    spawn_strategy="no_turn",
+    data_subdir="no_turn_right",
+    output_code="3_18_1",
+    ego_road_class=None,
+)
+
+NO_TURN_LEFT = SignProfile(
+    id="no_turn_left",
+    pdd_code="3.18.2",
+    sign_type="no_turn",
+    sign_name="No left turn (3.18.2)",
+    layout_mode="main_main",
+    spawn_strategy="no_turn",
+    data_subdir="no_turn_left",
+    output_code="3_18_2",
+    ego_road_class=None,
+)
+
+# 3.1: dual-path (all 6 slots); NoEntrySign on baseline first exit from start.
+NO_ENTRY = SignProfile(
+    id="no_entry",
+    pdd_code="3.1",
+    sign_type="no_entry",
+    sign_name="No entry (3.1)",
+    layout_mode="main_main",
+    spawn_strategy="no_entry",
+    data_subdir="no_entry",
+    output_code="3_1",
+    ego_road_class=None,
+)
+
 _PROFILES = (
     MAIN_ROAD,
     SECONDARY_ROAD,
@@ -217,6 +255,9 @@ _PROFILES = (
     DIRECTION_STRAIGHT_RIGHT,
     DIRECTION_STRAIGHT_LEFT,
     DIRECTION_LEFT_RIGHT,
+    NO_TURN_RIGHT,
+    NO_TURN_LEFT,
+    NO_ENTRY,
 )
 
 _REGISTRY: dict[str, SignProfile] = {
@@ -234,6 +275,9 @@ _REGISTRY: dict[str, SignProfile] = {
     DIRECTION_STRAIGHT_RIGHT.id: DIRECTION_STRAIGHT_RIGHT,
     DIRECTION_STRAIGHT_LEFT.id: DIRECTION_STRAIGHT_LEFT,
     DIRECTION_LEFT_RIGHT.id: DIRECTION_LEFT_RIGHT,
+    NO_TURN_RIGHT.id: NO_TURN_RIGHT,
+    NO_TURN_LEFT.id: NO_TURN_LEFT,
+    NO_ENTRY.id: NO_ENTRY,
     # aliases
     "2.1": MAIN_ROAD,
     "2_1": MAIN_ROAD,
@@ -272,6 +316,12 @@ _REGISTRY: dict[str, SignProfile] = {
     "4_1_5": DIRECTION_STRAIGHT_LEFT,
     "4.1.6": DIRECTION_LEFT_RIGHT,
     "4_1_6": DIRECTION_LEFT_RIGHT,
+    "3.18.1": NO_TURN_RIGHT,
+    "3_18_1": NO_TURN_RIGHT,
+    "3.18.2": NO_TURN_LEFT,
+    "3_18_2": NO_TURN_LEFT,
+    "3.1": NO_ENTRY,
+    "3_1": NO_ENTRY,
 }
 
 

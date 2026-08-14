@@ -391,7 +391,13 @@ def check_manifest_viability(
     result.spawn_lane_count = len(spawn_lanes)
 
     junction_layout = layout.to_dict()
-    if auxiliary_enabled and strategy not in ("blocked_road", "one_way", "direction"):
+    if auxiliary_enabled and strategy not in (
+        "blocked_road",
+        "one_way",
+        "direction",
+        "no_turn",
+        "no_entry",
+    ):
         if strategy in ("yield", "roundabout"):
             if not has_viable_aux_lanes(junction_layout, aux_distance_from_intersection):
                 if strategy == "roundabout":
@@ -510,6 +516,88 @@ def check_manifest_viability(
         return ManifestViabilityResult(
             viable=False,
             reason="no_direction_dual_path",
+            detail="no short-forbidden + long-compliant dual-path on this crop",
+            spawn_lane_count=result.spawn_lane_count,
+            scenario_count=0,
+        )
+
+    if strategy == "no_turn":
+        from ..scenarios.no_turn_bridge import discover_no_turn_dual_paths
+
+        code = str(pdd_code or "").strip()
+        if not code and meta:
+            raw = (
+                meta.get("pdd_code")
+                or meta.get("sign_code")
+                or meta.get("allocated_sign")
+            )
+            if raw:
+                code = str(raw).strip()
+        if not code:
+            code = "3.18.1"
+        preferred_jid = str(layout.junction_id or "").strip() or None
+        duals = discover_no_turn_dual_paths(
+            net_path,
+            pdd_code=code,
+            min_lane_length_m=min_ego_lane_m,
+            junction_ids=[preferred_jid] if preferred_jid else None,
+            scene_meta=meta,
+        )
+        if not duals and preferred_jid:
+            duals = discover_no_turn_dual_paths(
+                net_path,
+                pdd_code=code,
+                min_lane_length_m=min_ego_lane_m,
+                junction_ids=None,
+                scene_meta=meta,
+            )
+        result.scenario_count = len(duals)
+        if duals:
+            return result
+        return ManifestViabilityResult(
+            viable=False,
+            reason="no_no_turn_dual_path",
+            detail="no short-forbidden + long-compliant dual-path on this crop",
+            spawn_lane_count=result.spawn_lane_count,
+            scenario_count=0,
+        )
+
+    if strategy == "no_entry":
+        from ..scenarios.no_entry_bridge import discover_no_entry_dual_paths
+
+        code = str(pdd_code or "").strip()
+        if not code and meta:
+            raw = (
+                meta.get("pdd_code")
+                or meta.get("sign_code")
+                or meta.get("allocated_sign")
+            )
+            if raw:
+                code = str(raw).strip()
+        if not code:
+            code = "3.1"
+        preferred_jid = str(layout.junction_id or "").strip() or None
+        duals = discover_no_entry_dual_paths(
+            net_path,
+            pdd_code=code,
+            min_lane_length_m=min_ego_lane_m,
+            junction_ids=[preferred_jid] if preferred_jid else None,
+            scene_meta=meta,
+        )
+        if not duals and preferred_jid:
+            duals = discover_no_entry_dual_paths(
+                net_path,
+                pdd_code=code,
+                min_lane_length_m=min_ego_lane_m,
+                junction_ids=None,
+                scene_meta=meta,
+            )
+        result.scenario_count = len(duals)
+        if duals:
+            return result
+        return ManifestViabilityResult(
+            viable=False,
+            reason="no_no_entry_dual_path",
             detail="no short-forbidden + long-compliant dual-path on this crop",
             spawn_lane_count=result.spawn_lane_count,
             scenario_count=0,

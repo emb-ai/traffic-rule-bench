@@ -134,5 +134,7 @@ from core import SpawnScenario, build_junction_priority_layout
 4. Add viability rules in `manifest/manifest_viability.py`.
 5. Document the sign in this README’s scenario/manifest tables.
 
-Future **3.1 `blocked_entry`** should live alongside `blocked_road_*` under
-`scenarios/` and `manifest/` (shared route helpers, separate expansion if rules differ).
+**3.18.x / 3.1** use dual-path crops (same stack as 4.1 / 5.7):
+`no_turn_*` / `no_entry` profiles, bridges, and expansion modules under
+`scenarios/` + `manifest/`. Slot balance is only in
+`moscow_scenes/scripts/allocate_sign_scenes.py`.

@@ -77,6 +77,14 @@ from core.scenarios.direction_bridge import (
     get_direction_sign_spec,
     resolve_sign_class as resolve_direction_sign_class,
 )
+from core.scenarios.no_turn_bridge import (
+    get_no_turn_sign_spec,
+    resolve_sign_class as resolve_no_turn_sign_class,
+)
+from core.scenarios.no_entry_bridge import (
+    get_no_entry_sign_spec,
+    resolve_sign_class as resolve_no_entry_sign_class,
+)
 from core.layout.junction_priority_layout import right_arm_edge_id, straight_arm_edge_id
 from core.scenarios.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
@@ -1240,9 +1248,30 @@ def _row_is_direction(row: dict) -> bool:
     return code in _DIRECTION_CODES or sign_type in _DIRECTION_TYPES
 
 
+_NO_TURN_CODES = {"3.18.1", "3_18_1", "3.18.2", "3_18_2"}
+_NO_TURN_TYPES = {"no_turn", "no_turn_right", "no_turn_left"}
+
+
+def _row_is_no_turn(row: dict) -> bool:
+    code = str(row.get("pdd_code") or row.get("sign_code") or "")
+    sign_type = str(row.get("sign_type") or row.get("sign_family") or "")
+    return code in _NO_TURN_CODES or sign_type in _NO_TURN_TYPES
+
+
+def _row_is_no_entry(row: dict) -> bool:
+    code = str(row.get("pdd_code") or row.get("sign_code") or "")
+    sign_type = str(row.get("sign_type") or row.get("sign_family") or "")
+    return code in {"3.1", "3_1"} or sign_type == "no_entry"
+
+
 def _row_uses_dual_path_nav(row: dict) -> bool:
-    """5.7.x and 4.1.x: truncated dests; only rule-compliant policies replan."""
-    return _row_is_one_way(row) or _row_is_direction(row)
+    """5.7 / 4.1 / 3.18 / 3.1: truncated dests; only rule-compliant policies replan."""
+    return (
+        _row_is_one_way(row)
+        or _row_is_direction(row)
+        or _row_is_no_turn(row)
+        or _row_is_no_entry(row)
+    )
 
 
 _ONE_WAY_COMPLIANT_NAV_POLICIES = frozenset({
@@ -1312,6 +1341,34 @@ def _resolve_direction_pdd_code(row: dict) -> str:
         return get_direction_sign_spec(str(code).strip()).pdd_code
     except ValueError:
         return "4.1.1"
+
+
+def _resolve_no_turn_pdd_code(row: dict) -> str:
+    code = (
+        row.get("_sign_code")
+        or row.get("sign_code")
+        or row.get("pdd_code")
+        or row.get("sign_type")
+        or "3.18.1"
+    )
+    try:
+        return get_no_turn_sign_spec(str(code).strip()).pdd_code
+    except ValueError:
+        return "3.18.1"
+
+
+def _resolve_no_entry_pdd_code(row: dict) -> str:
+    code = (
+        row.get("_sign_code")
+        or row.get("sign_code")
+        or row.get("pdd_code")
+        or row.get("sign_type")
+        or "3.1"
+    )
+    try:
+        return get_no_entry_sign_spec(str(code).strip()).pdd_code
+    except ValueError:
+        return "3.1"
 
 
 def _row_is_main_secondary(row: dict) -> bool:
@@ -2474,6 +2531,197 @@ def _place_direction_signs(
         return False
 
 
+def _place_no_turn_sign_on_spawn_lane(
+    env,
+    pdd_code: str,
+    distance_before_end: float = 20.0,
+    show_model: bool = True,
+) -> bool:
+    """Fallback: place NoLeft/RightTurnSign beside the ego approach lane."""
+    try:
+        vehicle = env.agent
+        if vehicle is None or vehicle.lane is None:
+            return False
+        sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
+        if sign_mgr is None:
+            return False
+        _clear_sign_manager(sign_mgr)
+        lane = vehicle.lane
+        sign_cls = resolve_no_turn_sign_class(pdd_code)
+        placement_long = sign_placement_long(lane, distance_before_end)
+        sign = sign_mgr.add_sign(
+            sign_cls,
+            lane=lane,
+            longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
+            lateral_offset=lateral_offset_beside_lane(lane, placement_long),
+            show_model=show_model,
+            use_random_lane=False,
+        )
+        return sign is not None
+    except Exception as e:
+        print(f"[NoTurnSign] Failed to place {pdd_code}: {e}")
+        return False
+
+
+def _place_no_turn_signs(
+    env,
+    row: dict,
+    scenes_root: Path,
+    distance_before_end: float = 20.0,
+    show_model: bool = True,
+) -> bool:
+    """Place 3.18.x NoTurn sign on the ego approach (same as 4.1 / 5.7)."""
+    pdd_code = _resolve_no_turn_pdd_code(row)
+    layout = _get_junction_layout(row, scenes_root)
+    if layout is None:
+        print(f"[NoTurnSign] No layout; ego-only {pdd_code}")
+        return _place_no_turn_sign_on_spawn_lane(
+            env,
+            pdd_code,
+            distance_before_end=distance_before_end,
+            show_model=show_model,
+        )
+
+    sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
+    if sign_mgr is None:
+        return False
+    _clear_sign_manager(sign_mgr)
+
+    ego_edge = row.get("road_id")
+    if not ego_edge:
+        return _place_no_turn_sign_on_spawn_lane(
+            env,
+            pdd_code,
+            distance_before_end=distance_before_end,
+            show_model=show_model,
+        )
+
+    arm = next(
+        (a for a in layout.get("arms", []) if a.get("edge_id") == ego_edge),
+        None,
+    )
+    lane = resolve_sign_lane_for_edge(
+        env, str(ego_edge), (arm or {}).get("lane_keys", [])
+    )
+    if lane is None:
+        print(f"[NoTurnSign] Lane not found for ego edge {ego_edge}; ego-only fallback")
+        return _place_no_turn_sign_on_spawn_lane(
+            env,
+            pdd_code,
+            distance_before_end=distance_before_end,
+            show_model=show_model,
+        )
+
+    sign_cls = resolve_no_turn_sign_class(pdd_code)
+    placement_long = sign_placement_long(lane, distance_before_end)
+    try:
+        sign = sign_mgr.add_sign(
+            sign_cls,
+            lane=lane,
+            longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
+            lateral_offset=lateral_offset_beside_lane(lane, placement_long),
+            show_model=show_model,
+            use_random_lane=False,
+            intersection_name=str(
+                row.get("junction_id") or layout.get("junction_id") or ""
+            ),
+        )
+        spec = get_no_turn_sign_spec(pdd_code)
+        print(
+            f"[NoTurnSign] Placed {pdd_code} ({spec.title}) on {ego_edge}, "
+            f"junction={row.get('junction_id') or layout.get('junction_id')}, "
+            f"forbidden={spec.forbidden_dir}, allowed={sorted(spec.allowed_dirs)}, "
+            f"shoulder offset={SIGN_SHOULDER_OFFSET_M}m"
+        )
+        return sign is not None
+    except Exception as exc:
+        print(f"[NoTurnSign] Failed {pdd_code} on {ego_edge}: {exc}")
+        return False
+
+
+def _place_no_entry_sign(
+    env,
+    row: dict,
+    scenes_root: Path,
+    show_model: bool = True,
+) -> bool:
+    """Place NoEntrySign (3.1) at the start of the short forbidden exit."""
+    del scenes_root
+    pdd_code = _resolve_no_entry_pdd_code(row)
+    try:
+        sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
+        if sign_mgr is None:
+            return False
+
+        sign_road_id = (
+            row.get("sign_road_id")
+            or row.get("baseline_first_exit")
+            or row.get("destination_edge_id")
+        )
+        if not sign_road_id and row.get("destination_lane_id"):
+            sign_road_id = lane_edge_id(str(row["destination_lane_id"]))
+        if not sign_road_id:
+            print("[NoEntrySign] Missing sign_road_id / baseline_first_exit")
+            return False
+
+        lane_keys: list = []
+        layout = row.get("junction_layout") or {}
+        for arm in layout.get("arms", []) or []:
+            if arm.get("edge_id") == sign_road_id:
+                lane_keys = list(arm.get("lane_keys") or [])
+                break
+
+        lane = resolve_sign_lane_for_edge(env, str(sign_road_id), lane_keys)
+        if lane is None:
+            print(f"[NoEntrySign] Lane not found for forbidden edge {sign_road_id}")
+            return False
+
+        distance_from_start = float(
+            row.get("sign_distance_from_start", DEFAULT_SIGN_DISTANCE_FROM_START)
+            or DEFAULT_SIGN_DISTANCE_FROM_START
+        )
+        raw_cap = row.get("destination_max_along_m")
+        try:
+            dest_cap = float(
+                DEFAULT_DESTINATION_MAX_ALONG_M if raw_cap is None else raw_cap
+            )
+        except (TypeError, ValueError):
+            dest_cap = float(DEFAULT_DESTINATION_MAX_ALONG_M)
+        needed = max(distance_from_start + 1.0, dest_cap + 5.0)
+        lane_len = float(getattr(lane, "length", 0.0) or 0.0)
+        if lane_len <= needed:
+            print(
+                f"[NoEntrySign] Forbidden lane too short on {sign_road_id}: "
+                f"{lane_len:.2f}m <= needed {needed:.2f}m (sign/dest cap)"
+            )
+            return False
+
+        _clear_sign_manager(sign_mgr)
+        sign_cls = resolve_no_entry_sign_class(pdd_code)
+        placement_long = sign_placement_long_from_start(lane, distance_from_start)
+        longitudinal_offset = sign_longitudinal_offset_from_start(lane, distance_from_start)
+        lateral = lateral_offset_beside_lane(lane, placement_long)
+
+        sign = sign_mgr.add_sign(
+            sign_cls,
+            lane=lane,
+            longitudinal_offset=longitudinal_offset,
+            lateral_offset=lateral,
+            show_model=show_model,
+            use_random_lane=False,
+        )
+        spec = get_no_entry_sign_spec(pdd_code)
+        print(
+            f"[NoEntrySign] Placed {pdd_code} ({spec.title}) on forbidden edge "
+            f"{sign_road_id} at {distance_from_start:.2f}m from lane start "
+            f"(long_offset={longitudinal_offset:.2f})"
+        )
+        return sign is not None
+    except Exception as e:
+        print(f"[NoEntrySign] Failed to place: {e}")
+        return False
+
+
 def _ego_compliant_stop_before_blocked_road(
     env,
     vehicle,
@@ -2524,6 +2772,21 @@ def _place_junction_priority_signs(
     show_model: bool = True,
 ) -> bool:
     """Dispatch sign placement by row pdd_code / sign_type."""
+    if _row_is_no_entry(row):
+        return _place_no_entry_sign(
+            env,
+            row,
+            scenes_root=scenes_root,
+            show_model=show_model,
+        )
+    if _row_is_no_turn(row):
+        return _place_no_turn_signs(
+            env,
+            row,
+            scenes_root=scenes_root,
+            distance_before_end=distance_before_end,
+            show_model=show_model,
+        )
     if _row_is_direction(row):
         return _place_direction_signs(
             env,
@@ -2771,8 +3034,7 @@ def run_one_episode(
             if (
                 not _row_is_main_secondary(row)
                 and not _row_is_blocked_road(row)
-                and not _row_is_one_way(row)
-                and not _row_is_direction(row)
+                and not _row_uses_dual_path_nav(row)
             ):
                 _place_right_hand_yield_tracker(
                     base_env,

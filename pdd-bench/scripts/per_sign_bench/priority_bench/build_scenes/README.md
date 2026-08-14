@@ -31,6 +31,9 @@ cd traffic-rule-bench/pdd-bench/scripts/per_sign_bench/priority_bench
 
 # 1) Link allocated maps (train+test) into data/<sign>/scenes/
 python build_scenes/materialize_scenes.py --sign 2.4   # or 2.1 / 2.3 / 2.5 / 3.2 / 4.3
+# Dual-path: 5.7 / 4.1 / 3.18 / 3.1 (slot-balanced in allocate)
+#   python build_scenes/materialize_scenes.py --sign 3.18.1
+#   python build_scenes/materialize_scenes.py --sign 3.1
 # Roundabout: moscow scenes/O/ → data/roundabout/scenes
 
 # 2) Drop maps that cannot produce scenarios; refill to signs.yaml quotas
@@ -63,6 +66,9 @@ python generate_manifest.py sign=direction_left paths.split=train
 python generate_manifest.py sign=direction_straight_right paths.split=train
 python generate_manifest.py sign=direction_straight_left paths.split=train
 python generate_manifest.py sign=direction_left_right paths.split=train
+python generate_manifest.py sign=no_turn_right paths.split=train
+python generate_manifest.py sign=no_turn_left paths.split=train
+python generate_manifest.py sign=no_entry paths.split=train
 ```
 
 ### reject_unusable_scenes flags

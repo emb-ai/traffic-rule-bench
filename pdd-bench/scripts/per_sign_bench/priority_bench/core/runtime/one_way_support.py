@@ -222,10 +222,10 @@ def forbidden_edges_for_compliant_nav(row: dict) -> list[str]:
     5.7.x: the opposite carriageway (``wrong_dir_edges``). Blocking those
     is safe — the compliant detour never needs them.
 
-    4.1.x: do not permanently block the harvested forbidden branch. A long
-    compliant detour may legally re-enter that turn later (same as
-    ``direction_signs._install_direction_compliant_nav_route``). Pin
-    ``straight_path`` only; an empty blocked set is correct.
+    4.1.x / 3.18.x / 3.1: do not permanently block the harvested forbidden
+    branch. A long compliant detour may legally re-enter that turn later.
+    Pin ``straight_path`` only; an empty blocked set (no wrong-dir edges)
+    is correct.
     """
     dual = row.get("dual_path") or {}
     one_way = [str(e) for e in (row.get("background_excluded_edges") or []) if e]
