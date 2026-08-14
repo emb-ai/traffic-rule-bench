@@ -31,10 +31,12 @@ moscow_scenes/
 
 ## Two crop kinds
 
-| Kind | Path | Used by |
-|------|------|---------|
-| `junction` | `scenes/{T,X,O}/` | 2.x, 3.2, 4.3, … |
+
+| Kind        | Path                             | Used by             |
+| ----------- | -------------------------------- | ------------------- |
+| `junction`  | `scenes/{T,X,O}/`                | 2.x, 3.2, 4.3, …    |
 | `dual_path` | `scenes/dual_path/{T,X}/{slot}/` | 5.7, 3.18, 4.1, 3.1 |
+
 
 ### Dual-path slots
 
@@ -63,20 +65,22 @@ cd traffic-rule-bench/pdd-bench/scripts/per_sign_bench/moscow_scenes
 python scripts/run_pipeline.py --skip-download --skip-netconvert
 
 # Dual-path harvest (among the same enumerated T/X junctions)
-# Default: 500 scenes per (shape, slot) — shared pool, not one-sign quota
+# Default: 500 scenes per (shape, slot) — shared pool, not one-sign quota.
+# Crops incrementally (each atom → disk + candidates flush); Ctrl+C safe with
+# --skip-existing (resume recounts on-disk scenes toward the cap).
 python scripts/crop_dual_path_scenes.py --max-per-slot 500 --skip-existing
 # smoke:  python scripts/crop_dual_path_scenes.py --max-per-slot 5 --discover-only
 # subset: python scripts/crop_dual_path_scenes.py --max-per-slot 500 --slots l_s,l_r
 
-python scripts/make_junction_split.py
+python scripts/make_junction_split.py  # global train/test split among X/T/O 
 python scripts/allocate_sign_scenes.py
 ```
 
 ## Train / test
 
 1. Shared pool — not owned by any sign.
-2. Prefer split by **`junction_id`** so junction-only and dual_path crops of the
-   same junction stay on the same side (no road leakage across train/test).
+2. Prefer split by `**junction_id**` so junction-only and dual_path crops of the
+  same junction stay on the same side (no road leakage across train/test).
 3. Signs sample from the matching `crop_kind` with shape / slot filters.
 
 Quotas: `splits/signs.yaml` (`n_train`, `n_test`, `seed`, `crop_kind`, …).

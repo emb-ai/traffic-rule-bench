@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 _PRIORITY = Path(__file__).resolve().parents[2] / "priority_bench"
 if str(_PRIORITY) not in sys.path:
@@ -567,6 +567,8 @@ def fill_slots_for_junctions(
     min_lane_length_m: float = 8.0,
     seed: int = 42,
     already_filled: Optional[Dict[Tuple[str, str], int]] = None,
+    existing_scene_ids: Optional[Set[str]] = None,
+    on_atom: Optional[Callable[[dict, DualPathScenario, str], bool]] = None,
 ) -> List[Tuple[dict, DualPathScenario]]:
     """Fill dual-path atoms with a fixed pool size per ``(shape, slot)``.
 
@@ -579,8 +581,11 @@ def fill_slots_for_junctions(
       Moscow hit like junction-only T/X/O; 500 is ~X-scale density per bucket.
     * Junctions are shuffled with ``seed`` so geography is not biased to index order.
     * ``already_filled`` counts existing on-disk scenes toward the cap (skip-existing).
+    * ``existing_scene_ids`` — skip rediscovering atoms already on disk (resume-safe).
+    * ``on_atom(row, scenario, shape) -> kept`` — optional hook (e.g. crop immediately).
+      Count toward the pool only when it returns True (failed crops do not fill a slot).
 
-    Returns list of ``(index_row, scenario)`` ready for cropping.
+    Returns list of ``(index_row, scenario)`` that were kept (and counted).
     """
     import random
 
@@ -588,6 +593,7 @@ def fill_slots_for_junctions(
     graph = build_edge_graph(net_path)
     slot_list = slots_from_iterable(slots)
     out: List[Tuple[dict, DualPathScenario]] = []
+    seen_ids: Set[str] = set(existing_scene_ids or ())
 
     by_junc: Dict[str, dict] = {}
     for row in junction_rows:
@@ -620,7 +626,7 @@ def fill_slots_for_junctions(
     def _all_full() -> bool:
         return all(_bucket_full(shape, slot) for shape, slot in targets)
 
-    for jid, row in order:
+    for ji, (jid, row) in enumerate(order, start=1):
         if _all_full():
             break
         shape = str(row.get("shape") or "").upper()
@@ -656,11 +662,26 @@ def fill_slots_for_junctions(
                     break
                 if sc.ego_edge_id in seen_ego and n_per_junction_slot <= 1:
                     continue
+                scene_id = sc.scene_id(shape)
+                if scene_id in seen_ids:
+                    continue
                 kept.append(sc)
                 seen_ego.add(sc.ego_edge_id)
             for sc in kept:
+                if on_atom is not None and not on_atom(row, sc, shape):
+                    continue
+                scene_id = sc.scene_id(shape)
+                seen_ids.add(scene_id)
                 out.append((row, sc))
                 counts[(shape, slot)] = counts.get((shape, slot), 0) + 1
+        if ji == 1 or ji % 50 == 0 or ji == len(order):
+            filled_buckets = sum(1 for k in targets if _bucket_full(*k))
+            print(
+                f"  [discover] junctions {ji}/{len(order)} "
+                f"kept={len(out)} buckets_full={filled_buckets}/{len(targets)} "
+                f"counts={dict(sorted(counts.items()))}",
+                flush=True,
+            )
     return out
 
 
