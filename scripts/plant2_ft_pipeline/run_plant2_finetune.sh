@@ -84,6 +84,9 @@ export DDP_STRATEGY="${DDP_STRATEGY:-ddp_find_unused_parameters_true}"
 # faster group. Exported here so the header records what a run actually used.
 export INIT_SIGN_FROM_STOP="${INIT_SIGN_FROM_STOP:-0}"
 export NEW_PARAM_LR_MULT="${NEW_PARAM_LR_MULT:-1}"
+# 0 freezes the pretrained trunk: driving stays at checkpoint quality
+# while the sign channels and the speed head learn.
+export TRUNK_LR_MULT="${TRUNK_LR_MULT:-1}"
 
 mkdir -p "$DS_LOCAL"
 mkdir -p "$PLAN_T/log" "$PLAN_T/checkpoints_ft"
@@ -104,7 +107,7 @@ echo "  BS       = $BATCH_SIZE  workers=$NUM_WORKERS  epochs=$MAX_EPOCHS"
 echo "  ADDON    = $CHECKPOINT_ADDON"
 echo "  CACHE_GB = $CACHE_SIZE_GB  ckpt_every=$CKPT_EVERY_N_EPOCHS"
 echo "  STOPW    = $STOP_SPEED_LOSS_WEIGHT  ts_lookahead=${TS_LOOKAHEAD:-0} wps_stride=${WPS_STRIDE:-1}"
-echo "  NEWPARAM = init_sign_from_stop=$INIT_SIGN_FROM_STOP  lr_mult=$NEW_PARAM_LR_MULT"
+echo "  NEWPARAM = init_sign_from_stop=$INIT_SIGN_FROM_STOP  lr_mult=$NEW_PARAM_LR_MULT  trunk_mult=$TRUNK_LR_MULT"
 echo "  PYTHON   = $PY"
 echo "  ENTRY    = $LIT_ENTRY (flash_attn disabled)"
 echo "  NOUSERSITE=$PYTHONNOUSERSITE"
