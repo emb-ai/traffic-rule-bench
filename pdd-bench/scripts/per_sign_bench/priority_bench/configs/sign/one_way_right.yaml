@@ -12,9 +12,7 @@ auxiliary:
 
 scenario:
   min_dual_path_gain_m: 20.0
-  # Shared travel budget (m) for baseline + compliant path truncation.
-  # horizon=800 @ ~6–8 m/s → ~480–640 m; 500 keeps most shorts intact.
-  dual_path_route_budget_m: 500.0
+  dual_path_route_budget_m: 150
 
 simulation:
   horizon: 800

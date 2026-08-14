@@ -61,7 +61,9 @@ def truncate_edge_path(
     """Cut ``path_edges`` (post-ego exits) so cumulative length ≤ budget.
 
     Always keeps at least the first exit so the signed junction decision remains
-    in the episode. If the cut lands mid-edge, ``destination_max_along_m`` is set.
+    in the episode. Always sets ``destination_max_along_m`` on the final edge
+    (mid-edge cut when over budget; near lane end when the path fits) so the
+    top-down finish mark can be placed like roundabout 4.3.
     """
     edges = [str(e) for e in path_edges if e]
     if not edges:
@@ -108,15 +110,24 @@ def truncate_edge_path(
     if not truncated:
         return None
 
+    # Path ended within budget (or between edges): still pin finish near end
+    # of the final edge so GIF/top-down matches 4.3-style dest mark.
     dest_edge = truncated[-1]
+    final_len = float(edge_lengths.get(dest_edge, 0.0) or 0.0)
+    if along_cap is None:
+        if final_len > 5.0:
+            along_cap = max(5.0, final_len - 5.0)
+        elif final_len > 0.0:
+            along_cap = max(1.0, final_len * 0.5)
+        else:
+            along_cap = 5.0
+
     return TruncatedRoute(
         edges=tuple(truncated),
         dest_edge_id=dest_edge,
         dest_lane_id=make_lane_key(dest_edge, int(dest_lane_num)),
         length_m=float(accum),
-        destination_max_along_m=(
-            float(along_cap) if along_cap is not None else None
-        ),
+        destination_max_along_m=float(along_cap),
         truncated=bool(was_truncated or len(truncated) < len(edges)),
     )
 
@@ -174,12 +185,15 @@ def apply_dual_path_route_budget(
         "dual_path": out,
         "baseline_destination_lane_id": base.dest_lane_id,
         "baseline_destination_edge_id": base.dest_edge_id,
-        "baseline_destination_max_along_m": base.destination_max_along_m,
+        "baseline_destination_max_along_m": float(base.destination_max_along_m or 5.0),
         "compliant_destination_lane_id": comp.dest_lane_id,
         "compliant_destination_edge_id": comp.dest_edge_id,
-        "compliant_destination_max_along_m": comp.destination_max_along_m,
+        "compliant_destination_max_along_m": float(comp.destination_max_along_m or 5.0),
         "destination_lane_id": comp.dest_lane_id,
         "destination_edge_id": comp.dest_edge_id,
+        # Default along-cap follows the (policy-resolved) destination; runtime
+        # overwrites from baseline_/compliant_ fields per policy.
+        "destination_max_along_m": float(comp.destination_max_along_m or 5.0),
         "turn_length_m": out["turn_length_m"],
         "straight_length_m": out["straight_length_m"],
         "dual_path_gain_m": out["gain_m"],

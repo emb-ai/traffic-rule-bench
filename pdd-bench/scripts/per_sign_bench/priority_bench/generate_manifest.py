@@ -200,7 +200,9 @@ class GifConfig:
     hide_signs: bool = True
     dir: Optional[str] = None
     run_name: Optional[str] = None
-    scaling: float = 24.0
+    # Meters of view on the 800px GIF. MetaDrive clamps zoom by film/map_bbox;
+    # run_benchmark grows film_size so the window sticks on large maps.
+    window_m: float = 80.0
     draw_path_conflict: bool = False
     # Optional override; carl/plant2* fall back to pretrained defaults.
     model_path: Optional[str] = None
@@ -1524,9 +1526,9 @@ def render_gifs_from_manifest(
             cmd.append("--hide-signs")
         if gif_cfg.draw_path_conflict:
             cmd.append("--draw-path-conflict")
-        if gif_cfg.scaling:
-            cmd.extend(["--gif-scaling", str(float(gif_cfg.scaling))])
-        
+        if gif_cfg.window_m is not None and float(gif_cfg.window_m) > 0.0:
+            cmd.extend(["--gif-window-m", str(float(gif_cfg.window_m))])
+
         if aux_cfg.enabled:
             cmd.append("--auxiliary-agent")
             cmd.extend(["--aux-distance-from-intersection", str(aux_cfg.distance_from_intersection)])
@@ -1698,7 +1700,7 @@ def main(cfg: DictConfig) -> None:
         hide_signs=cfg.gif.hide_signs,
         dir=cfg.gif.dir,
         run_name=cfg.gif.run_name,
-        scaling=float(getattr(cfg.gif, "scaling", 24.0) or 24.0),
+        window_m=float(getattr(cfg.gif, "window_m", 80.0) or 80.0),
         draw_path_conflict=bool(getattr(cfg.gif, "draw_path_conflict", False)),
         model_path=getattr(cfg.gif, "model_path", None) or None,
     )

@@ -1229,10 +1229,12 @@ def _resolve_one_way_row_for_policy(row: dict, policy_type: str) -> dict:
         edge = lane_edge_id(str(dest))
         if edge:
             out["destination_edge_id"] = edge
+    # Always set along for one_way so finish mark / arrive match 4.3 behaviour.
     if along is not None:
         out["destination_max_along_m"] = float(along)
-    else:
-        out.pop("destination_max_along_m", None)
+    elif out.get("destination_max_along_m") is None:
+        # Fallback: near end of final lane (resolved later from lane length).
+        out["destination_max_along_m"] = 1e9
     return out
 
 
@@ -2408,6 +2410,40 @@ def _place_junction_priority_signs(
     )
 
 
+def _topdown_gif_film_and_scaling(
+    env,
+    *,
+    screen_size: tuple[int, int] = (800, 800),
+    window_m: float = 80.0,
+) -> tuple[tuple[int, int], float]:
+    """Choose film_size + MetaDrive scaling for a fixed visible window (meters).
+
+    Dual-path crops are often >1 km; a fixed ``film_size=(4800,4800)`` would
+    clamp zoom. Grow film with map bbox so ``window_m`` is honored without
+    editing MetaDrive.
+    """
+    screen = int(max(screen_size[0], screen_size[1]))
+    win = float(window_m) if window_m and float(window_m) > 0.0 else 80.0
+    scaling_req = float(screen) / win
+
+    max_len = 400.0
+    try:
+        b_box = env.engine.current_map.road_network.get_bounding_box()
+        max_len = max(
+            float(b_box[1] - b_box[0]),
+            float(b_box[3] - b_box[2]),
+            1.0,
+        )
+    except Exception:
+        pass
+
+    # MetaDrive: scaling = min(requested, film/max_len - 0.1)
+    need = int((scaling_req + 0.1) * max_len + 64)
+    film = max(4800, need)
+    film = min(film, 24000)  # soft cap for RAM
+    return (film, film), float(scaling_req)
+
+
 def run_one_episode(
     row: dict,
     policy_type: str,
@@ -2418,7 +2454,7 @@ def run_one_episode(
     ego_sample_seed_base: int,
     replay_root: Path | None = None,
     save_gif: Path | None = None,
-    gif_scaling: float = 24.0,
+    gif_window_m: float = 80.0,
     hide_signs: bool = False,
     draw_path_conflict: bool = False,
     auxiliary_agent: bool = False,
@@ -2903,9 +2939,7 @@ def run_one_episode(
                 else:
                     compliant_stop_steps = 0
 
-            if is_blocked_road_row or _row_is_roundabout(row) or (
-                _row_is_one_way(row) and row.get("destination_max_along_m") is not None
-            ):
+            if is_blocked_road_row or _row_is_roundabout(row) or _row_is_one_way(row):
                 raw_cap = row.get("destination_max_along_m")
                 if raw_cap is None:
                     dest_cap_m = float(DEFAULT_DESTINATION_MAX_ALONG_M)
@@ -2946,11 +2980,17 @@ def run_one_episode(
             # Render before breaking so arrive/terminate frames are in the GIF.
             if save_gif:
                 try:
+                    screen_size = (800, 800)
+                    film_size, scaling = _topdown_gif_film_and_scaling(
+                        base_env,
+                        screen_size=screen_size,
+                        window_m=gif_window_m,
+                    )
                     base_env.render(
                         mode="top_down",
-                        film_size=(4800, 4800),
-                        scaling=float(gif_scaling),
-                        screen_size=(800, 800),
+                        film_size=film_size,
+                        scaling=float(scaling),
+                        screen_size=screen_size,
                         semantic_map=True,
                         semantic_broken_line=True,
                         draw_target_vehicle_trajectory=True,
@@ -3356,10 +3396,11 @@ def main():
     parser.add_argument("--gif-dir", type=str, default=None,
                         help="Directory for GIFs")
     parser.add_argument(
-        "--gif-scaling",
+        "--gif-window-m",
         type=float,
-        default=24.0,
-        help="Top-down GIF zoom: pixels per meter (higher = more zoomed in, default: 24)",
+        default=80.0,
+        help="Visible top-down GIF window in meters (same across signs; "
+             "film_size auto-grows so MetaDrive does not clamp zoom).",
     )
     parser.add_argument("--output-dir", type=str, default=None,
                         help="Write episodes/summary/gifs here directly "
@@ -3605,7 +3646,7 @@ def main():
                 ego_sample_seed_base=args.ego_sample_seed_base,
                 replay_root=replay_root,
                 save_gif=gif_path,
-                gif_scaling=args.gif_scaling,
+                gif_window_m=args.gif_window_m,
                 hide_signs=args.hide_signs,
                 draw_path_conflict=bool(args.draw_path_conflict),
                 auxiliary_agent=args.auxiliary_agent,
