@@ -70,6 +70,12 @@ from core.manifest.one_way_expansion import (
     build_one_way_manifest_entry,
     expand_one_way_scene_entries,
 )
+from core.manifest.direction_expansion import (
+    DirectionExpansionConfig,
+    DirectionSimParams,
+    build_direction_manifest_entry,
+    expand_direction_scene_entries,
+)
 from core.scenarios.scene_augmentation import (
     SpawnScenario,
     pick_default_main_spawn_meta_for_net,
@@ -1237,6 +1243,204 @@ def generate_one_way_manifest(
 
 
 # -----------------------------------------------------------------------------
+# Direction (4.1.1–4.1.6) manifest generation
+# -----------------------------------------------------------------------------
+def generate_direction_manifest(
+    scenes_dir: Path,
+    output_dir: Path,
+    scenario_cfg: ScenarioConfig,
+    sim_cfg: SimulationConfig,
+    expansion_cfg: ExpansionConfig,
+    split: str = "all",
+) -> List[Dict]:
+    """Generate real_manifest.jsonl for PDD 4.1.x (dual-path × NPC profiles)."""
+    split = normalize_split(split)
+    assert_rejected_scenes_applied(scenes_dir)
+    all_scenes = discover_scenes(scenes_dir)
+    print(f"Scenes root: {scenes_dir.resolve()}")
+    print(f"Discovered {len(all_scenes)} scene(s) on disk")
+
+    try:
+        scenes, split_by_id, skipped_unknown = filter_scene_dirs_by_split(
+            all_scenes, split=split, scenes_dir=scenes_dir
+        )
+    except FileNotFoundError as exc:
+        raise SystemExit(f"[error] {exc}") from exc
+
+    if skipped_unknown:
+        preview = ", ".join(skipped_unknown[:8])
+        more = f" (+{len(skipped_unknown) - 8} more)" if len(skipped_unknown) > 8 else ""
+        print(
+            f"  [split] Skipping {len(skipped_unknown)} scene(s) not in "
+            f"{pool_path(scenes_dir).name}: {preview}{more}"
+        )
+    print(f"Split filter: {split} → {len(scenes)} scene(s)")
+    n_variations = max(1, int(sim_cfg.n_variations))
+    print(
+        f"Augmentation axes: layout={expansion_cfg.layout_on}, "
+        f"n_variations={n_variations} (combined with dual-path; "
+        f"max_scenarios caps the product)"
+    )
+
+    direction_expansion = DirectionExpansionConfig(
+        layout=expansion_cfg.layout_on,
+        max_scenarios=scenario_cfg.max_scenarios,
+    )
+    sim_params = DirectionSimParams(
+        spawn_distance_before_end=sim_cfg.spawn_distance_before_end,
+        sign_distance_before_end=sim_cfg.sign_distance_before_end,
+        spawn_velocity_ms=sim_cfg.spawn_velocity_ms,
+        horizon=sim_cfg.horizon,
+        n_variations=n_variations,
+        profile_density_cap=float(sim_cfg.profile_density_cap),
+        min_dual_path_gain_m=float(scenario_cfg.min_dual_path_gain_m),
+        min_ego_lane_m=min(float(sim_cfg.spawn_distance_before_end), 8.0),
+        dual_path_route_budget_m=scenario_cfg.dual_path_route_budget_m,
+    )
+
+    print(
+        f"[direction] NPC world: sample_one_profile in shared pool with "
+        f"dual-path (n_variations={n_variations}, "
+        f"density_cap={sim_cfg.profile_density_cap}, "
+        f"min_gain={scenario_cfg.min_dual_path_gain_m}m, "
+        f"route_budget_m={scenario_cfg.dual_path_route_budget_m}, "
+        f"horizon={sim_cfg.horizon})"
+    )
+
+    build_entry = partial(
+        build_direction_manifest_entry,
+        pdd_code=PDD_CODE,
+        sign_type=SIGN_TYPE,
+    )
+
+    entries: List[Dict] = []
+    used_scene_ids: List[str] = []
+    min_lane = min(float(sim_cfg.spawn_distance_before_end), 8.0)
+
+    for scene_dir in scenes:
+        meta = load_scene_metadata(scene_dir)
+        scene_name = meta.get("scene_name", scene_dir.name)
+        net_file = meta.get("net_file", "map.net.xml")
+        net_full_path = scene_dir / net_file
+        print(f"\n=== {scene_name} ===")
+
+        spawn_lanes = parse_sumo_net_for_spawn_lanes(net_full_path, min_length=min_lane)
+        print(f"  Found {len(spawn_lanes)} intersection-approaching lane(s)")
+
+        sign_lat = meta.get("latitude") or meta.get("center_lat")
+        sign_lon = meta.get("longitude") or meta.get("center_lon")
+        junction_layout = build_junction_layout_for_scene(
+            net_full_path,
+            sign_lat=float(sign_lat) if sign_lat is not None else None,
+            sign_lon=float(sign_lon) if sign_lon is not None else None,
+            scene_meta=meta,
+        )
+        if junction_layout is None:
+            print(f"  Skipping {scene_name}: no junction layout")
+            continue
+        shape = junction_layout.get("shape")
+        allowed_shapes = allowed_shapes_for_mode(_profile().layout_mode)
+        if shape not in allowed_shapes:
+            print(
+                f"  Skipping {scene_name}: junction shape {shape!r} "
+                f"(need {sorted(allowed_shapes)})"
+            )
+            continue
+
+        scene_entries = expand_direction_scene_entries(
+            scene_dir=scene_dir,
+            scenes_root=scenes_dir,
+            meta=meta,
+            net_path=net_full_path,
+            spawn_lanes=spawn_lanes,
+            junction_layout=junction_layout,
+            sim=sim_params,
+            expansion=direction_expansion,
+            build_entry=build_entry,
+            pdd_code=PDD_CODE,
+        )
+        if not scene_entries:
+            print(f"  Skipping {scene_name}: no manifest entries after expansion")
+            continue
+
+        scene_split = split_by_id.get(scene_name) or split_by_id.get(scene_dir.name)
+        for entry in scene_entries:
+            entry["split"] = scene_split
+        entries.extend(scene_entries)
+        used_scene_ids.append(scene_dir.name)
+
+    pre_total = len(entries)
+    max_total = scenario_cfg.max_total
+    if max_total is not None and max_total >= 0 and pre_total > max_total:
+        rng = random.Random(
+            hash(("max_total_shuffle", int(max_total), split, PDD_CODE)) & 0xFFFFFFFF
+        )
+        rng.shuffle(entries)
+        entries = entries[: int(max_total)]
+        used_scene_ids = sorted({str(e.get("scene_id")) for e in entries if e.get("scene_id")})
+        print(
+            f"[max_total] Retained {len(entries)} of {pre_total} manifest entries "
+            f"(shuffled, cap={max_total})"
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / "real_manifest.jsonl"
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        for entry in entries:
+            f.write(json.dumps(entry, default=str) + "\n")
+
+    split_counts = count_splits(used_scene_ids, split_by_id)
+    summary = {
+        "pdd_code": PDD_CODE,
+        "sign_type": SIGN_TYPE,
+        "sign_name": SIGN_NAME,
+        "sign_class": _profile().sign_type,
+        "sign_placement": (
+            "LaneAllowedDirectionSign on ego approach "
+            "(sign_distance_before_end); dual-path compliant nav installed at episode start"
+        ),
+        "split_filter": split,
+        "split_counts": split_counts,
+        "total_scenes": len(used_scene_ids),
+        "total_entries": len(entries),
+        "total_entries_before_max_total": pre_total,
+        "augmentation_layout": expansion_cfg.layout_on,
+        "n_variations": n_variations,
+        "npc_world": "factorized_space.agent_profile_bank.sample_one_profile",
+        "profile_density_cap": sim_cfg.profile_density_cap,
+        "min_dual_path_gain_m": scenario_cfg.min_dual_path_gain_m,
+        "max_scenarios": scenario_cfg.max_scenarios,
+        "max_total": scenario_cfg.max_total,
+        "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
+        "horizon": sim_cfg.horizon,
+        "sign_distance_before_end": sim_cfg.sign_distance_before_end,
+        "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
+        "auxiliary_agent": False,
+        "generated_at": datetime.now().isoformat(),
+        "scenes": list(used_scene_ids),
+    }
+    summary_path = output_dir / "real_manifest_summary.json"
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+    manifest_meta_path = output_dir / "manifest.json"
+    with open(manifest_meta_path, "w", encoding="utf-8") as f:
+        json.dump({"entries_file": "real_manifest.jsonl", **summary}, f, indent=2)
+
+    repro_dir = write_repro_artifacts(
+        output_dir=output_dir,
+        scenes_dir=scenes_dir,
+        split_filter=split,
+        used_scene_ids=used_scene_ids,
+        split_by_id=split_by_id,
+        pdd_code=PDD_CODE,
+    )
+    print(f"Wrote repro artifacts → {repro_dir}")
+    print(f"\nGenerated {len(entries)} manifest entries from {len(used_scene_ids)} scenes")
+    print(f"  Manifest: {manifest_path}")
+    return entries
+
+
+# -----------------------------------------------------------------------------
 # Manifest generation
 # -----------------------------------------------------------------------------
 def generate_manifest(
@@ -1719,6 +1923,15 @@ def main(cfg: DictConfig) -> None:
         )
     elif profile.spawn_strategy == "one_way":
         entries = generate_one_way_manifest(
+            scenes_dir=scenes_dir,
+            output_dir=experiment_dir,
+            scenario_cfg=scenario_cfg,
+            sim_cfg=sim_cfg,
+            expansion_cfg=expansion_cfg,
+            split=split,
+        )
+    elif profile.spawn_strategy == "direction":
+        entries = generate_direction_manifest(
             scenes_dir=scenes_dir,
             output_dir=experiment_dir,
             scenario_cfg=scenario_cfg,

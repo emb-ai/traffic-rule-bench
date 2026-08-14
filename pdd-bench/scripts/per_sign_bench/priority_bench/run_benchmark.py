@@ -66,11 +66,17 @@ from traffic_signs.no_traffic_sign import NoTrafficSign
 from core.sumo.lane_keys import clamp_lane_key_to_graph, lane_edge_id, make_lane_key
 from core.runtime.one_way_support import (
     OneWaySumoTrafficManager,
-    install_one_way_baseline_nav_route,
     install_one_way_compliant_nav_route,
     resolve_row_background_excluded_edges,
 )
-from core.scenarios.one_way_bridge import get_one_way_sign_spec, resolve_sign_class
+from core.scenarios.one_way_bridge import (
+    get_one_way_sign_spec,
+    resolve_sign_class as resolve_one_way_sign_class,
+)
+from core.scenarios.direction_bridge import (
+    get_direction_sign_spec,
+    resolve_sign_class as resolve_direction_sign_class,
+)
 from core.layout.junction_priority_layout import right_arm_edge_id, straight_arm_edge_id
 from core.scenarios.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
@@ -947,10 +953,12 @@ def _apply_destination_along_cap(env, row: dict) -> None:
     """
     raw = row.get("destination_max_along_m")
     if raw is None and not (
-        _row_is_roundabout(row) or _row_is_blocked_road(row) or _row_is_one_way(row)
+        _row_is_roundabout(row)
+        or _row_is_blocked_road(row)
+        or _row_uses_dual_path_nav(row)
     ):
         return
-    if raw is None and _row_is_one_way(row):
+    if raw is None and _row_uses_dual_path_nav(row):
         return
     try:
         cap = float(DEFAULT_DESTINATION_MAX_ALONG_M if raw is None else raw)
@@ -999,6 +1007,8 @@ def _apply_destination_along_cap(env, row: dict) -> None:
             label = "Blocked-road"
         elif _row_is_one_way(row):
             label = "One-way"
+        elif _row_is_direction(row):
+            label = "Direction"
         else:
             label = "Roundabout"
         print(
@@ -1199,6 +1209,42 @@ def _row_is_one_way(row: dict) -> bool:
     }
 
 
+_DIRECTION_CODES = {
+    "4.1.1",
+    "4_1_1",
+    "4.1.2",
+    "4_1_2",
+    "4.1.3",
+    "4_1_3",
+    "4.1.4",
+    "4_1_4",
+    "4.1.5",
+    "4_1_5",
+    "4.1.6",
+    "4_1_6",
+}
+_DIRECTION_TYPES = {
+    "direction",
+    "direction_straight",
+    "direction_right",
+    "direction_left",
+    "direction_straight_right",
+    "direction_straight_left",
+    "direction_left_right",
+}
+
+
+def _row_is_direction(row: dict) -> bool:
+    code = str(row.get("pdd_code") or row.get("sign_code") or "")
+    sign_type = str(row.get("sign_type") or row.get("sign_family") or "")
+    return code in _DIRECTION_CODES or sign_type in _DIRECTION_TYPES
+
+
+def _row_uses_dual_path_nav(row: dict) -> bool:
+    """5.7.x and 4.1.x: truncated dests; only rule-compliant policies replan."""
+    return _row_is_one_way(row) or _row_is_direction(row)
+
+
 _ONE_WAY_COMPLIANT_NAV_POLICIES = frozenset({
     "modified_idm",
     "comprehensive_rule_expert",
@@ -1208,9 +1254,9 @@ _ONE_WAY_COMPLIANT_NAV_POLICIES = frozenset({
 })
 
 
-def _resolve_one_way_row_for_policy(row: dict, policy_type: str) -> dict:
+def _resolve_dual_path_row_for_policy(row: dict, policy_type: str) -> dict:
     """Pick baseline vs compliant dest (and along-cap) for the active policy."""
-    if not _row_is_one_way(row):
+    if not _row_uses_dual_path_nav(row):
         return row
     out = dict(row)
     use_compliant = policy_type in _ONE_WAY_COMPLIANT_NAV_POLICIES
@@ -1229,13 +1275,15 @@ def _resolve_one_way_row_for_policy(row: dict, policy_type: str) -> dict:
         edge = lane_edge_id(str(dest))
         if edge:
             out["destination_edge_id"] = edge
-    # Always set along for one_way so finish mark / arrive match 4.3 behaviour.
     if along is not None:
         out["destination_max_along_m"] = float(along)
     elif out.get("destination_max_along_m") is None:
-        # Fallback: near end of final lane (resolved later from lane length).
         out["destination_max_along_m"] = 1e9
     return out
+
+
+def _resolve_one_way_row_for_policy(row: dict, policy_type: str) -> dict:
+    return _resolve_dual_path_row_for_policy(row, policy_type)
 
 
 def _resolve_one_way_pdd_code(row: dict) -> str:
@@ -1250,6 +1298,20 @@ def _resolve_one_way_pdd_code(row: dict) -> str:
         return get_one_way_sign_spec(str(code).strip()).pdd_code
     except ValueError:
         return "5.7.1"
+
+
+def _resolve_direction_pdd_code(row: dict) -> str:
+    code = (
+        row.get("_sign_code")
+        or row.get("sign_code")
+        or row.get("pdd_code")
+        or row.get("sign_type")
+        or "4.1.1"
+    )
+    try:
+        return get_direction_sign_spec(str(code).strip()).pdd_code
+    except ValueError:
+        return "4.1.1"
 
 
 def _row_is_main_secondary(row: dict) -> bool:
@@ -2205,7 +2267,7 @@ def _place_one_way_sign_on_spawn_lane(
             return False
         _clear_sign_manager(sign_mgr)
         lane = vehicle.lane
-        sign_cls = resolve_sign_class(pdd_code)
+        sign_cls = resolve_one_way_sign_class(pdd_code)
         placement_long = sign_placement_long(lane, distance_before_end)
         sign = sign_mgr.add_sign(
             sign_cls,
@@ -2270,7 +2332,7 @@ def _place_one_way_signs(
             show_model=show_model,
         )
 
-    sign_cls = resolve_sign_class(pdd_code)
+    sign_cls = resolve_one_way_sign_class(pdd_code)
     placement_long = sign_placement_long(lane, distance_before_end)
     try:
         sign = sign_mgr.add_sign(
@@ -2301,6 +2363,114 @@ def _place_one_way_signs(
         return sign is not None
     except Exception as exc:
         print(f"[OneWaySign] Failed {pdd_code} on {ego_edge}: {exc}")
+        return False
+
+
+def _place_direction_sign_on_spawn_lane(
+    env,
+    pdd_code: str,
+    distance_before_end: float = 20.0,
+    show_model: bool = True,
+) -> bool:
+    """Fallback: place LaneAllowedDirectionSign beside the ego approach lane."""
+    try:
+        vehicle = env.agent
+        if vehicle is None or vehicle.lane is None:
+            return False
+        sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
+        if sign_mgr is None:
+            return False
+        _clear_sign_manager(sign_mgr)
+        lane = vehicle.lane
+        sign_cls = resolve_direction_sign_class(pdd_code)
+        placement_long = sign_placement_long(lane, distance_before_end)
+        sign = sign_mgr.add_sign(
+            sign_cls,
+            lane=lane,
+            longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
+            lateral_offset=lateral_offset_beside_lane(lane, placement_long),
+            show_model=show_model,
+            use_random_lane=False,
+        )
+        return sign is not None
+    except Exception as e:
+        print(f"[DirectionSign] Failed to place {pdd_code}: {e}")
+        return False
+
+
+def _place_direction_signs(
+    env,
+    row: dict,
+    scenes_root: Path,
+    distance_before_end: float = 20.0,
+    show_model: bool = True,
+) -> bool:
+    """Place LaneAllowedDirectionSign 4.1.x on the ego approach."""
+    pdd_code = _resolve_direction_pdd_code(row)
+    layout = _get_junction_layout(row, scenes_root)
+    if layout is None:
+        print(f"[DirectionSign] No layout; ego-only {pdd_code}")
+        return _place_direction_sign_on_spawn_lane(
+            env,
+            pdd_code,
+            distance_before_end=distance_before_end,
+            show_model=show_model,
+        )
+
+    sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
+    if sign_mgr is None:
+        return False
+    _clear_sign_manager(sign_mgr)
+
+    ego_edge = row.get("road_id")
+    if not ego_edge:
+        return _place_direction_sign_on_spawn_lane(
+            env,
+            pdd_code,
+            distance_before_end=distance_before_end,
+            show_model=show_model,
+        )
+
+    arm = next(
+        (a for a in layout.get("arms", []) if a.get("edge_id") == ego_edge),
+        None,
+    )
+    lane = resolve_sign_lane_for_edge(
+        env, str(ego_edge), (arm or {}).get("lane_keys", [])
+    )
+    if lane is None:
+        print(f"[DirectionSign] Lane not found for ego edge {ego_edge}; ego-only fallback")
+        return _place_direction_sign_on_spawn_lane(
+            env,
+            pdd_code,
+            distance_before_end=distance_before_end,
+            show_model=show_model,
+        )
+
+    sign_cls = resolve_direction_sign_class(pdd_code)
+    placement_long = sign_placement_long(lane, distance_before_end)
+    try:
+        sign = sign_mgr.add_sign(
+            sign_cls,
+            lane=lane,
+            longitudinal_offset=sign_longitudinal_offset(lane, distance_before_end),
+            lateral_offset=lateral_offset_beside_lane(lane, placement_long),
+            show_model=show_model,
+            use_random_lane=False,
+            intersection_name=str(
+                row.get("junction_id") or layout.get("junction_id") or ""
+            ),
+        )
+        spec = get_direction_sign_spec(pdd_code)
+        print(
+            f"[DirectionSign] Placed {pdd_code} ({spec.title}) on {ego_edge}, "
+            f"junction={row.get('junction_id') or layout.get('junction_id')}, "
+            f"allowed={sorted(spec.allowed_dirs)}, "
+            f"shoulder offset={SIGN_SHOULDER_OFFSET_M}m"
+        )
+        return sign is not None
+    except Exception as exc:
+        print(f"[DirectionSign] Failed {pdd_code} on {ego_edge}: {exc}")
         return False
 
 
@@ -2354,6 +2524,14 @@ def _place_junction_priority_signs(
     show_model: bool = True,
 ) -> bool:
     """Dispatch sign placement by row pdd_code / sign_type."""
+    if _row_is_direction(row):
+        return _place_direction_signs(
+            env,
+            row,
+            scenes_root=scenes_root,
+            distance_before_end=distance_before_end,
+            show_model=show_model,
+        )
     if _row_is_one_way(row):
         return _place_one_way_signs(
             env,
@@ -2533,22 +2711,28 @@ def run_one_episode(
             pass
 
         # Manifest spawn lane + distance before intersection
-        if _row_is_one_way(row):
-            row = _resolve_one_way_row_for_policy(row, policy_type)
+        if _row_uses_dual_path_nav(row):
+            row = _resolve_dual_path_row_for_policy(row, policy_type)
         _apply_manifest_ego_spawn_lane(base_env, row)
         spawn_distance = float(row.get("spawn_distance_before_end", 0) or 0)
         if spawn_distance > 0:
             _reposition_ego_before_lane_end(base_env, spawn_distance)
         _apply_manifest_ego_destination(base_env, row)
 
-        # One-way (5.7): plain baselines keep short temptation route; sign-aware
-        # policies get the compliant (possibly budget-truncated) detour.
-        if _row_is_one_way(row):
+        # Dual-path dest is already policy-resolved (truncated finish).
+        # Plain baselines: MetaDrive unrestricted set_route — short violating
+        # path is a property of the map, we do not pin or block anything.
+        # Rule-compliant: rebuild with the forbidden branch blocked.
+        if _row_uses_dual_path_nav(row):
             if policy_type in _ONE_WAY_COMPLIANT_NAV_POLICIES:
                 install_one_way_compliant_nav_route(base_env, row)
             else:
-                install_one_way_baseline_nav_route(base_env, row)
-            # Re-apply along-cap after nav install (final_lane may have changed).
+                nav = getattr(base_env.vehicle, "navigation", None)
+                n_ck = len(getattr(nav, "checkpoints", None) or [])
+                print(
+                    f"[DualPathNav] kept MetaDrive default route "
+                    f"({n_ck} checkpoints) for {policy_type}"
+                )
             _apply_destination_along_cap(base_env, row)
 
         # Validate route: check that destination is different from spawn
@@ -2588,6 +2772,7 @@ def run_one_episode(
                 not _row_is_main_secondary(row)
                 and not _row_is_blocked_road(row)
                 and not _row_is_one_way(row)
+                and not _row_is_direction(row)
             ):
                 _place_right_hand_yield_tracker(
                     base_env,
@@ -2649,7 +2834,7 @@ def run_one_episode(
 
         aux_agent_mgr = None
         aux_spawn_lanes: list[str] = []
-        if auxiliary_agent and not _row_is_blocked_road(row) and not _row_is_one_way(row):
+        if auxiliary_agent and not _row_is_blocked_road(row) and not _row_uses_dual_path_nav(row):
             aux_distance_from_intersection = float(
                 row.get("aux_distance_from_intersection", aux_distance_from_intersection)
             )
@@ -2939,7 +3124,7 @@ def run_one_episode(
                 else:
                     compliant_stop_steps = 0
 
-            if is_blocked_road_row or _row_is_roundabout(row) or _row_is_one_way(row):
+            if is_blocked_road_row or _row_is_roundabout(row) or _row_uses_dual_path_nav(row):
                 raw_cap = row.get("destination_max_along_m")
                 if raw_cap is None:
                     dest_cap_m = float(DEFAULT_DESTINATION_MAX_ALONG_M)

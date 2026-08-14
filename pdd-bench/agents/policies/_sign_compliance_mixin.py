@@ -80,36 +80,6 @@ FLOOR_OVERSHOOT_KMH = 3.0          # aim this far ABOVE the min so a policy's
 # drops out of the wait loop, kick-starts, then re-brakes — stutter after stop).
 STOP_ENGAGE_DISTANCE_M = 12.0
 
-# Force the first allowed exit at a direction sign. MetaDrive IDM follows the
-# approach-lane centreline into the default (often straight) connector even
-# after NAV checkpoints have been replanned; near the junction end we aim at
-# the compliant next-hop entry instead.
-# Override IDM steering only in the last metres of the signed approach —
-# an earlier lateral pull runs the ego off-road before the connector.
-DIRECTION_EXIT_LOOKAHEAD_M = 14.0
-DIRECTION_EXIT_AIM_S = 5.0
-DIRECTION_EXIT_SPEED_CAP_KMH = 18.0
-# Target lateral offset on the approach (m). Enough to pick the via, small
-# enough to stay inside the drivable polygon. Sign of action[0] vs +lat is
-# map-empiric (negative action increases +lat on SUMO EdgeRoadNetwork).
-DIRECTION_EXIT_DESIRED_LAT_M = 0.85
-DIRECTION_EXIT_MAX_STEER = 0.42
-# SUMO connector starts for r/s/l share almost the same XY; steering alone
-# rarely changes MetaDrive's lane assignment. One short snap onto the
-# allowed via when the approach ends makes the expert take the compliant hop.
-# 4 m (was 2): CaRL often brakes near the curb ~3–4 m before the end after the
-# rightward exit-aim pull, and never reaches a 2 m snap → stuck on the shoulder.
-DIRECTION_EXIT_SNAP_REMAINING_M = 4.0
-# A one-shot teleport (1.5–2 m in a single frame) reads as a visible "jump"
-# on GIFs. Instead, glide: pull ego toward the allowed via by at most
-# GLIDE_MAX_STEP_M per step (plus a bounded heading turn) until it actually
-# sits on the via, then finalize nav/hold. Also un-sticks a stalled CaRL,
-# since the glide moves the body regardless of throttle.
-DIRECTION_EXIT_GLIDE_MAX_STEP_M = 0.40
-DIRECTION_EXIT_GLIDE_MAX_TURN_RAD = np.radians(6.0)
-DIRECTION_EXIT_GLIDE_DONE_LAT_M = 0.4
-DIRECTION_EXIT_GLIDE_MAX_STEPS = 40  # safety: hard-snap if glide drags on
-
 # Mid-route U-turns on compliant no-turn (3.18.1 / 3.18.2) detours only.
 # Rule-based phases (PlanT2 opt-in via ``APPLY_UTURN_ZONE_ASSIST``):
 #   approach → mid-road (between own / oncoming) → 180° spin → release.
@@ -231,20 +201,7 @@ class SignComplianceMixin:
         self._rerouted_edges = {}   # {(from, to): True/False} — True = rerouted OK
         self._has_priority = False  # True when on a main road (set by MainRoadSign)
         self._no_overtaking_active = False  # set per-step by NoOvertakingSign
-        self._direction_exit_lane = None
-        self._direction_exit_source_lane = None
-        self._direction_exit_bias = 0.0  # MetaDrive action[0] bias toward allowed turn
-        self._direction_exit_snapped = False
-        # Whether exit snap should physically relocate ego to the connector.
-        # For plain 5.15.2 DirectionSign this creates a visible "forward jump";
-        # keep only nav/checkpoint snap there.
-        self._direction_exit_position_snap = True
-        self._direction_exit_glide_steps = 0
-        self._direction_exit_hold_lane = None
-        self._direction_exit_hold_steps = 0
-        # One-way first hop: slow into the short connector.
-        self._direction_exit_creep = False
-        # Set per-step when 5.7.x nav already avoids wrong-way lanes.
+        # Set per-step when 5.7.x / 4.1.x nav already avoids the forbidden hop.
         self._one_way_nav_clean = False
         # Mid-route U-turn assist (3.18.1/3.18.2 only) — steering only.
         self._no_turn_318_context = False
@@ -275,17 +232,8 @@ class SignComplianceMixin:
         self._lc_final_sumo_num = None
         self._has_priority = False
         self._no_overtaking_active = False
-        self._direction_exit_lane = None
-        self._direction_exit_source_lane = None
         self._lane_dirs_nav_locked = False
         self._lane_dirs_hold_applied = False
-        self._direction_exit_bias = 0.0
-        self._direction_exit_snapped = False
-        self._direction_exit_position_snap = True
-        self._direction_exit_glide_steps = 0
-        self._direction_exit_hold_lane = None
-        self._direction_exit_hold_steps = 0
-        self._direction_exit_creep = False
         self._one_way_nav_clean = False
         self._no_turn_318_context = False
         self._restore_uturn_steering_limit()
@@ -1156,19 +1104,8 @@ class SignComplianceMixin:
             self._rerouted_edges.pop(cache_key, None)
         return ok
 
-    def _clear_direction_exit(self):
-        self._direction_exit_lane = None
-        self._direction_exit_source_lane = None
-        self._direction_exit_bias = 0.0
-        self._direction_exit_position_snap = True
-        self._direction_exit_glide_steps = 0
-        if self._direction_exit_hold_steps <= 0:
-            self._direction_exit_creep = False
-        # Keep _direction_exit_snapped so a loop-back onto the approach does
-        # not re-snap (first-exit semantics for dual-path routes).
-
     def _soft_cap_into_next_checkpoint_via(self) -> None:
-        """Slow before a short next-hop connector (nav-only, no body snap)."""
+        """Slow before a short next-hop connector."""
         ego = self.control_object
         nav = getattr(ego, "navigation", None)
         lane = getattr(ego, "lane", None)
@@ -1212,108 +1149,6 @@ class SignComplianceMixin:
         if remaining <= 6.0:
             self._cap_speed(8.0)
 
-    def _arm_direction_exit_from_sign(self, sign) -> bool:
-        """Remember the route's first allowed next-hop for near-junction steering."""
-        return self._arm_direction_exit_from_lane(sign, getattr(sign, "lane", None))
-
-    def _arm_direction_exit_from_lane(self, sign, source_lane) -> bool:
-        """Arm exit aiming using ``source_lane`` as the departure lane."""
-        # First-exit only: after the compliant hop, dual-path routes often
-        # re-enter the same approach and must follow checkpoints without a
-        # second forced right/left pull.
-        if self._direction_exit_snapped:
-            return False
-        nav = getattr(self.control_object, "navigation", None)
-        if nav is None or not self._is_sumo_edge_nav(nav):
-            return False
-        source_id = getattr(source_lane, "index", None)
-        if source_lane is None or not isinstance(source_id, str):
-            return False
-        if isinstance(sign, LaneDirectionsSign):
-            blocked = self._lane_directions_blocked_exits(sign, source_lane)
-        else:
-            blocked = self._direction_blocked_exits_from_source(sign, source_lane)
-        next_id = None
-        for i, ck in enumerate(list(nav.checkpoints or [])[:-1]):
-            if ck == source_id:
-                next_id = nav.checkpoints[i + 1]
-                break
-        if next_id is None or next_id in blocked:
-            return False
-        try:
-            exit_lane = self.engine.current_map.road_network.get_lane(next_id)
-        except Exception:
-            exit_lane = None
-        if exit_lane is None:
-            return False
-        self._direction_exit_lane = exit_lane
-        self._direction_exit_source_lane = source_lane
-        # Direction boards (5.15.1 LaneDirectionsSign / 5.15.2 DirectionSign) and
-        # one-way (5.7.x): never physically teleport onto the via. Route/nav +
-        # steering bias are enough; body snaps read as visible "jumps" on GIFs.
-        is_one_way = isinstance(sign, OneWayEntrySign)
-        is_direction_board = isinstance(sign, DirectionSign)  # includes LaneDirectionsSign
-        self._direction_exit_position_snap = not (is_direction_board or is_one_way)
-        self._direction_exit_creep = is_one_way
-        # Bias derived from turn metadata (more stable than lateral chase).
-        # Empirically on SUMO EdgeRoadNetwork: negative action[0] → +lane.lat
-        # (right side of the approach for these maps).
-        turn_dir = None
-        for turn in getattr(source_lane, "turns", None) or []:
-            if turn.get("via_lane") == next_id or turn.get("to_lane") == next_id:
-                turn_dir = self._normalize_turn_dir(turn.get("direction"))
-                break
-        bias_by_dir = {"r": -0.55, "l": 0.55, "s": 0.0, "t": 0.7}
-        self._direction_exit_bias = float(bias_by_dir.get(turn_dir or "", 0.0))
-        try:
-            long, _ = source_lane.local_coordinates(self.control_object.position)
-            remaining = float(source_lane.length) - float(long)
-            if is_one_way:
-                # Compliant first hops are often short sharp vias (~5m).
-                if remaining <= 20.0:
-                    self._cap_speed(12.0)
-                if remaining <= 10.0:
-                    self._cap_speed(8.0)
-            elif remaining <= DIRECTION_EXIT_LOOKAHEAD_M:
-                self._cap_speed(DIRECTION_EXIT_SPEED_CAP_KMH)
-        except Exception:
-            pass
-        return True
-
-    def _update_direction_exit_steering_state(self):
-        """Drop the exit target after leaving the signed approach."""
-        if self._direction_exit_lane is None:
-            return
-        # Keep arming while hold is active so creep cap / nav glue still apply.
-        if self._direction_exit_hold_steps > 0:
-            return
-        ego_lane = getattr(self.control_object, "lane", None)
-        if ego_lane is None:
-            return
-        exit_id = getattr(self._direction_exit_lane, "index", None)
-        ego_id = getattr(ego_lane, "index", None)
-        if exit_id is not None and ego_id == exit_id:
-            self._clear_direction_exit()
-            return
-        src = self._direction_exit_source_lane
-        if src is not None and not on_same_road(ego_lane, src):
-            self._clear_direction_exit()
-
-    def _reset_steering_pids(self) -> None:
-        """Clear IDM/expert heading+lateral PID windup (common after junction hops)."""
-        for attr in ("heading_pid", "lateral_pid"):
-            pid = getattr(self, attr, None)
-            if pid is not None and hasattr(pid, "reset"):
-                try:
-                    pid.reset()
-                except Exception:
-                    pass
-        try:
-            self._get_heading_pid().reset()
-            self._get_lateral_pid().reset()
-        except Exception:
-            pass
-
     def _force_nav_onto_lane(self, lane) -> None:
         """Point EdgeNetworkNavigation at ``lane`` so localization prefers it."""
         ego = self.control_object
@@ -1342,188 +1177,6 @@ class SignComplianceMixin:
                 nav.next_ref_lanes = None
         except Exception as exc:
             logger.debug("Force nav onto lane failed: %s", exc)
-
-    def _finalize_direction_exit_snap(self) -> bool:
-        exit_lane = self._direction_exit_lane
-        self._direction_exit_snapped = True
-        self._direction_exit_glide_steps = 0
-        self._direction_exit_hold_lane = exit_lane
-        self._direction_exit_hold_steps = 20
-        self._force_nav_onto_lane(exit_lane)
-        self._reset_steering_pids()
-        logger.info(
-            "Direction exit snap → %s", getattr(exit_lane, "index", None)
-        )
-        return True
-
-    def _maybe_snap_to_direction_exit(self) -> bool:
-        """Once per episode, guide ego onto the allowed via near the lane end.
-
-        Instead of a one-shot teleport (a visible "jump" on GIFs), pull the
-        body toward the via with a bounded per-step displacement/turn until it
-        actually sits there, then finalize the nav/checkpoint switch.
-        """
-        # Keep nav glued to the snapped via for a few steps — ray_localization
-        # otherwise often reassigns the overlapping straight connector.
-        if self._direction_exit_hold_steps > 0 and self._direction_exit_hold_lane is not None:
-            self._force_nav_onto_lane(self._direction_exit_hold_lane)
-            self._direction_exit_hold_steps -= 1
-
-        if self._direction_exit_snapped or self._direction_exit_lane is None:
-            return False
-        ego = self.control_object
-        exit_lane = self._direction_exit_lane
-        if self._direction_exit_glide_steps == 0:
-            # Not gliding yet: arm only within the snap window on the approach.
-            src = self._direction_exit_source_lane
-            ego_lane = getattr(ego, "lane", None)
-            if src is None or ego_lane is None or not on_same_road(ego_lane, src):
-                return False
-            try:
-                long, _ = src.local_coordinates(ego.position)
-                remaining = float(src.length) - float(long)
-            except Exception:
-                return False
-            if remaining > DIRECTION_EXIT_SNAP_REMAINING_M or remaining < -1.0:
-                return False
-            if not self._direction_exit_position_snap:
-                # 5.15.2: pure nav/checkpoint snap, no physical relocation.
-                return self._finalize_direction_exit_snap()
-
-        self._direction_exit_glide_steps += 1
-        try:
-            long_v, lat_v = exit_lane.local_coordinates(ego.position)
-        except Exception:
-            long_v, lat_v = -1.0, 10.0
-        if float(long_v) >= 0.35 and abs(float(lat_v)) <= DIRECTION_EXIT_GLIDE_DONE_LAT_M:
-            # Final exact placement on the via centerline (≤ DONE_LAT lateral,
-            # invisible on GIFs) so IDM starts the connector from the same
-            # clean state the old one-shot snap provided.
-            s = float(np.clip(float(long_v), 0.35, max(0.35, float(exit_lane.length) - 0.3)))
-            try:
-                ego.set_position(exit_lane.position(s, 0))
-                ego.set_heading_theta(exit_lane.heading_theta_at(s))
-            except Exception as exc:
-                logger.debug("Direction exit final placement failed: %s", exc)
-            return self._finalize_direction_exit_snap()
-        if self._direction_exit_glide_steps > DIRECTION_EXIT_GLIDE_MAX_STEPS:
-            # Glide never converged (physics fighting back) — hard snap as a
-            # last resort so the episode still takes the compliant exit.
-            s = min(1.5, max(0.5, float(exit_lane.length) * 0.25))
-            try:
-                ego.set_position(exit_lane.position(s, 0))
-                ego.set_heading_theta(exit_lane.heading_theta_at(s))
-            except Exception as exc:
-                logger.debug("Direction exit snap failed: %s", exc)
-                return False
-            return self._finalize_direction_exit_snap()
-        # One bounded glide increment toward a point slightly ahead on the via.
-        s_cap = max(0.5, float(exit_lane.length) - 0.5)
-        s_t = float(np.clip(float(long_v) + 0.6, 0.35, s_cap))
-        try:
-            target = np.asarray(exit_lane.position(s_t, 0), dtype=float)[:2]
-            target_heading = float(exit_lane.heading_theta_at(s_t))
-        except Exception as exc:
-            logger.debug("Direction exit glide failed: %s", exc)
-            return False
-        try:
-            pos = np.asarray(ego.position, dtype=float)[:2]
-            delta = target - pos
-            dist = float(np.linalg.norm(delta))
-            if dist > 1e-6:
-                step = delta * (min(DIRECTION_EXIT_GLIDE_MAX_STEP_M, dist) / dist)
-                ego.set_position(pos + step)
-            heading = float(ego.heading_theta)
-            dh = float(wrap_to_pi(target_heading - heading))
-            dh = float(np.clip(dh, -DIRECTION_EXIT_GLIDE_MAX_TURN_RAD, DIRECTION_EXIT_GLIDE_MAX_TURN_RAD))
-            ego.set_heading_theta(heading + dh)
-        except Exception as exc:
-            logger.debug("Direction exit glide failed: %s", exc)
-        return False
-
-    def _maybe_override_steering_for_direction_exit(self, steering: float) -> float:
-        """Near a direction sign, replace IDM steering to select the allowed via.
-
-        Adding a small bias fails because IDM's lateral PID cancels it. A
-        bounded pure-P track of a modest approach-frame offset (from turn
-        direction / via sample) selects the connector without leaving the road.
-        When connectors share the same start XY, finish with a one-shot snap.
-        """
-        self._update_direction_exit_steering_state()
-        self._maybe_snap_to_direction_exit()
-        if self._lc_target_lane is not None:
-            return float(np.clip(steering, -1.0, 1.0))
-        ego = self.control_object
-
-        # While holding the snapped via, centre on that connector (IDM form).
-        hold = self._direction_exit_hold_lane
-        if self._direction_exit_hold_steps > 0 and hold is not None:
-            try:
-                if getattr(self, "_direction_exit_creep", False):
-                    self._cap_speed(8.0)
-                long_v, lat_v = hold.local_coordinates(ego.position)
-                heading = hold.heading_theta_at(max(0.0, float(long_v)) + 0.5)
-                heading_err = wrap_to_pi(heading - ego.heading_theta)
-                return float(np.clip(1.4 * (-heading_err) + 0.55 * (-lat_v), -1.0, 1.0))
-            except Exception:
-                pass
-        elif self._direction_exit_hold_lane is not None and self._direction_exit_hold_steps <= 0:
-            self._direction_exit_hold_lane = None
-            self._direction_exit_creep = False
-            self._reset_steering_pids()
-
-        # After the first compliant hop, only clip IDM (do not pull again).
-        if self._direction_exit_snapped or self._direction_exit_lane is None:
-            return float(np.clip(steering, -1.0, 1.0))
-        src = self._direction_exit_source_lane
-        ego_lane = getattr(ego, "lane", None)
-        if src is None or ego_lane is None or not on_same_road(ego_lane, src):
-            return float(np.clip(steering, -1.0, 1.0))
-        try:
-            long, lat = src.local_coordinates(ego.position)
-            remaining = float(src.length) - float(long)
-        except Exception:
-            return float(np.clip(steering, -1.0, 1.0))
-        if remaining > DIRECTION_EXIT_LOOKAHEAD_M:
-            return float(np.clip(steering, -1.0, 1.0))
-
-        # Desired lateral: prefer via mid-sample, fall back to turn-bias sign.
-        desired_lat = 0.0
-        try:
-            aim_s = min(
-                max(2.0, float(self._direction_exit_lane.length) * 0.5),
-                max(0.5, float(self._direction_exit_lane.length) - 0.2),
-            )
-            _, via_lat = src.local_coordinates(
-                self._direction_exit_lane.position(aim_s, 0)
-            )
-            desired_lat = float(via_lat)
-        except Exception:
-            desired_lat = 0.0
-        if abs(desired_lat) < 1e-3 and abs(self._direction_exit_bias) > 1e-6:
-            # bias < 0 means "need +lat" (right) on these maps
-            desired_lat = (
-                DIRECTION_EXIT_DESIRED_LAT_M
-                if self._direction_exit_bias < 0
-                else -DIRECTION_EXIT_DESIRED_LAT_M
-            )
-        desired_lat = float(np.clip(
-            desired_lat, -DIRECTION_EXIT_DESIRED_LAT_M, DIRECTION_EXIT_DESIRED_LAT_M
-        ))
-
-        src_heading = src.heading_theta_at(long + 1.0)
-        heading_err = wrap_to_pi(src_heading - ego.heading_theta)
-        lat_err = float(lat) - desired_lat
-        # Empiric action sign: +(lat - desired) pulls toward desired_lat.
-        exit_steer = 1.2 * (-heading_err) + 0.7 * lat_err
-        exit_steer = float(np.clip(
-            exit_steer, -DIRECTION_EXIT_MAX_STEER, DIRECTION_EXIT_MAX_STEER
-        ))
-        # Blend in over the lookahead window so the handoff isn't a step.
-        weight = float(np.clip(
-            1.0 - (remaining / max(DIRECTION_EXIT_LOOKAHEAD_M, 1.0)), 0.15, 1.0
-        ))
-        return float(np.clip((1.0 - weight) * steering + weight * exit_steer, -1.0, 1.0))
 
     # ------------------------------------------------------------------
     # Mid-route U-turn assist (no-turn 3.18 compliant detours)
@@ -1660,21 +1313,6 @@ class SignComplianceMixin:
             return True
         if self._uturn_hold_steps > 0 and self._uturn_via_lane is not None:
             return True
-        # First signed exit owns the approach until it snaps/clears.
-        if (
-            self._direction_exit_lane is not None
-            and not self._direction_exit_snapped
-        ):
-            return False
-        # While still physically on the first-exit hold lane, do not steal
-        # steering. Once ego is past it (e.g. on the U-turn approach), arm.
-        if self._direction_exit_hold_steps > 0:
-            hold = self._direction_exit_hold_lane
-            ego_lane = getattr(self.control_object, "lane", None)
-            if hold is not None and ego_lane is not None and (
-                same_lane(ego_lane, hold) or on_same_road(ego_lane, hold)
-            ):
-                return False
 
         ego = self.control_object
         nav = getattr(ego, "navigation", None)
@@ -1999,8 +1637,8 @@ class SignComplianceMixin:
         """In-place 180° yaw at mid-road until aligned with the opposite lane.
 
         Ackermann full-lock on ~3 m OSM roads sweeps into the curb. Instead:
-        hold XY near the mid-road point and rotate heading kinematically
-        (same pattern as direction-exit glide), then release to plant2.
+        hold XY near the mid-road point and rotate heading kinematically,
+        then release to plant2.
         """
         self._uturn_spinning = True
         # Near-stop: no forward crawl that would arc off the mid-road.
@@ -2950,15 +2588,10 @@ class SignComplianceMixin:
             # no-turn sign — where the dual-path detour may legally loop back and
             # take the once-forbidden turn on a second pass — here the wrong-way
             # carriageway must NEVER be driven (no oncoming lane exists).
-            # Prefer the compliant route already installed at episode start
-            # (one_way_signs.run_benchmark._install_one_way_compliant_nav_route).
-            #
-            # When nav is already clean: do NOT arm direction-exit creep/steer
-            # and skip hard intersection-priority braking this step. Arming from
-            # spawn (often ≤20 m to junction) + continuous cross-traffic yield
-            # (_cap_speed 0.001) stalls CaRL/PlanT2 (~12 m / 1500 steps) while
-            # the same compliant path with APPLY_RULE_OVERLAY=False succeeds.
-            # Intervene only if the route still touches the wrong-way carriageway.
+            # Prefer the compliant route already installed at episode start.
+            # When nav is already clean: skip hard intersection-priority braking
+            # this step. Yield (_cap_speed 0.001) stalls CaRL/PlanT2 at spawn.
+            # Replan only if the route still touches the wrong-way carriageway.
             forbidden_edges = getattr(sign, "one_way_forbidden_edges", None)
             if forbidden_edges:
                 wrong_lanes = self._lanes_on_edges(forbidden_edges)
@@ -2967,16 +2600,14 @@ class SignComplianceMixin:
                     dirty = any(ck in wrong_lanes for ck in ckpts)
                     if dirty:
                         self._reroute_sumo_avoiding_lanes(wrong_lanes)
-                        self._arm_direction_exit_from_sign(sign)
                     else:
                         self._one_way_nav_clean = True
                     return
-            # No-turn / missing forbidden_edges: replan+arm only when the first
+            # No-turn / missing forbidden_edges: replan only when the first
             # hop from the signed approach is still a blocked exit.
             source_id = getattr(sign.lane, "index", None)
             if self._sumo_route_uses_blocked_source_exit(nav, source_id, blocked):
                 self._reroute_sumo_for_direction_sign(sign)
-                self._arm_direction_exit_from_sign(sign)
             return
 
         turns = getattr(sign.lane, "turns", [])
@@ -3127,10 +2758,10 @@ class SignComplianceMixin:
             blocked = self._direction_blocked_exits_from_source(sign, sign.lane)
             for lid in blocked:
                 self._blocked_lanes.add(lid)
-            self._reroute_sumo_for_direction_sign(sign)
-            # Replan alone is insufficient: IDM still tracks the approach centreline
-            # into the default connector. Arm exit-aiming for the last metres.
-            self._arm_direction_exit_from_sign(sign)
+            if self._sumo_route_uses_blocked_source_exit(nav, source_id, blocked):
+                self._reroute_sumo_for_direction_sign(sign)
+            else:
+                self._one_way_nav_clean = True
             return
 
         # ---- PG / legacy path (tuple checkpoints) ----
@@ -3525,9 +3156,6 @@ class SignComplianceMixin:
         self._speed_floor = None
         self._blocked_lanes.clear()
         self._restricted_lanes.clear()
-        if (self._direction_exit_hold_steps > 0
-                and getattr(self, "_direction_exit_creep", False)):
-            self._cap_speed(8.0)
         self._no_overtaking_active = False
         # Sticky within a step: any 3.18.1/3.18.2 sign in this scene.
         # Cleared each `_process_signs` call; re-set when those signs are seen.
@@ -3603,14 +3231,6 @@ class SignComplianceMixin:
         if not getattr(self, "_one_way_nav_clean", False):
             self._handle_intersection_priority()       # PG (RoadPriorityAssigner)
             self._handle_intersection_priority_sumo()  # SUMO (lane.turns[i]["priority"])
-        # Keep / apply the direction-exit snap *before* base IDM steering so
-        # routing_target_lane and current_lane see the allowed via this step.
-        self._maybe_snap_to_direction_exit()
-        # After a forced connector hop, MetaDrive IDM PIDs wind up on the
-        # curved vias and drive the ego off-road on the next edges. Zero the
-        # integrators each step so lane-keeping stays P-dominated.
-        if self._direction_exit_snapped:
-            self._reset_steering_pids()
 
     # ------------------------------------------------------------------
     # Throttle post-processing

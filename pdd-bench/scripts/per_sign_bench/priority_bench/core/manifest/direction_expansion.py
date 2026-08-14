@@ -1,12 +1,11 @@
-"""Expand one-way (5.7.1 / 5.7.2) scenes: dual-path × ego spawn lane × NPC.
+"""Expand direction (4.1.1–4.1.6) scenes: dual-path × ego spawn lane × NPC.
 
-Dual-path geometry comes from crop ``meta.json`` (moscow dual_path harvest),
-then is multiplied across approach lanes on the ego edge
-(length ≥ ``min_ego_lane_m``) and ``n_variations`` NPC profiles.
-
-``max_scenarios`` caps the combined (dual × lane × n_variations) pool after
-shuffle.
+Dual-path geometry comes from crop ``meta.json`` (moscow dual_path harvest).
+Lane axis and NPC world follow priority_bench (same as 5.7 / blocked_road):
+``sample_one_profile`` / ``stable_hash``. ``max_scenarios`` caps the combined
+(dual × lane × n_variations) pool after shuffle.
 """
+
 from __future__ import annotations
 
 import random
@@ -15,12 +14,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from ..scenarios.one_way_bridge import (
+from ..scenarios.direction_bridge import (
     DualPathScenario,
-    discover_one_way_dual_paths,
+    discover_direction_dual_paths,
     dual_path_to_spawn_scenario,
     ego_spawn_lane_nums_for_dual,
-    get_one_way_sign_spec,
+    get_direction_sign_spec,
 )
 from ..scenarios.scene_augmentation import SpawnScenario
 from .dual_path_budget import (
@@ -35,9 +34,11 @@ if str(_PER_SIGN_BENCH) not in sys.path:
 from factorized_space.agent_profile_bank import sample_one_profile  # noqa: E402
 from sumo_space.sumo_catalog import stable_hash  # noqa: E402
 
+_CARDINAL = frozenset({"s", "r", "l"})
+
 
 @dataclass(frozen=True)
-class OneWaySimParams:
+class DirectionSimParams:
     spawn_distance_before_end: float
     sign_distance_before_end: float
     spawn_velocity_ms: float
@@ -46,22 +47,20 @@ class OneWaySimParams:
     profile_density_cap: float = 1.0
     min_dual_path_gain_m: float = 20.0
     min_ego_lane_m: float = 8.0
-    # Shared travel budget (m) for baseline + compliant truncations; None = no cut.
     dual_path_route_budget_m: Optional[float] = None
 
 
 @dataclass(frozen=True)
-class OneWayExpansionConfig:
+class DirectionExpansionConfig:
     layout: bool = True
     max_scenarios: Optional[int] = None
     max_dual_paths: int = 20
-    arm_counts: Tuple[int, ...] = (3, 4)
 
 
-BuildOneWayEntryFn = Callable[..., Dict[str, Any]]
+BuildDirectionEntryFn = Callable[..., Dict[str, Any]]
 
 
-def one_way_geometry_key(entry: Dict[str, Any]) -> Tuple:
+def direction_geometry_key(entry: Dict[str, Any]) -> Tuple:
     return (
         entry.get("road_id"),
         entry.get("spawn_lane_num"),
@@ -71,7 +70,7 @@ def one_way_geometry_key(entry: Dict[str, Any]) -> Tuple:
     )
 
 
-def expand_one_way_scene_entries(
+def expand_direction_scene_entries(
     *,
     scene_dir: Path,
     scenes_root: Path,
@@ -79,9 +78,9 @@ def expand_one_way_scene_entries(
     net_path: Path,
     spawn_lanes: Sequence[Any],
     junction_layout: dict,
-    sim: OneWaySimParams,
-    expansion: OneWayExpansionConfig,
-    build_entry: BuildOneWayEntryFn,
+    sim: DirectionSimParams,
+    expansion: DirectionExpansionConfig,
+    build_entry: BuildDirectionEntryFn,
     pdd_code: str,
 ) -> List[Dict[str, Any]]:
     """Expand one scene: dual-path × ego spawn lanes × n_variations NPC profiles."""
@@ -94,7 +93,7 @@ def expand_one_way_scene_entries(
     )
 
     if not expansion.layout:
-        print("  Layout axis off: one-way requires dual-path layout; skipping")
+        print("  Layout axis off: direction requires dual-path layout; skipping")
         return []
 
     preferred_jid = str(
@@ -102,14 +101,13 @@ def expand_one_way_scene_entries(
     ).strip()
     junction_ids = [preferred_jid] if preferred_jid else None
 
-    dual_paths = discover_one_way_dual_paths(
+    dual_paths = discover_direction_dual_paths(
         net_path,
         pdd_code=pdd_code,
         min_gain_m=float(sim.min_dual_path_gain_m),
         min_lane_length_m=float(sim.min_ego_lane_m),
         max_scenarios=int(expansion.max_dual_paths),
         junction_ids=junction_ids,
-        arm_counts=expansion.arm_counts,
         scene_meta=meta,
     )
     if not dual_paths and junction_ids is not None:
@@ -117,14 +115,13 @@ def expand_one_way_scene_entries(
             f"  [dual-path] No picks at junction {preferred_jid}; "
             f"retrying without junction filter"
         )
-        dual_paths = discover_one_way_dual_paths(
+        dual_paths = discover_direction_dual_paths(
             net_path,
             pdd_code=pdd_code,
             min_gain_m=float(sim.min_dual_path_gain_m),
             min_lane_length_m=float(sim.min_ego_lane_m),
             max_scenarios=int(expansion.max_dual_paths),
             junction_ids=None,
-            arm_counts=expansion.arm_counts,
             scene_meta=meta,
         )
 
@@ -171,7 +168,7 @@ def expand_one_way_scene_entries(
     cap = expansion.max_scenarios
     if cap is not None and pre_cap > cap:
         rng = random.Random(
-            hash((scene_name, "one_way_combo_cap", int(cap))) & 0xFFFFFFFF
+            hash((scene_name, "direction_combo_cap", int(cap))) & 0xFFFFFFFF
         )
         rng.shuffle(candidates)
         candidates = candidates[:cap]
@@ -215,7 +212,7 @@ def expand_one_way_scene_entries(
             junction_layout_cache=junction_layout,
             npc_profile=profile,
         )
-        key = one_way_geometry_key(entry)
+        key = direction_geometry_key(entry)
         if key in seen:
             continue
         seen.add(key)
@@ -225,7 +222,7 @@ def expand_one_way_scene_entries(
     return scene_entries
 
 
-def build_one_way_manifest_entry(
+def build_direction_manifest_entry(
     *,
     scene_dir: Path,
     scenes_root: Path,
@@ -233,18 +230,18 @@ def build_one_way_manifest_entry(
     layout_variant: int,
     var_idx: int,
     seed: int,
-    sim: OneWaySimParams,
+    sim: DirectionSimParams,
     spawn_scenario: Optional[SpawnScenario],
     dual_path: Optional[DualPathScenario],
     spawn_lanes_cache: Optional[List[Any]],
     junction_layout_cache: Optional[dict],
     npc_profile: Dict[str, Any],
     pdd_code: str,
-    sign_type: str = "one_way",
+    sign_type: str = "direction",
 ) -> Dict[str, Any]:
     """Build one manifest row for a dual-path + spawn-lane + NPC variation."""
     del layout_variant
-    spec = get_one_way_sign_spec(pdd_code)
+    spec = get_direction_sign_spec(pdd_code)
     scene_name = str(meta.get("scene_name") or scene_dir.name)
     net_file = meta.get("net_file", "map.net.xml")
     net_rel = scene_dir.relative_to(scenes_root) / net_file
@@ -252,6 +249,7 @@ def build_one_way_manifest_entry(
     traffic_density = float(npc_profile["traffic_density"])
     horizon = int(npc_profile.get("horizon_steps", sim.horizon))
     scene_id = scene_name
+    forbidden_dirs = sorted(_CARDINAL - set(spec.allowed_dirs))
 
     selected_lane = None
     if spawn_scenario is not None and spawn_lanes_cache:
@@ -277,11 +275,11 @@ def build_one_way_manifest_entry(
         "pdd_code": spec.pdd_code,
         "sign_code": spec.pdd_code,
         "sign_type": sign_type,
-        "sign_family": "one_way",
+        "sign_family": "direction",
         "sign_title": spec.title,
         "sign_class": spec.class_name,
         "allowed_dirs": sorted(spec.allowed_dirs),
-        "forbidden_dir": spec.forbidden_dir,
+        "forbidden_dirs": forbidden_dirs,
         "spawn_velocity_ms": sim.spawn_velocity_ms,
         "traffic_density": traffic_density,
         "horizon": horizon,
@@ -309,8 +307,6 @@ def build_one_way_manifest_entry(
     if dual_path is not None:
         meta_fields = dual_path.to_meta_fields()
         dual_meta = dict(meta_fields["dual_path"])
-        # Keep spawn lane consistent with the lane-axis row (discovery defaults
-        # to lane 0 only).
         if spawn_scenario is not None:
             dual_meta["spawn_lane_num"] = int(spawn_scenario.ego_lane_num)
         entry["dual_path"] = dual_meta
@@ -322,10 +318,7 @@ def build_one_way_manifest_entry(
         entry["baseline_dir"] = dual_path.turn_dir
         entry["compliant_first_exit"] = dual_path.straight_first_exit
         entry["baseline_first_exit"] = dual_path.turn_first_exit
-        entry["background_excluded_edges"] = list(dual_path.wrong_dir_edges)
         entry["junction_id"] = dual_path.junction_id
-        entry["forbidden_dir"] = spec.forbidden_dir
-        dual_meta["forbidden_dir"] = spec.forbidden_dir
 
         budget = sim.dual_path_route_budget_m
         if budget is not None and float(budget) > 0.0:
@@ -343,7 +336,6 @@ def build_one_way_manifest_entry(
                 dest_lane_num=int(dual_path.dest_lane_num),
             )
             entry.update(trimmed)
-            # Prefer truncated dest over full-path spawn_scenario fields.
             for key in (
                 "destination_lane_id",
                 "destination_edge_id",
@@ -369,7 +361,6 @@ def build_one_way_manifest_entry(
             )
 
     if junction_layout_cache is not None:
-        # Prefer dual-path junction when it differs from lat/lon layout pick.
         layout = dict(junction_layout_cache)
         if dual_path is not None and dual_path.junction_id:
             if str(layout.get("junction_id")) != str(dual_path.junction_id):

@@ -1,0 +1,7 @@
+# @package _global_
+defaults:
+  - _dual_path
+
+sign: direction_right
+paths:
+  output_base: data/direction_right/output

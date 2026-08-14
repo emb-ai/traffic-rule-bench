@@ -1,4 +1,4 @@
-"""Sign profiles for priority-junction benches (2.1–2.5 / 4.3 / 3.2 / 5.7.x)."""
+"""Sign profiles for priority-junction benches (2.1–2.5 / 4.1.x / 4.3 / 3.2 / 5.7.x)."""
 
 from __future__ import annotations
 
@@ -129,6 +129,79 @@ ONE_WAY_LEFT = SignProfile(
     ego_road_class=None,
 )
 
+# 4.1.1–4.1.6 share dual-path spawn; separate data pools + pdd_code.
+DIRECTION_STRAIGHT = SignProfile(
+    id="direction_straight",
+    pdd_code="4.1.1",
+    sign_type="direction",
+    sign_name="Proceed straight (4.1.1)",
+    layout_mode="main_main",
+    spawn_strategy="direction",
+    data_subdir="direction_straight",
+    output_code="4_1_1",
+    ego_road_class=None,
+)
+
+DIRECTION_RIGHT = SignProfile(
+    id="direction_right",
+    pdd_code="4.1.2",
+    sign_type="direction",
+    sign_name="Turn right (4.1.2)",
+    layout_mode="main_main",
+    spawn_strategy="direction",
+    data_subdir="direction_right",
+    output_code="4_1_2",
+    ego_road_class=None,
+)
+
+DIRECTION_LEFT = SignProfile(
+    id="direction_left",
+    pdd_code="4.1.3",
+    sign_type="direction",
+    sign_name="Turn left (4.1.3)",
+    layout_mode="main_main",
+    spawn_strategy="direction",
+    data_subdir="direction_left",
+    output_code="4_1_3",
+    ego_road_class=None,
+)
+
+DIRECTION_STRAIGHT_RIGHT = SignProfile(
+    id="direction_straight_right",
+    pdd_code="4.1.4",
+    sign_type="direction",
+    sign_name="Straight or right (4.1.4)",
+    layout_mode="main_main",
+    spawn_strategy="direction",
+    data_subdir="direction_straight_right",
+    output_code="4_1_4",
+    ego_road_class=None,
+)
+
+DIRECTION_STRAIGHT_LEFT = SignProfile(
+    id="direction_straight_left",
+    pdd_code="4.1.5",
+    sign_type="direction",
+    sign_name="Straight or left (4.1.5)",
+    layout_mode="main_main",
+    spawn_strategy="direction",
+    data_subdir="direction_straight_left",
+    output_code="4_1_5",
+    ego_road_class=None,
+)
+
+DIRECTION_LEFT_RIGHT = SignProfile(
+    id="direction_left_right",
+    pdd_code="4.1.6",
+    sign_type="direction",
+    sign_name="Right or left (4.1.6)",
+    layout_mode="main_main",
+    spawn_strategy="direction",
+    data_subdir="direction_left_right",
+    output_code="4_1_6",
+    ego_road_class=None,
+)
+
 _PROFILES = (
     MAIN_ROAD,
     SECONDARY_ROAD,
@@ -138,6 +211,12 @@ _PROFILES = (
     BLOCKED_ROAD,
     ONE_WAY_RIGHT,
     ONE_WAY_LEFT,
+    DIRECTION_STRAIGHT,
+    DIRECTION_RIGHT,
+    DIRECTION_LEFT,
+    DIRECTION_STRAIGHT_RIGHT,
+    DIRECTION_STRAIGHT_LEFT,
+    DIRECTION_LEFT_RIGHT,
 )
 
 _REGISTRY: dict[str, SignProfile] = {
@@ -149,6 +228,12 @@ _REGISTRY: dict[str, SignProfile] = {
     BLOCKED_ROAD.id: BLOCKED_ROAD,
     ONE_WAY_RIGHT.id: ONE_WAY_RIGHT,
     ONE_WAY_LEFT.id: ONE_WAY_LEFT,
+    DIRECTION_STRAIGHT.id: DIRECTION_STRAIGHT,
+    DIRECTION_RIGHT.id: DIRECTION_RIGHT,
+    DIRECTION_LEFT.id: DIRECTION_LEFT,
+    DIRECTION_STRAIGHT_RIGHT.id: DIRECTION_STRAIGHT_RIGHT,
+    DIRECTION_STRAIGHT_LEFT.id: DIRECTION_STRAIGHT_LEFT,
+    DIRECTION_LEFT_RIGHT.id: DIRECTION_LEFT_RIGHT,
     # aliases
     "2.1": MAIN_ROAD,
     "2_1": MAIN_ROAD,
@@ -175,6 +260,18 @@ _REGISTRY: dict[str, SignProfile] = {
     "5.7.2": ONE_WAY_LEFT,
     "5_7_2": ONE_WAY_LEFT,
     "one_way_572": ONE_WAY_LEFT,
+    "4.1.1": DIRECTION_STRAIGHT,
+    "4_1_1": DIRECTION_STRAIGHT,
+    "4.1.2": DIRECTION_RIGHT,
+    "4_1_2": DIRECTION_RIGHT,
+    "4.1.3": DIRECTION_LEFT,
+    "4_1_3": DIRECTION_LEFT,
+    "4.1.4": DIRECTION_STRAIGHT_RIGHT,
+    "4_1_4": DIRECTION_STRAIGHT_RIGHT,
+    "4.1.5": DIRECTION_STRAIGHT_LEFT,
+    "4_1_5": DIRECTION_STRAIGHT_LEFT,
+    "4.1.6": DIRECTION_LEFT_RIGHT,
+    "4_1_6": DIRECTION_LEFT_RIGHT,
 }
 
 

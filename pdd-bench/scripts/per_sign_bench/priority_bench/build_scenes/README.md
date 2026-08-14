@@ -57,6 +57,12 @@ python generate_manifest.py sign=roundabout gif.enabled=false
 python generate_manifest.py sign=blocked_road paths.split=train
 python generate_manifest.py sign=one_way_right paths.split=train
 python generate_manifest.py sign=one_way_left paths.split=train
+python generate_manifest.py sign=direction_straight paths.split=train
+python generate_manifest.py sign=direction_right paths.split=train
+python generate_manifest.py sign=direction_left paths.split=train
+python generate_manifest.py sign=direction_straight_right paths.split=train
+python generate_manifest.py sign=direction_straight_left paths.split=train
+python generate_manifest.py sign=direction_left_right paths.split=train
 ```
 
 ### reject_unusable_scenes flags

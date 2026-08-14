@@ -165,10 +165,7 @@ class PlanT2SignCompliantPolicy(SignComplianceMixin, BasePolicy):
                     ))
             else:
                 self._arm_uturn_from_nav()
-                uturn_armed = self._uturn_via_lane is not None
 
-            if not uturn_armed:
-                steering = self._maybe_override_steering_for_direction_exit(steering)
             steering = self._maybe_override_steering_for_uturn_zone(steering)
 
             # No-overtaking steering guard (matches RuleCompliantExpertPolicy:59-71):

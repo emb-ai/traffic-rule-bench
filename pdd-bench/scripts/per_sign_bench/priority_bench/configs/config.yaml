@@ -1,4 +1,4 @@
-# Priority junction bench — 2.1 main / 2.3 secondary / 2.4 yield / 2.5 stop / 4.3 roundabout / 3.2 blocked_road / 5.7.x one_way
+# Priority junction bench — 2.1 main / 2.3 secondary / 2.4 yield / 2.5 stop / 4.1.x direction / 4.3 roundabout / 3.2 blocked_road / 5.7.x one_way
 #   python generate_manifest.py
 #   python generate_manifest.py sign=secondary
 #   python generate_manifest.py sign=yield
@@ -7,10 +7,17 @@
 #   python generate_manifest.py sign=blocked_road
 #   python generate_manifest.py sign=one_way_right
 #   python generate_manifest.py sign=one_way_left
+#   python generate_manifest.py sign=direction_straight
+#   python generate_manifest.py sign=direction_right
+#   python generate_manifest.py sign=direction_left
+#   python generate_manifest.py sign=direction_straight_right
+#   python generate_manifest.py sign=direction_straight_left
+#   python generate_manifest.py sign=direction_left_right
 
 defaults:
   - _self_
   - sign: main
+  # Dual-path signs compose configs/sign/_dual_path.yaml (Hydra group base).
 
 hydra:
   run:

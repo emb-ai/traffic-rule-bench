@@ -15,7 +15,7 @@ cd traffic-rule-bench/pdd-bench/scripts/per_sign_bench/priority_bench
 ```
 priority_bench/
 ├── core/                 # shared libs (layout, crop, aux, augmentation, viability, …)
-├── signs/                # SignProfile registry (main=2.1, secondary=2.3, yield=2.4, stop=2.5, roundabout=4.3)
+├── signs/                # SignProfile registry (main=2.1 … 4.1.x direction, 5.7 one_way)
 ├── configs/              # Hydra (configs/sign/{main,secondary,yield,stop,roundabout}.yaml)
 ├── data/
 │   ├── main_road/{scenes,output,trajectories}

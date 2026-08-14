@@ -21,7 +21,7 @@ from ..sumo.sumo_utils import VehicleRouteIndex, is_vehicle_drivable_lane, load_
 DEFAULT_AUX_DISTANCE_FROM_INTERSECTION = 20.0
 
 SpawnStrategy = Literal[
-    "equal_priority", "yield", "roundabout", "blocked_road", "one_way"
+    "equal_priority", "yield", "roundabout", "blocked_road", "one_way", "direction"
 ]
 EgoManeuver = Literal["left", "right", "straight"]
 AuxSide = Literal["left", "right", "straight", "other"]
@@ -922,6 +922,9 @@ def enumerate_spawn_scenarios(
     if strategy == "one_way":
         # Dual-path discovery lives in one_way_expansion / one_way_bridge —
         # not through-path arm enumeration.
+        return []
+    if strategy == "direction":
+        # Dual-path discovery lives in direction_expansion / direction_bridge.
         return []
     return enumerate_spawn_scenarios_equal_priority(
         layout,

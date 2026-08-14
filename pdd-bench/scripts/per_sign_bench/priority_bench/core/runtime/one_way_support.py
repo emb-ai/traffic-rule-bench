@@ -1,8 +1,8 @@
-"""One-way (5.7.x) runtime helpers: NPC exclusion + compliant nav install.
+"""One-way / direction dual-path runtime: NPC exclusion + compliant nav.
 
-Ported from ``one_way_signs/run_benchmark.py`` for use inside priority_bench
-without modifying that package. Wrong-way carriageway stays in the net so ego
-can violate; background traffic and compliant nav never use it.
+Wrong-way (5.7) / forbidden first exit (4.1) stay in the net so ego baselines
+can violate via ordinary MetaDrive routing. Background traffic (5.7) and
+rule-compliant nav never use those edges.
 """
 
 from __future__ import annotations
@@ -216,8 +216,26 @@ def _apply_nav_lane_path(env, path: list[str]) -> bool:
         return False
 
 
+def forbidden_edges_for_compliant_nav(row: dict) -> list[str]:
+    """Edges rule-compliant nav must not use.
+
+    5.7.x: the opposite carriageway (``wrong_dir_edges``). Blocking those
+    is safe — the compliant detour never needs them.
+
+    4.1.x: do not permanently block the harvested forbidden branch. A long
+    compliant detour may legally re-enter that turn later (same as
+    ``direction_signs._install_direction_compliant_nav_route``). Pin
+    ``straight_path`` only; an empty blocked set is correct.
+    """
+    dual = row.get("dual_path") or {}
+    one_way = [str(e) for e in (row.get("background_excluded_edges") or []) if e]
+    if not one_way:
+        one_way = [str(e) for e in (dual.get("wrong_dir_edges") or []) if e]
+    return one_way
+
+
 def install_one_way_compliant_nav_route(env, row: dict) -> bool:
-    """Install dual-path compliant (long) route so experts don't take the short wrong-way."""
+    """Rebuild ego nav on the allowed route with the forbidden path blocked."""
     dual = row.get("dual_path") or {}
     dest = (
         row.get("compliant_destination_lane_id")
@@ -233,9 +251,7 @@ def install_one_way_compliant_nav_route(env, row: dict) -> bool:
     spawn_num = int(row.get("spawn_lane_num", 0) or 0)
     spawn_key = make_lane_key(str(road_id), spawn_num)
 
-    forbidden_edges = list(row.get("background_excluded_edges") or [])
-    if not forbidden_edges:
-        forbidden_edges = list(dual.get("wrong_dir_edges") or [])
+    forbidden_edges = forbidden_edges_for_compliant_nav(row)
 
     try:
         vehicle = env.agent
@@ -264,7 +280,7 @@ def install_one_way_compliant_nav_route(env, row: dict) -> bool:
         if not path:
             print(
                 f"[OneWayNav] no compliant path {spawn_key} → {dest} "
-                f"(blocked {len(blocked)} wrong-dir lanes; "
+                f"(blocked {len(blocked)} forbidden lanes; "
                 f"straight_edges={len(straight_edges)})"
             )
             return False
@@ -293,95 +309,6 @@ def install_one_way_compliant_nav_route(env, row: dict) -> bool:
         return True
     except Exception as exc:
         print(f"[OneWayNav] failed: {exc}")
-        return False
-
-
-def install_one_way_baseline_nav_route(env, row: dict) -> bool:
-    """Install unrestricted / temptation route for plain baselines.
-
-    Prefer expanding ``dual_path.turn_path`` to the baseline destination (after
-    route-budget truncation this is the short branch dest). Fall back to
-    hop-BFS with no wrong-dir block if turn_path is missing or expand fails.
-    """
-    dual = row.get("dual_path") or {}
-    dest = (
-        row.get("baseline_destination_lane_id")
-        or row.get("destination_lane_id")
-    )
-    road_id = row.get("road_id")
-    turn_edges = [str(e) for e in (dual.get("turn_path") or [])]
-    if not dest or not road_id:
-        return False
-    dest = str(dest)
-    if not dest.startswith("lane_"):
-        dest = f"lane_{dest}"
-    spawn_num = int(row.get("spawn_lane_num", 0) or 0)
-    spawn_key = make_lane_key(str(road_id), spawn_num)
-
-    try:
-        vehicle = env.agent
-        nav = getattr(vehicle, "navigation", None)
-        if nav is None:
-            return False
-        road_network = env.engine.current_map.road_network
-        graph = getattr(road_network, "graph", None) or {}
-        if spawn_key not in graph or dest not in graph:
-            print(f"[OneWayNav] missing lanes spawn={spawn_key} dest={dest}")
-            return False
-
-        path = None
-        method = "bfs"
-        if turn_edges:
-            edge_seq = [str(road_id), *turn_edges]
-            path = _expand_edge_seq_to_lane_path(
-                road_network, edge_seq, spawn_key, dest, blocked_lanes=()
-            )
-            if path:
-                method = "edge_expand"
-
-        if not path:
-            # Keep MetaDrive default when already a real path to this dest.
-            existing = list(getattr(nav, "checkpoints", None) or [])
-            if (
-                len(existing) > 1
-                and existing[0] != existing[-1]
-                and existing[-1] != spawn_key
-                and existing[-1] == dest
-            ):
-                print(
-                    f"[OneWayNav] kept MetaDrive shortest route "
-                    f"({len(existing)} checkpoints) {spawn_key} → {dest}"
-                )
-                return True
-            path = _bfs_lane_path(
-                road_network, spawn_key, dest, blocked_lanes=(), max_len=200
-            )
-            method = "bfs"
-
-        if not path:
-            print(f"[OneWayNav] no baseline path {spawn_key} → {dest}")
-            return False
-
-        if not _apply_nav_lane_path(env, path):
-            return False
-
-        first_road = None
-        for ck in path[1:]:
-            e = lane_edge_id(ck)
-            if not str(e).startswith(":"):
-                first_road = e
-                break
-        expected = dual.get("turn_first_exit") or row.get("baseline_first_exit")
-        note = ""
-        if expected and first_road and str(expected) != str(first_road):
-            note = f" (first_road={first_road}, harvest_baseline={expected})"
-        print(
-            f"[OneWayNav] installed baseline {len(path)}-hop route via {method} "
-            f"{spawn_key} → {dest}{note}"
-        )
-        return True
-    except Exception as exc:
-        print(f"[OneWayNav] baseline failed: {exc}")
         return False
 
 
