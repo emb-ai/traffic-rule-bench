@@ -1,10 +1,10 @@
 # build_scenes — sign scene pool (materialize → viability reject → review)
 
 First-class pipeline stage for `priority_bench`. Pulls allocated junctions from
-the shared **`moscow_scenes`** harvest into `data/<sign>/scenes/`, drops maps
+the shared `**moscow_scenes**` harvest into `data/<sign>/scenes/`, drops maps
 that cannot produce scenarios, then optional visual review keep/reject.
 
-Ad-hoc debug helpers stay under [`../tools/`](../tools/).
+Ad-hoc debug helpers stay under `[../tools/](../tools/)`.
 
 ## Layout
 
@@ -73,25 +73,29 @@ python generate_manifest.py sign=no_entry paths.split=train
 
 ### reject_unusable_scenes flags
 
-| Flag | Meaning |
-|------|---------|
-| `--dry-run` | Print which live scenes would be rejected |
-| `--apply` | Move rejects to `scenes/_rejected/` |
-| `--refill` | Call `materialize_scenes.py --refill` after apply |
-| `--loop` | Repeat reject→apply→refill until live pool is fully viable |
-| `--audit PATH` | Write rejected rows as JSONL |
+
+| Flag           | Meaning                                                    |
+| -------------- | ---------------------------------------------------------- |
+| `--dry-run`    | Print which live scenes would be rejected                  |
+| `--apply`      | Move rejects to `scenes/_rejected/`                        |
+| `--refill`     | Call `materialize_scenes.py --refill` after apply          |
+| `--loop`       | Repeat reject→apply→refill until live pool is fully viable |
+| `--audit PATH` | Write rejected rows as JSONL                               |
+
 
 Reasons are stored in `scenes/scene_selection.json` under `reject_reasons`.
 
 ### Materialize flags
 
-| Flag | Meaning |
-|------|---------|
-| `--split train\|test\|all` | Which half of the allocation (default `all`) |
-| `--refill` | Add unused maps until kept train/test hit `signs.yaml` quotas |
-| `--mode symlink\|copy` | Symlink into sign pool (default) or full copy |
+
+| Flag                                   | Meaning                                                                    |
+| -------------------------------------- | -------------------------------------------------------------------------- |
+| `--split train|test|all`               | Which half of the allocation (default `all`)                               |
+| `--refill`                             | Add unused maps until kept train/test hit `signs.yaml` quotas              |
+| `--mode symlink|copy`                  | Symlink into sign pool (default) or full copy                              |
 | `--crop-missing` / `--no-crop-missing` | Crop from city net if missing under `moscow_scenes/scenes` (default: crop) |
-| `--force-preview` | Rebuild `custom_cropped.png` for the review UI |
+| `--force-preview`                      | Rebuild `custom_cropped.png` for the review UI                             |
+
 
 Pool bookkeeping: `data/yield/scenes/moscow_pool.json` (per-scene `split`).
 Keep train+test in one `scenes/` folder; choose half at manifest time with
@@ -118,3 +122,12 @@ output/<ts>/{real_manifest.jsonl, repro/}
 
 `legacy/` assumed **sign-catalog → Overpass fragment → crop**. Kept for
 reference only. Old yield folders: `data/yield/_old_scenes`.
+
+
+
+Useful command:
+
+```markdown
+ls -1d sign*/ 2>/dev/null | wc -l
+```
+

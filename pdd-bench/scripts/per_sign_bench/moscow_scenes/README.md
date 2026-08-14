@@ -17,7 +17,8 @@ moscow_scenes/
 ├── lib/                         # dual_path discovery + roles + stem
 ├── scenes/
 │   ├── {T,X,O}/                 # junction-only (~80 m arms)
-│   └── dual_path/{T,X}/{slot}/  # path-union crops (l_s, l_r, …)
+│   ├── dual_path/{T,X}/{slot}/  # path-union crops (l_s, l_r, …)
+│   └── lane_direction/{T,X}/    # 5.15.1 multi-lane LC crops
 ├── splits/
 │   ├── signs.yaml / signs.json
 │   ├── train_ids.json / test_ids.json
@@ -32,10 +33,11 @@ moscow_scenes/
 ## Two crop kinds
 
 
-| Kind        | Path                             | Used by             |
-| ----------- | -------------------------------- | ------------------- |
-| `junction`  | `scenes/{T,X,O}/`                | 2.x, 3.2, 4.3, …    |
-| `dual_path` | `scenes/dual_path/{T,X}/{slot}/` | 5.7, 3.18, 4.1, 3.1 |
+| Kind             | Path                                  | Used by                    |
+| ---------------- | ------------------------------------- | -------------------------- |
+| `junction`       | `scenes/{T,X,O}/`                     | 2.x, 3.2, 4.3, …           |
+| `dual_path`      | `scenes/dual_path/{T,X}/{slot}/`      | 5.7, 3.18, 4.1, 3.1        |
+| `lane_direction` | `scenes/lane_direction/{T,X}/`        | **5.15.1** (multi-lane LC) |
 
 
 ### Dual-path slots
@@ -71,6 +73,10 @@ python scripts/run_pipeline.py --skip-download --skip-netconvert
 python scripts/crop_dual_path_scenes.py --max-per-slot 500 --skip-existing
 # smoke:  python scripts/crop_dual_path_scenes.py --max-per-slot 5 --discover-only
 # subset: python scripts/crop_dual_path_scenes.py --max-per-slot 500 --slots l_s,l_r
+
+# Lane-direction harvest for 5.15.1 (multi-lane approach + exclusive L/R peer exit)
+python scripts/crop_lane_direction_scenes.py --max-per-shape 500 --skip-existing
+# smoke:  python scripts/crop_lane_direction_scenes.py --max-junctions 50 --max-per-shape 5
 
 python scripts/make_junction_split.py  # global train/test split among X/T/O 
 python scripts/allocate_sign_scenes.py
