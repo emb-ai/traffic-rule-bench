@@ -13,6 +13,10 @@
 #   narrow — both + the object filter the training used (50 m / front x2)
 #   remap  — both + NPC cars rewritten as the sign class (does the model react
 #            to the sign token at all, even on a moving object?)
+#   trainlike — every input knob set to what training actually used: object
+#            filter 50 m / front x2, sequence length = object count instead of a
+#            fixed 30, BEV covering 32 m instead of 64. The eval defaults differ
+#            from the dump on all three, and each one changes the model input.
 #
 # Every run is gated: a swallowed model-load failure prints "get_action failed"
 # per step and yields a car that never moves — which scores perfect compliance
@@ -50,6 +54,7 @@ env_for () {                      # config name -> env assignments
         token)  echo "PLANT2_SIGN_OBJS=0 PLANT2_SIGN_TOKEN=1" ;;
         both)   echo "PLANT2_SIGN_OBJS=1 PLANT2_SIGN_TOKEN=1" ;;
         narrow) echo "PLANT2_SIGN_OBJS=1 PLANT2_SIGN_TOKEN=1 PLANT2_OBJ_MAX_DIST=50 PLANT2_OBJ_FRONT_FACTOR=2" ;;
+        trainlike) echo "PLANT2_SIGN_OBJS=1 PLANT2_SIGN_TOKEN=1 PLANT2_OBJ_MAX_DIST=50 PLANT2_OBJ_FRONT_FACTOR=2 PLANT2_SEQ_FIT=1 PLANT2_BEV_METERS=32" ;;
         remap)  echo "PLANT2_SIGN_OBJS=1 PLANT2_SIGN_TOKEN=1 PLANT2_REMAP_NPC_TO_SIGN=$LABEL" ;;
         *)      echo "" ;;
     esac

@@ -358,7 +358,13 @@ class PlanT2MetaDriveAdapter:
             input_bev=True,
             input_ego_speed=input_ego_speed,
             bev_resolution=128,
-            bev_size_meters=64.0,
+            # The dump writes 256 px over 64 m and PlanTDataset keeps the central
+            # 128 px (dataset.py: bev[0, 64:-64, 64:-64]), so training sees 32 m
+            # at 0.25 m/px. Rendering 128 px over 64 m here gives the same tensor
+            # shape at half the zoom — twice the area, silently. PLANT2_BEV_METERS=32
+            # reproduces the training geometry; the default keeps the old behaviour
+            # so the difference can be A/B'd.
+            bev_size_meters=float(_os.environ.get("PLANT2_BEV_METERS", 64.0)),
             device=self.device,
             # PLANT2_SIGN_TOKEN=0 drops the global sign token, so the A/B can
             # separate it from the per-object PDD classes (PLANT2_SIGN_OBJS).
