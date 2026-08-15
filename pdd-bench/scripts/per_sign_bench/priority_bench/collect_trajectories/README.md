@@ -111,7 +111,7 @@ PLANT2_ACTION_MODE=pid \
 GPU_IDS=0,1,2,3 \
 GPUS_CARL=0,1 GPUS_PLANT2=2,3 \
 JOBS_PER_GPU=2 \
-N_WORKERS=16 \
+N_WORKERS=16 IDM_CHUNKS=8 \
 EXTRA_SAMPLES_COMPREHENSIVE=4 IDM_SEED_BASE=42 \
 MAX_STEPS=1500 RESUME=1 \
 OUT_BASE=../data/yield/trajectories/traj_full \
@@ -121,6 +121,14 @@ bash collect_trajectories.sh
 Notes:
 
 - `SIGN=yield|main|stop|secondary` (aliases `2.4|2_4|2.1|2_1|main_road|2.5|2_5|stop_sign|2.3|2_3|secondary_road`).
+- **CPU parallelism:** `N_WORKERS` = max concurrent CPU processes (default 8).
+  IDM-family policies (`comprehensive_rule_expert`, …) are sharded into
+  `IDM_CHUNKS` workers (default 8) via `--start/--count/--worker-id`.
+  Without sharding, `POLICIES_CPU="comprehensive_rule_expert rule_compliant"`
+  would only use **2** CPU processes even if `N_WORKERS=8`.
+- **Live progress:** every `PROGRESS_EVERY_S` seconds (default 30) the shell
+  prints a per-policy bar (`done/target`) and the last `[i/N]` line from each
+  worker log. Detail: `tail -f $OUT_BASE/_logs/.../<policy>.wXX.log`.
 - Default ckpts (relative to `collect_trajectories/`):
   - `CARL_CKPT=../../../../checkpoints/carl/nuplan_51479_1B/model_best.pth`
   - `PLANT2_CKPT=../../../../checkpoints/plant2_pretrain/epoch=029_final_3.ckpt`

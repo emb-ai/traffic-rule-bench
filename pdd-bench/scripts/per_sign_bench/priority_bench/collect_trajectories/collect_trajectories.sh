@@ -18,12 +18,13 @@
 #   PLANT2_CKPT=../../../../checkpoints/plant2_pretrain/epoch=029_final_3.ckpt \
 #   PLANT2_ACTION_MODE=pid \
 #   GPU_IDS=0,1,2,3 GPUS_CARL=0,1 GPUS_PLANT2=2,3 \
-#   JOBS_PER_GPU=2 N_WORKERS=16 \
+#   JOBS_PER_GPU=2 N_WORKERS=16 IDM_CHUNKS=8 \
 #   EXTRA_SAMPLES_COMPREHENSIVE=4 IDM_SEED_BASE=42 \
 #   MAX_STEPS=1500 RESUME=1 \
 #   OUT_BASE=/path/to/traj_yield_2_4 \
 #   bash collect_trajectories.sh
 #
+# Live progress every PROGRESS_EVERY_S seconds (default 30).
 # Smoke / visual QA (3 scenes + GIFs):
 #   SIGN=yield SMOKE=1 bash collect_trajectories.sh
 
@@ -92,6 +93,8 @@ export PER_SIGN_COMPLIANT_NPC EGO_SAMPLER EGO_CURVE_AWARE EGO_HOLD_V0 CARL_LONGI
 : "${MANIFEST:=}"
 
 : "${N_WORKERS:=8}"
+: "${IDM_CHUNKS:=8}"   # shard IDM-family policies across this many processes
+: "${PROGRESS_EVERY_S:=30}"
 : "${MAX_STEPS:=1500}"
 : "${ROWS_LIMIT:=}"          # empty = all rows (or COUNT)
 : "${EXTRA_SAMPLES_COMPREHENSIVE:=4}"  # default + s1..s4
@@ -254,11 +257,11 @@ echo "  COUNT/ROWS_LIMIT= ${COUNT:-—} / ${ROWS_LIMIT:-—}"
 echo "  SAVE_GIFS/SMOKE = $SAVE_GIFS / $SMOKE"
 echo "  EGO_SAMPLER     = $EGO_SAMPLER  CURVE_AWARE=$EGO_CURVE_AWARE  HOLD_V0=$EGO_HOLD_V0"
 echo "  CARL_LONGITUDINAL=$CARL_LONGITUDINAL  COMPLIANT_NPC=$PER_SIGN_COMPLIANT_NPC"
-echo "  CPU             = $POLICIES_CPU  (SKIP_CPU=$SKIP_CPU, N_WORKERS=$N_WORKERS)"
+echo "  CPU             = $POLICIES_CPU  (SKIP_CPU=$SKIP_CPU, N_WORKERS=$N_WORKERS, IDM_CHUNKS=$IDM_CHUNKS)"
 echo "  CARL            = $POLICIES_CARL (SKIP_CARL=$SKIP_CARL, GPUS=$GPUS_CARL)"
 echo "  PLANT2          = $POLICIES_PLANT2 (SKIP_PLANT2=$SKIP_PLANT2, GPUS=$GPUS_PLANT2)"
 echo "  EXTRA_SAMPLES   = $EXTRA_SAMPLES_COMPREHENSIVE  IDM_SEED_BASE=$IDM_SEED_BASE"
-echo "  MAX_STEPS       = $MAX_STEPS  RESUME=$RESUME"
+echo "  MAX_STEPS       = $MAX_STEPS  RESUME=$RESUME  PROGRESS_EVERY_S=$PROGRESS_EVERY_S"
 echo "  CARL_CKPT       = ${CARL_CKPT:-<unset>}"
 echo "  PLANT2_CKPT     = ${PLANT2_CKPT:-<unset>}"
 echo "================================================================"
@@ -270,19 +273,60 @@ _is_idm_family() {
     esac
 }
 
+_manifest_nrows() {
+    "$PYTHON_BIN" - "$1" <<'PY'
+import json, sys
+from pathlib import Path
+n = 0
+for ln in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    ln = ln.strip()
+    if not ln:
+        continue
+    try:
+        row = json.loads(ln)
+    except json.JSONDecodeError:
+        continue
+    if row.get("valid") is False:
+        continue
+    n += 1
+print(n)
+PY
+}
+
 run_one() {
     local policy="$1"
     shift
     local extra=("$@")
     local out_dir="$OUT_BASE/$policy/$SIGN_SLUG"
-    local logf="$LOG_DIR/${policy}.log"
     mkdir -p "$out_dir"
 
+    # Log name: policy.log or policy.w03.log for shards.
+    local log_tag="$policy"
+    local i=0
+    while [ "$i" -lt "${#extra[@]}" ]; do
+        if [ "${extra[$i]}" = "--worker-id" ] && [ $((i + 1)) -lt "${#extra[@]}" ]; then
+            log_tag=$(printf '%s.w%02d' "$policy" "${extra[$((i + 1))]}")
+            break
+        fi
+        i=$((i + 1))
+    done
+    local logf="$LOG_DIR/${log_tag}.log"
+
+    local has_count=0
+    for a in ${extra[@]+"${extra[@]}"}; do
+        if [ "$a" = "--count" ]; then
+            has_count=1
+            break
+        fi
+    done
+
     local count_args=()
-    if [ -n "$COUNT" ]; then
-        count_args+=( --count "$COUNT" )
-    elif [ -n "$ROWS_LIMIT" ]; then
-        count_args+=( --count "$ROWS_LIMIT" )
+    if [ "$has_count" -eq 0 ]; then
+        if [ -n "$COUNT" ]; then
+            count_args+=( --count "$COUNT" )
+        elif [ -n "$ROWS_LIMIT" ]; then
+            count_args+=( --count "$ROWS_LIMIT" )
+        fi
     fi
 
     local idm_args=()
@@ -297,7 +341,7 @@ run_one() {
     local resume_args=()
     [ "$RESUME" = "1" ] && resume_args+=( --resume )
 
-    echo "[run] $policy → $out_dir"
+    echo "[run] $policy → $out_dir  log=$log_tag"
     if "$PYTHON_BIN" "$RUNNER" \
         --sign "$SIGN" \
         --manifest "$MANIFEST" \
@@ -312,16 +356,60 @@ run_one() {
         ${extra[@]+"${extra[@]}"} \
         > "$logf" 2>&1
     then
-        echo "[ok]  $policy"
+        echo "[ok]  $log_tag"
         if [ ! -s "$CATALOG" ] && [ -s "$out_dir/catalog.jsonl" ]; then
             cp "$out_dir/catalog.jsonl" "$CATALOG"
             echo "[catalog] $CATALOG"
         fi
         return 0
     else
-        echo "[FAIL] $policy  log=$logf"
+        echo "[FAIL] $log_tag  log=$logf"
         return 1
     fi
+}
+
+# Launch one CPU policy, optionally sharded across IDM_CHUNKS processes.
+_run_cpu_policy() {
+    local policy="$1"
+    # Smoke / tiny COUNT: keep single process.
+    if [ -n "$COUNT" ] || [ "${IDM_CHUNKS:-1}" -le 1 ]; then
+        while [ "$(jobs -rp | wc -l)" -ge "$N_WORKERS" ]; do
+            sleep 1
+        done
+        run_one "$policy" &
+        pids+=("$!")
+        return 0
+    fi
+
+    local n_rows
+    n_rows=$(_manifest_nrows "$MANIFEST")
+    if [ -z "$n_rows" ] || [ "$n_rows" -le 0 ]; then
+        echo "[FAIL] empty manifest for sharding: $MANIFEST"
+        fail=$((fail + 1))
+        return 1
+    fi
+    local n_chunks="$IDM_CHUNKS"
+    if [ "$n_chunks" -gt "$n_rows" ]; then
+        n_chunks="$n_rows"
+    fi
+    local chunk_size=$(( (n_rows + n_chunks - 1) / n_chunks ))
+    echo "[shard] $policy  rows=$n_rows  chunks=$n_chunks  chunk_size=$chunk_size"
+    local i start count
+    for ((i = 0; i < n_chunks; i++)); do
+        start=$((i * chunk_size))
+        if [ "$start" -ge "$n_rows" ]; then
+            break
+        fi
+        count=$chunk_size
+        if [ $((start + count)) -gt "$n_rows" ]; then
+            count=$((n_rows - start))
+        fi
+        while [ "$(jobs -rp | wc -l)" -ge "$N_WORKERS" ]; do
+            sleep 1
+        done
+        run_one "$policy" --start "$start" --count "$count" --worker-id "$i" &
+        pids+=("$!")
+    done
 }
 
 fail=0
@@ -329,11 +417,7 @@ pids=()
 
 if [ "$SKIP_CPU" != "1" ]; then
     for policy in $POLICIES_CPU; do
-        while [ "$(jobs -rp | wc -l)" -ge "$N_WORKERS" ]; do
-            sleep 1
-        done
-        run_one "$policy" &
-        pids+=("$!")
+        _run_cpu_policy "$policy"
     done
 fi
 
@@ -378,11 +462,164 @@ if [ "$SKIP_PLANT2" != "1" ]; then
     fi
 fi
 
+# Live dashboard while policies run in parallel (progress is otherwise only in
+# $LOG_DIR/<policy>.log — easy to miss from the main terminal).
+_print_collect_progress() {
+    "$PYTHON_BIN" - "$OUT_BASE" "$MANIFEST" "$EXTRA_SAMPLES_COMPREHENSIVE" "$LOG_DIR" "$SIGN_SLUG" <<'PY'
+import os, re, sys, json
+from pathlib import Path
+
+out_base = Path(sys.argv[1])
+manifest = Path(sys.argv[2])
+extra = int(sys.argv[3] or 0)
+log_dir = Path(sys.argv[4])
+sign_slug = sys.argv[5]
+
+n_rows = 0
+if manifest.is_file():
+    with open(manifest, encoding="utf-8") as f:
+        for ln in f:
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                row = json.loads(ln)
+            except Exception:
+                n_rows += 1
+                continue
+            if row.get("valid") is False:
+                continue
+            n_rows += 1
+
+idm = {"idm", "modified_idm", "comprehensive_rule_expert"}
+print("----- progress -----", flush=True)
+any_pol = False
+for pol_dir in sorted(p for p in out_base.iterdir() if p.is_dir() and not p.name.startswith("_")):
+    any_pol = True
+    pol = pol_dir.name
+    n_var = (1 + max(0, extra)) if pol in idm else 1
+    target = n_rows * n_var if n_rows else 0
+    done = 0
+    seen = set()
+    ledgers = list(pol_dir.glob(f"{sign_slug}/all_runs.jsonl"))
+    ledgers += list(pol_dir.glob(f"{sign_slug}/all_runs.w*.jsonl"))
+    # fallback if layout differs
+    if not ledgers:
+        ledgers = list(pol_dir.glob("*/all_runs.jsonl")) + list(pol_dir.glob("*/all_runs.w*.jsonl"))
+    for ar in ledgers:
+        try:
+            with open(ar, encoding="utf-8") as f:
+                for ln in f:
+                    if not ln.strip():
+                        continue
+                    try:
+                        r = json.loads(ln)
+                    except Exception:
+                        continue
+                    key = (r.get("scene_uid"), r.get("policy"), r.get("variant"))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    done += 1
+        except OSError:
+            pass
+    pct = (100.0 * done / target) if target else 0.0
+    width = 24
+    filled = int(width * done / target) if target else 0
+    bar = "#" * filled + "-" * (width - filled)
+    last = ""
+    log_cands = sorted(log_dir.glob(f"{pol}.log")) + sorted(log_dir.glob(f"{pol}.w*.log"))
+    for logf in reversed(log_cands):
+        try:
+            lines = logf.read_text(encoding="utf-8", errors="replace").splitlines()
+            for ln in reversed(lines[-80:]):
+                if re.match(r"^\[\d+/\d+\]", ln) or "it/s" in ln or "%|" in ln:
+                    last = ln.strip()[:100]
+                    break
+        except OSError:
+            pass
+        if last:
+            break
+    print(f"  {pol:<28} [{bar}] {done:>5}/{target:<5} ({pct:5.1f}%)", flush=True)
+    if last:
+        print(f"    └ {last}", flush=True)
+if not any_pol:
+    print("  (no policy dirs yet)", flush=True)
+print(
+    f"  tip: tail -f {log_dir}/<policy>.log   |   "
+    f"refresh every {os.environ.get('PROGRESS_EVERY_S', '30')}s",
+    flush=True,
+)
+print("--------------------", flush=True)
+PY
+}
+
+echo
+echo "[progress] live dashboard every ${PROGRESS_EVERY_S}s  (per-policy detail: $LOG_DIR/<policy>.log)"
+_print_collect_progress
+
+while true; do
+    alive=0
+    for pid in ${pids[@]+"${pids[@]}"}; do
+        if kill -0 "$pid" 2>/dev/null; then
+            alive=1
+            break
+        fi
+    done
+    [ "$alive" -eq 0 ] && break
+    sleep "$PROGRESS_EVERY_S"
+    _print_collect_progress
+done
+
 for pid in ${pids[@]+"${pids[@]}"}; do
     wait "$pid" || fail=$((fail + 1))
 done
+_print_collect_progress
 
 echo "=== Collection finished. failures=$fail ==="
+
+# Fold parallel shard ledgers into all_runs.jsonl (dedupe by scene/policy/variant).
+echo "=== Merge worker shards → all_runs.jsonl ==="
+"$PYTHON_BIN" - "$OUT_BASE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+out_base = Path(sys.argv[1])
+n_merged = 0
+for pol_dir in sorted(p for p in out_base.iterdir() if p.is_dir() and not p.name.startswith("_")):
+    for sign_dir in sorted(p for p in pol_dir.iterdir() if p.is_dir()):
+        shards = sorted(sign_dir.glob("all_runs.w*.jsonl"))
+        main = sign_dir / "all_runs.jsonl"
+        if not shards:
+            continue
+        by_key = {}
+        order = []
+        for path in ([main] if main.is_file() else []) + shards:
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError as e:
+                print(f"  [warn] {path}: {e}")
+                continue
+            for ln in text.splitlines():
+                if not ln.strip():
+                    continue
+                try:
+                    row = json.loads(ln)
+                except json.JSONDecodeError:
+                    continue
+                key = (row.get("scene_uid"), row.get("policy"), row.get("variant"))
+                if key not in by_key:
+                    order.append(key)
+                by_key[key] = row
+        with open(main, "w", encoding="utf-8") as fh:
+            for key in order:
+                fh.write(json.dumps(by_key[key], default=str) + "\n")
+        print(f"  {pol_dir.name}/{sign_dir.name}: {len(by_key)} rows "
+              f"(from {len(shards)} shards" + (f" + main" if main.is_file() else "") + ")")
+        n_merged += 1
+print(f"shard merge: {n_merged} sign dirs")
+PY
 
 if [ "$SKIP_MERGE" = "1" ]; then
     echo "[skip] SKIP_MERGE=1"

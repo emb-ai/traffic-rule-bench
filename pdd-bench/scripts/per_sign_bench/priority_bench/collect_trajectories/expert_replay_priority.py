@@ -301,33 +301,54 @@ def run_collection(args: argparse.Namespace) -> int:
         print("ERROR: no valid rows in manifest (after start/count)", file=sys.stderr)
         return 2
 
+    worker_id: Optional[int] = getattr(args, "worker_id", None)
     catalog_path = out_dir / "catalog.jsonl"
-    write_catalog(rows, catalog_path)
-    print(f"Catalog: {catalog_path} ({len(rows)} uids)")
+    # Parallel shards: only worker 0 writes the full catalog.
+    if worker_id is None or worker_id == 0:
+        catalog_rows = (
+            _load_manifest(manifest, None, 0) if worker_id is not None else rows
+        )
+        write_catalog(catalog_rows, catalog_path)
+        print(f"Catalog: {catalog_path} ({len(catalog_rows)} uids)")
+    else:
+        print(f"Catalog: skip (worker_id={worker_id})")
 
     variants = _ego_variants(args.policy, args.ego_variant, args.ego_extra_samples)
     models = rb._load_policy_models(
         args.policy, args.model_path, args.plant2_action_mode
     )
 
-    all_runs_path = out_dir / "all_runs.jsonl"
+    # Shards write all_runs.wXX.jsonl so concurrent workers never race.
+    if worker_id is None:
+        all_runs_path = out_dir / "all_runs.jsonl"
+    else:
+        all_runs_path = out_dir / f"all_runs.w{worker_id:02d}.jsonl"
     mode = "a" if args.resume and all_runs_path.exists() else "w"
     done_keys: set[tuple] = set()
-    if mode == "a":
-        for line in all_runs_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
+    if args.resume:
+        # Seed skip-set from every ledger (main + shards) so resume is global.
+        for cand in [out_dir / "all_runs.jsonl", *sorted(out_dir.glob("all_runs.w*.jsonl"))]:
+            if not cand.is_file():
                 continue
             try:
-                r = json.loads(line)
-            except json.JSONDecodeError:
+                text = cand.read_text(encoding="utf-8")
+            except OSError:
                 continue
-            done_keys.add((r.get("scene_uid"), r.get("policy"), r.get("variant")))
+            for line in text.splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                done_keys.add((r.get("scene_uid"), r.get("policy"), r.get("variant")))
 
+    wtag = f" worker={worker_id}" if worker_id is not None else ""
     print(
-        f"Policy={args.policy}  variants={variants}  scenes={len(rows)}  "
+        f"Policy={args.policy}  variants={variants}  scenes={len(rows)}{wtag}  "
         f"aux=ON  record=ON  gifs={'yes' if args.save_gifs else 'no'}"
     )
-    print(f"Output: {out_dir}")
+    print(f"Output: {out_dir}  ledger={all_runs_path.name}")
 
     n_ok = n_fail = n_skip = 0
     with open(all_runs_path, mode, encoding="utf-8") as ao:
@@ -468,6 +489,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Only first N manifest rows (smoke / visual check)")
     p.add_argument("--start", type=int, default=0,
                    help="Skip first N rows of the manifest")
+    p.add_argument(
+        "--worker-id",
+        type=int,
+        default=None,
+        help="Parallel shard id: write all_runs.wXX.jsonl (safe concurrent "
+             "collection). Use with --start/--count.",
+    )
     p.add_argument("--max-steps", type=int, default=1500)
     p.add_argument("--ego-variant", default="default",
                    help="Single ego variant when --ego-extra-samples=0")
