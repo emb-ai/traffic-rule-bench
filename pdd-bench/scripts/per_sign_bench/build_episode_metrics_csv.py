@@ -63,6 +63,10 @@ POLICY_DISPLAY_NAME: dict[str, str] = {
 #
 # Junction priority (2.3.x): scenes place SecondaryRoad* as the benchmark target,
 # but in_zone / violations are tracked on co-located YieldSign at the junction.
+#
+# Priority plates 2.1 / 2.3.x are informational and never violate; SIGN_CLASS_MAP
+# already points those PDDs at RightHandYieldSign / YieldSign (the classes that
+# own the approach zone and emit violations).
 TARGET_CLASS_SUBCLASSES: dict[str, list[str]] = {
     "SpeedLimitSign":         ["SpeedLimitSign15"],
     "EndOfSpeedLimitSign":    ["EndOfSpeedLimitSign15"],

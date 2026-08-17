@@ -52,9 +52,23 @@ from lib.sumo_utils import is_vehicle_drivable_lane
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 RUN_BENCH_SCRIPT = SCRIPT_DIR / "run_benchmark.py"
+PDD_BENCH_DIR = SCRIPT_DIR.parents[2]
 
 PDD_CODE = "4.3"
 SIGN_TYPE = "roundabout"
+
+DEFAULT_CARL_CKPT = (
+    PDD_BENCH_DIR / "checkpoints" / "carl" / "nuplan_51479_1B" / "model_best.pth"
+)
+DEFAULT_NN_CHECKPOINTS = {
+    "carl": DEFAULT_CARL_CKPT,
+    "carl_rule": DEFAULT_CARL_CKPT,
+    "plant2": PDD_BENCH_DIR / "checkpoints" / "plant2_finetuned" / "plant2_supervised_2nd_final.pt",
+    "plant2_rule": PDD_BENCH_DIR
+    / "checkpoints"
+    / "plant2_finetuned"
+    / "plant2_supervised_2nd_final.pt",
+}
 
 
 # -----------------------------------------------------------------------------
@@ -117,6 +131,7 @@ class GifConfig:
     hide_signs: bool = True
     dir: Optional[str] = None
     run_name: Optional[str] = None
+    model_path: Optional[str] = None  # Required for carl/plant2; default from checkpoints/
 
 
 @dataclass
@@ -1206,7 +1221,13 @@ def render_gifs_from_manifest(
         return 0, 0
     
     print(f"\n[GIF] Rendering {len(rows)} scene(s)...")
-    
+
+    model_path = gif_cfg.model_path
+    if not model_path:
+        default_ckpt = DEFAULT_NN_CHECKPOINTS.get(gif_cfg.policy)
+        if default_ckpt is not None and Path(default_ckpt).is_file():
+            model_path = str(default_ckpt)
+
     rendered = 0
     failed = 0
     missing = 0
@@ -1225,6 +1246,8 @@ def render_gifs_from_manifest(
             "--scenes-root", str(scenes_root),
             "--policy", gif_cfg.policy,
         ]
+        if model_path:
+            cmd.extend(["--model-path", model_path])
         if gif_cfg.hide_signs:
             cmd.append("--hide-signs")
         
@@ -1299,6 +1322,7 @@ def main(cfg: DictConfig) -> None:
         hide_signs=cfg.gif.hide_signs,
         dir=cfg.gif.dir,
         run_name=cfg.gif.run_name,
+        model_path=getattr(cfg.gif, "model_path", None),
     )
     
     entries = generate_manifest(

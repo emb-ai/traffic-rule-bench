@@ -1417,33 +1417,14 @@ def run_one_episode(
                 text_dict = {
                     "Step": step,
                     "Speed": f"{vehicle.speed_km_h:.2f} km/h",
-                    "Vehicle lane: ": vehicle.lane.index,
-                    "Current lane width: ": vehicle.lane.width,
-                    "Violations: ": sign_violations,
+                    "Violations": sign_violations,
                 }
-                
-                no_entry_signs = [
-                    sign for sign in sign_mgr.signs
-                    if isinstance(sign, (NoEntrySign, NoTrafficSign))
-                ] if sign_mgr is not None else []
-                text_dict["No-entry signs"] = len(no_entry_signs)
-                if no_entry_signs:
-                    text_dict["Sign class"] = type(no_entry_signs[0]).__name__
-
-            if current_violation_texts:
-                text_dict["Violation"] = current_violation_texts[0]
-                if len(current_violation_texts) > 1:
-                    text_dict["Violation +"] = f"+{len(current_violation_texts) - 1} more"
-            elif last_violation_texts:
-                text_dict["Last violation"] = last_violation_texts[0]
-                if len(last_violation_texts) > 1:
-                    text_dict["Last violation +"] = f"+{len(last_violation_texts) - 1} more"
 
             if save_gif:
                 try:
                     base_env.render(
                         mode="top_down",
-                        film_size=(2400, 2400), scaling=12.0,
+                        film_size=(4800, 4800), scaling=24.0,
                         screen_size=(800, 800),
                         semantic_map=True,
                         semantic_broken_line=True,

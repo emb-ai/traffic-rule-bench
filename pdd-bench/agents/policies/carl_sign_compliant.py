@@ -34,7 +34,7 @@ class CarlSignCompliantPolicy(SignComplianceMixin, BasePolicy):
     _carl_checkpoint: Optional[str] = None
     _carl_device: str = "cpu"
 
-    # Let mixin override steering for sign-driven lane changes
+    # Let the mixin override steering for sign-driven lane changes
     # (pre-positioning at 5.15.2 direction signs, lane bans, etc.).
     APPLY_LANE_CHANGE_OVERRIDE = True
 
@@ -42,6 +42,12 @@ class CarlSignCompliantPolicy(SignComplianceMixin, BasePolicy):
     # lane-change override, no-overtaking guard, speed-cap clamp). Used by
     # PlainCarlPolicy to expose raw CaRL behaviour without rule overlay.
     APPLY_RULE_OVERLAY = True
+
+    # 5.15.1: do not stub nav to [spawn, dest] while peer-LC'ing — that
+    # rewrite makes the route look cut off and fights the NN. Soft LC
+    # steering is enough; MetaDrive checkpoints stay intact until the
+    # post-LC compliant install.
+    APPLY_LANE_DIRS_NAV_HOLD = False
 
     @classmethod
     def set_checkpoint(cls, checkpoint_path: str, device: str = "cpu"):
@@ -114,8 +120,6 @@ class CarlSignCompliantPolicy(SignComplianceMixin, BasePolicy):
                     steering = float(np.clip(
                         self._steering_control_for_lc(self._lc_target_lane), -1.0, 1.0
                     ))
-
-            steering = self._maybe_override_steering_for_direction_exit(steering)
 
             # No-overtaking steering guard (matches RuleCompliantExpertPolicy:59-71):
             # if CaRL steers toward the opposite lane while overtaking is forbidden,

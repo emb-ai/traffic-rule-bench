@@ -32,6 +32,10 @@ for _p in (PDD_BENCH_DIR, METADRIVE_DIR, BENCHMARK_DIR):
     if _ps not in sys.path:
         sys.path.insert(0, _ps)
 
+from bench.top_down_text_patch import apply_top_down_violations_text_patch  # noqa: E402
+
+apply_top_down_violations_text_patch()
+
 
 def _build_env(catalog_row: dict, profile: dict):
     """Construct an _EnvWithTraffic with the SumoTrafficManager injected."""
@@ -495,20 +499,15 @@ def _drive_episode(env, agent_policy: str, max_steps: int, save_gif: str | None)
 
         if save_gif:
             try:
-                lim = float(env.config.get("ego_v_target_kmh", 0.0) or 0.0)
                 text_dict = {
                     "Step": step,
                     "Speed": f"{veh.speed_km_h:.1f} km/h",
+                    "Violations": n_violations,
                 }
-                if lim > 0:
-                    text_dict["Limit"] = f"{lim:.0f} km/h"
-                    text_dict["Over"] = "YES" if veh.speed_km_h > lim else "no"
-                if n_violations > 0:
-                    text_dict["Violations"] = n_violations
                 env.render(
                     mode="top_down",
-                    film_size=(2400, 2400),
-                    scaling=12.0,
+                    film_size=(4800, 4800),
+                    scaling=24.0,
                     screen_size=(600, 600),
                     semantic_map=True,
                     semantic_broken_line=True,

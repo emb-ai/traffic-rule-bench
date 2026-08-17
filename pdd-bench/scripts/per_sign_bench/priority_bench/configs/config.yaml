@@ -1,0 +1,71 @@
+# Priority junction bench — 2.1 main / 2.3 secondary / 2.4 yield / 2.5 stop / 4.1.x direction / 4.3 roundabout / 3.2 blocked_road / 5.7.x one_way
+#   python generate_manifest.py
+#   python generate_manifest.py sign=secondary
+#   python generate_manifest.py sign=yield
+#   python generate_manifest.py sign=stop
+#   python generate_manifest.py sign=roundabout
+#   python generate_manifest.py sign=blocked_road
+#   python generate_manifest.py sign=one_way_right
+#   python generate_manifest.py sign=one_way_left
+#   python generate_manifest.py sign=direction_straight
+#   python generate_manifest.py sign=direction_right
+#   python generate_manifest.py sign=direction_left
+#   python generate_manifest.py sign=direction_straight_right
+#   python generate_manifest.py sign=direction_straight_left
+#   python generate_manifest.py sign=direction_left_right
+
+defaults:
+  - _self_
+  - sign: main
+  # Dual-path signs compose configs/sign/_dual_path.yaml (Hydra group base).
+
+hydra:
+  run:
+    dir: ${paths.output_base}/${paths.experiment_name}
+  output_subdir: .hydra
+  job:
+    chdir: false
+
+paths:
+  scenes_dir: scenes
+  split: all  # all | train | test
+  experiment_name: ${now:%Y-%m-%d_%H-%M-%S}
+
+scenario:
+  max_scenarios: 10
+  max_total: null # for debugging
+
+augmentation:
+  enabled: true
+  layout: false
+  auxiliary: false
+
+auxiliary:
+  enabled: false
+  distance_from_intersection: 20.0
+  convoy_size: 3
+  lanes_occupied: 4
+  convoy_gap_m: [5.0, 10.0]
+  release_when_ego_within_m: 15.0
+
+simulation:
+  spawn_velocity_ms: 2.5
+  traffic_density: 0.0
+  horizon: 800
+  sign_distance_before_end: 0.0
+  spawn_distance_before_end: 15.0
+
+gif:
+  enabled: false
+  policy: idm
+  max_scenes: null
+  dry_run: false
+  hide_signs: true
+  dir: null
+  run_name: null
+  window_m: 60
+  draw_path_conflict: false  # cyan/magenta routes + yellow conflict X on GIFs
+  # Optional; carl/carl_rule/plant2/plant2_rule default to pretrained:
+  #   carl*:    pdd-bench/checkpoints/carl/nuplan_51479_1B/model_best.pth
+  #   plant2*:  pdd-bench/checkpoints/plant2_pretrain/epoch=029_final_3.ckpt
+  model_path: null

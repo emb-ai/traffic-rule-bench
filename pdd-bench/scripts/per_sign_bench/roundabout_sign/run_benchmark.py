@@ -84,6 +84,9 @@ from lib.top_down_renderer_patch import (
 )
 
 apply_roundabout_top_down_renderer_patch()
+from bench.top_down_text_patch import apply_top_down_violations_text_patch  # noqa: E402
+apply_top_down_violations_text_patch()
+
 
 BENCH_DIR = Path(__file__).resolve().parent
 PER_SIGN_BENCH_DIR = BENCH_DIR.parent
@@ -1721,67 +1724,14 @@ def run_one_episode(
                 text_dict = {
                     "Step": step,
                     "Speed": f"{vehicle.speed_km_h:.2f} km/h",
-                    "Vehicle lane: ": vehicle.lane.index,
-                    "Aux lanes": len(aux_spawn_lanes),
-                    "Current lane width: ": vehicle.lane.width,
-                    "Violations: ": sign_violations,
+                    "Violations": sign_violations,
                 }
-                
-                ego_in_yield_zone = False
-                ego_violating_yield = False
-                main_road_has_traffic = False
-                
-                if sign_mgr is not None and vehicle is not None:
-                    yield_signs = [
-                        sign for sign in sign_mgr.signs
-                        if "yield" in type(sign).__name__.lower()
-                    ]
-                    text_dict["Yield signs"] = len(yield_signs)
-                    text_dict["Main road signs"] = sum(
-                        1 for sign in sign_mgr.signs
-                        if "mainroad" in type(sign).__name__.lower()
-                    )
-                    for sign in yield_signs:
-                        has_traffic, _ = sign.has_main_road_traffic(exclude_vehicle=vehicle)
-                        main_road_has_traffic = main_road_has_traffic or has_traffic
-                        if _ego_in_exact_sign_zone(sign, vehicle):
-                            ego_in_yield_zone = True
-                        if sign._is_violating(vehicle):
-                            ego_violating_yield = True
-                
-                text_dict["Main road traffic"] = main_road_has_traffic
-                text_dict["Ego in yield zone"] = ego_in_yield_zone
-                text_dict["Yield violation"] = ego_violating_yield
-                
-                # Add auxiliary agent status
-                if aux_agent_mgr is not None:
-                    aux_status = aux_agent_mgr.get_status()
-                    text_dict["Aux agents"] = aux_status.get("count", 0)
-                    text_dict["Aux lanes"] = aux_status.get("lanes_occupied", aux_lanes_occupied)
-                    text_dict["Aux convoy size"] = aux_status.get("convoy_size", aux_convoy_size)
-                    text_dict["Aux policy"] = aux_status.get("policy", aux_policy)
-                    agents = aux_status.get("agents") or []
-                    if agents:
-                        text_dict["Aux dest"] = agents[0].get("destination_lane", "")
-                        text_dict["Aux released"] = agents[0].get("released", False)
-                        ego_dist = agents[0].get("ego_dist_to_spawn_lane_end_m")
-                        if ego_dist is not None:
-                            text_dict["Ego to lane end"] = f"{ego_dist:.1f}m"
-
-            if current_violation_texts:
-                text_dict["Violation"] = current_violation_texts[0]
-                if len(current_violation_texts) > 1:
-                    text_dict["Violation +"] = f"+{len(current_violation_texts) - 1} more"
-            elif last_violation_texts:
-                text_dict["Last violation"] = last_violation_texts[0]
-                if len(last_violation_texts) > 1:
-                    text_dict["Last violation +"] = f"+{len(last_violation_texts) - 1} more"
 
             if save_gif:
                 try:
                     base_env.render(
                         mode="top_down",
-                        film_size=(2400, 2400), scaling=12.0,
+                        film_size=(4800, 4800), scaling=24.0,
                         screen_size=(800, 800),
                         semantic_map=True,
                         semantic_broken_line=True,
