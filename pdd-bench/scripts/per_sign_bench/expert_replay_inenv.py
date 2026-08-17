@@ -802,11 +802,15 @@ def _load_expert_rows(path: Path, count: int | None, start: int) -> list[dict]:
 
 def _resolve_expert_paths(expert_row: dict) -> tuple[Path, Path, str, str, str]:
     """Return (pkl, sidecar, scene_uid, variant, backend) from an experts_*.jsonl row."""
+    from bench.mount_paths import resolve_shared_path
+
     sidecar_path = expert_row.get("sidecar_path") or expert_row.get("winning_sidecar")
     pkl_path = expert_row.get("pkl_path")
     if not sidecar_path:
         raise ValueError("expert row missing sidecar_path")
-    sidecar_path = Path(sidecar_path)
+    # The rows store absolute paths from the collecting node; the same volume is
+    # mounted under several roots, so try the equivalent ones before failing.
+    sidecar_path = resolve_shared_path(sidecar_path)
     if not sidecar_path.exists():
         raise FileNotFoundError(f"sidecar not found: {sidecar_path}")
 
@@ -816,7 +820,7 @@ def _resolve_expert_paths(expert_row: dict) -> tuple[Path, Path, str, str, str]:
         pkl_path = sidecar.get("pkl_path")
     if not pkl_path:
         raise ValueError(f"expert row / sidecar missing pkl_path: {sidecar_path}")
-    pkl_path = Path(pkl_path)
+    pkl_path = resolve_shared_path(pkl_path)
     if not pkl_path.exists():
         raise FileNotFoundError(f"pkl not found: {pkl_path}")
 

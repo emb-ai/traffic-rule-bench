@@ -453,8 +453,13 @@ def load_expert_rows(path: Path, count: int | None, start: int) -> list[dict]:
 
 
 def resolve_expert_paths(expert_row: dict) -> tuple[Path, Path, str, str, str]:
-    sidecar_path = Path(expert_row["sidecar_path"])
-    pkl_path = Path(expert_row.get("pkl_path") or json.loads(
+    # Expert rows carry absolute paths written on whichever node collected them;
+    # the same volume answers to more than one mount point, so resolve against
+    # the equivalent roots before declaring a replay missing.
+    from bench.mount_paths import resolve_shared_path
+
+    sidecar_path = resolve_shared_path(expert_row["sidecar_path"])
+    pkl_path = resolve_shared_path(expert_row.get("pkl_path") or json.loads(
         sidecar_path.read_text(encoding="utf-8"))["pkl_path"])
     sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     scene_uid = expert_row.get("scene_uid") or sidecar.get("scene_uid") or "?"
