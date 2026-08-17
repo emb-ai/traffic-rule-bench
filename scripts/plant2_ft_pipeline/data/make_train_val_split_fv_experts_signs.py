@@ -200,32 +200,44 @@ def main() -> None:
         for p in sorted(data.iterdir()):
             if not p.is_dir():
                 continue
-            if not (p / "results.json.gz").exists():
+            # Some dump generations nest the route inside a directory of its own
+            # name, leaving empty boxes/measurements at the top and the real
+            # frames one level down. dataset.py's recursive glob finds those, so
+            # they train fine once split — but enumerating only the top level
+            # dropped every one of them into skipped_no_results without a word.
+            # Linking from the inner directory also flattens the route in the
+            # split, so the glob stops counting each of them twice.
+            route = p if (p / "results.json.gz").exists() else p / p.name
+            if not (route / "results.json.gz").exists():
                 skipped_no_results += 1
                 continue
-            if not route_is_ok(p):
+            if not route_is_ok(route):
                 skipped_bad += 1
                 continue
+            # The OUTER name carries the sign code and names the route in the
+            # split; only the source path moves inward.
             sign = route_sign(p.name, uid2sign)
             if sign is None:
-                sign = sniff_sign(p)
+                sign = sniff_sign(route)
             if sign is None:
                 unknown += 1
                 continue
-            by[sign].append((p, p.name, tag))
+            by[sign].append((route, p.name, tag))
 
     bare_tags: dict[str, set[str]] = defaultdict(set)
+    # Key on the name the route will carry in the split, not on the source
+    # directory's: with the nested layout the two can differ.
     for items in by.values():
-        for p, _o, tag in items:
-            bare_tags[p.name].add(tag)
+        for _p, out_name, tag in items:
+            bare_tags[out_name].add(tag)
     collide = {n for n, tags in bare_tags.items() if len(tags) > 1}
     if collide:
         print(f"name collisions: {len(collide)} — applying tag prefixes", flush=True)
         new_by: dict[str, list[tuple[Path, str, str]]] = defaultdict(list)
         for sign, items in by.items():
             for p, out_name, tag in items:
-                if p.name in collide:
-                    out_name = f"{tag}__{p.name}"
+                if out_name in collide:
+                    out_name = f"{tag}__{out_name}"
                 new_by[sign].append((p, out_name, tag))
         by = new_by
 
