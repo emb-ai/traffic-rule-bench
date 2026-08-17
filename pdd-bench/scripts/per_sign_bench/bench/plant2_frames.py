@@ -144,6 +144,29 @@ _CLASS_TO_PDD = {
 
 _PDD_ICON_RE = re.compile(r"^(\d+(?:\.\d+)*)")
 
+# Codes whose plate carries a number, and the attribute holding it (km/h).
+# Restricted by code on purpose: reading any `speed_limit` attribute that
+# happened to exist would put a road speed on plates that prescribe nothing.
+_SIGN_VALUE_ATTR = {
+    "3.24": "speed_limit",   # maximum speed
+    "5.31": "speed_limit",   # zone maximum speed
+    "4.6": "min_speed",      # minimum speed
+}
+
+
+def _sign_value_kmh(sign, pdd: str | None):
+    """The number written on the plate, in km/h, or None if it carries none."""
+    attr = _SIGN_VALUE_ATTR.get(str(pdd))
+    if attr is None:
+        return None
+    raw = getattr(sign, attr, None)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
 
 def resolve_pdd_code_from_sign(sign) -> str | None:
     """Best-effort PDD code for a MetaDrive BaseTrafficSign instance."""
@@ -350,21 +373,34 @@ def collect_boxes(engine, vehicle,
         yaw = float(wrap_to_pi(heading - ego_heading))
         w = float(getattr(sign, "WIDTH", 0.6) or 0.6)
         l = float(getattr(sign, "DEPTH", 0.1) or 0.1)
-        boxes.append({
+        # The PDD code alone cannot say WHICH limit a speed sign prescribes:
+        # SpeedLimitSign20 and SpeedLimitSign60 are both "3.24", and the
+        # sequence's speed_limit token carries the road's raw speed, not the
+        # sign's. Without the value in the frame the target speed inside the
+        # zone is not derivable from anything the model sees, so imitation can
+        # only learn the corpus prior. Carry it in the box's own speed slot
+        # (m/s, as for vehicles): PlanTDataset turns that into km/h for the
+        # object token, and every other static keeps its 0.
+        value_kmh = _sign_value_kmh(sign, pdd)
+        entry = {
             "class": pdd,
             "position": [x, y, 0.0],
             "yaw": yaw,
-            "speed": 0.0,
+            "speed": (value_kmh or 0.0) / 3.6,
             "extent": [max(l, 0.2) / 2.0, max(w, 0.2) / 2.0, 0.75],
             "id": obj_id,
             "type_id": f"traffic.sign.{pdd}",
             "pdd_code": pdd,
             "affects_ego": True,
-        })
+        }
+        if value_kmh is not None:
+            # Readable in the dump and immune to the m/s convention.
+            entry["sign_value_kmh"] = float(value_kmh)
+        boxes.append(entry)
         obj_id += 1
         n_signs_added += 1
         _dbg(f"sign added: pdd={pdd} id={sign_id} type={sign_type} "
-             f"ego_xy=({x:.1f},{y:.1f}) box_id={obj_id - 1}")
+             f"ego_xy=({x:.1f},{y:.1f}) value={value_kmh} box_id={obj_id - 1}")
 
     if _DUMP_DEBUG:
         classes = [b["class"] for b in boxes]
