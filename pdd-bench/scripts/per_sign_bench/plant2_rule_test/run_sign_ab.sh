@@ -13,6 +13,13 @@
 #   narrow — both + the object filter the training used (50 m / front x2)
 #   remap  — both + NPC cars rewritten as the sign class (does the model react
 #            to the sign token at all, even on a moving object?)
+#   yflip  — both + the handedness training actually used. The dumps store the
+#            route and the waypoint targets with y=left (build_ego_matrix),
+#            while eval feeds the route as y=right and the pure-pursuit
+#            controller reads the prediction as y=right. With both defaults off
+#            the two mirrors cancel for plain route following, but the geometry
+#            between an object's side and the manoeuvre does not survive it —
+#            which is exactly what a lateral rule (detour 4.2.x) measures.
 #   trainlike — every input knob set to what training actually used: object
 #            filter 50 m / front x2, sequence length = object count instead of a
 #            fixed 30, BEV covering 32 m instead of 64. The eval defaults differ
@@ -55,6 +62,7 @@ env_for () {                      # config name -> env assignments
         both)   echo "PLANT2_SIGN_OBJS=1 PLANT2_SIGN_TOKEN=1" ;;
         narrow) echo "PLANT2_SIGN_OBJS=1 PLANT2_SIGN_TOKEN=1 PLANT2_OBJ_MAX_DIST=50 PLANT2_OBJ_FRONT_FACTOR=2" ;;
         trainlike) echo "PLANT2_SIGN_OBJS=1 PLANT2_SIGN_TOKEN=1 PLANT2_OBJ_MAX_DIST=50 PLANT2_OBJ_FRONT_FACTOR=2 PLANT2_SEQ_FIT=1 PLANT2_BEV_METERS=32" ;;
+        yflip)  echo "PLANT2_SIGN_OBJS=1 PLANT2_SIGN_TOKEN=1 PLANT2_ROUTE_YFLIP=1 PLANT2_PRED_YFLIP=1" ;;
         remap)  echo "PLANT2_SIGN_OBJS=1 PLANT2_SIGN_TOKEN=1 PLANT2_REMAP_NPC_TO_SIGN=$LABEL" ;;
         *)      echo "" ;;
     esac
