@@ -182,7 +182,6 @@ def build_catalog(
     insufficient_v0 = 0
     dropped_high_limit = 0
     dropped_slow_min = 0   # 4.6 scenes whose road is too slow for a meaningful min
-    dropped_slow_limit = 0  # 3.24/5.31 scenes whose road is too slow for any limit
     # Round-robin counters for target limits, one per sign_code — made
     # deterministic by stratified_sample order → exact split within each code.
     limit_rr: dict = {}
@@ -246,24 +245,22 @@ def build_catalog(
                 if v_target_raw_kmh > 80:   # motorways — geometry unsuitable for 20/30
                     dropped_high_limit += 1
                     continue
-                # 3.24 AND 5.31: balance the limit over {20,30,40}, but only
-                # among ACHIEVABLE buckets (v_target <= road - 10), exactly as
-                # the 4.6 branch above does for minimums. A blind round-robin
-                # handed 22% of scenes a limit at or above their road's own
-                # speed: the sign then demands nothing, and those frames teach
-                # "sign present, no slowdown" against every other frame.
-                # Greedy least-filled keeps the split as even as the road pool
-                # allows; deterministic via stratified_sample order.
-                achievable = [t for t in SPEED_LIMIT_TARGETS_KMH
-                              if t <= v_target_raw_kmh - 10]
-                if not achievable:
-                    dropped_slow_limit += 1
-                    continue
-                counts = limit_rr.setdefault(
-                    ("limit_counts", scene.sign_code),
-                    {t: 0 for t in SPEED_LIMIT_TARGETS_KMH})
-                v_target_kmh = min(achievable, key=lambda t: (counts[t], t))
-                counts[v_target_kmh] += 1
+                # 3.24 AND 5.31: uniform round-robin of the limit over
+                # {20,30,40} (exact 1/3 split within each code) instead of the
+                # nearest-snap that put 85% of scenes on non-discriminative v40.
+                #
+                # Do NOT filter these against the road's own nominal speed. It
+                # looks like a scene whose limit is at or above the road speed
+                # demands nothing, but measured baselines say otherwise: on
+                # 5.31, unaware policies score 0.43-0.65 compliance against
+                # 0.84-0.93 for rule-following ones, and on 5.21 — where the
+                # limit equals the road speed in every single row — the gap is
+                # wider still. The nominal edge speed is not the speed a policy
+                # drives, and a zone can span faster edges downstream, so the
+                # comparison is not a test of discriminability.
+                idx = limit_rr.get(scene.sign_code, 0)
+                limit_rr[scene.sign_code] = idx + 1
+                v_target_kmh = SPEED_LIMIT_TARGETS_KMH[idx % len(SPEED_LIMIT_TARGETS_KMH)]
 
         for spawn_lane_num in lane_range:
             for var_idx in range(n_variations):
@@ -373,9 +370,6 @@ def build_catalog(
         print(f"[build_catalog] dropped {dropped_high_limit} scenes (raw limit > 80 km/h)")
     if dropped_slow_min:
         print(f"[build_catalog] dropped {dropped_slow_min} 4.6 scenes (road too slow for a min)")
-    if dropped_slow_limit:
-        print(f"[build_catalog] dropped {dropped_slow_limit} 3.24/5.31 scenes "
-              f"(road too slow for any limit <= road-10)")
     if insufficient_v0:
         print(f"[build_catalog] dropped {insufficient_v0} braking rows "
               f"(v0 could not exceed limit; cap {SPAWN_VELOCITY_MAX_MPS} m/s)")
