@@ -249,7 +249,7 @@ sys.exit(0 if per.get('$lbl', {}).get('N', 0) > 0 else 1)
     fi
 
     say "split: $DUMP_NEW -> $SPLIT_NEW"
-    # No CLI: sources and OUT come from SHEPELEV via _paths.py, so pointing
+    # No CLI: sources and OUT come from SHEPELEV via lib/paths.py, so pointing
     # SHEPELEV at $FIX_ROOT splits our tree plus the two linked ones.
     ( cd "$PIPE" && SHEPELEV="$FIX_ROOT" PLAN_T="$PLANT" \
       $PY data/make_train_val_split_fv_experts_signs.py 2>&1 | tail -20 ) \
