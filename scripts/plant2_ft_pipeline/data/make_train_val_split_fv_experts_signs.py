@@ -54,12 +54,38 @@ def sniff_sign(route_dir: Path) -> str | None:
             if _PDD_RE.match(str(code)):
                 return str(code)
     return None
-SRCS = [
+_DEFAULT_SRCS = [
     ("fv", SHEPELEV / "plant2_l1_traj_fv_nodeA_signs"),
     ("exp", SHEPELEV / "plant2_l1_from_experts_signs"),
     ("lane", SHEPELEV / "plant2_l1_lane_signs"),
 ]
-OUT = SHEPELEV / "plant2_l1_fv_experts_split_signs"
+
+
+def _srcs_from_env():
+    """SPLIT_SRCS overrides the source list: `tag=/abs/path` items, ';'-separated.
+
+    The defaults are a fixed trio under SHEPELEV, which cannot express "these
+    dumps and not those". That matters when a re-dump supersedes part of an
+    older one: mixing both would put two different conventions for the same
+    sign into one training set, and nothing downstream would notice.
+    """
+    raw = os.environ.get("SPLIT_SRCS", "").strip()
+    if not raw:
+        return _DEFAULT_SRCS
+    out = []
+    for item in raw.split(";"):
+        item = item.strip()
+        if not item:
+            continue
+        tag, _, path = item.partition("=")
+        if not path:
+            raise SystemExit(f"SPLIT_SRCS item must be tag=/abs/path, got {item!r}")
+        out.append((tag.strip(), Path(path.strip())))
+    return out
+
+
+SRCS = _srcs_from_env()
+OUT = Path(os.environ.get("SPLIT_OUT") or (SHEPELEV / "plant2_l1_fv_experts_split_signs"))
 SEED = 42
 # Hardlinking is I/O, not CPU: threads keep the external `cp` calls busy
 # without the fork-time deadlock a process pool hits on a few thousand
