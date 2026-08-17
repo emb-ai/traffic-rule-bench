@@ -350,16 +350,40 @@ class PlanT2MetaDriveAdapter:
             route_ego_20x2=route_ego,
             speed_limit_kmh=None,     # keep model input unchanged (80 km/h default token)
             max_objects=30,
-            max_distance=75.0,
-            range_factor_front=16.0,
+            # Training filtered objects with range 50 / front factor 2
+            # (PlanT.yaml model.training). These eval defaults are wider; the env
+            # vars exist to A/B whether that train/eval gap costs anything.
+            max_distance=float(_os.environ.get("PLANT2_OBJ_MAX_DIST", 75.0)),
+            range_factor_front=float(_os.environ.get("PLANT2_OBJ_FRONT_FACTOR", 16.0)),
             input_bev=True,
             input_ego_speed=input_ego_speed,
             bev_resolution=128,
-            bev_size_meters=64.0,
+            # The dump writes 256 px over 64 m and PlanTDataset keeps the central
+            # 128 px (dataset.py: bev[0, 64:-64, 64:-64]), so training sees 32 m
+            # at 0.25 m/px. Rendering 128 px over 64 m here gives the same tensor
+            # shape at half the zoom — twice the area, silently. PLANT2_BEV_METERS=32
+            # reproduces the training geometry; the default keeps the old behaviour
+            # so the difference can be A/B'd.
+            bev_size_meters=float(_os.environ.get("PLANT2_BEV_METERS", 64.0)),
             device=self.device,
-            include_sign_id=bool(getattr(self, "_use_sign_id", False)),
+            # PLANT2_SIGN_TOKEN=0 drops the global sign token, so the A/B can
+            # separate it from the per-object PDD classes (PLANT2_SIGN_OBJS).
+            include_sign_id=bool(getattr(self, "_use_sign_id", False))
+            and _os.environ.get("PLANT2_SIGN_TOKEN", "1") not in ("0", "false", "False"),
             sign_code=getattr(self, "sign_code", None),
         )
+
+        # Object pool as the model sees it — to compare the eval-side convention
+        # against the training dumps (boxes/NNNN.json.gz) row by row.
+        if _os.environ.get("PLANT2_DEBUG_OBJS"):
+            _x = batch.get("x_objs")
+            if _x is not None:
+                _rows = _x[0] if _x.dim() == 3 else _x
+                for _r in _rows.tolist():
+                    if _r[0] > 0:
+                        print(f"[objdbg] type={_r[0]:.0f} x={_r[1]:+.1f} y={_r[2]:+.1f} "
+                              f"yaw={_r[3]:+.0f} spd={_r[4]:.1f}", flush=True)
+                print("[objdbg] ---", flush=True)
 
         with torch.no_grad():
             _, _, pred_plan, _ = self._model(batch)
@@ -369,6 +393,19 @@ class PlanT2MetaDriveAdapter:
         if not getattr(self, "_has_trained_speed_head", True):
             pred_path, pred_wps, _ = pred_plan
             pred_plan = (pred_path, pred_wps, None)
+
+        # The dumps used for finetuning store route AND targets in MetaDrive
+        # convention (y=left), while the controllers below read the prediction as
+        # CARLA (y=right). Flipping only the route input leaves the output
+        # mirrored — steering comes out inverted. This flips the prediction too,
+        # so route in / path out can be put in one convention together.
+        if _os.environ.get("PLANT2_PRED_YFLIP"):
+            _pp, _pw, _ps = pred_plan
+            if _pp is not None:
+                _pp = _pp.clone(); _pp[..., 1] = -_pp[..., 1]
+            if _pw is not None:
+                _pw = _pw.clone(); _pw[..., 1] = -_pw[..., 1]
+            pred_plan = (_pp, _pw, _ps)
 
         ego_speed = float(getattr(vehicle, "speed", 0.0))
         speed_limit_idx = int(batch["speed_limit"][0].item())

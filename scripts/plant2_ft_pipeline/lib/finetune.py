@@ -31,6 +31,21 @@ class FinetuneConfig:
     augment_parked: bool = False
     filter_routes: bool = True
     stop_speed_loss_weight: float | None = None
+    gpus: int = 1
+    # tok_emb holds one embedding per object class; no single batch contains
+    # every class, so plain DDP aborts on "unused parameters" at the first step.
+    ddp_strategy: str = "ddp_find_unused_parameters_true"
+    # The base checkpoint carries tok_emb.0-6 only: every PDD sign embedding,
+    # sign_emb, speed_token and the ego-speed head are created from scratch on
+    # each finetune. These three decide whether those start from noise at the
+    # trunk's learning rate (defaults = historical behaviour) or get a warm
+    # start and a group of their own.
+    init_sign_from_stop: bool = False
+    new_param_lr_mult: float = 1.0
+    trunk_lr_mult: float = 1.0
+    # lit_finetune writes checkpoints under user.working_dir; left unset Hydra
+    # keeps the config default, which points outside this checkout.
+    working_dir: Path | None = None
     extra_hydra: list[str] = field(default_factory=list)
     hydra_run_dir: Path | None = None
     python: Path | None = None
@@ -45,6 +60,11 @@ class FinetuneConfig:
         self.resume_ckpt = Path(self.resume_ckpt or default_ckpt0())
         self.python = Path(self.python or resolve_python())
         self.shim = Path(self.shim or shim_path())
+        self.working_dir = Path(self.working_dir or plan_t().parent)
+        self.gpus = max(1, int(self.gpus))
+        # GPUS>1 takes the first N devices unless the caller pinned them by hand.
+        if self.gpus > 1 and self.cuda_device == "0":
+            self.cuda_device = ",".join(str(i) for i in range(self.gpus))
 
     def validate(self) -> None:
         if "parallel300" in str(self.split) and os.environ.get("ALLOW_PARALLEL300") != "1":
@@ -79,6 +99,10 @@ def build_finetune_cmd(cfg: FinetuneConfig) -> list[str]:
     os.environ["CKPT_EVERY_N_EPOCHS"] = str(cfg.ckpt_every_n_epochs)
     os.environ["WANDB_MODE"] = cfg.wandb_mode
     os.environ["CUDA_VISIBLE_DEVICES"] = cfg.cuda_device
+    os.environ["DDP_STRATEGY"] = cfg.ddp_strategy
+    os.environ["INIT_SIGN_FROM_STOP"] = "1" if cfg.init_sign_from_stop else "0"
+    os.environ["NEW_PARAM_LR_MULT"] = str(cfg.new_param_lr_mult)
+    os.environ["TRUNK_LR_MULT"] = str(cfg.trunk_lr_mult)
 
     cmd = [
         str(cfg.python),
@@ -86,7 +110,7 @@ def build_finetune_cmd(cfg: FinetuneConfig) -> list[str]:
         str(cfg.shim),
         "resume=True",
         f"resume_path={hydra_escape(cfg.resume_ckpt)}",
-        "gpus=1",
+        f"gpus={cfg.gpus}",
         "use_caching=True",
         f"lr_scheduler={cfg.lr_scheduler}",
         f"warmup_ratio={cfg.warmup_ratio}",
@@ -104,6 +128,7 @@ def build_finetune_cmd(cfg: FinetuneConfig) -> list[str]:
     cmd.extend(cfg.extra_hydra)
     cmd.extend(
         [
+            f"user.working_dir={hydra_escape(cfg.working_dir)}",
             f"model.training.log_path={hydra_escape(pt / f'log/ft_{cfg.checkpoint_addon}_{cfg.seed}')}",
             f"expname=ft_{cfg.checkpoint_addon}",
             f"wandb_name=ft_{cfg.checkpoint_addon}_{cfg.seed}",
@@ -123,9 +148,21 @@ def run_finetune(cfg: FinetuneConfig, *, cwd: Path | None = None, log_path: Path
     print(f"  SPLIT    = {cfg.split}")
     print(f"  CKPT     = {cfg.resume_ckpt}")
     print(f"  DS_LOCAL = {cfg.ds_local}")
-    print(f"  GPU      = {cfg.cuda_device}")
+    print(f"  GPU      = {cfg.cuda_device} (gpus={cfg.gpus}, {cfg.ddp_strategy})")
     print(f"  LR       = {cfg.learning_rate}")
+    print(f"  SCHED    = {cfg.lr_scheduler} (warmup_ratio={cfg.warmup_ratio})")
+    print(f"  BS       = {cfg.batch_size}  workers={cfg.num_workers}  epochs={cfg.max_epochs}")
     print(f"  ADDON    = {cfg.checkpoint_addon}")
+    print(f"  WORKDIR  = {cfg.working_dir}")
+    print(
+        f"  STOPW    = {cfg.stop_speed_loss_weight}"
+        f"  ts_lookahead={os.environ.get('TS_LOOKAHEAD', '0')}"
+        f" wps_stride={os.environ.get('WPS_STRIDE', '1')}"
+    )
+    print(
+        f"  NEWPARAM = init_sign_from_stop={'1' if cfg.init_sign_from_stop else '0'}"
+        f"  lr_mult={cfg.new_param_lr_mult}  trunk_mult={cfg.trunk_lr_mult}"
+    )
     print("=" * 60)
 
     stdout = open(log_path, "a") if log_path else None

@@ -18,6 +18,10 @@ DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END = 5.0
 DEFAULT_CONVOY_SIZE = 3
 DEFAULT_CONVOY_GAP_M = 10.0
 MIN_SPAWN_LONGITUDE_M = 3.0
+# Despawn aux that left the roadway (same soft vanish as roundabout 4.3).
+OFFROAD_DESPAWN_GRACE_STEPS = 20
+OFFROAD_DESPAWN_STREAK = 3
+OFFROAD_LATERAL_MARGIN_M = 1.5
 AuxPolicyType = Literal["idm", "stationary"]
 
 
@@ -190,6 +194,9 @@ class AuxiliaryAgentsManager(BaseManager):
         self._spawn_destinations: List[Optional[str]] = []
         self._convoy_positions: List[int] = []
         self._aux_policies: List[BasePolicy] = []
+        self._aux_spawn_steps: List[int] = []
+        self._offroad_streaks: List[int] = []
+        self._despawned_offroad_count = 0
 
     def reset(self):
         self._aux_vehicles = []
@@ -197,6 +204,9 @@ class AuxiliaryAgentsManager(BaseManager):
         self._spawn_destinations = []
         self._convoy_positions = []
         self._aux_policies = []
+        self._aux_spawn_steps = []
+        self._offroad_streaks = []
+        self._despawned_offroad_count = 0
 
     def after_reset(self):
         self._spawn_auxiliary_vehicles()
@@ -289,6 +299,8 @@ class AuxiliaryAgentsManager(BaseManager):
             self._spawn_lane_indices.append(spawn_lane_index)
             self._spawn_destinations.append(destination_lane)
             self._convoy_positions.append(convoy_position)
+            self._aux_spawn_steps.append(int(getattr(self.engine, "episode_step", 0) or 0))
+            self._offroad_streaks.append(0)
             logging.info(
                 f"[AuxAgent] Spawned convoy slot {convoy_position + 1}/{self._convoy_size} "
                 f"on {spawn_lane_index} at {spawn_long:.1f}m "
@@ -314,6 +326,8 @@ class AuxiliaryAgentsManager(BaseManager):
         self._spawn_destinations = []
         self._convoy_positions = []
         self._aux_policies = []
+        self._aux_spawn_steps = []
+        self._offroad_streaks = []
 
         for idx, spawn_lane_index in enumerate(self._requested_spawn_lane_indices):
             candidate_lanes = [spawn_lane_index]
@@ -386,12 +400,90 @@ class AuxiliaryAgentsManager(BaseManager):
                 logging.debug(f"[AuxAgent] Policy execution error: {e}")
         return {}
 
+    def _aux_is_off_road(self, vehicle: BaseVehicle) -> bool:
+        """True when the aux left the drivable surface (sidewalk / off-lane)."""
+        if bool(getattr(vehicle, "crash_sidewalk", False)):
+            return True
+        on_lane = getattr(vehicle, "on_lane", None)
+        if on_lane is False:
+            return True
+        if bool(getattr(vehicle, "out_of_route", False)):
+            return True
+        try:
+            lane = getattr(vehicle, "lane", None)
+            if lane is not None:
+                _longitudinal, lateral = lane.local_coordinates(vehicle.position)
+                half = float(getattr(lane, "width", 3.5) or 3.5) * 0.5 + OFFROAD_LATERAL_MARGIN_M
+                if abs(float(lateral)) > half:
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _despawn_aux_at(self, idx: int, reason: str) -> None:
+        if idx < 0 or idx >= len(self._aux_vehicles):
+            return
+        vehicle = self._aux_vehicles[idx]
+        vid = getattr(vehicle, "id", None)
+        try:
+            if vid is not None:
+                self.clear_objects([vid])
+            elif hasattr(vehicle, "destroy"):
+                vehicle.destroy()
+        except Exception as exc:
+            logging.debug("[AuxAgent] clear_objects failed for off-road aux: %s", exc)
+        print(
+            f"[AuxAgent] Despawned off-road aux "
+            f"(convoy_pos={self._convoy_positions[idx] if idx < len(self._convoy_positions) else '?'}, "
+            f"reason={reason})"
+        )
+        self._despawned_offroad_count += 1
+        for lst in (
+            self._aux_vehicles,
+            self._spawn_lane_indices,
+            self._spawn_destinations,
+            self._convoy_positions,
+            self._aux_policies,
+            self._aux_spawn_steps,
+            self._offroad_streaks,
+        ):
+            if idx < len(lst):
+                lst.pop(idx)
+
+    def _despawn_offroad_auxiliaries(self) -> None:
+        if not self._aux_vehicles:
+            return
+        episode_step = int(getattr(self.engine, "episode_step", 0) or 0)
+        while len(self._offroad_streaks) < len(self._aux_vehicles):
+            self._offroad_streaks.append(0)
+        while len(self._aux_spawn_steps) < len(self._aux_vehicles):
+            self._aux_spawn_steps.append(episode_step)
+
+        to_remove: List[int] = []
+        for idx, vehicle in enumerate(self._aux_vehicles):
+            spawn_step = self._aux_spawn_steps[idx]
+            if episode_step - spawn_step < OFFROAD_DESPAWN_GRACE_STEPS:
+                self._offroad_streaks[idx] = 0
+                continue
+            if self._aux_is_off_road(vehicle):
+                self._offroad_streaks[idx] += 1
+            else:
+                self._offroad_streaks[idx] = 0
+            if self._offroad_streaks[idx] >= OFFROAD_DESPAWN_STREAK:
+                to_remove.append(idx)
+        for idx in reversed(to_remove):
+            reason = "crash_sidewalk" if bool(
+                getattr(self._aux_vehicles[idx], "crash_sidewalk", False)
+            ) else "off_road"
+            self._despawn_aux_at(idx, reason)
+
     def after_step(self, *args, **kwargs):
         for aux_vehicle in self._aux_vehicles:
             try:
                 aux_vehicle.after_step()
             except Exception:
                 pass
+        self._despawn_offroad_auxiliaries()
         return {}
 
     @property
@@ -405,7 +497,12 @@ class AuxiliaryAgentsManager(BaseManager):
 
     def get_status(self) -> dict:
         if not self._aux_vehicles:
-            return {"exists": False, "count": 0, "agents": []}
+            return {
+                "exists": False,
+                "count": 0,
+                "agents": [],
+                "despawned_offroad": self._despawned_offroad_count,
+            }
 
         agents = []
         for aux_vehicle, lane_index, destination, policy, convoy_pos in zip(
@@ -445,6 +542,7 @@ class AuxiliaryAgentsManager(BaseManager):
             "lanes_occupied": len(set(self._spawn_lane_indices)),
             "policy": self._policy,
             "agents": agents,
+            "despawned_offroad": self._despawned_offroad_count,
         }
 
 

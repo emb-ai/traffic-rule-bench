@@ -4,9 +4,11 @@
 Per-policy rules:
   IDM family ({idm, modified_idm, comprehensive_rule_expert}):
       5 ego-variants are run (default, s1, s2, s3, s4) → 5 baselines per policy.
-  NN policies ({rule_compliant, ppo_lidar, carl, carl_rule, plant2, plant2_rule}):
+  NN policies ({rule_compliant, ppo_lidar, carl, carl_rule, plant2, plant2_ft, plant2_rule}):
       1 baseline per policy (ego-variant does not apply).
-  Checkpoint required for: carl, carl_rule, plant2, plant2_rule.
+  Checkpoint required for: carl, carl_rule, plant2, plant2_ft, plant2_rule.
+  plant2_ft is an alias of plant2 that loads the finetuned checkpoint
+  (run_benchmark still gets --policy plant2).
 
 Supported input modes:
   1. Benchmark run folder:   --manifest <run_dir>  (reads <run_dir>/real_manifest.jsonl,
@@ -84,9 +86,11 @@ from pathlib import Path
 
 # Policy categories 
 IDM_FAMILY = {"idm", "modified_idm", "comprehensive_rule_expert"}
-NN_NEED_CHECKPOINT = {"carl", "carl_rule", "plant2", "plant2_rule"}
+NN_NEED_CHECKPOINT = {"carl", "carl_rule", "plant2", "plant2_ft", "plant2_rule"}
 NN_NO_CHECKPOINT = {"rule_compliant", "ppo_lidar"}
 ALL_POLICIES = IDM_FAMILY | NN_NEED_CHECKPOINT | NN_NO_CHECKPOINT
+# eval-only aliases → actual --policy passed to run_benchmark.py
+POLICY_ALIASES = {"plant2_ft": "plant2"}
 
 EGO_VARIANTS = ["default", "s1", "s2", "s3", "s4"]
 RUN_MANIFEST_NAME = "real_manifest.jsonl"
@@ -104,8 +108,9 @@ from lib.manifest_config import (
 DEFAULT_MODEL_PATHS: dict[str, Path] = {
     "carl": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
     "carl_rule": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
-    "plant2": CHECKPOINTS_DIR / "plant2_finetuned" / "plant2_supervised_2nd_final.pt",
-    "plant2_rule": CHECKPOINTS_DIR / "plant2_finetuned" / "plant2_supervised_2nd_final.pt",
+    "plant2": CHECKPOINTS_DIR / "plant2_pretrain" / "epoch=029_final_3.ckpt",
+    "plant2_rule": CHECKPOINTS_DIR / "plant2_pretrain" / "epoch=029_final_3.ckpt",
+    "plant2_ft": CHECKPOINTS_DIR / "plant2_finetuned" / "plant2_supervised_2nd_final.pt",
 }
 
 
@@ -128,9 +133,10 @@ def build_benchmark_cmd(
     output_dir: Path | None = None,
 ) -> list[str]:
     run_name = f"{policy}_{variant}"
+    bench_policy = POLICY_ALIASES.get(policy, policy)
     cmd = [
         sys.executable, str(BENCH_DIR / "run_benchmark.py"),
-        "--policy", policy,
+        "--policy", bench_policy,
         "--run-name", run_name,
         "--manifest", str(input_manifest),
         "--scenes-root", scenes_root,
@@ -145,7 +151,7 @@ def build_benchmark_cmd(
         cmd.append("--save-gifs")
     if policy in NN_NEED_CHECKPOINT:
         cmd += ["--model-path", model_paths[policy]]
-    if policy in ("plant2", "plant2_rule"):
+    if bench_policy in ("plant2", "plant2_rule"):
         cmd += ["--plant2-action-mode", plant2_action_mode]
     return cmd
 

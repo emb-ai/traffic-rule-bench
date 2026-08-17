@@ -55,6 +55,7 @@ auxiliary:
 gif:
   enabled: false
   policy: idm
+  model_path: null   # optional override; carl/plant2* use checkpoints/ defaults
   max_scenes: null
   dry_run: false
   hide_signs: true

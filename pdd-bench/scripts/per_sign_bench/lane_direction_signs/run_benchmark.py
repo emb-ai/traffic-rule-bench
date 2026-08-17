@@ -1689,26 +1689,55 @@ def run_one_episode(
                     apply_ego_sampled(policy_obj, sampled_ego_params)
                 else:
                     apply_ego_defaults(policy_obj)
-            # Arm peer LC + hold nav immediately so the merge starts from step 0
-            # (plain IDM baseline keeps the illegal connector route).
+            # Peer-LC for sign-aware policies. Nav-hold (stub [spawn, dest]) only
+            # for IDM-family — it keeps IDM off the injected connector, but
+            # truncates the drawn MetaDrive route. CaRL/PlanT2 keep full
+            # set_route checkpoints (APPLY_LANE_DIRS_NAV_HOLD=False).
             tln = row.get("target_lane_num")
+            _RULE_LC_POLICIES = frozenset({
+                "modified_idm",
+                "comprehensive_rule_expert",
+                "rule_compliant",
+                "carl_rule",
+                "plant2_rule",
+            })
+            _NAV_HOLD_POLICIES = frozenset({
+                "modified_idm",
+                "comprehensive_rule_expert",
+                "rule_compliant",
+            })
             if (
-                tln is not None
+                policy_type in _RULE_LC_POLICIES
+                and tln is not None
                 and hasattr(policy_obj, "_begin_lane_change_by_sumo_num")
-                and hasattr(policy_obj, "_hold_on_lane_until_lc")
             ):
                 try:
                     policy_obj._begin_lane_change_by_sumo_num(int(tln))
-                    ego_lane = getattr(base_env.vehicle, "lane", None)
-                    if ego_lane is not None:
-                        if policy_obj._hold_on_lane_until_lc(ego_lane):
-                            policy_obj._lane_dirs_hold_applied = True
+                    if (
+                        policy_type in _NAV_HOLD_POLICIES
+                        and hasattr(policy_obj, "_hold_on_lane_until_lc")
+                    ):
+                        ego_lane = getattr(base_env.vehicle, "lane", None)
+                        if ego_lane is not None:
+                            if policy_obj._hold_on_lane_until_lc(ego_lane):
+                                policy_obj._lane_dirs_hold_applied = True
+                    nav = getattr(base_env.vehicle, "navigation", None)
+                    n_ck = len(getattr(nav, "checkpoints", None) or [])
+                    hold = "with nav-hold" if policy_type in _NAV_HOLD_POLICIES else "MetaDrive nav kept"
                     print(
                         f"[LaneChange] armed LC spawn_L{approach_lane_num}→"
-                        f"target_L{int(tln)} at spawn_d={spawn_distance:.1f}m"
+                        f"target_L{int(tln)} at spawn_d={spawn_distance:.1f}m "
+                        f"({hold}, {n_ck} ckpts)"
                     )
                 except Exception:
                     pass
+            elif tln is not None:
+                nav = getattr(base_env.vehicle, "navigation", None)
+                n_ck = len(getattr(nav, "checkpoints", None) or [])
+                print(
+                    f"[LaneChangeNav] kept MetaDrive route ({n_ck} checkpoints) "
+                    f"for {policy_type} (no LC hold)"
+                )
 
         total_reward = 0.0
         violations = 0
@@ -1903,47 +1932,14 @@ def run_one_episode(
                 text_dict = {
                     "Step": step,
                     "Speed": f"{vehicle.speed_km_h:.2f} km/h",
-                    "Vehicle lane: ": vehicle.lane.index,
-                    "Current lane width: ": vehicle.lane.width,
-                    "Violations: ": sign_violations,
+                    "Violations": sign_violations,
                 }
-                try:
-                    hc = base_env.engine.global_config.get("highlight_connectors") or {}
-                    if hc.get("injected"):
-                        text_dict["Injected via (magenta)"] = ",".join(
-                            str(x).replace("lane_", "") for x in hc["injected"]
-                        )
-                    if hc.get("legal"):
-                        text_dict["Legal via (cyan)"] = ",".join(
-                            str(x).replace("lane_", "") for x in hc["legal"]
-                        )
-                except Exception:
-                    pass
-                
-                direction_signs = [
-                    sign for sign in sign_mgr.signs
-                    if isinstance(sign, LaneAllowedDirectionSign)
-                ] if sign_mgr is not None else []
-                text_dict["Direction signs"] = len(direction_signs)
-                if direction_signs:
-                    allowed = getattr(direction_signs[0], "ALLOWED_DIRS", None)
-                    if allowed is not None:
-                        text_dict["Allowed dirs"] = ",".join(sorted(allowed))
-
-            if current_violation_texts:
-                text_dict["Violation"] = current_violation_texts[0]
-                if len(current_violation_texts) > 1:
-                    text_dict["Violation +"] = f"+{len(current_violation_texts) - 1} more"
-            elif last_violation_texts:
-                text_dict["Last violation"] = last_violation_texts[0]
-                if len(last_violation_texts) > 1:
-                    text_dict["Last violation +"] = f"+{len(last_violation_texts) - 1} more"
 
             if save_gif:
                 try:
                     base_env.render(
                         mode="top_down",
-                        film_size=(2400, 2400), scaling=12.0,
+                        film_size=(4800, 4800), scaling=24.0,
                         screen_size=(800, 800),
                         semantic_map=True,
                         semantic_broken_line=True,

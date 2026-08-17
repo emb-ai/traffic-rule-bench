@@ -1345,9 +1345,25 @@ def run_one_episode(
         if spawn_distance > 0:
             _reposition_ego_before_lane_end(base_env, spawn_distance)
 
-        # Replace MetaDrive shortest (baseline) path with the compliant dual-path
-        # route before the policy loop — avoids mid-episode replan/teleport.
-        _install_direction_compliant_nav_route(base_env, row)
+        # Compliant dual-path detour only for sign-aware policies (avoids
+        # mid-episode replan/teleport). Plain baselines (idm, carl, plant2,
+        # ppo_lidar) keep MetaDrive's default shortest_path — as if no sign.
+        _COMPLIANT_NAV_POLICIES = frozenset({
+            "modified_idm",
+            "comprehensive_rule_expert",
+            "rule_compliant",
+            "carl_rule",
+            "plant2_rule",
+        })
+        if policy_type in _COMPLIANT_NAV_POLICIES:
+            _install_direction_compliant_nav_route(base_env, row)
+        else:
+            nav = getattr(base_env.vehicle, "navigation", None)
+            n_ck = len(getattr(nav, "checkpoints", None) or [])
+            print(
+                f"[DirectionNav] kept MetaDrive default route "
+                f"({n_ck} checkpoints) for {policy_type}"
+            )
 
         # Validate route: check that destination is different from spawn
         nav = getattr(base_env.vehicle, "navigation", None)
@@ -1605,35 +1621,14 @@ def run_one_episode(
                 text_dict = {
                     "Step": step,
                     "Speed": f"{vehicle.speed_km_h:.2f} km/h",
-                    "Vehicle lane: ": vehicle.lane.index,
-                    "Current lane width: ": vehicle.lane.width,
-                    "Violations: ": sign_violations,
+                    "Violations": sign_violations,
                 }
-                
-                direction_signs = [
-                    sign for sign in sign_mgr.signs
-                    if isinstance(sign, LaneAllowedDirectionSign)
-                ] if sign_mgr is not None else []
-                text_dict["Direction signs"] = len(direction_signs)
-                if direction_signs:
-                    allowed = getattr(direction_signs[0], "ALLOWED_DIRS", None)
-                    if allowed is not None:
-                        text_dict["Allowed dirs"] = ",".join(sorted(allowed))
-
-            if current_violation_texts:
-                text_dict["Violation"] = current_violation_texts[0]
-                if len(current_violation_texts) > 1:
-                    text_dict["Violation +"] = f"+{len(current_violation_texts) - 1} more"
-            elif last_violation_texts:
-                text_dict["Last violation"] = last_violation_texts[0]
-                if len(last_violation_texts) > 1:
-                    text_dict["Last violation +"] = f"+{len(last_violation_texts) - 1} more"
 
             if save_gif:
                 try:
                     base_env.render(
                         mode="top_down",
-                        film_size=(2400, 2400), scaling=12.0,
+                        film_size=(4800, 4800), scaling=24.0,
                         screen_size=(800, 800),
                         semantic_map=True,
                         semantic_broken_line=True,

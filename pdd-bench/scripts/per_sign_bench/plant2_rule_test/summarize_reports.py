@@ -97,6 +97,10 @@ def main() -> None:
             if len(keys) == 1:
                 m = pb[keys[0]]
                 baseline = keys[0]
+            elif len(pb) == 1:
+                baseline = next(iter(pb))
+                m = pb[baseline]
+                print(f"[info] {label}: using sole baseline {baseline!r}", file=sys.stderr)
             else:
                 print(f"[warn] {label}: baseline {args.baseline!r} not in {sorted(pb)}", file=sys.stderr)
                 missing.append(label)

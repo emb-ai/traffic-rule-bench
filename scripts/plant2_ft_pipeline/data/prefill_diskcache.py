@@ -73,8 +73,21 @@ def _log(msg: str, log_path: Path) -> None:
         f.write(line + "\n")
 
 
+def _cache_key(dataset, index: int) -> str:
+    """The key the dataset itself would use.
+
+    Under WPS_STRIDE>1 the dataset suffixes the key, since the stride changes
+    the stored waypoints. Recomputing the bare label here would look up an
+    entry that never exists: the base would count as missing right after being
+    filled, and the augmented variant would be skipped for every sample.
+    """
+    labels = dataset.labels[index]
+    key_fn = getattr(dataset, "_cache_key", None)
+    return key_fn(labels) if key_fn is not None else labels[0].decode()
+
+
 def _fill_one(dataset, cache, index: int, do_aug: bool) -> tuple[str, str]:
-    key = dataset.labels[index][0].decode()
+    key = _cache_key(dataset, index)
     old_tf = dataset.transform
     dataset.transform = None
     try:

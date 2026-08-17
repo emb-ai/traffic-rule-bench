@@ -51,6 +51,7 @@ python generate_manifest.py paths.experiment_name=my_experiment
 |-----------|---------|-------------|
 | `enabled` | `false` | Generate visualization GIFs |
 | `policy` | `idm` | Policy for GIF rendering |
+| `model_path` | `null` | Checkpoint override; `carl`/`plant2*` use `pdd-bench/checkpoints/` defaults |
 | `max_scenes` | `null` | Limit GIFs to generate |
 
 ## Output Structure

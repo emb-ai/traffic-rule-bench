@@ -11,6 +11,8 @@ Subclasses must implement:
 """
 
 import logging
+from typing import Optional
+
 import numpy as np
 
 from metadrive.utils.math import wrap_to_pi
@@ -63,6 +65,7 @@ FALLBACK_MIN_KMH = 5.0             # minimum speed when no safe lane found
 FALLBACK_FACTOR = 0.3              # speed multiplier when no safe lane found
 END_MAIN_ROAD_LOOKAHEAD = 30.0     # metres to start slowing before end-of-main-road
 STOP_PAST_THRESHOLD = 5.0          # metres past stop line before state resets
+YIELD_STOP_BEFORE_END_M = 5.0      # hold yield / RH-rule stop this far before lane end
 
 BRAKE_PROP_GAIN = 0.05             # proportional gain for braking
 BRAKE_BIAS = 0.15                  # constant offset for braking
@@ -104,6 +107,27 @@ DIRECTION_EXIT_GLIDE_MAX_STEP_M = 0.40
 DIRECTION_EXIT_GLIDE_MAX_TURN_RAD = np.radians(6.0)
 DIRECTION_EXIT_GLIDE_DONE_LAT_M = 0.4
 DIRECTION_EXIT_GLIDE_MAX_STEPS = 40  # safety: hard-snap if glide drags on
+
+# Mid-route U-turns on compliant no-turn (3.18.1 / 3.18.2) detours only.
+# Rule-based phases (PlanT2 opt-in via ``APPLY_UTURN_ZONE_ASSIST``):
+#   approach → mid-road (between own / oncoming) → 180° spin → release.
+# No body teleports. Not used for 3.19 / one-way / direction signs.
+UTURN_ZONE_LOOKAHEAD_M = 40.0
+UTURN_ZONE_SPEED_CAP_KMH = 4.0
+UTURN_ZONE_CREEP_KMH = 2.0
+UTURN_ZONE_MIN_KMH = 1.5  # crawl floor — keep moving, never freeze at the lip
+UTURN_ZONE_MAX_STEER = 1.0
+UTURN_ZONE_SOFT_STEER = 0.45  # far approach: stay on-lane, do not circle
+UTURN_ZONE_DESIRED_LAT_M = 1.2
+UTURN_ZONE_HOLD_STEPS = 70
+UTURN_ZONE_FORCE_NAV_REMAINING_M = 12.0
+UTURN_ZONE_CENTER_REMAINING_M = 12.0  # start drifting to mid-road
+UTURN_ZONE_SPIN_REMAINING_M = 5.0  # begin in-place 180° only near the via
+UTURN_ZONE_MIDROAD_TOL_M = 0.55
+UTURN_ZONE_SPIN_ALIGN_RAD = np.radians(20.0)
+UTURN_ZONE_SPIN_RAD_PER_STEP = np.radians(7.0)  # kinematic yaw while holding mid-road
+UTURN_ZONE_SPIN_HOLD_STEP_M = 0.18  # max XY correction toward mid per step
+UTURN_ZONE_MAX_STEERING_DEG = 90.0  # temporary vehicle limit for tight OSM U-turns
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +204,8 @@ class SignComplianceMixin:
     STOP_WAIT_STEPS = 30
     NO_STOP_MIN_SPEED_KMH = 5.0
     BRAKE_ACTION = -1.0
+    # Mid-route U-turn crawl/spin assist (3.18 detours). Opt-in — PlanT2 only.
+    APPLY_UTURN_ZONE_ASSIST = False
 
     # -- Subclass must implement these two --
     def _get_heading_pid(self):
@@ -216,10 +242,28 @@ class SignComplianceMixin:
         self._direction_exit_hold_steps = 0
         # One-way first hop: slow into the short connector.
         self._direction_exit_creep = False
+        # Set per-step when 5.7.x nav already avoids wrong-way lanes.
+        self._one_way_nav_clean = False
+        # Mid-route U-turn assist (3.18.1/3.18.2 only) — steering only.
+        self._no_turn_318_context = False
+        self._uturn_via_lane = None
+        self._uturn_source_lane = None
+        self._uturn_hold_lane = None
+        self._uturn_hold_steps = 0
+        self._uturn_bias = 0.0
+        self._uturn_phase = None  # "approach" | "center" | "spin"
+        self._uturn_spinning = False
+        self._uturn_spin_dir = None
+        self._uturn_spin_dir_flipped = False
+        self._uturn_saved_max_steering = None
         # 5.15.1: after the one post-LC compliant replan, never rewrite nav
         # again (NN policies often oscillate across peer lanes mid-merge).
         self._lane_dirs_nav_locked = False
         self._lane_dirs_hold_applied = False
+
+    # When True (IDM experts), stub nav to [lane, dest] during 5.15.1 peer LC
+    # so IDM does not dive into an injected connector. NN policies set False.
+    APPLY_LANE_DIRS_NAV_HOLD = True
 
     def _reset_sign_compliance(self):
         """Call on episode reset to clear stale state."""
@@ -240,6 +284,19 @@ class SignComplianceMixin:
         self._direction_exit_hold_lane = None
         self._direction_exit_hold_steps = 0
         self._direction_exit_creep = False
+        self._one_way_nav_clean = False
+        self._no_turn_318_context = False
+        self._restore_uturn_steering_limit()
+        self._uturn_via_lane = None
+        self._uturn_source_lane = None
+        self._uturn_hold_lane = None
+        self._uturn_hold_steps = 0
+        self._uturn_bias = 0.0
+        self._uturn_phase = None
+        self._uturn_spinning = False
+        self._uturn_spin_dir = None
+        self._uturn_spin_dir_flipped = False
+        self._uturn_saved_max_steering = None
 
     # ------------------------------------------------------------------
     # Helpers
@@ -849,6 +906,35 @@ class SignComplianceMixin:
             return True
 
         path = None
+        # CaRL/PlanT2: keep MetaDrive shortest_path (no dual-path edge rewrite).
+        # IDM experts still prefer compliant_edge_path — MetaDrive BFS often
+        # still picks a short illegal spur even after the peer LC.
+        use_metadrive = not getattr(self, "APPLY_LANE_DIRS_NAV_HOLD", True)
+        if use_metadrive:
+            try:
+                nav.set_route(start, destination)
+                path = list(getattr(nav, "checkpoints", None) or [])
+                if path and path[-1] == destination and len(path) >= 2:
+                    # Drop illegal first hops if MetaDrive still chose them.
+                    if blocked and self._sumo_route_uses_blocked_source_exit(
+                        nav, start, blocked
+                    ):
+                        path = None
+                    else:
+                        ok = True
+                        logger.info(
+                            "LaneDirections MetaDrive route: %s → %s via %d hops",
+                            start,
+                            destination,
+                            len(path),
+                        )
+                        self._rerouted_edges[cache_key] = True
+                        self._lane_dirs_nav_locked = True
+                        self._lane_dirs_hold_applied = False
+                        return True
+            except Exception:
+                path = None
+
         # Prefer waypoint edges from the dual-path crop — MetaDrive BFS often
         # still prefers a short illegal spur even after the peer LC.
         if edge_hint:
@@ -1436,6 +1522,675 @@ class SignComplianceMixin:
             1.0 - (remaining / max(DIRECTION_EXIT_LOOKAHEAD_M, 1.0)), 0.15, 1.0
         ))
         return float(np.clip((1.0 - weight) * steering + weight * exit_steer, -1.0, 1.0))
+
+    # ------------------------------------------------------------------
+    # Mid-route U-turn assist (no-turn 3.18 compliant detours)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _sumo_edge_from_lane_id(lane_id) -> Optional[str]:
+        if not isinstance(lane_id, str) or not lane_id.startswith("lane_"):
+            return None
+        raw = lane_id[5:]
+        if "_" not in raw:
+            return raw or None
+        edge, _ = raw.rsplit("_", 1)
+        return edge or None
+
+    @staticmethod
+    def _sumo_edges_are_reverse(a: str, b: str) -> bool:
+        """Opposite carriageways of the same OSM edge (incl. ``#segment``)."""
+        if not a or not b:
+            return False
+        return (
+            a.lstrip("-") == b.lstrip("-")
+            and a.startswith("-") != b.startswith("-")
+        )
+
+    @staticmethod
+    def _is_internal_lane_id(lane_id) -> bool:
+        if not isinstance(lane_id, str):
+            return False
+        return lane_id.startswith("lane_:") or lane_id.startswith(":")
+
+    def _clear_uturn_assist(self) -> None:
+        self._restore_uturn_steering_limit()
+        self._uturn_via_lane = None
+        self._uturn_source_lane = None
+        self._uturn_hold_lane = None
+        self._uturn_hold_steps = 0
+        self._uturn_bias = 0.0
+        self._uturn_phase = None
+        self._uturn_spinning = False
+        self._uturn_spin_dir = None
+        self._uturn_spin_dir_flipped = False
+
+    def _scene_has_no_turn_318(self) -> bool:
+        """True iff this episode has a 3.18.1 / 3.18.2 sign (not 3.19)."""
+        if getattr(self, "_no_turn_318_context", False):
+            return True
+        try:
+            return any(
+                isinstance(s, (NoRightTurnSign, NoLeftTurnSign))
+                for s in self._get_signs()
+            )
+        except Exception:
+            return False
+
+    def _boost_uturn_steering_limit(self) -> None:
+        """Temporarily widen vehicle max steering for a tight OSM U-turn."""
+        ego = self.control_object
+        if self._uturn_saved_max_steering is None:
+            self._uturn_saved_max_steering = getattr(ego, "max_steering", None)
+        try:
+            cur = float(getattr(ego, "max_steering", 50.0) or 50.0)
+            ego.max_steering = max(cur, float(UTURN_ZONE_MAX_STEERING_DEG))
+        except Exception:
+            pass
+
+    def _restore_uturn_steering_limit(self) -> None:
+        saved = getattr(self, "_uturn_saved_max_steering", None)
+        if saved is None:
+            return
+        try:
+            self.control_object.max_steering = saved
+        except Exception:
+            pass
+        self._uturn_saved_max_steering = None
+
+    def _find_uturn_next_hop(self, ego_lane, ckpts: list, cur_idx: int):
+        """Return (via_lane, bias) only for true U-turns (``dir=t`` / reverse)."""
+        if ego_lane is None or cur_idx + 1 >= len(ckpts):
+            return None, 0.0
+        next_id = ckpts[cur_idx + 1]
+        turn_dir = None
+        for turn in getattr(ego_lane, "turns", None) or []:
+            via_id = turn.get("via_lane")
+            to_id = turn.get("to_lane")
+            if via_id == next_id or to_id == next_id:
+                turn_dir = self._normalize_turn_dir(turn.get("direction"))
+                break
+        try:
+            via = self.engine.current_map.road_network.get_lane(next_id)
+        except Exception:
+            via = None
+        if turn_dir == "t" and via is not None:
+            return via, 0.85
+
+        cur_edge = self._sumo_edge_from_lane_id(getattr(ego_lane, "index", None))
+        probe_ids = [next_id]
+        if self._is_internal_lane_id(next_id) and cur_idx + 2 < len(ckpts):
+            probe_ids.append(ckpts[cur_idx + 2])
+        for pid in probe_ids:
+            nxt_edge = self._sumo_edge_from_lane_id(pid)
+            if cur_edge and nxt_edge and self._sumo_edges_are_reverse(cur_edge, nxt_edge):
+                if via is not None:
+                    return via, 0.85
+
+        # Heading reversal across a short via (~U-turn geometry).
+        try:
+            if via is None:
+                return None, 0.0
+            via_len = float(getattr(via, "length", 0.0) or 0.0)
+            if via_len > 16.0:
+                return None, 0.0
+            h0 = float(ego_lane.heading_theta_at(max(0.0, float(ego_lane.length) - 0.5)))
+            h1 = float(via.heading_theta_at(min(1.0, max(0.2, via_len * 0.55))))
+            if abs(float(wrap_to_pi(h1 - h0))) >= (130.0 * np.pi / 180.0):
+                return via, 0.85
+        except Exception:
+            pass
+        return None, 0.0
+
+    def _arm_uturn_from_nav(self) -> bool:
+        """Arm mid-route U-turn assist from current nav next-hop.
+
+        Only for 3.18.1 / 3.18.2 scenes (plant2 opt-in). Never for 3.19 /
+        one-way / direction signs.
+        """
+        if not getattr(self, "APPLY_UTURN_ZONE_ASSIST", False):
+            return False
+        if not self._scene_has_no_turn_318():
+            return False
+        if self._uturn_via_lane is not None:
+            # Sticky until `_clear_uturn_assist`: re-arming on the connector
+            # would replace the via with the reverse carriageway.
+            return True
+        if self._uturn_hold_steps > 0 and self._uturn_via_lane is not None:
+            return True
+        # First signed exit owns the approach until it snaps/clears.
+        if (
+            self._direction_exit_lane is not None
+            and not self._direction_exit_snapped
+        ):
+            return False
+        # While still physically on the first-exit hold lane, do not steal
+        # steering. Once ego is past it (e.g. on the U-turn approach), arm.
+        if self._direction_exit_hold_steps > 0:
+            hold = self._direction_exit_hold_lane
+            ego_lane = getattr(self.control_object, "lane", None)
+            if hold is not None and ego_lane is not None and (
+                same_lane(ego_lane, hold) or on_same_road(ego_lane, hold)
+            ):
+                return False
+
+        ego = self.control_object
+        nav = getattr(ego, "navigation", None)
+        lane = getattr(ego, "lane", None)
+        if nav is None or lane is None or not self._is_sumo_edge_nav(nav):
+            return False
+        ckpts = list(getattr(nav, "checkpoints", None) or [])
+        cur_id = getattr(lane, "index", None)
+        if not isinstance(cur_id, str) or cur_id not in ckpts:
+            return False
+        try:
+            cur_idx = ckpts.index(cur_id)
+        except ValueError:
+            return False
+
+        via, bias = self._find_uturn_next_hop(lane, ckpts, cur_idx)
+        if via is None:
+            return False
+
+        self._uturn_via_lane = via
+        self._uturn_source_lane = lane
+        self._uturn_bias = float(bias)
+        self._uturn_phase = "approach"
+        return True
+
+    def _uturn_spin_dir_from_geometry(self, via, src, rev) -> float:
+        """Pick the U-turn steer sign from via curvature / lateral offset.
+
+        Shortest-path heading to reverse is ambiguous near ±180° and often
+        picks the wrong side → OOR. Via bend / side-of-road is stable.
+        Convention (this codebase): ``steer = -heading_err`` so negative
+        steer increases heading (CCW).
+        """
+        # 1) Via curvature: which way the connector bends.
+        if via is not None:
+            try:
+                via_len = float(getattr(via, "length", 0.0) or 0.0)
+                if via_len > 0.4:
+                    h0 = float(via.heading_theta_at(min(0.35, via_len * 0.15)))
+                    h1 = float(via.heading_theta_at(
+                        min(via_len - 0.05, max(via_len * 0.55, via_len * 0.35))
+                    ))
+                    dh = float(wrap_to_pi(h1 - h0))
+                    if abs(dh) >= (12.0 * np.pi / 180.0):
+                        return -1.0 if dh > 0.0 else 1.0
+            except Exception:
+                pass
+
+        # 2) Which side of the approach the via sits on.
+        # Empiric on SUMO EdgeRoadNetwork: negative action → +lane.lat.
+        if via is not None and src is not None:
+            try:
+                via_len = float(getattr(via, "length", 1.0) or 1.0)
+                aim = min(max(0.4, via_len * 0.45), max(0.3, via_len - 0.1))
+                _, via_lat = src.local_coordinates(via.position(aim, 0))
+                if abs(float(via_lat)) >= 0.25:
+                    return -1.0 if float(via_lat) > 0.0 else 1.0
+            except Exception:
+                pass
+
+        # 3) Cross product approach_heading × (via - ego) in XY.
+        if via is not None:
+            try:
+                ego = self.control_object
+                pos = np.asarray(ego.position, dtype=float)[:2]
+                via_len = float(getattr(via, "length", 1.0) or 1.0)
+                tgt = np.asarray(
+                    via.position(min(via_len * 0.5, max(0.3, via_len - 0.1)), 0),
+                    dtype=float,
+                )[:2]
+                delta = tgt - pos
+                if src is not None:
+                    long_a, _ = src.local_coordinates(ego.position)
+                    hx = float(np.cos(src.heading_theta_at(
+                        min(float(src.length) - 0.1, max(0.0, float(long_a)))
+                    )))
+                    hy = float(np.sin(src.heading_theta_at(
+                        min(float(src.length) - 0.1, max(0.0, float(long_a)))
+                    )))
+                else:
+                    hx = float(np.cos(ego.heading_theta))
+                    hy = float(np.sin(ego.heading_theta))
+                cross = hx * float(delta[1]) - hy * float(delta[0])
+                if abs(cross) >= 1e-3:
+                    # Positive cross = target left of heading = CCW = neg steer.
+                    return -1.0 if cross > 0.0 else 1.0
+            except Exception:
+                pass
+
+        return 1.0 if self._uturn_bias >= 0 else -1.0
+
+    def _uturn_pure_pursuit_steer(
+        self, ego, via, fallback_steer: float, *, aggressive: bool = True
+    ) -> float:
+        """Steer toward a point ahead on the U-turn via (smooth, no teleport)."""
+        try:
+            via_len = float(getattr(via, "length", 1.0) or 1.0)
+            # Close: aim deep into the hook. Far: aim near via entry so we
+            # drive along the approach instead of spinning toward mid-via.
+            if aggressive:
+                aim_s = min(max(0.8, via_len * 0.75), max(0.5, via_len - 0.1))
+            else:
+                aim_s = min(0.6, max(0.2, via_len * 0.15))
+            target = np.asarray(via.position(aim_s, 0), dtype=float)[:2]
+            pos = np.asarray(ego.position, dtype=float)[:2]
+            delta = target - pos
+            dist = float(np.linalg.norm(delta))
+            if dist < 1e-4:
+                return float(np.clip(fallback_steer, -1.0, 1.0))
+            desired_heading = float(np.arctan2(delta[1], delta[0]))
+            heading_err = wrap_to_pi(desired_heading - float(ego.heading_theta))
+            if aggressive:
+                if dist < 5.0:
+                    gain = 4.0
+                elif dist < 10.0:
+                    gain = 3.2
+                else:
+                    gain = 2.4
+                bias = 0.55 * float(self._uturn_bias)
+                cap = UTURN_ZONE_MAX_STEER
+            else:
+                gain = 1.1
+                bias = 0.15 * float(self._uturn_bias)
+                cap = UTURN_ZONE_SOFT_STEER
+            steer = gain * (-heading_err) + bias
+            return float(np.clip(steer, -cap, cap))
+        except Exception:
+            return float(np.clip(fallback_steer, -1.0, 1.0))
+
+    def _uturn_follow_approach_steer(self, ego, src, via, steering: float) -> float:
+        """Stay on the approach lane and ease toward the via entry."""
+        try:
+            long, lat = src.local_coordinates(ego.position)
+            # Look ahead along the approach toward the via.
+            aim = min(float(src.length) - 0.1, max(0.5, float(long) + 4.0))
+            heading = src.heading_theta_at(aim)
+            heading_err = wrap_to_pi(heading - ego.heading_theta)
+            desired_lat = 0.0
+            try:
+                _, via_lat = src.local_coordinates(via.position(0.3, 0))
+                desired_lat = float(np.clip(
+                    via_lat, -UTURN_ZONE_DESIRED_LAT_M, UTURN_ZONE_DESIRED_LAT_M
+                ))
+            except Exception:
+                desired_lat = (
+                    -0.6 * UTURN_ZONE_DESIRED_LAT_M
+                    if self._uturn_bias >= 0
+                    else 0.6 * UTURN_ZONE_DESIRED_LAT_M
+                )
+            lat_err = float(lat) - desired_lat
+            lane_steer = 1.6 * (-heading_err) + 0.9 * lat_err
+            pp = self._uturn_pure_pursuit_steer(
+                ego, via, steering, aggressive=False
+            )
+            # Prefer lane following far out; mild via pull only.
+            steer = 0.75 * lane_steer + 0.25 * pp
+            return float(np.clip(
+                steer, -UTURN_ZONE_SOFT_STEER, UTURN_ZONE_SOFT_STEER
+            ))
+        except Exception:
+            return self._uturn_pure_pursuit_steer(
+                ego, via, steering, aggressive=False
+            )
+
+    def _uturn_reverse_lane_after_via(self):
+        """Lane after the U-turn via on the nav path (opposite carriageway)."""
+        via = self._uturn_via_lane
+        if via is None:
+            return None
+        nav = getattr(self.control_object, "navigation", None)
+        if nav is None or not self._is_sumo_edge_nav(nav):
+            return None
+        ckpts = list(getattr(nav, "checkpoints", None) or [])
+        via_id = getattr(via, "index", None)
+        if not isinstance(via_id, str) or via_id not in ckpts:
+            return None
+        try:
+            idx = ckpts.index(via_id)
+        except ValueError:
+            return None
+        rn = self.engine.current_map.road_network
+        for pid in ckpts[idx + 1 : idx + 3]:
+            if self._is_internal_lane_id(pid):
+                continue
+            try:
+                return rn.get_lane(pid)
+            except Exception:
+                return None
+        return None
+
+    def _uturn_midroad_target(self, src, rev, via, *, at_via: bool = False):
+        """World XY of the mid-road point between approach and oncoming.
+
+        Halfway between the approach centerline and the reverse carriageway.
+        Default: at the ego's current longitudinal position (lateral mid-road).
+        ``at_via=True``: at the U-turn via entry (used only as a far waypoint).
+        """
+        ego = self.control_object
+        try:
+            if at_via and via is not None:
+                via_len = float(getattr(via, "length", 1.0) or 1.0)
+                anchor = np.asarray(via.position(min(0.4, via_len * 0.2), 0), dtype=float)[:2]
+            else:
+                anchor = np.asarray(ego.position, dtype=float)[:2]
+        except Exception:
+            anchor = np.asarray(ego.position, dtype=float)[:2]
+
+        p_src = None
+        p_rev = None
+        if src is not None:
+            try:
+                long_s, _ = src.local_coordinates(anchor)
+                long_s = float(np.clip(long_s, 0.0, max(0.1, float(src.length) - 0.1)))
+                p_src = np.asarray(src.position(long_s, 0), dtype=float)[:2]
+            except Exception:
+                p_src = None
+        if rev is not None:
+            try:
+                long_r, _ = rev.local_coordinates(anchor if p_src is None else p_src)
+                long_r = float(np.clip(long_r, 0.0, max(0.1, float(rev.length) - 0.1)))
+                p_rev = np.asarray(rev.position(long_r, 0), dtype=float)[:2]
+            except Exception:
+                p_rev = None
+
+        if p_src is not None and p_rev is not None:
+            return 0.5 * (p_src + p_rev)
+        if p_src is not None and via is not None:
+            try:
+                via_len = float(getattr(via, "length", 1.0) or 1.0)
+                p_via = np.asarray(
+                    via.position(min(via_len * 0.35, max(0.3, via_len - 0.1)), 0),
+                    dtype=float,
+                )[:2]
+                return 0.5 * (p_src + p_via)
+            except Exception:
+                return p_src
+        if p_src is not None:
+            return p_src
+        return anchor
+
+    def _uturn_steer_toward_xy(self, ego, target_xy, *, gain: float, cap: float) -> float:
+        pos = np.asarray(ego.position, dtype=float)[:2]
+        delta = np.asarray(target_xy, dtype=float)[:2] - pos
+        dist = float(np.linalg.norm(delta))
+        if dist < 1e-4:
+            return 0.0
+        desired = float(np.arctan2(delta[1], delta[0]))
+        heading_err = float(wrap_to_pi(desired - float(ego.heading_theta)))
+        return float(np.clip(gain * (-heading_err), -cap, cap))
+
+    def _uturn_phase_approach_steer(self, ego, src, via, steering: float) -> float:
+        """Mostly plant2 on approach; curb guard only when drifting wide.
+
+        Continuous centerline P weaves. Pure plant2 walks off ~3 m OSM roads
+        (lat → ±4). Soft graduated guard: no touch near center, stronger only
+        as |lat| grows.
+        """
+        steer = float(steering)
+        if src is not None:
+            try:
+                long_a, lat_a = src.local_coordinates(ego.position)
+                rem = float(src.length) - float(long_a)
+                lat_a = float(lat_a)
+            except Exception:
+                rem = None
+                lat_a = None
+            self._force_nav_onto_lane(src)
+            if rem is not None and rem <= 18.0:
+                self._cap_speed(max(UTURN_ZONE_SPEED_CAP_KMH, 5.0))
+            if rem is not None and rem <= 14.0:
+                self._cap_speed(UTURN_ZONE_CREEP_KMH)
+                self._raise_floor(UTURN_ZONE_MIN_KMH)
+            # Empiric MetaDrive: positive steer decreases lane.lat.
+            if lat_a is not None:
+                abs_lat = abs(lat_a)
+                if abs_lat <= 0.40:
+                    pass  # plant2 free near center
+                elif abs_lat <= 0.85:
+                    corr = float(np.clip(0.9 * lat_a, -0.22, 0.22))
+                    steer = 0.75 * steer + 0.25 * corr
+                else:
+                    corr = float(np.clip(1.3 * lat_a, -0.55, 0.55))
+                    steer = 0.25 * steer + 0.75 * corr
+        return float(np.clip(steer, -1.0, 1.0))
+
+    def _uturn_phase_center_steer(self, ego, src, via, rev, steering: float) -> float:
+        """Drift onto the mid-road strip between approach and oncoming.
+
+        Lateral error dominates — heading-keep at crawl speed previously
+        overshot mid-road all the way to lat≈±4 (OOR) on narrow OSM.
+        """
+        self._cap_speed(UTURN_ZONE_CREEP_KMH)
+        self._raise_floor(UTURN_ZONE_MIN_KMH)
+        if src is not None:
+            self._force_nav_onto_lane(src)
+        desired_lat = 0.0
+        try:
+            mid = self._uturn_midroad_target(src, rev, via, at_via=False)
+            if src is not None:
+                _, desired_lat = src.local_coordinates(mid)
+                # Do not ask for more than ~half a lane toward the median.
+                desired_lat = float(np.clip(desired_lat, -1.15, 1.15))
+        except Exception:
+            desired_lat = 0.0
+        try:
+            long_a, lat_a = src.local_coordinates(ego.position)
+            aim = min(float(src.length) - 0.1, max(0.5, float(long_a) + 2.0))
+            h_err = float(wrap_to_pi(
+                float(src.heading_theta_at(aim)) - float(ego.heading_theta)
+            ))
+            lat_err = float(lat_a) - float(desired_lat)
+            # Empiric: positive steer decreases lane.lat. Lat first, mild heading.
+            steer = 0.5 * (-h_err) + 1.6 * lat_err
+            return float(np.clip(steer, -0.45, 0.45))
+        except Exception:
+            mid = self._uturn_midroad_target(src, rev, via, at_via=False)
+            return self._uturn_steer_toward_xy(
+                ego, mid, gain=1.4, cap=0.45
+            )
+
+    def _uturn_phase_spin_steer(self, ego, via, rev, steering: float) -> float:
+        """In-place 180° yaw at mid-road until aligned with the opposite lane.
+
+        Ackermann full-lock on ~3 m OSM roads sweeps into the curb. Instead:
+        hold XY near the mid-road point and rotate heading kinematically
+        (same pattern as direction-exit glide), then release to plant2.
+        """
+        self._uturn_spinning = True
+        # Near-stop: no forward crawl that would arc off the mid-road.
+        self._cap_speed(0.6)
+        src = self._uturn_source_lane
+        if self._uturn_spin_dir is None:
+            self._uturn_spin_dir = self._uturn_spin_dir_from_geometry(via, src, rev)
+
+        mid = self._uturn_midroad_target(src, rev, via, at_via=False)
+        try:
+            pos = np.asarray(ego.position, dtype=float)[:2]
+            delta = np.asarray(mid, dtype=float)[:2] - pos
+            dist = float(np.linalg.norm(delta))
+            if dist > 1e-4:
+                step = delta * (
+                    min(UTURN_ZONE_SPIN_HOLD_STEP_M, dist) / dist
+                )
+                ego.set_position(pos + step)
+            # Kill residual velocity so the hold does not fight physics.
+            try:
+                ego.set_velocity([1.0, 0.0], 0.0)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        # Target heading = reverse carriageway (or approach + π).
+        target_h = None
+        if rev is not None:
+            try:
+                long_r, _ = rev.local_coordinates(ego.position)
+                aim = min(
+                    float(rev.length) - 0.1,
+                    max(0.5, float(long_r) + 1.5),
+                )
+                target_h = float(rev.heading_theta_at(aim))
+                self._force_nav_onto_lane(rev)
+            except Exception:
+                target_h = None
+        if target_h is None and src is not None:
+            try:
+                long_a, _ = src.local_coordinates(ego.position)
+                h0 = float(src.heading_theta_at(
+                    min(float(src.length) - 0.1, max(0.0, float(long_a)))
+                ))
+                target_h = float(wrap_to_pi(h0 + np.pi))
+            except Exception:
+                target_h = None
+
+        if target_h is not None:
+            err = float(wrap_to_pi(target_h - float(ego.heading_theta)))
+            if abs(err) < UTURN_ZONE_SPIN_ALIGN_RAD:
+                self._clear_uturn_assist()
+                return float(np.clip(steering, -1.0, 1.0))
+            # Prefer geometric shortest remaining yaw; fall back to locked dir.
+            if abs(err) > (np.pi * 0.5) and self._uturn_spin_dir is not None:
+                # Keep committed side once past 90° so we do not dither.
+                dh = -float(np.sign(self._uturn_spin_dir)) * UTURN_ZONE_SPIN_RAD_PER_STEP
+            else:
+                dh = float(np.clip(
+                    err, -UTURN_ZONE_SPIN_RAD_PER_STEP, UTURN_ZONE_SPIN_RAD_PER_STEP
+                ))
+            try:
+                ego.set_heading_theta(float(ego.heading_theta) + dh)
+            except Exception:
+                pass
+        else:
+            # No reverse geometry — yaw by locked spin dir.
+            try:
+                dh = -float(self._uturn_spin_dir) * UTURN_ZONE_SPIN_RAD_PER_STEP
+                ego.set_heading_theta(float(ego.heading_theta) + dh)
+            except Exception:
+                pass
+
+        if via is not None:
+            self._force_nav_onto_lane(via)
+        # Steering unused during kinematic spin; return mild lock for logging.
+        return float(np.clip(
+            float(self._uturn_spin_dir or 0.0) * 0.3, -0.3, 0.3
+        ))
+
+    def _maybe_override_steering_for_uturn_zone(self, steering: float) -> float:
+        """Rule-based mid-route U-turn for 3.18 detours (PlanT2 only).
+
+        Phases:
+          1. approach — plant2 steers; we only soft-cap speed
+          2. center   — move to mid-road (between own / oncoming)
+          3. spin     — in-place ~180° until aligned with reverse lane
+          4. release  — clear assist, resume base policy
+        """
+        if not getattr(self, "APPLY_UTURN_ZONE_ASSIST", False):
+            return float(np.clip(steering, -1.0, 1.0))
+        if not self._scene_has_no_turn_318():
+            return float(np.clip(steering, -1.0, 1.0))
+
+        # U-turn assist outranks an in-progress lane-change once armed.
+        if self._lc_target_lane is not None and self._uturn_via_lane is None:
+            return float(np.clip(steering, -1.0, 1.0))
+
+        ego = self.control_object
+        self._arm_uturn_from_nav()
+        via = self._uturn_via_lane
+        if via is None:
+            return float(np.clip(steering, -1.0, 1.0))
+
+        self._boost_uturn_steering_limit()
+        ego_lane = getattr(ego, "lane", None)
+        rev = self._uturn_reverse_lane_after_via()
+        src = self._uturn_source_lane
+        phase = getattr(self, "_uturn_phase", None) or "approach"
+
+        approach_rem = None
+        if src is not None:
+            try:
+                long_a, _ = src.local_coordinates(ego.position)
+                approach_rem = float(src.length) - float(long_a)
+            except Exception:
+                approach_rem = None
+        geo_near_via = False
+        try:
+            long_v, lat_v = via.local_coordinates(ego.position)
+            geo_near_via = (
+                float(long_v) >= -0.8
+                and float(long_v) <= float(via.length) + 1.5
+                and abs(float(lat_v)) <= 2.5
+            )
+        except Exception:
+            geo_near_via = False
+
+        # Lateral-only distance to mid-road at current long (not via waypoint).
+        mid_dist = 99.0
+        try:
+            mid = self._uturn_midroad_target(src, rev, via, at_via=False)
+            if src is not None:
+                _, cur_lat = src.local_coordinates(ego.position)
+                _, mid_lat = src.local_coordinates(mid)
+                mid_dist = abs(float(cur_lat) - float(mid_lat))
+            else:
+                mid_dist = float(np.linalg.norm(
+                    np.asarray(ego.position, dtype=float)[:2]
+                    - np.asarray(mid, dtype=float)[:2]
+                ))
+        except Exception:
+            mid_dist = 99.0
+
+        # Sticky phase advances only forward.
+        if phase == "approach":
+            if (
+                geo_near_via
+                or same_lane(ego_lane, via)
+                or (
+                    approach_rem is not None
+                    and approach_rem <= UTURN_ZONE_CENTER_REMAINING_M
+                )
+            ):
+                phase = "center"
+        if phase == "center":
+            # Spin only at the U-turn location (near via), after mid-road.
+            at_uturn = geo_near_via or (
+                approach_rem is not None
+                and approach_rem <= UTURN_ZONE_SPIN_REMAINING_M
+            )
+            centered = mid_dist <= (UTURN_ZONE_MIDROAD_TOL_M + 0.35)
+            if at_uturn and centered:
+                phase = "spin"
+            elif at_uturn and (
+                approach_rem is not None
+                and approach_rem <= max(2.0, UTURN_ZONE_SPIN_REMAINING_M - 2.0)
+            ):
+                # Very close to via — spin even if mid-road not perfect.
+                phase = "spin"
+        if getattr(self, "_uturn_spinning", False):
+            phase = "spin"
+        self._uturn_phase = phase
+
+        # False reverse localization mid-approach: glue nav, keep plant2 steer.
+        if (
+            phase == "approach"
+            and rev is not None
+            and ego_lane is not None
+            and on_same_road(ego_lane, rev)
+            and src is not None
+        ):
+            self._force_nav_onto_lane(src)
+
+        if phase == "spin":
+            return self._uturn_phase_spin_steer(ego, via, rev, steering)
+        if phase == "center":
+            return self._uturn_phase_center_steer(ego, src, via, rev, steering)
+
+        # Approach: plant2 steering + optional speed soft-cap only.
+        return self._uturn_phase_approach_steer(ego, src, via, steering)
 
     # ------------------------------------------------------------------
     # Sign handlers — speed
@@ -2047,6 +2802,16 @@ class SignComplianceMixin:
             return
         veh_long = self._veh_long(sign.lane)
         approach = self._approach_dist(0.0)
+        # Explicit stop line (StopSign) or default: stop 5 m before the lane end /
+        # intersection entry, matching roundabout / right-hand yield behaviour.
+        stop_long = getattr(sign, "stop_line_position", None)
+        if stop_long is None:
+            stop_long = float(sign.lane.length) - YIELD_STOP_BEFORE_END_M
+        stop_long = max(
+            float(sign.zone_start),
+            min(float(stop_long), float(sign.lane.length) - 0.5),
+        )
+
         if veh_long < sign.zone_start:
             if 0 < (sign.zone_start - veh_long) < approach:
                 has_traffic, _ = sign._check_main_road_traffic(self.control_object)
@@ -2056,7 +2821,12 @@ class SignComplianceMixin:
         if not (sign.zone_start <= veh_long <= sign.zone_end):
             return
         has_traffic, _ = sign._check_main_road_traffic(self.control_object)
-        if has_traffic:
+        if not has_traffic:
+            return
+        # Brake toward / hold at the stop line; do not creep into the junction.
+        if veh_long >= stop_long - 0.35:
+            self._cap_speed(0.001)
+        elif 0 < (stop_long - veh_long) < approach:
             self._cap_speed(0.001)
 
     def _handle_main_road(self, sign):
@@ -2101,19 +2871,31 @@ class SignComplianceMixin:
             # carriageway must NEVER be driven (no oncoming lane exists).
             # Prefer the compliant route already installed at episode start
             # (one_way_signs.run_benchmark._install_one_way_compliant_nav_route).
-            # Replan only if nav still touches wrong-way lanes; always arm the
-            # first allowed exit for steering (position snap is off for OneWay).
+            #
+            # When nav is already clean: do NOT arm direction-exit creep/steer
+            # and skip hard intersection-priority braking this step. Arming from
+            # spawn (often ≤20 m to junction) + continuous cross-traffic yield
+            # (_cap_speed 0.001) stalls CaRL/PlanT2 (~12 m / 1500 steps) while
+            # the same compliant path with APPLY_RULE_OVERLAY=False succeeds.
+            # Intervene only if the route still touches the wrong-way carriageway.
             forbidden_edges = getattr(sign, "one_way_forbidden_edges", None)
             if forbidden_edges:
                 wrong_lanes = self._lanes_on_edges(forbidden_edges)
                 if wrong_lanes:
                     ckpts = list(getattr(nav, "checkpoints", None) or [])
-                    if any(ck in wrong_lanes for ck in ckpts):
+                    dirty = any(ck in wrong_lanes for ck in ckpts)
+                    if dirty:
                         self._reroute_sumo_avoiding_lanes(wrong_lanes)
-                    self._arm_direction_exit_from_sign(sign)
+                        self._arm_direction_exit_from_sign(sign)
+                    else:
+                        self._one_way_nav_clean = True
                     return
-            self._reroute_sumo_for_direction_sign(sign)
-            self._arm_direction_exit_from_sign(sign)
+            # No-turn / missing forbidden_edges: replan+arm only when the first
+            # hop from the signed approach is still a blocked exit.
+            source_id = getattr(sign.lane, "index", None)
+            if self._sumo_route_uses_blocked_source_exit(nav, source_id, blocked):
+                self._reroute_sumo_for_direction_sign(sign)
+                self._arm_direction_exit_from_sign(sign)
             return
 
         turns = getattr(sign.lane, "turns", [])
@@ -2208,7 +2990,10 @@ class SignComplianceMixin:
                     )
                     for lid in blocked:
                         self._blocked_lanes.add(lid)
-                    if not getattr(self, "_lane_dirs_hold_applied", False):
+                    if (
+                        getattr(self, "APPLY_LANE_DIRS_NAV_HOLD", True)
+                        and not getattr(self, "_lane_dirs_hold_applied", False)
+                    ):
                         if self._hold_on_lane_until_lc(
                             self.control_object.lane, blocked
                         ):
@@ -2618,6 +3403,10 @@ class SignComplianceMixin:
                 and getattr(self, "_direction_exit_creep", False)):
             self._cap_speed(8.0)
         self._no_overtaking_active = False
+        # Sticky within a step: any 3.18.1/3.18.2 sign in this scene.
+        # Cleared each `_process_signs` call; re-set when those signs are seen.
+        self._no_turn_318_context = False
+        self._one_way_nav_clean = False
 
         for sign in self._get_signs():
             try:
@@ -2654,7 +3443,12 @@ class SignComplianceMixin:
                     self._handle_yield_sign(sign)
                 elif isinstance(sign, EndMainRoadSign):
                     self._handle_end_main_road(sign)
-                elif isinstance(sign, (NoRightTurnSign, NoLeftTurnSign, NoUTurnSign)):
+                elif isinstance(sign, (NoRightTurnSign, NoLeftTurnSign)):
+                    # 3.18.1 / 3.18.2 only — enables mid-route U-turn assist.
+                    self._no_turn_318_context = True
+                    self._handle_no_turn(sign)
+                elif isinstance(sign, NoUTurnSign):
+                    # 3.19: same turn blocking, but no mid-route U-turn assist.
                     self._handle_no_turn(sign)
                 elif isinstance(sign, OneWayEntrySign):
                     self._handle_no_turn(sign)
@@ -2672,8 +3466,11 @@ class SignComplianceMixin:
                 logger.debug("Error processing %s: %s", type(sign).__name__, exc)
 
         self._process_rules()
-        self._handle_intersection_priority()       # PG (RoadPriorityAssigner)
-        self._handle_intersection_priority_sumo()  # SUMO (lane.turns[i]["priority"])
+        # Pre-installed one-way compliant nav: skip hard priority yield so
+        # continuous cross-traffic cannot freeze NN policies at the approach.
+        if not getattr(self, "_one_way_nav_clean", False):
+            self._handle_intersection_priority()       # PG (RoadPriorityAssigner)
+            self._handle_intersection_priority_sumo()  # SUMO (lane.turns[i]["priority"])
         # Keep / apply the direction-exit snap *before* base IDM steering so
         # routing_target_lane and current_lane see the allowed via this step.
         self._maybe_snap_to_direction_exit()

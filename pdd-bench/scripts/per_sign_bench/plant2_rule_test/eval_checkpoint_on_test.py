@@ -235,15 +235,6 @@ def main() -> None:
     )
     ap.add_argument("--jobs", type=int, default=8, help="eval_pipeline --jobs (per-scene workers)")
     ap.add_argument(
-        "--scenes-per-job",
-        type=int,
-        default=1,
-        help=(
-            "scenes handled by one run_benchmark.py process "
-            "(forwarded to eval_pipeline; default: 1)"
-        ),
-    )
-    ap.add_argument(
         "--n-scenes",
         "--max-scenes",
         dest="n_scenes",
@@ -329,14 +320,8 @@ def main() -> None:
     work_dir = args.work_dir or (HERE / "work" / args.run_name)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.scenes_per_job < 1:
-        sys.exit("--scenes-per-job must be >= 1")
-
     print(f"Selected {len(jobs)} job(s); work_dir={work_dir}")
-    print(
-        f"Policies: {args.policies}  jobs={args.jobs}  "
-        f"scenes_per_job={args.scenes_per_job}  n_scenes={args.n_scenes}"
-    )
+    print(f"Policies: {args.policies}  jobs={args.jobs}  n_scenes={args.n_scenes}")
     print(f"model-paths: {args.model_paths}")
     print(f"Output root: {HERE / 'output' / args.run_name}")
 
@@ -390,8 +375,6 @@ def main() -> None:
             str(out / "eval_out"),
             "--jobs",
             str(args.jobs),
-            "--scenes-per-job",
-            str(args.scenes_per_job),
             "--plant2-action-mode",
             args.plant2_action_mode,
         ]

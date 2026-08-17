@@ -43,11 +43,13 @@ from lib.auxiliary_agent import (
     MIN_SPAWN_LONGITUDE_M,
     add_auxiliary_agents,
     filter_lane_keys_in_road_network,
+    ordered_ring_lane_cycle,
     resolve_aux_destination_lane_key,
     resolve_aux_spawn_plan,
     select_occupied_main_lanes,
     select_spawnable_lanes,
 )
+from lib.lane_keys import lane_num_from_key
 from lib.manifest_config import DEFAULT_AUX_LANES_OCCUPIED_MAX
 from lib.junction_sign_placement import (
     SIGN_SHOULDER_OFFSET_M,
@@ -1265,6 +1267,7 @@ def run_one_episode(
     aux_convoy_size: int = DEFAULT_CONVOY_SIZE,
     aux_convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
     aux_lanes_occupied: int = DEFAULT_AUX_LANES_OCCUPIED_MAX,
+    aux_loop_ring: bool = True,
     record_episode: bool = False,
 ) -> dict:
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
@@ -1505,6 +1508,20 @@ def run_one_episode(
                     )
 
             if aux_spawn_lanes:
+                ring_loop_lanes = None
+                if aux_loop_ring:
+                    lane_num = lane_num_from_key(str(aux_spawn_lanes[0]))
+                    ring_loop_lanes = ordered_ring_lane_cycle(
+                        row.get("junction_layout"),
+                        lane_num=lane_num,
+                    )
+                    if len(ring_loop_lanes) < 2:
+                        print(
+                            f"[AuxAgent] Ring loop requested but only "
+                            f"{len(ring_loop_lanes)} ring lane(s) resolved; "
+                            "falling back to fixed destination"
+                        )
+                        ring_loop_lanes = None
                 aux_agent_mgr = add_auxiliary_agents(
                     base_env,
                     spawn_lane_indices=aux_spawn_lanes,
@@ -1520,12 +1537,15 @@ def run_one_episode(
                     convoy_gap_m=aux_convoy_gap_m,
                     alternate_spawn_dest_map=alternate_spawn_dest_map,
                     spawn_longitudinal_by_lane=aux_spawn_longitudes,
+                    ring_loop_lanes=ring_loop_lanes,
                 )
                 if aux_agent_mgr is not None:
+                    status = aux_agent_mgr.get_status()
                     print(
                         f"[AuxAgent] lanes={len(aux_spawn_lanes)}, "
                         f"convoy_size={aux_convoy_size}, gap={aux_convoy_gap_m}m, "
-                        f"spawned={aux_agent_mgr.get_status().get('count', 0)}"
+                        f"spawned={status.get('count', 0)}, "
+                        f"ring_loop={status.get('ring_loop', False)}"
                     )
 
         total_reward = 0.0
@@ -1721,67 +1741,14 @@ def run_one_episode(
                 text_dict = {
                     "Step": step,
                     "Speed": f"{vehicle.speed_km_h:.2f} km/h",
-                    "Vehicle lane: ": vehicle.lane.index,
-                    "Aux lanes": len(aux_spawn_lanes),
-                    "Current lane width: ": vehicle.lane.width,
-                    "Violations: ": sign_violations,
+                    "Violations": sign_violations,
                 }
-                
-                ego_in_yield_zone = False
-                ego_violating_yield = False
-                main_road_has_traffic = False
-                
-                if sign_mgr is not None and vehicle is not None:
-                    yield_signs = [
-                        sign for sign in sign_mgr.signs
-                        if "yield" in type(sign).__name__.lower()
-                    ]
-                    text_dict["Yield signs"] = len(yield_signs)
-                    text_dict["Main road signs"] = sum(
-                        1 for sign in sign_mgr.signs
-                        if "mainroad" in type(sign).__name__.lower()
-                    )
-                    for sign in yield_signs:
-                        has_traffic, _ = sign.has_main_road_traffic(exclude_vehicle=vehicle)
-                        main_road_has_traffic = main_road_has_traffic or has_traffic
-                        if _ego_in_exact_sign_zone(sign, vehicle):
-                            ego_in_yield_zone = True
-                        if sign._is_violating(vehicle):
-                            ego_violating_yield = True
-                
-                text_dict["Main road traffic"] = main_road_has_traffic
-                text_dict["Ego in yield zone"] = ego_in_yield_zone
-                text_dict["Yield violation"] = ego_violating_yield
-                
-                # Add auxiliary agent status
-                if aux_agent_mgr is not None:
-                    aux_status = aux_agent_mgr.get_status()
-                    text_dict["Aux agents"] = aux_status.get("count", 0)
-                    text_dict["Aux lanes"] = aux_status.get("lanes_occupied", aux_lanes_occupied)
-                    text_dict["Aux convoy size"] = aux_status.get("convoy_size", aux_convoy_size)
-                    text_dict["Aux policy"] = aux_status.get("policy", aux_policy)
-                    agents = aux_status.get("agents") or []
-                    if agents:
-                        text_dict["Aux dest"] = agents[0].get("destination_lane", "")
-                        text_dict["Aux released"] = agents[0].get("released", False)
-                        ego_dist = agents[0].get("ego_dist_to_spawn_lane_end_m")
-                        if ego_dist is not None:
-                            text_dict["Ego to lane end"] = f"{ego_dist:.1f}m"
-
-            if current_violation_texts:
-                text_dict["Violation"] = current_violation_texts[0]
-                if len(current_violation_texts) > 1:
-                    text_dict["Violation +"] = f"+{len(current_violation_texts) - 1} more"
-            elif last_violation_texts:
-                text_dict["Last violation"] = last_violation_texts[0]
-                if len(last_violation_texts) > 1:
-                    text_dict["Last violation +"] = f"+{len(last_violation_texts) - 1} more"
 
             if save_gif:
                 try:
                     base_env.render(
                         mode="top_down",
-                        film_size=(2400, 2400), scaling=12.0,
+                        film_size=(4800, 4800), scaling=24.0,
                         screen_size=(800, 800),
                         semantic_map=True,
                         semantic_broken_line=True,
@@ -2217,6 +2184,14 @@ def main():
         help=f"Fallback max main-road lanes to occupy when manifest row omits aux_lanes_occupied "
              f"(default: {DEFAULT_AUX_LANES_OCCUPIED_MAX})",
     )
+    parser.add_argument(
+        "--aux-loop-ring",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep aux circulating on the roundabout ring by advancing destination "
+             "to the next ring edge (default: enabled). Use --no-aux-loop-ring for "
+             "the old fixed outgoing destination.",
+    )
 
     args = parser.parse_args()
 
@@ -2263,7 +2238,10 @@ def main():
             print(f"  - Convoy size: from manifest row aux_convoy_size (CLI default {args.aux_convoy_size})")
             print(f"  - Lanes occupied: from manifest row aux_lanes_occupied (CLI default {args.aux_lanes_occupied})")
             print(f"  - Convoy gap: {args.aux_convoy_gap_m}m")
-            print(f"  - Route: incoming lane -> reachable outgoing lane")
+            if args.aux_loop_ring:
+                print("  - Route: ring loop (destination advances to next ring edge)")
+            else:
+                print("  - Route: incoming lane -> reachable outgoing lane")
 
     if args.manifest:
         manifest_path = Path(args.manifest)
@@ -2391,6 +2369,7 @@ def main():
                 aux_convoy_size=args.aux_convoy_size,
                 aux_convoy_gap_m=args.aux_convoy_gap_m,
                 aux_lanes_occupied=args.aux_lanes_occupied,
+                aux_loop_ring=args.aux_loop_ring,
             )
             episode_dt = time.time() - episode_t0
             print(f"{args.policy}  elapsed_s={episode_dt:.3f}")

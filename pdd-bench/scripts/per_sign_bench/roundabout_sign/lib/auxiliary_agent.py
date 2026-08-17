@@ -21,6 +21,12 @@ DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END = 5.0
 DEFAULT_CONVOY_SIZE = 3
 DEFAULT_CONVOY_GAP_M = 10.0
 MIN_SPAWN_LONGITUDE_M = 3.0
+# Advance ring-loop destination when this close to the end of the current dest lane.
+RING_LOOP_ADVANCE_M = 8.0
+# Despawn aux that left the roadway (treated like a soft collision / vanish).
+OFFROAD_DESPAWN_GRACE_STEPS = 20
+OFFROAD_DESPAWN_STREAK = 3
+OFFROAD_LATERAL_MARGIN_M = 1.5
 
 
 def achievable_convoy_sizes(
@@ -253,6 +259,70 @@ def merge_lane_lengths_from_layout(
     return merged
 
 
+def ordered_ring_lane_cycle(
+    junction_layout: Optional[dict],
+    *,
+    lane_num: int = 0,
+) -> List[str]:
+    """Return main/ring lane keys in circulation order (a closed cycle when possible)."""
+    main_arms = [
+        arm for arm in _layout_arms(junction_layout) if arm.get("road_class") == "main"
+    ]
+    if not main_arms:
+        return []
+
+    by_from: Dict[str, dict] = {}
+    for arm in main_arms:
+        from_node = str(arm.get("from_node", ""))
+        if from_node and from_node not in by_from:
+            by_from[from_node] = arm
+
+    start = main_arms[0]
+    cycle_arms: List[dict] = []
+    seen_edges: set[str] = set()
+    cur: Optional[dict] = start
+    while cur is not None:
+        edge_id = str(cur.get("edge_id", ""))
+        if not edge_id or edge_id in seen_edges:
+            break
+        seen_edges.add(edge_id)
+        cycle_arms.append(cur)
+        nxt = by_from.get(str(cur.get("to_node", "")))
+        if nxt is None:
+            break
+        cur = nxt
+        if len(cycle_arms) > len(main_arms) + 1:
+            break
+
+    keys: List[str] = []
+    for arm in cycle_arms:
+        arm_keys = [str(k) for k in (arm.get("lane_keys") or [])]
+        chosen: Optional[str] = None
+        for key in arm_keys:
+            if lane_num_from_key(key) == int(lane_num):
+                chosen = key
+                break
+        if chosen is None and arm_keys:
+            chosen = arm_keys[min(int(lane_num), len(arm_keys) - 1)]
+        if chosen is None:
+            chosen = make_lane_key(str(arm.get("edge_id")), int(lane_num))
+        keys.append(chosen)
+    return keys
+
+
+def next_ring_lane_in_cycle(cycle: List[str], lane_key: Optional[str]) -> Optional[str]:
+    """Next lane in the ring cycle after ``lane_key`` (wraps around)."""
+    if not cycle:
+        return None
+    if not lane_key:
+        return cycle[0]
+    edge = lane_edge_id(str(lane_key))
+    for i, key in enumerate(cycle):
+        if key == lane_key or lane_edge_id(key) == edge:
+            return cycle[(i + 1) % len(cycle)]
+    return cycle[0]
+
+
 def apply_aux_cruise_speed(aux_policy, speed_ms: float) -> None:
     """Set auxiliary IDM cruise target to a fixed speed (m/s)."""
     if aux_policy is None:
@@ -387,6 +457,7 @@ class AuxiliaryAgentsManager(BaseManager):
         convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
         alternate_spawn_dest_map: Optional[dict] = None,
         spawn_longitudinal_by_lane: Optional[dict] = None,
+        ring_loop_lanes: Optional[List[str]] = None,
     ):
         super().__init__()
         self._requested_spawn_lane_indices = list(spawn_lane_indices)
@@ -399,6 +470,7 @@ class AuxiliaryAgentsManager(BaseManager):
         self._destination_lanes = list(destination_lanes or [])
         self._alternate_spawn_dest_map = dict(alternate_spawn_dest_map or {})
         self._spawn_longitudinal_by_lane = dict(spawn_longitudinal_by_lane or {})
+        self._ring_loop_lanes = list(ring_loop_lanes or [])
         self._ego_vehicle = ego_vehicle
         self._ego_spawn_lane_index = ego_spawn_lane_index
         self._ego_release_distance_before_end = float(ego_release_distance_before_end)
@@ -409,7 +481,10 @@ class AuxiliaryAgentsManager(BaseManager):
         self._spawn_destinations: List[Optional[str]] = []
         self._convoy_positions: List[int] = []
         self._aux_policies: List[BasePolicy] = []
+        self._aux_spawn_steps: List[int] = []
+        self._offroad_streaks: List[int] = []
         self._pending_convoy_spawns: List[_PendingConvoySpawn] = []
+        self._despawned_offroad_count = 0
 
     def reset(self):
         self._aux_vehicles = []
@@ -417,10 +492,109 @@ class AuxiliaryAgentsManager(BaseManager):
         self._spawn_destinations = []
         self._convoy_positions = []
         self._aux_policies = []
+        self._aux_spawn_steps = []
+        self._offroad_streaks = []
         self._pending_convoy_spawns = []
+        self._despawned_offroad_count = 0
 
     def after_reset(self):
+        if self._ring_loop_lanes:
+            try:
+                road_network = self.engine.current_map.road_network
+                filtered = [
+                    key for key in self._ring_loop_lanes if key in road_network.graph
+                ]
+            except Exception:
+                filtered = list(self._ring_loop_lanes)
+            if len(filtered) < 2:
+                logging.warning(
+                    "[AuxAgent] ring loop disabled: need >=2 ring lanes in map "
+                    f"(got {len(filtered)} from {len(self._ring_loop_lanes)})"
+                )
+                self._ring_loop_lanes = []
+            else:
+                self._ring_loop_lanes = filtered
+                print(
+                    f"[AuxAgent] Ring loop enabled: {len(self._ring_loop_lanes)} lane(s) "
+                    f"{' → '.join(self._ring_loop_lanes[:4])}"
+                    + (" → …" if len(self._ring_loop_lanes) > 4 else "")
+                    + " → (cycle)"
+                )
         self._spawn_auxiliary_vehicles()
+
+    def _loop_destination_for_spawn(self, spawn_lane_index: str) -> Optional[str]:
+        if len(self._ring_loop_lanes) < 2:
+            return None
+        return next_ring_lane_in_cycle(self._ring_loop_lanes, spawn_lane_index)
+
+    def _should_advance_ring_destination(
+        self,
+        vehicle: BaseVehicle,
+        destination_lane: Optional[str],
+    ) -> bool:
+        if not destination_lane or len(self._ring_loop_lanes) < 2:
+            return False
+        try:
+            road_network = self.engine.current_map.road_network
+            lane = road_network.get_lane(destination_lane)
+            longitudinal, lateral = lane.local_coordinates(vehicle.position)
+            on_dest = abs(float(lateral)) < 4.0 and float(longitudinal) >= -2.0
+            near_end = float(longitudinal) >= float(lane.length) - RING_LOOP_ADVANCE_M
+            if on_dest and near_end:
+                return True
+            # Already left the destination edge onto the next ring segment.
+            current = getattr(vehicle, "lane_index", None)
+            if current is None:
+                return False
+            current_key = str(current)
+            if current_key == destination_lane:
+                return False
+            expected_next = next_ring_lane_in_cycle(self._ring_loop_lanes, destination_lane)
+            return (
+                expected_next is not None
+                and (
+                    current_key == expected_next
+                    or lane_edge_id(current_key) == lane_edge_id(expected_next)
+                )
+            )
+        except Exception:
+            return False
+
+    def _advance_ring_destination(self, idx: int) -> None:
+        if idx < 0 or idx >= len(self._aux_vehicles):
+            return
+        vehicle = self._aux_vehicles[idx]
+        old_dest = self._spawn_destinations[idx] if idx < len(self._spawn_destinations) else None
+        new_dest = next_ring_lane_in_cycle(self._ring_loop_lanes, old_dest)
+        if not new_dest or new_dest == old_dest:
+            return
+        start = None
+        current = getattr(vehicle, "lane_index", None)
+        if current is not None:
+            start = str(current)
+        if not start:
+            start = old_dest
+        try:
+            if vehicle.navigation is not None and start:
+                vehicle.navigation.set_route(start, new_dest)
+            self._spawn_destinations[idx] = new_dest
+            logging.debug(
+                "[AuxAgent] Ring loop advance %s → %s (from %s)",
+                old_dest,
+                new_dest,
+                start,
+            )
+        except Exception as exc:
+            logging.debug("[AuxAgent] Ring loop advance failed: %s", exc)
+
+    def _maybe_advance_ring_routes(self) -> None:
+        if len(self._ring_loop_lanes) < 2:
+            return
+        for idx, (vehicle, destination) in enumerate(
+            zip(self._aux_vehicles, self._spawn_destinations)
+        ):
+            if self._should_advance_ring_destination(vehicle, destination):
+                self._advance_ring_destination(idx)
 
     def _vehicle_longitudinal_on_lane(self, vehicle: BaseVehicle, lane_index: str) -> Optional[float]:
         try:
@@ -451,9 +625,9 @@ class AuxiliaryAgentsManager(BaseManager):
             if pending.wait_slot >= 0:
                 predecessor = pending.lane_convoy[pending.wait_slot]
                 if predecessor is None:
-                    still_pending.append(pending)
-                    continue
-                if not self._predecessor_cleared_spawn_point(
+                    # Never spawned or already despawned — do not block forever.
+                    pass
+                elif not self._predecessor_cleared_spawn_point(
                     predecessor,
                     pending.spawn_lane_index,
                     pending.lead_spawn_long,
@@ -566,6 +740,8 @@ class AuxiliaryAgentsManager(BaseManager):
             self._spawn_lane_indices.append(spawn_lane_index)
             self._spawn_destinations.append(destination_lane)
             self._convoy_positions.append(convoy_position)
+            self._aux_spawn_steps.append(int(getattr(self.engine, "episode_step", 0) or 0))
+            self._offroad_streaks.append(0)
             logging.info(
                 f"[AuxAgent] Spawned convoy slot {convoy_position + 1}/{self._convoy_size} "
                 f"on {spawn_lane_index} at {spawn_long:.1f}m "
@@ -591,6 +767,8 @@ class AuxiliaryAgentsManager(BaseManager):
         self._spawn_destinations = []
         self._convoy_positions = []
         self._aux_policies = []
+        self._aux_spawn_steps = []
+        self._offroad_streaks = []
         self._pending_convoy_spawns = []
 
         for idx, spawn_lane_index in enumerate(self._requested_spawn_lane_indices):
@@ -624,6 +802,9 @@ class AuxiliaryAgentsManager(BaseManager):
                     destination_lane = pick_destination_outgoing_lane(
                         candidate_lane, self._outgoing_lanes, road_network
                     )
+                loop_dest = self._loop_destination_for_spawn(candidate_lane)
+                if loop_dest:
+                    destination_lane = loop_dest
 
                 spawned_on_lane = 0
                 lane_convoy: List[Optional[BaseVehicle]] = [None] * self._convoy_size
@@ -685,8 +866,90 @@ class AuxiliaryAgentsManager(BaseManager):
                     + (f", +{pending_n} sequential pending" if pending_n else "")
                 )
 
+    def _aux_is_off_road(self, vehicle: BaseVehicle) -> bool:
+        """True when the aux left the drivable surface (sidewalk / off-lane)."""
+        if bool(getattr(vehicle, "crash_sidewalk", False)):
+            return True
+        on_lane = getattr(vehicle, "on_lane", None)
+        if on_lane is False:
+            return True
+        if bool(getattr(vehicle, "out_of_route", False)):
+            return True
+        try:
+            lane = getattr(vehicle, "lane", None)
+            if lane is not None:
+                _longitudinal, lateral = lane.local_coordinates(vehicle.position)
+                half = float(getattr(lane, "width", 3.5) or 3.5) * 0.5 + OFFROAD_LATERAL_MARGIN_M
+                if abs(float(lateral)) > half:
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _despawn_aux_at(self, idx: int, reason: str) -> None:
+        if idx < 0 or idx >= len(self._aux_vehicles):
+            return
+        vehicle = self._aux_vehicles[idx]
+        for pending in self._pending_convoy_spawns:
+            for slot, other in enumerate(pending.lane_convoy):
+                if other is vehicle:
+                    pending.lane_convoy[slot] = None
+        vid = getattr(vehicle, "id", None)
+        try:
+            if vid is not None:
+                self.clear_objects([vid])
+            elif hasattr(vehicle, "destroy"):
+                vehicle.destroy()
+        except Exception as exc:
+            logging.debug("[AuxAgent] clear_objects failed for off-road aux: %s", exc)
+        print(
+            f"[AuxAgent] Despawned off-road aux "
+            f"(convoy_pos={self._convoy_positions[idx] if idx < len(self._convoy_positions) else '?'}, "
+            f"reason={reason})"
+        )
+        self._despawned_offroad_count += 1
+        for lst in (
+            self._aux_vehicles,
+            self._spawn_lane_indices,
+            self._spawn_destinations,
+            self._convoy_positions,
+            self._aux_policies,
+            self._aux_spawn_steps,
+            self._offroad_streaks,
+        ):
+            if idx < len(lst):
+                lst.pop(idx)
+
+    def _despawn_offroad_auxiliaries(self) -> None:
+        if not self._aux_vehicles:
+            return
+        episode_step = int(getattr(self.engine, "episode_step", 0) or 0)
+        while len(self._offroad_streaks) < len(self._aux_vehicles):
+            self._offroad_streaks.append(0)
+        while len(self._aux_spawn_steps) < len(self._aux_vehicles):
+            self._aux_spawn_steps.append(episode_step)
+
+        to_remove: List[int] = []
+        for idx, vehicle in enumerate(self._aux_vehicles):
+            spawn_step = self._aux_spawn_steps[idx]
+            if episode_step - spawn_step < OFFROAD_DESPAWN_GRACE_STEPS:
+                self._offroad_streaks[idx] = 0
+                continue
+            if self._aux_is_off_road(vehicle):
+                self._offroad_streaks[idx] += 1
+            else:
+                self._offroad_streaks[idx] = 0
+            if self._offroad_streaks[idx] >= OFFROAD_DESPAWN_STREAK:
+                to_remove.append(idx)
+        for idx in reversed(to_remove):
+            reason = "crash_sidewalk" if bool(
+                getattr(self._aux_vehicles[idx], "crash_sidewalk", False)
+            ) else "off_road"
+            self._despawn_aux_at(idx, reason)
+
     def before_step(self):
         self._try_spawn_pending_convoys()
+        self._maybe_advance_ring_routes()
         if not self._aux_vehicles:
             return {}
         for aux_vehicle in self._aux_vehicles:
@@ -710,6 +973,7 @@ class AuxiliaryAgentsManager(BaseManager):
                 aux_vehicle.after_step()
             except Exception:
                 pass
+        self._despawn_offroad_auxiliaries()
         return {}
 
     @property
@@ -723,7 +987,12 @@ class AuxiliaryAgentsManager(BaseManager):
 
     def get_status(self) -> dict:
         if not self._aux_vehicles:
-            return {"exists": False, "count": 0, "agents": []}
+            return {
+                "exists": False,
+                "count": 0,
+                "agents": [],
+                "despawned_offroad": self._despawned_offroad_count,
+            }
 
         agents = []
         for aux_vehicle, lane_index, destination, policy, convoy_pos in zip(
@@ -763,6 +1032,9 @@ class AuxiliaryAgentsManager(BaseManager):
             "pending_convoy_spawns": len(self._pending_convoy_spawns),
             "lanes_occupied": len(set(self._spawn_lane_indices)),
             "policy": self._policy,
+            "ring_loop": len(self._ring_loop_lanes) >= 2,
+            "ring_loop_lanes": list(self._ring_loop_lanes),
+            "despawned_offroad": self._despawned_offroad_count,
             "agents": agents,
         }
 
@@ -1086,6 +1358,7 @@ def add_auxiliary_agents(
     convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
     alternate_spawn_dest_map: Optional[dict] = None,
     spawn_longitudinal_by_lane: Optional[dict] = None,
+    ring_loop_lanes: Optional[List[str]] = None,
 ) -> Optional[AuxiliaryAgentsManager]:
     """Add auxiliary agents on incoming lanes (optionally as a convoy per lane)."""
     if not spawn_lane_indices:
@@ -1109,6 +1382,7 @@ def add_auxiliary_agents(
         convoy_gap_m=convoy_gap_m,
         alternate_spawn_dest_map=alternate_spawn_dest_map,
         spawn_longitudinal_by_lane=spawn_longitudinal_by_lane,
+        ring_loop_lanes=ring_loop_lanes,
     )
     env.engine.register_manager("auxiliary_agent_manager", manager)
     manager.after_reset()

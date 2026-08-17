@@ -16,7 +16,7 @@ hydra:
 # Path Configuration
 # =============================================================================
 paths:
-  scenes_dir: scenes
+  scenes_dir: scenes/2_1
   output_base: benchmark_output/2_1
   experiment_name: ${now:%Y-%m-%d_%H-%M-%S}
 
@@ -27,6 +27,7 @@ scenario:
   n_variants: 1                   # Variants per scene (non-augmented mode)
   augment: true                   # Enable ego/aux spawn point enumeration
   max_scenarios_per_scene: 15     # Limit augmented scenarios (null = all)
+  max_scenarios: null             # Cap total manifest rows (null = all)
   respect_scene_selection: true  # Skip scenes marked reject in scene_selection.json
 
 # =============================================================================
@@ -60,3 +61,4 @@ gif:
   hide_signs: true                # Hide traffic signs in visualization
   dir: null                       # Output dir (null = <exp>/gifs)
   run_name: null                  # Custom run name (null = timestamp)
+  model_path: null                # Checkpoint for carl/plant2 (null = default under pdd-bench/checkpoints/)

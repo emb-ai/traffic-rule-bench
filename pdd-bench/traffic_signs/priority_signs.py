@@ -534,6 +534,8 @@ class RightHandYieldSign(YieldSign):
             **kwargs,
         )
         self.priority_type = "right_hand_yield"
+        # Experts / metrics: hold ~5 m before the junction entry (lane end).
+        self.stop_line_position = max(0.0, float(self.lane.length) - 5.0)
 
     def get_rule_description(self) -> str:
         return (
@@ -749,6 +751,8 @@ class RoundaboutYieldSign(YieldSign):
             **kwargs,
         )
         self.priority_type = "roundabout_yield"
+        # Experts hold ~5 m before entering the circle (same as RH-rule stop).
+        self.stop_line_position = max(0.0, float(self.lane.length) - 5.0)
         if entry_junction_xy is not None:
             self._entry_junction_xy = np.array(
                 [float(entry_junction_xy[0]), float(entry_junction_xy[1])],

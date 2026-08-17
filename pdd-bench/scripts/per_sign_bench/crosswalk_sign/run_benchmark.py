@@ -1558,40 +1558,16 @@ def run_one_episode(
                 text_dict = {
                     "Step": step,
                     "Speed": f"{vehicle.speed_km_h:.2f} km/h",
-                    "Vehicle lane: ": vehicle.lane.index,
-                    "Crosswalk": row.get("crosswalk_id", ""),
-                    "Violations: ": sign_violations + crosswalk_violations,
+                    "Violations": sign_violations + crosswalk_violations,
                 }
-
-                ped_status = _get_pedestrian_yield_status(sign_mgr, vehicle)
-                if ped_status:
-                    text_dict["CW active"] = ped_status.get("crosswalk_active_count", 0)
-                    text_dict["In yield zone"] = ped_status.get("in_yield_zone", False)
-                    text_dict["Must stop"] = ped_status.get("must_stop", False)
-                    text_dict["Target dist"] = (
-                        f"{ped_status['target_distance_m']:.1f}m"
-                        if ped_status.get("target_distance_m") is not None
-                        else "-"
-                    )
-
-                ped_mgr_status = _pedestrian_manager_status(base_env)
-                if ped_mgr_status:
-                    text_dict["Pedestrians"] = ped_mgr_status.get("pedestrians", 0)
-
-            if current_violation_texts:
-                text_dict["Violation"] = current_violation_texts[0]
-                if len(current_violation_texts) > 1:
-                    text_dict["Violation +"] = f"+{len(current_violation_texts) - 1} more"
-            elif last_violation_texts:
-                text_dict["Last violation"] = last_violation_texts[0]
-                if len(last_violation_texts) > 1:
-                    text_dict["Last violation +"] = f"+{len(last_violation_texts) - 1} more"
 
             if save_gif:
                 try:
                     base_env.render(
                         mode="top_down",
-                        film_size=(2400, 2400), scaling=12.0,
+                        # Zoom = screen_size/scaling meters; MetaDrive also clamps
+                        # scaling to film_size/map_size, so film must grow with scaling.
+                        film_size=(4800, 4800), scaling=24.0,
                         screen_size=(800, 800),
                         semantic_map=True,
                         semantic_broken_line=True,

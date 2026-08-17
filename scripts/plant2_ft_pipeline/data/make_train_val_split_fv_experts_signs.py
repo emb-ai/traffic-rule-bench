@@ -25,12 +25,35 @@ import random
 import re
 import subprocess
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from lib.paths import shepelev
 
 SHEPELEV = shepelev()
+# Nodes without the uid->sign jsonls resolve priority-sign routes from the
+# dumped boxes instead (the PDD sign is stored there with its code).
+_PDD_RE = re.compile(r"^\d\.\d+(\.\d+)?$")
+
+
+def sniff_sign(route_dir: Path) -> str | None:
+    boxes = route_dir / "boxes"
+    if not boxes.is_dir():
+        return None
+    frames = sorted(boxes.iterdir())
+    if not frames:
+        return None
+    step = max(1, len(frames) // 12)
+    for f in frames[::step]:
+        try:
+            entries = json.load(gzip.open(f))
+        except Exception:  # noqa: BLE001
+            continue
+        for e in entries:
+            code = e.get("pdd_code") or e.get("class") or ""
+            if _PDD_RE.match(str(code)):
+                return str(code)
+    return None
 SRCS = [
     ("fv", SHEPELEV / "plant2_l1_traj_fv_nodeA_signs"),
     ("exp", SHEPELEV / "plant2_l1_from_experts_signs"),
@@ -38,7 +61,10 @@ SRCS = [
 ]
 OUT = SHEPELEV / "plant2_l1_fv_experts_split_signs"
 SEED = 42
-WORKERS = min(64, (os.cpu_count() or 8) * 2)
+# Hardlinking is I/O, not CPU: threads keep the external `cp` calls busy
+# without the fork-time deadlock a process pool hits on a few thousand
+# queued jobs (it hung here for 11 h with every worker in futex_wait).
+WORKERS = int(os.environ.get("SPLIT_WORKERS", min(32, (os.cpu_count() or 8))))
 REQUIRED_DIRS = ("measurements", "boxes", "bev_no_car_semantics")
 
 
@@ -163,7 +189,13 @@ def main() -> None:
     for tag, src in SRCS:
         data = src / "data"
         if not data.is_dir():
-            raise SystemExit(f"missing {data} — run dump first")
+            # A node that only carries some of the source trees can still build
+            # a (smaller) split; the per-sign counts printed below make any
+            # missing source obvious.
+            if os.environ.get("ALLOW_MISSING_SRCS", "").strip() in ("1", "true"):
+                print(f"skipping missing source {data}", flush=True)
+                continue
+            raise SystemExit(f"missing {data} — run dump first (or ALLOW_MISSING_SRCS=1)")
         print(f"scanning {tag}: {data}", flush=True)
         for p in sorted(data.iterdir()):
             if not p.is_dir():
@@ -175,6 +207,8 @@ def main() -> None:
                 skipped_bad += 1
                 continue
             sign = route_sign(p.name, uid2sign)
+            if sign is None:
+                sign = sniff_sign(p)
             if sign is None:
                 unknown += 1
                 continue
@@ -269,7 +303,7 @@ def main() -> None:
 
     print(f"hardlinking {len(jobs)} routes with workers={WORKERS} …", flush=True)
     done = skipped = 0
-    with ProcessPoolExecutor(max_workers=WORKERS) as ex:
+    with ThreadPoolExecutor(max_workers=WORKERS) as ex:
         futs = [ex.submit(hardlink_one, j) for j in jobs]
         for fut in as_completed(futs):
             st = fut.result()

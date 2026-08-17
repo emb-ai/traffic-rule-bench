@@ -19,14 +19,17 @@ import os
 import sys
 from pathlib import Path
 
-from lib.paths import shepelev
+from lib.paths import plan_t, shepelev
 
 SHEPELEV = shepelev()
-SRC = SHEPELEV / "plant2_l1_fv_experts_split_signs"
-OUT = SHEPELEV / "plant2_l1_fv_experts_split_signs_2.5"
-SIGN = "2.5"
+SIGN = os.environ.get("SUBSET_SIGN", "2.5")
+SRC = Path(os.environ.get("SUBSET_SRC", SHEPELEV / "plant2_l1_fv_experts_split_signs"))
+OUT = Path(os.environ.get("SUBSET_OUT", f"{SRC}_{SIGN}"))
 
-sys.path.insert(0, str(SHEPELEV / "traffic-rule-bench/plant2/PlanT"))
+# PlanT lives next to whichever tree we are splitting, not always under
+# SHEPELEV -- with SHEPELEV redirected at a private root the hardcoded
+# join points at a path that does not exist.
+sys.path.insert(0, str(plan_t()))
 from util.sign_id import load_uid2sign, resolve_route_sign  # noqa: E402
 
 

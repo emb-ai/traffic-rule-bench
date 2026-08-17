@@ -35,9 +35,23 @@ from lib.scene_augmentation import SpawnScenario, augment_layout_for_scene
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 RUN_BENCH_SCRIPT = SCRIPT_DIR / "run_benchmark.py"
+PDD_BENCH_DIR = SCRIPT_DIR.parents[2]
 
 PDD_CODE = "2.1"
 SIGN_TYPE = "main"
+
+DEFAULT_CARL_CKPT = (
+    PDD_BENCH_DIR / "checkpoints" / "carl" / "nuplan_51479_1B" / "model_best.pth"
+)
+DEFAULT_NN_CHECKPOINTS = {
+    "carl": DEFAULT_CARL_CKPT,
+    "carl_rule": DEFAULT_CARL_CKPT,
+    "plant2": PDD_BENCH_DIR / "checkpoints" / "plant2_finetuned" / "plant2_supervised_2nd_final.pt",
+    "plant2_rule": PDD_BENCH_DIR
+    / "checkpoints"
+    / "plant2_finetuned"
+    / "plant2_supervised_2nd_final.pt",
+}
 
 
 # -----------------------------------------------------------------------------
@@ -55,6 +69,7 @@ class ScenarioConfig:
     n_variants: int = 1
     augment: bool = True
     max_scenarios_per_scene: Optional[int] = None
+    max_scenarios: Optional[int] = None
 
 
 @dataclass
@@ -84,6 +99,7 @@ class GifConfig:
     hide_signs: bool = True
     dir: Optional[str] = None
     run_name: Optional[str] = None
+    model_path: Optional[str] = None  # Required for carl/plant2; default from checkpoints/
 
 
 @dataclass
@@ -454,8 +470,18 @@ def generate_manifest(
     """Generate real_manifest.jsonl from discovered scenes."""
     scenes = discover_scenes(scenes_dir)
     entries = []
+    max_total = scenario_cfg.max_scenarios
+    if max_total is not None:
+        max_total = max(1, int(max_total))
     
     for scene_dir in scenes:
+        if max_total is not None and len(entries) >= max_total:
+            print(
+                f"\n[cap] reached max_scenarios={max_total} "
+                f"({len(entries)} row(s)); stopping"
+            )
+            break
+
         meta = load_scene_metadata(scene_dir)
         scene_name = meta.get("scene_name", scene_dir.name)
         net_file = meta.get("net_file", "map.net.xml")
@@ -545,6 +571,17 @@ def generate_manifest(
         else:
             print(f"  Manifest entries for {scene_name}: {len(scene_entries)}")
 
+        if max_total is not None and len(entries) + len(scene_entries) > max_total:
+            keep = max_total - len(entries)
+            print(
+                f"  [cap] truncating {scene_name}: keeping {keep} of "
+                f"{len(scene_entries)} for max_scenarios={max_total}"
+            )
+            if keep <= 0:
+                break
+            random.shuffle(scene_entries)
+            scene_entries = scene_entries[:keep]
+
         entries.extend(scene_entries)
     
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -563,6 +600,7 @@ def generate_manifest(
         "variants_per_scene": scenario_cfg.n_variants,
         "augment": scenario_cfg.augment,
         "max_scenarios_per_scene": scenario_cfg.max_scenarios_per_scene,
+        "max_scenarios": scenario_cfg.max_scenarios,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
         "traffic_density": sim_cfg.traffic_density,
         "horizon": sim_cfg.horizon,
@@ -649,7 +687,20 @@ def render_gifs_from_manifest(
         return 0, 0
     
     print(f"\n[GIF] Rendering {len(rows)} scene(s)...")
-    
+
+    model_path = gif_cfg.model_path
+    if not model_path:
+        default_ckpt = DEFAULT_NN_CHECKPOINTS.get(gif_cfg.policy)
+        if default_ckpt is not None and Path(default_ckpt).is_file():
+            model_path = str(default_ckpt)
+            print(f"[GIF] Using default checkpoint for {gif_cfg.policy}: {model_path}")
+        elif gif_cfg.policy in DEFAULT_NN_CHECKPOINTS:
+            print(
+                f"[GIF] WARNING: default checkpoint missing for {gif_cfg.policy}: "
+                f"{DEFAULT_NN_CHECKPOINTS[gif_cfg.policy]}",
+                file=sys.stderr,
+            )
+
     rendered = 0
     failed = 0
     for i, row in enumerate(rows, start=1):
@@ -666,6 +717,8 @@ def render_gifs_from_manifest(
             "--scenes-root", str(scenes_root),
             "--policy", gif_cfg.policy,
         ]
+        if model_path:
+            cmd.extend(["--model-path", model_path])
         if gif_cfg.hide_signs:
             cmd.append("--hide-signs")
         
@@ -708,6 +761,7 @@ def main(cfg: DictConfig) -> None:
         n_variants=cfg.scenario.n_variants,
         augment=cfg.scenario.augment,
         max_scenarios_per_scene=cfg.scenario.max_scenarios_per_scene,
+        max_scenarios=getattr(cfg.scenario, "max_scenarios", None),
     )
     sim_cfg = SimulationConfig(
         spawn_velocity_ms=cfg.simulation.spawn_velocity_ms,
@@ -731,6 +785,7 @@ def main(cfg: DictConfig) -> None:
         hide_signs=cfg.gif.hide_signs,
         dir=cfg.gif.dir,
         run_name=cfg.gif.run_name,
+        model_path=getattr(cfg.gif, "model_path", None),
     )
     
     entries = generate_manifest(

@@ -74,6 +74,10 @@ from lib.finetune import FinetuneConfig, run_finetune
 | `make_split_signs_2.5_subset.py`           | symlink subset только sign 2.5                 |
 | `extract_patch_2p5_cache.py`               | extract+patch ключей 2.5 из большого cache     |
 | `prefill_diskcache.py`                     | prefill / parallel / 2p5 subcommands           |
+| `make_balanced_split.py`                   | сплит с потолком на перепредставленные знаки   |
+| `make_sign_pair_splits.py`                 | парные сплиты new/old для одного знака         |
+| `make_old_half_from_new.py`                | синтез старой половины пары из новых дампов    |
+| `assemble_fix_dump.py`                     | сборка дампа из нескольких источников          |
 
 
 ### Примеры
@@ -112,7 +116,19 @@ $PY data/prefill_diskcache.py 2p5 \
 | ------------------------ | --------------------------------------------------------- |
 | `launch_ft.py`           | sweeps: `spatial-lr`, `2p5-tsfix`, `2p5-stopw`, `2p5-hyp` |
 | `launch_ft.sh`           | thin wrapper → `launch_ft.py`                             |
-| `run_plant2_finetune.py` | один FT job (argparse)                                    |
+| `run_plant2_finetune.py` | один FT job (argparse; те же имена читаются из окружения) |
+
+Базовый чекпоинт несёт только `tok_emb.0-6`: эмбеддинги знаков ПДД, `sign_emb`,
+`speed_token` и голова скорости создаются заново на каждом дообучении. Ручки для
+них — флаги либо одноимённые переменные окружения:
+
+| Ручка                    | Что делает                                                       |
+| ------------------------ | ---------------------------------------------------------------- |
+| `--gpus` / `GPUS`        | число GPU; при >1 сам заполняет `CUDA_VISIBLE_DEVICES`           |
+| `--ddp-strategy`         | по умолчанию `ddp_find_unused_parameters_true` (иначе DDP падает на неиспользованных `tok_emb`) |
+| `--init-sign-from-stop`  | инициализировать знаки ПДД из обученного слоя `stop_sign`         |
+| `--new-param-lr-mult`    | множитель LR для параметров, которых нет в чекпоинте              |
+| `--trunk-lr-mult`        | множитель LR для предобученного транкера; `0` замораживает его    |
 
 
 Чекпоинты: `$TRB_ROOT/plant2/PlanT/checkpoints_ft/<CHECKPOINT_ADDON>/`  
@@ -205,6 +221,8 @@ $PY eval/eval_full.py spatial \
 | `viz_train_global_gif.py`    | GIF из train route                           |
 | `overfit_1traj_sweep.py`     | train+eval на 1 traj, гиперпараметры из YAML |
 | `configs/overfit_1traj.yaml` | конфиг overfit (редактировать здесь)         |
+| `check_token_alignment.py`   | срез логитов форкастинга против позиций токенов |
+| `compare_train_eval_objects.py` | список объектов в обучении против эвала на одном кадре |
 
 
 ### Примеры
@@ -246,6 +264,22 @@ $PY $SHIM resume=True resume_path=$CKPT0 gpus=1 use_caching=True \
   model.training.learning_rate=1e-5 model.training.max_epochs=30 \
   expname=ft_my_addon
 ```
+
+---
+
+## `shell/` — оркестраторы
+
+| Файл                        | Назначение                                                     |
+| --------------------------- | -------------------------------------------------------------- |
+| `env.sh`                    | `PY`, `CKPT0`, `SHIM`, `PLAN_T`, `TRB_ROOT`                     |
+| `run_fix_pipeline.sh`       | очередь dump → assemble → split → cache → train → eval          |
+| `run_sign_pair_experiment.sh` | парные дообучения на одном знаке: те же сцены, разные кадры   |
+| `run_all_checks.sh`         | вся кампания одной очередью, одна таблица в конце               |
+| `run_2p5_tsfix_pipeline.sh` | 2.5 tsfix: extract cache → FT → eval                            |
+| `launch_overfit_sweep_tmux.sh` | overfit sweep в tmux                                         |
+
+Пути внутри очередей считаются от `$SM`, а вызываемые скрипты — от корня
+пайплайна (`$PIPE`), на уровень выше `shell/`.
 
 ---
 
