@@ -88,6 +88,13 @@ from core.manifest.no_entry_expansion import (
     build_no_entry_manifest_entry,
     expand_no_entry_scene_entries,
 )
+from core.manifest.crosswalk_expansion import (
+    CrosswalkExpansionConfig,
+    CrosswalkSimParams,
+    DEFAULT_POSITIONS,
+    discover_segment_crosswalk_scenes,
+    expand_crosswalk_scene_entries,
+)
 from core.scenarios.scene_augmentation import (
     SpawnScenario,
     pick_default_main_spawn_meta_for_net,
@@ -190,6 +197,7 @@ class SimulationConfig:
     compliant_stop_success_seconds: float = 3.0
     compliant_stop_max_dist_m: float = 12.0
     compliant_stop_speed_mps: float = 0.5
+    min_hops_after_depart: int = 0
 
 
 @dataclass
@@ -1850,6 +1858,185 @@ def generate_no_entry_manifest(
 
 
 # -----------------------------------------------------------------------------
+# Pedestrian crossing (5.19) manifest generation
+# -----------------------------------------------------------------------------
+def generate_crosswalk_manifest(
+    scenes_dir: Path,
+    output_dir: Path,
+    scenario_cfg: ScenarioConfig,
+    sim_cfg: SimulationConfig,
+    expansion_cfg: ExpansionConfig,
+    *,
+    split: str = "all",
+    max_ego_lanes: int = 3,
+    max_density_levels: int = 3,
+    max_pedestrian_presets: int = 3,
+    crosswalk_positions: Optional[List[str]] = None,
+    traffic_density_augment: bool = True,
+    ped_cfg: Optional[Dict[str, Any]] = None,
+) -> List[Dict]:
+    """Generate real_manifest.jsonl for PDD 5.19 (segment_crosswalk maps)."""
+    split = normalize_split(split)
+    # Maps come from moscow_scenes harvest — no scene_selection / reject apply step.
+    positions = tuple(crosswalk_positions or DEFAULT_POSITIONS)
+    all_scenes = discover_segment_crosswalk_scenes(scenes_dir, positions=positions)
+    print(f"Scenes root: {scenes_dir.resolve()}")
+    print(f"Discovered {len(all_scenes)} segment_crosswalk scene(s) on disk")
+
+    try:
+        scenes, split_by_id, skipped_unknown = filter_scene_dirs_by_split(
+            all_scenes, split=split, scenes_dir=scenes_dir
+        )
+    except FileNotFoundError as exc:
+        raise SystemExit(f"[error] {exc}") from exc
+
+    if skipped_unknown:
+        preview = ", ".join(skipped_unknown[:8])
+        more = f" (+{len(skipped_unknown) - 8} more)" if len(skipped_unknown) > 8 else ""
+        print(
+            f"  [split] Skipping {len(skipped_unknown)} scene(s) not in "
+            f"{pool_path(scenes_dir).name}: {preview}{more}"
+        )
+    print(f"Split filter: {split} → {len(scenes)} scene(s)")
+    print(
+        f"Augmentation axes (≤3 each): ego_lanes={max_ego_lanes}, "
+        f"density={max_density_levels}, ped_presets={max_pedestrian_presets}, "
+        f"positions={list(positions)}, layout={expansion_cfg.layout_on}"
+    )
+
+    ped = ped_cfg or {}
+    sim_params = CrosswalkSimParams(
+        spawn_distance_before_end=float(sim_cfg.spawn_distance_before_end),
+        sign_distance_before_end=float(sim_cfg.sign_distance_before_end),
+        spawn_velocity_ms=float(sim_cfg.spawn_velocity_ms),
+        horizon=int(sim_cfg.horizon),
+        traffic_density=float(sim_cfg.traffic_density),
+        traffic_density_augment=bool(traffic_density_augment),
+        min_hops_after_depart=int(getattr(sim_cfg, "min_hops_after_depart", 0) or 0),
+        destination_max_along_m=float(
+            sim_cfg.destination_max_along_m
+            if sim_cfg.destination_max_along_m is not None
+            else 40.0
+        ),
+        max_ego_lanes=int(max_ego_lanes),
+        max_density_levels=int(max_density_levels),
+        max_pedestrian_presets=int(max_pedestrian_presets),
+        crosswalk_positions=positions,
+        ped_ego_spawn_distance_m=float(ped.get("default_ego_spawn_distance_m", 50.0)),
+        ped_speed_mean=float(ped.get("default_speed_mean", 1.2)),
+        ped_speed_std=float(ped.get("default_speed_std", 0.2)),
+        ped_spawn_gap_s=float(ped.get("default_spawn_gap_s", 2.5)),
+        ped_yield_distance=float(ped.get("yield_distance", 12.0)),
+        ped_no_stop_before_crosswalk_m=float(ped.get("no_stop_before_crosswalk_m", 3.0)),
+    )
+    cw_expansion = CrosswalkExpansionConfig(
+        layout=expansion_cfg.layout_on,
+        max_scenarios=scenario_cfg.max_scenarios,
+    )
+
+    entries: List[Dict] = []
+    used_scene_ids: List[str] = []
+
+    for scene_dir in scenes:
+        meta = load_scene_metadata(scene_dir)
+        scene_name = meta.get("scene_name", scene_dir.name)
+        net_file = meta.get("net_file", "map.net.xml")
+        net_full_path = scene_dir / net_file
+        print(f"\n=== {scene_name} (pos={meta.get('crosswalk_position')}) ===")
+
+        scene_entries = expand_crosswalk_scene_entries(
+            scene_dir=scene_dir,
+            scenes_root=scenes_dir,
+            meta=meta,
+            net_path=net_full_path,
+            sim=sim_params,
+            expansion=cw_expansion,
+            pdd_code=PDD_CODE,
+            sign_type=SIGN_TYPE,
+        )
+        if not scene_entries:
+            print(f"  Skipping {scene_name}: no manifest entries after expansion")
+            continue
+
+        scene_split = split_by_id.get(scene_name) or split_by_id.get(scene_dir.name)
+        for entry in scene_entries:
+            entry["split"] = scene_split
+        entries.extend(scene_entries)
+        used_scene_ids.append(scene_dir.name)
+
+    pre_total = len(entries)
+    max_total = scenario_cfg.max_total
+    if max_total is not None and max_total >= 0 and pre_total > max_total:
+        rng = random.Random(
+            hash(("max_total_shuffle", int(max_total), split, PDD_CODE)) & 0xFFFFFFFF
+        )
+        rng.shuffle(entries)
+        entries = entries[: int(max_total)]
+        used_scene_ids = sorted({str(e.get("scene_name")) for e in entries if e.get("scene_name")})
+        print(
+            f"[max_total] Retained {len(entries)} of {pre_total} manifest entries "
+            f"(shuffled, cap={max_total})"
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / "real_manifest.jsonl"
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        for entry in entries:
+            f.write(json.dumps(entry, default=str) + "\n")
+
+    split_counts = count_splits(used_scene_ids, split_by_id)
+    summary = {
+        "pdd_code": PDD_CODE,
+        "sign_type": SIGN_TYPE,
+        "sign_name": SIGN_NAME,
+        "sign_class": "PedestrianCrossingSign",
+        "sign_placement": (
+            "PedestrianCrossingSign (5.19 icon) on ego approach lane; "
+            "yield enforced via PedestrianYieldRule + CrosswalkPedestrianManager"
+        ),
+        "split_filter": split,
+        "split_counts": split_counts,
+        "total_scenes": len(used_scene_ids),
+        "total_entries": len(entries),
+        "total_entries_before_max_total": pre_total,
+        "augmentation_layout": expansion_cfg.layout_on,
+        "max_ego_lanes": max_ego_lanes,
+        "max_density_levels": max_density_levels,
+        "max_pedestrian_presets": max_pedestrian_presets,
+        "crosswalk_positions": list(positions),
+        "traffic_density_augment": bool(traffic_density_augment),
+        "max_scenarios": scenario_cfg.max_scenarios,
+        "max_total": scenario_cfg.max_total,
+        "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
+        "horizon": sim_cfg.horizon,
+        "sign_distance_before_end": sim_cfg.sign_distance_before_end,
+        "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
+        "auxiliary_agent": False,
+        "generated_at": datetime.now().isoformat(),
+        "scenes": list(used_scene_ids),
+    }
+    summary_path = output_dir / "real_manifest_summary.json"
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+    manifest_meta_path = output_dir / "manifest.json"
+    with open(manifest_meta_path, "w", encoding="utf-8") as f:
+        json.dump({"entries_file": "real_manifest.jsonl", **summary}, f, indent=2)
+
+    repro_dir = write_repro_artifacts(
+        output_dir=output_dir,
+        scenes_dir=scenes_dir,
+        split_filter=split,
+        used_scene_ids=used_scene_ids,
+        split_by_id=split_by_id,
+        pdd_code=PDD_CODE,
+    )
+    print(f"Wrote repro artifacts → {repro_dir}")
+    print(f"\nGenerated {len(entries)} manifest entries from {len(used_scene_ids)} scenes")
+    print(f"  Manifest: {manifest_path}")
+    return entries
+
+
+# -----------------------------------------------------------------------------
 # Manifest generation
 # -----------------------------------------------------------------------------
 def generate_manifest(
@@ -2141,6 +2328,8 @@ def render_gifs_from_manifest(
             cmd.append("--draw-path-conflict")
         if gif_cfg.window_m is not None and float(gif_cfg.window_m) > 0.0:
             cmd.extend(["--gif-window-m", str(float(gif_cfg.window_m))])
+        row_horizon = int(row.get("horizon_steps") or row.get("horizon") or 600)
+        cmd.extend(["--max-steps", str(max(1, row_horizon))])
 
         if aux_cfg.enabled:
             cmd.append("--auxiliary-agent")
@@ -2267,6 +2456,9 @@ def main(cfg: DictConfig) -> None:
         compliant_stop_speed_mps=float(
             getattr(cfg.simulation, "compliant_stop_speed_mps", 0.5) or 0.5
         ),
+        min_hops_after_depart=int(
+            getattr(cfg.simulation, "min_hops_after_depart", 0) or 0
+        ),
     )
     expert_cfg = ExpertConfig(
         stop_wait_steps=int(
@@ -2365,6 +2557,40 @@ def main(cfg: DictConfig) -> None:
             sim_cfg=sim_cfg,
             expansion_cfg=expansion_cfg,
             split=split,
+        )
+    elif profile.spawn_strategy == "crosswalk":
+        positions_raw = getattr(cfg.scenario, "crosswalk_positions", None)
+        if positions_raw is None:
+            positions_list = list(DEFAULT_POSITIONS)
+        elif OmegaConf.is_list(positions_raw) or isinstance(positions_raw, (list, tuple)):
+            positions_list = [str(x) for x in positions_raw]
+        else:
+            positions_list = [str(positions_raw)]
+        ped_node = getattr(cfg, "pedestrian", None)
+        ped_cfg = (
+            OmegaConf.to_container(ped_node, resolve=True)
+            if ped_node is not None
+            else {}
+        )
+        if not isinstance(ped_cfg, dict):
+            ped_cfg = {}
+        entries = generate_crosswalk_manifest(
+            scenes_dir=scenes_dir,
+            output_dir=experiment_dir,
+            scenario_cfg=scenario_cfg,
+            sim_cfg=sim_cfg,
+            expansion_cfg=expansion_cfg,
+            split=split,
+            max_ego_lanes=int(getattr(cfg.scenario, "max_ego_lanes", 3) or 3),
+            max_density_levels=int(getattr(cfg.scenario, "max_density_levels", 3) or 3),
+            max_pedestrian_presets=int(
+                getattr(cfg.scenario, "max_pedestrian_presets", 3) or 3
+            ),
+            crosswalk_positions=positions_list,
+            traffic_density_augment=bool(
+                getattr(cfg.simulation, "traffic_density_augment", True)
+            ),
+            ped_cfg=ped_cfg,
         )
     else:
         entries = generate_manifest(

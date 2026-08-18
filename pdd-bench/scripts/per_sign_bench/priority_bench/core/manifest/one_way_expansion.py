@@ -9,7 +9,6 @@ shuffle.
 """
 from __future__ import annotations
 
-import random
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +26,7 @@ from .dual_path_budget import (
     apply_dual_path_route_budget,
     load_sumo_edge_lengths,
 )
+from .manifest_expansion import shuffle_cap
 
 _PER_SIGN_BENCH = Path(__file__).resolve().parents[3]
 if str(_PER_SIGN_BENCH) not in sys.path:
@@ -169,15 +169,15 @@ def expand_one_way_scene_entries(
         for dp in dual_paths
     )
     cap = expansion.max_scenarios
+    candidates = shuffle_cap(
+        candidates,
+        cap,
+        seed_key=(scene_name, "one_way_combo_cap", int(cap) if cap is not None else 0),
+    )
     if cap is not None and pre_cap > cap:
-        rng = random.Random(
-            hash((scene_name, "one_way_combo_cap", int(cap))) & 0xFFFFFFFF
-        )
-        rng.shuffle(candidates)
-        candidates = candidates[:cap]
         print(
             f"  Retained {len(candidates)} of {pre_cap} "
-            f"(dual×lane×NPC) scenario(s) (cap={cap}; "
+            f"(dual×lane×NPC) scenario(s) (shuffled, cap={cap}; "
             f"{len(dual_paths)} dual, {n_lane_combos} lane-slots, "
             f"{n_variations} profiles)"
         )

@@ -2,6 +2,7 @@
 
 from .base import (
     BLOCKED_ROAD,
+    CROSSWALK,
     DIRECTION_LEFT,
     DIRECTION_LEFT_RIGHT,
     DIRECTION_RIGHT,
@@ -43,6 +44,7 @@ __all__ = [
     "NO_TURN_RIGHT",
     "NO_TURN_LEFT",
     "NO_ENTRY",
+    "CROSSWALK",
     "SignProfile",
     "get_profile",
     "list_profiles",

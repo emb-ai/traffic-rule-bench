@@ -1,4 +1,4 @@
-# Priority junction bench — 2.1 main / 2.3 secondary / 2.4 yield / 2.5 stop / 4.1.x direction / 4.3 roundabout / 3.2 blocked_road / 5.7.x one_way
+# Priority junction bench — 2.1 main / 2.3 secondary / 2.4 yield / 2.5 stop / 4.1.x direction / 4.3 roundabout / 3.2 blocked_road / 5.7.x one_way / 5.19 crosswalk
 #   python generate_manifest.py
 #   python generate_manifest.py sign=secondary
 #   python generate_manifest.py sign=yield
@@ -13,6 +13,7 @@
 #   python generate_manifest.py sign=direction_straight_right
 #   python generate_manifest.py sign=direction_straight_left
 #   python generate_manifest.py sign=direction_left_right
+#   python generate_manifest.py sign=crosswalk
 
 defaults:
   - _self_

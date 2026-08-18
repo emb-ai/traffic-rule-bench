@@ -60,6 +60,26 @@ class ExpansionConfig:
 BuildEntryFn = Callable[..., Dict]
 
 
+def shuffle_cap(items: List, cap: Optional[int], *, seed_key: tuple) -> List:
+    """Keep ``cap`` items after a deterministic shuffle.
+
+    Used by every sign after the full augmentation product: shuffle only when
+    ``len(items) > cap``. ``cap is None`` or ``cap < 0`` leaves the list as-is.
+    """
+    if cap is None:
+        return items
+    try:
+        cap_i = int(cap)
+    except (TypeError, ValueError):
+        return items
+    if cap_i < 0 or len(items) <= cap_i:
+        return items
+    out = list(items)
+    rng = random.Random(hash(tuple(seed_key)) & 0xFFFFFFFF)
+    rng.shuffle(out)
+    return out[:cap_i]
+
+
 def sizes_up_to(
     max_value: int,
     *,
@@ -392,22 +412,22 @@ def expand_scene_entries(
 
     # After the full cartesian product (+ filters), shuffle then cap per scene.
     cap = expansion.max_scenarios
-    if cap is not None:
-        rng = random.Random(
-            hash((scene_name, "max_scenarios_shuffle", int(cap))) & 0xFFFFFFFF
+    pre_cap = len(scene_entries)
+    scene_entries = shuffle_cap(
+        scene_entries,
+        cap,
+        seed_key=(scene_name, "max_scenarios_shuffle", int(cap) if cap is not None else 0),
+    )
+    if cap is not None and pre_cap > cap:
+        print(
+            f"  Retained {len(scene_entries)} of {pre_cap} manifest entries "
+            f"for {scene_name} (shuffled, cap={cap})"
         )
-        rng.shuffle(scene_entries)
-        if len(scene_entries) > cap:
-            print(
-                f"  Retained {cap} of {len(scene_entries)} manifest entries "
-                f"for {scene_name} (shuffled)"
-            )
-            scene_entries = scene_entries[:cap]
-        else:
-            print(
-                f"  Manifest entries for {scene_name}: {len(scene_entries)} "
-                f"(shuffled, under cap={cap})"
-            )
+    elif cap is not None:
+        print(
+            f"  Manifest entries for {scene_name}: {len(scene_entries)} "
+            f"(under cap={cap})"
+        )
     else:
         print(f"  Manifest entries for {scene_name}: {len(scene_entries)}")
 

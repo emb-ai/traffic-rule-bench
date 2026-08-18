@@ -1,0 +1,57 @@
+# @package _global_
+# PDD 5.19 pedestrian crossing (segment_crosswalk maps).
+# Maps are prepared in moscow_scenes (prepare_segment_crosswalk.py).
+# Augmentation axes (each capped at 3):
+#   1) ego approach lane
+#   2) traffic density (nuPlan low/medium/high)
+#   3) crosswalk position (near_start / middle / near_end — separate maps)
+#   4) pedestrian presets from crosswalk_sign/lib/pedestrian_presets.py
+
+sign: crosswalk
+
+paths:
+  # Nested segment_crosswalk harvest from moscow_scenes (straight/ + curved/).
+  scenes_dir: ../moscow_scenes/scenes/segment_crosswalk
+  output_base: data/crosswalk/output
+  split: all
+
+augmentation:
+  layout: true
+  auxiliary: false
+
+auxiliary:
+  enabled: false
+
+scenario:
+  max_scenarios: 10
+  max_total: null
+  max_ego_lanes: 3
+  max_density_levels: 3
+  max_pedestrian_presets: 3
+  # Crosswalk position variants to include (scene name suffix _cw_<pos>).
+  crosswalk_positions: [near_start, middle, near_end]
+
+simulation:
+  horizon: 600
+  spawn_velocity_ms: 2.5
+  traffic_density: 0.0
+  traffic_density_augment: true
+  sign_distance_before_end: 12.0
+  # Distance before the crosswalk. Clamped per approach so short near_start
+  # stubs still work; long middle/near_end approaches spawn further back.
+  spawn_distance_before_end: 55.0
+  # Dest is the first edge past the crosswalk, capped so 600 steps can finish.
+  min_hops_after_depart: 0
+  destination_max_along_m: 40.0
+
+gif:
+  window_m: 130
+
+pedestrian:
+  # Trigger while ego is still approaching, not already on the zebra.
+  default_ego_spawn_distance_m: 50.0
+  default_speed_mean: 1.2
+  default_speed_std: 0.2
+  default_spawn_gap_s: 2.5
+  yield_distance: 5.0
+  no_stop_before_crosswalk_m: 3.0

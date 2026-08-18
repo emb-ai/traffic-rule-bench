@@ -10,7 +10,6 @@ NPC world params come from the same shared helpers as sumo_space:
 
 from __future__ import annotations
 
-import random
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +17,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..scenarios.blocked_road_route import forbidden_edge_geometry_ok
 from ..scenarios.scene_augmentation import SpawnScenario, augment_layout_for_scene
+from .manifest_expansion import shuffle_cap
 
 # per_sign_bench/ on path for factorized_space + sumo_space.
 _PER_SIGN_BENCH = Path(__file__).resolve().parents[3]
@@ -136,15 +136,15 @@ def expand_blocked_road_scene_entries(
     ]
     pre_cap = len(candidates)
     cap = expansion.max_scenarios
+    candidates = shuffle_cap(
+        candidates,
+        cap,
+        seed_key=(scene_name, "blocked_road_combo_cap", int(cap) if cap is not None else 0),
+    )
     if cap is not None and pre_cap > cap:
-        rng = random.Random(
-            hash((scene_name, "blocked_road_combo_cap", int(cap))) & 0xFFFFFFFF
-        )
-        rng.shuffle(candidates)
-        candidates = candidates[:cap]
         print(
             f"  Retained {len(candidates)} of {pre_cap} "
-            f"(layout×NPC) scenario(s) (cap={cap}; "
+            f"(layout×NPC) scenario(s) (shuffled, cap={cap}; "
             f"{len(layout_kept)} layouts × {n_variations} profiles)"
         )
     else:

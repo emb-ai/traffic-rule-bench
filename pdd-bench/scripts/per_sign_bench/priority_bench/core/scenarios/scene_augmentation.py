@@ -29,6 +29,7 @@ SpawnStrategy = Literal[
     "direction",
     "no_turn",
     "no_entry",
+    "crosswalk",
 ]
 EgoManeuver = Literal["left", "right", "straight"]
 AuxSide = Literal["left", "right", "straight", "other"]

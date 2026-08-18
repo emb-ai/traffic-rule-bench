@@ -1,10 +1,12 @@
-# moscow_scenes — Moscow map harvest (junction-only + dual_path)
+# moscow_scenes — Moscow map harvest (junction + dual_path + segment)
 
-Sign-free scene harvest for Moscow. Scenes are keyed by **SUMO `junction_id`**
-(or roundabout fingerprint), not by traffic-sign database IDs.
+Sign-free scene harvest for Moscow. Junction / dual_path scenes are keyed by
+**SUMO `junction_id`** (or roundabout fingerprint). Segment scenes are keyed by
+incoming **edge_id** and split by **OSM way id**.
 
 Formerly `moscow_junctions`. Renamed because the pool now includes **dual_path**
-crops (path-union bbox), not only junction-only stubs.
+crops (path-union bbox) and **segment** crops (straight-road stubs), not only
+junction-only maps.
 
 > Naming: use **dual_path**, not “detour” (PDD **4.2.1** is the detour sign).
 
@@ -14,30 +16,33 @@ crops (path-union bbox), not only junction-only stubs.
 moscow_scenes/
 ├── README.md
 ├── raw/ … nets/ … index/
-├── lib/                         # dual_path discovery + roles + stem
+├── lib/                         # dual_path, lane_direction, segment, roles, stem
 ├── scenes/
 │   ├── {T,X,O}/                 # junction-only (~80 m arms)
 │   ├── dual_path/{T,X}/{slot}/  # path-union crops (l_s, l_r, …)
-│   └── lane_direction/{T,X}/    # 5.15.1 multi-lane LC crops
+│   ├── lane_direction/{T,X}/    # 5.15.1 multi-lane LC crops
+│   └── segment/{straight,curved}/  # straight-road stubs (no intersection)
 ├── splits/
 │   ├── signs.yaml / signs.json
 │   ├── train_ids.json / test_ids.json
 │   └── sign_allocations.json
 └── scripts/
     ├── build_net.py / enumerate_junctions.py / crop_scenes.py
-    ├── crop_dual_path_scenes.py
+    ├── crop_dual_path_scenes.py / crop_lane_direction_scenes.py
+    ├── enumerate_segments.py / crop_segment_scenes.py
     ├── make_junction_split.py / allocate_sign_scenes.py
     └── run_pipeline.py
 ```
 
-## Two crop kinds
+## Crop kinds
 
 
-| Kind             | Path                                  | Used by                    |
-| ---------------- | ------------------------------------- | -------------------------- |
-| `junction`       | `scenes/{T,X,O}/`                     | 2.x, 3.2, 4.3, …           |
-| `dual_path`      | `scenes/dual_path/{T,X}/{slot}/`      | 5.7, 3.18, 4.1, 3.1        |
-| `lane_direction` | `scenes/lane_direction/{T,X}/`        | **5.15.1** (multi-lane LC) |
+| Kind             | Path                                  | Used by                         |
+| ---------------- | ------------------------------------- | ------------------------------- |
+| `junction`       | `scenes/{T,X,O}/`                     | 2.x, 3.2, 4.3, …                |
+| `dual_path`      | `scenes/dual_path/{T,X}/{slot}/`      | 5.7, 3.18, 4.1, 3.1             |
+| `lane_direction` | `scenes/lane_direction/{T,X}/`        | **5.15.1** (multi-lane LC)      |
+| `segment`        | `scenes/segment/{straight,curved}/`   | **3.24**, **5.19**, **4.2.x**   |
 
 
 ### Dual-path slots
@@ -57,6 +62,23 @@ early-stop when buckets are full.
 
 Sign → slots (allocate filter): see `lib/roles.py` (`SIGN_TO_SLOTS`).
 Extra gates: **5.7** → T only, `ego_is_t_stem`, `carriageway_pair`.
+
+### Segments (straight-road signs)
+
+These signs are tested **on a road, not at an intersection**. Source is
+`incoming_edge_ids` from `index/junctions.jsonl`: the approach is cropped so the
+scene **ends before the junction** (10 m margin). That reuses the existing
+junction harvest and keeps the map a plain corridor.
+
+Filters (`lib/segment.py`):
+
+- length ≥ **150 m** — covers braking from ego spawn 60 km/h to a 20 km/h limit
+  (`d_brake ≈ 47 m` at 3.5 m/s²) plus a ~60 m compliance zone and buffers
+- **straight** — chord/arc ≥ 0.99 → **3.24** (curve-aware IDM must not brake
+  from geometry)
+- **curved** — chord/arc ≥ 0.97 → **5.19**, **4.2.x** (slight curvature OK)
+
+Each scene: `map.net.xml`, `meta.json`, `center.json`, `custom_cropped.png`.
 
 ## Pipeline
 
@@ -78,16 +100,25 @@ python scripts/crop_dual_path_scenes.py --max-per-slot 500 --skip-existing
 python scripts/crop_lane_direction_scenes.py --max-per-shape 500 --skip-existing
 # smoke:  python scripts/crop_lane_direction_scenes.py --max-junctions 50 --max-per-shape 5
 
-python scripts/make_junction_split.py  # global train/test split among X/T/O 
+# Segment harvest for 3.24 / 5.19 / 4.2.x (incoming edges, cropped before junction)
+python scripts/enumerate_segments.py
+python scripts/crop_segment_scenes.py --max-per-type 500 --skip-existing
+# smoke:  python scripts/crop_segment_scenes.py --max-per-type 10
+
+python scripts/make_junction_split.py  # global train/test split among X/T/O
 python scripts/allocate_sign_scenes.py
 ```
 
 ## Train / test
 
 1. Shared pool — not owned by any sign.
-2. Prefer split by `**junction_id**` so junction-only and dual_path crops of the
-  same junction stay on the same side (no road leakage across train/test).
-3. Signs sample from the matching `crop_kind` with shape / slot filters.
+2. Junction / dual_path / lane_direction: prefer split by `**junction_id**` so
+  crops of the same junction stay on the same side (no road leakage across
+  train/test).
+3. Segments: split by `**osm_way_id**` so consecutive SUMO edges of one OSM way
+  cannot land in both train and test.
+4. Signs sample from the matching `crop_kind` with shape / slot / segment_type
+  filters.
 
 Quotas: `splits/signs.yaml` (`n_train`, `n_test`, `seed`, `crop_kind`, …).
 

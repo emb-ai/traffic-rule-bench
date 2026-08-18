@@ -42,8 +42,10 @@ DEFAULT_SIGNS_YAML = ROOT / "splits" / "signs.yaml"
 DEFAULT_TRAIN = ROOT / "splits" / "train_ids.json"
 DEFAULT_TEST = ROOT / "splits" / "test_ids.json"
 DEFAULT_INDEX = ROOT / "index" / "junctions.jsonl"
+DEFAULT_SEGMENTS_INDEX = ROOT / "index" / "segments.jsonl"
 DEFAULT_DUAL_ROOT = ROOT / "scenes" / "dual_path"
 DEFAULT_LANE_DIR_ROOT = ROOT / "scenes" / "lane_direction"
+DEFAULT_SEGMENT_ROOT = ROOT / "scenes" / "segment"
 DEFAULT_OUT = ROOT / "splits" / "sign_allocations.json"
 
 
@@ -267,6 +269,78 @@ def _scan_lane_direction_pool(
     return by_shape
 
 
+def _load_segments_index(path: Path) -> Dict[str, Dict]:
+    """Load segments.jsonl as {scene_id: row}."""
+    index: Dict[str, Dict] = {}
+    if not path.is_file():
+        return index
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            sid = str(row.get("scene_id", ""))
+            if sid:
+                index[sid] = row
+    return index
+
+
+def _scan_segment_pool(
+    segment_root: Path,
+    segments_index: Dict[str, Dict],
+    *,
+    allowed_segment_types: Set[str],
+    allowed_osm_ways: Set[str],
+) -> Dict[str, Dict[str, List[str]]]:
+    """Return ``by_type[segment_type][segment_type] = [scene_id, ...]``.
+
+    For segments, we don't have shape (T/X), so we use segment_type as the key.
+    Split is by osm_way_id (not junction_id) to prevent data leakage.
+    """
+    by_type: Dict[str, Dict[str, List[str]]] = {t: {} for t in allowed_segment_types}
+    if not segment_root.is_dir():
+        return by_type
+    for type_dir in sorted(segment_root.iterdir()):
+        if not type_dir.is_dir():
+            continue
+        seg_type = type_dir.name
+        if seg_type not in allowed_segment_types:
+            continue
+        for scene_dir in sorted(type_dir.iterdir()):
+            meta_path = scene_dir / "meta.json"
+            if not meta_path.is_file():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            osm_way = str(meta.get("osm_way_id") or "")
+            if allowed_osm_ways and osm_way not in allowed_osm_ways:
+                continue
+            sid = str(meta.get("scene_id") or scene_dir.name)
+            by_type.setdefault(seg_type, {}).setdefault(seg_type, []).append(sid)
+    for seg_type, by_sub in list(by_type.items()):
+        for sub in list(by_sub):
+            by_sub[sub] = sorted(set(by_sub[sub]))
+    return by_type
+
+
+def _osm_ways_for_split(
+    segments_index: Dict[str, Dict],
+    scene_ids: List[str],
+) -> Set[str]:
+    """Get osm_way_ids for given scene_ids."""
+    ways: Set[str] = set()
+    for sid in scene_ids:
+        row = segments_index.get(sid)
+        if row:
+            way = str(row.get("osm_way_id", ""))
+            if way:
+                ways.add(way)
+    return ways
+
+
 def allocate(
     *,
     signs_cfg: dict,
@@ -275,6 +349,8 @@ def allocate(
     scene_to_junc: Dict[str, str],
     dual_root: Path,
     lane_dir_root: Path,
+    segment_root: Path,
+    segments_index: Dict[str, Dict],
 ) -> dict:
     seed = int(signs_cfg.get("seed", 42))
     n_train = int(signs_cfg.get("n_train", 115))
@@ -358,6 +434,42 @@ def allocate(
             test_need = _counts_for_sign(
                 shapes=shapes, n_total=sign_n_test, x_share=x_share
             )
+        elif crop_kind == "segment":
+            # Segment scenes: split by osm_way_id, not junction_id
+            segment_types = set(spec.get("segment_types") or ["straight", "curved"])
+            # Build osm_way_id sets from train/test junction splits
+            # Use segments whose osm_way_id appears only in train/test junctions
+            train_ways = _osm_ways_for_split(segments_index, list(segments_index.keys()))
+            test_ways: Set[str] = set()
+            # Simple hash-based split by osm_way_id
+            for sid, row in segments_index.items():
+                osm_way = str(row.get("osm_way_id", ""))
+                if osm_way:
+                    # 20% test split via hash
+                    if hash(osm_way) % 5 == 0:
+                        test_ways.add(osm_way)
+            train_ways = train_ways - test_ways
+            train_pool = _scan_segment_pool(
+                segment_root,
+                segments_index,
+                allowed_segment_types=segment_types,
+                allowed_osm_ways=train_ways,
+            )
+            test_pool = _scan_segment_pool(
+                segment_root,
+                segments_index,
+                allowed_segment_types=segment_types,
+                allowed_osm_ways=test_ways,
+            )
+            # For segments, use segment_type as the "shape" key
+            train_need = {t: sign_n_train // len(segment_types) for t in segment_types}
+            test_need = {t: sign_n_test // len(segment_types) for t in segment_types}
+            # Distribute remainder
+            for i, t in enumerate(sorted(segment_types)):
+                if i < sign_n_train % len(segment_types):
+                    train_need[t] += 1
+                if i < sign_n_test % len(segment_types):
+                    test_need[t] += 1
         else:
             train_pool = {s: list(train_by_shape.get(s, [])) for s in shapes}
             test_pool = {s: list(test_by_shape.get(s, [])) for s in shapes}
@@ -369,7 +481,7 @@ def allocate(
         got_train_slots: Dict[str, Dict[str, int]] = {}
         got_test_slots: Dict[str, Dict[str, int]] = {}
 
-        if crop_kind in ("dual_path", "lane_direction"):
+        if crop_kind in ("dual_path", "lane_direction", "segment"):
             for shape, need in train_need.items():
                 by_slot = dict(train_pool.get(shape) or {})
                 picked, slot_got = _sample_balanced_across_slots(
@@ -438,6 +550,11 @@ def allocate(
         elif crop_kind == "lane_direction":
             block["train"]["by_compliant_dir"] = got_train_slots
             block["test"]["by_compliant_dir"] = got_test_slots
+        elif crop_kind == "segment":
+            block["train"]["by_segment_type"] = got_train_slots
+            block["test"]["by_segment_type"] = got_test_slots
+            block["segment_types"] = sorted(segment_types)
+            block["shapes"] = []  # segments don't have shapes
         allocations[str(sign_code)] = block
 
     return {
@@ -457,8 +574,10 @@ def main() -> None:
     ap.add_argument("--train-ids", type=Path, default=DEFAULT_TRAIN)
     ap.add_argument("--test-ids", type=Path, default=DEFAULT_TEST)
     ap.add_argument("--index", type=Path, default=DEFAULT_INDEX)
+    ap.add_argument("--segments-index", type=Path, default=DEFAULT_SEGMENTS_INDEX)
     ap.add_argument("--dual-root", type=Path, default=DEFAULT_DUAL_ROOT)
     ap.add_argument("--lane-dir-root", type=Path, default=DEFAULT_LANE_DIR_ROOT)
+    ap.add_argument("--segment-root", type=Path, default=DEFAULT_SEGMENT_ROOT)
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = ap.parse_args()
 
@@ -474,6 +593,7 @@ def main() -> None:
     train_doc = json.loads(args.train_ids.read_text(encoding="utf-8"))
     test_doc = json.loads(args.test_ids.read_text(encoding="utf-8"))
     scene_to_junc = _load_index_maps(args.index)
+    segments_index = _load_segments_index(args.segments_index)
     result = allocate(
         signs_cfg=signs_cfg,
         train_by_shape=train_doc.get("by_shape") or {},
@@ -481,6 +601,8 @@ def main() -> None:
         scene_to_junc=scene_to_junc,
         dual_root=args.dual_root,
         lane_dir_root=args.lane_dir_root,
+        segment_root=args.segment_root,
+        segments_index=segments_index,
     )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -505,10 +627,16 @@ def main() -> None:
             tr = block["train"].get("by_compliant_dir") or {}
             te = block["test"].get("by_compliant_dir") or {}
             slot_note = f"  dirs_train={tr}  dirs_test={te}"
+        elif block.get("crop_kind") == "segment":
+            tr = block["train"].get("by_segment_type") or {}
+            te = block["test"].get("by_segment_type") or {}
+            slot_note = f"  types_train={tr}  types_test={te}"
+        by_shape = block["train"].get("by_shape") or block["train"].get("by_segment_type") or {}
+        by_shape_test = block["test"].get("by_shape") or block["test"].get("by_segment_type") or {}
         print(
             f"  {code} [{block.get('crop_kind', 'junction')}]: "
-            f"train={block['train']['n']} {block['train']['by_shape']}  "
-            f"test={block['test']['n']} {block['test']['by_shape']}"
+            f"train={block['train']['n']} {by_shape}  "
+            f"test={block['test']['n']} {by_shape_test}"
             f"{slot_note}"
         )
     if result["shortfalls"]:

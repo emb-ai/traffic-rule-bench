@@ -1,4 +1,4 @@
-"""Sign profiles for priority-junction benches (2.1–2.5 / 3.1 / 3.18 / 4.1.x / 4.3 / 3.2 / 5.7.x)."""
+"""Sign profiles for priority-junction benches (2.1–2.5 / 3.1 / 3.18 / 4.1.x / 4.3 / 3.2 / 5.7.x / 5.19)."""
 
 from __future__ import annotations
 
@@ -240,6 +240,19 @@ NO_ENTRY = SignProfile(
     ego_road_class=None,
 )
 
+# 5.19: segment maps with injected SUMO crosswalk (moscow_scenes/segment_crosswalk).
+CROSSWALK = SignProfile(
+    id="crosswalk",
+    pdd_code="5.19",
+    sign_type="crosswalk",
+    sign_name="Pedestrian crossing (5.19)",
+    layout_mode="main_main",
+    spawn_strategy="crosswalk",
+    data_subdir="crosswalk",
+    output_code="5_19",
+    ego_road_class=None,
+)
+
 _PROFILES = (
     MAIN_ROAD,
     SECONDARY_ROAD,
@@ -258,6 +271,7 @@ _PROFILES = (
     NO_TURN_RIGHT,
     NO_TURN_LEFT,
     NO_ENTRY,
+    CROSSWALK,
 )
 
 _REGISTRY: dict[str, SignProfile] = {
@@ -278,6 +292,7 @@ _REGISTRY: dict[str, SignProfile] = {
     NO_TURN_RIGHT.id: NO_TURN_RIGHT,
     NO_TURN_LEFT.id: NO_TURN_LEFT,
     NO_ENTRY.id: NO_ENTRY,
+    CROSSWALK.id: CROSSWALK,
     # aliases
     "2.1": MAIN_ROAD,
     "2_1": MAIN_ROAD,
@@ -322,6 +337,10 @@ _REGISTRY: dict[str, SignProfile] = {
     "3_18_2": NO_TURN_LEFT,
     "3.1": NO_ENTRY,
     "3_1": NO_ENTRY,
+    "5.19": CROSSWALK,
+    "5_19": CROSSWALK,
+    "5.19.1": CROSSWALK,
+    "5.19.2": CROSSWALK,
 }
 
 
