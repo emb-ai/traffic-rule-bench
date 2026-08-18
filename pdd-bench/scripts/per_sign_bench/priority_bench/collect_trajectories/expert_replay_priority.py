@@ -70,7 +70,7 @@ IDM_VARIANT_POLICIES = {"idm", "modified_idm", "comprehensive_rule_expert"}
 POLICY_CHOICES = [
     "idm", "modified_idm", "comprehensive_rule_expert",
     "rule_compliant", "ppo_lidar",
-    "carl", "carl_rule", "plant2", "plant2_rule",
+    "carl", "carl_rule", "plant2", "plant2_rule", "plant2_ft",
 ]
 
 
@@ -541,9 +541,13 @@ def main() -> None:
     if not args.scenes_root:
         args.scenes_root = str(profile_scenes_dir(profile))
     print(f"Sign profile: {profile.id} ({SIGN_CODE} / {SIGN_SLUG})")
-    if args.policy in {"carl", "carl_rule", "plant2", "plant2_rule"} and not args.model_path:
-        print(f"ERROR: --model-path required for {args.policy}", file=sys.stderr)
-        sys.exit(2)
+    if args.policy in {"carl", "carl_rule", "plant2", "plant2_rule", "plant2_ft"}:
+        from core.runtime.checkpoints import resolve_nn_checkpoint
+        args.model_path = resolve_nn_checkpoint(args.policy, args.model_path)
+        if not args.model_path:
+            print(f"ERROR: --model-path required for {args.policy} (no default found)",
+                  file=sys.stderr)
+            sys.exit(2)
     sys.exit(run_collection(args))
 
 

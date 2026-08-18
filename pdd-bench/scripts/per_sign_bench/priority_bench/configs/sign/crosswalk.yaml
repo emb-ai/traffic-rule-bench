@@ -5,7 +5,7 @@
 #   1) ego approach lane
 #   2) traffic density (nuPlan low/medium/high)
 #   3) crosswalk position (near_start / middle / near_end — separate maps)
-#   4) pedestrian presets from crosswalk_sign/lib/pedestrian_presets.py
+#   4) pedestrian presets from core/scenarios/pedestrian_presets.py
 
 sign: crosswalk
 

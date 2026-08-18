@@ -16,7 +16,6 @@ PACKAGE_DIR = TOOLS_DIR.parent
 PDD_BENCH_DIR = PACKAGE_DIR.parent.parent.parent
 SDC_ROOT = PDD_BENCH_DIR.parent
 SCENES_ROOT = PACKAGE_DIR / "scenes"
-CHECKPOINTS_DIR = PDD_BENCH_DIR / "checkpoints"
 
 # Add paths for imports
 sys.path.insert(0, str(PDD_BENCH_DIR))
@@ -27,20 +26,16 @@ from core.runtime.metadrive_sumo_patch import apply_metadrive_sumo_via_patch
 apply_metadrive_sumo_via_patch()
 
 from core.sumo.sumo_utils import resolve_net_file, load_scene_meta, find_first_edge_id, DEFAULT_NET_FILE
+from core.runtime.checkpoints import (
+    NN_NEED_CHECKPOINT,
+    PLAIN_PLANT2_POLICIES,
+    resolve_nn_checkpoint,
+)
 
 # Policy categories
 IDM_FAMILY = {"idm", "modified_idm", "comprehensive_rule_expert"}
-NN_NEED_CHECKPOINT = {"carl", "carl_rule", "plant2", "plant2_rule"}
 NN_NO_CHECKPOINT = {"rule_compliant", "ppo_lidar"}
 ALL_POLICIES = IDM_FAMILY | NN_NEED_CHECKPOINT | NN_NO_CHECKPOINT
-
-# Default checkpoint paths
-DEFAULT_MODEL_PATHS = {
-    "carl": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
-    "carl_rule": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
-    "plant2": CHECKPOINTS_DIR / "plant2_pretrain" / "epoch=029_final_3.ckpt",
-    "plant2_rule": CHECKPOINTS_DIR / "plant2_pretrain" / "epoch=029_final_3.ckpt",
-}
 
 
 def build_catalog_row(scene_dir: Path, meta: dict, var_idx: int = 0) -> dict:
@@ -142,9 +137,9 @@ def load_policy_models(policy: str, model_path: str | None, plant2_action_mode: 
         PlainCarlPolicy.set_checkpoint(model_path, device=device)
         policy_cls = PlainCarlPolicy
         
-    elif policy == "plant2":
+    elif policy in PLAIN_PLANT2_POLICIES:
         if not model_path:
-            raise ValueError("--model-path is required for --policy plant2")
+            raise ValueError(f"--model-path is required for --policy {policy}")
         PLANT2_PATH = SDC_ROOT / "plant2"
         from agents.policies.plain_plant2_policy import PlainPlanT2Policy
         PlainPlanT2Policy.set_checkpoint(
@@ -210,16 +205,7 @@ def make_policy(policy_type: str, vehicle, seed: int, models: dict | None = None
 
 def resolve_model_path(policy: str, model_path: str | None) -> str | None:
     """Resolve model path, using default if not provided."""
-    if model_path:
-        return model_path
-    
-    if policy in NN_NEED_CHECKPOINT:
-        default = DEFAULT_MODEL_PATHS.get(policy)
-        if default and default.is_file():
-            print(f"Using default checkpoint for {policy}: {default}")
-            return str(default)
-    
-    return None
+    return resolve_nn_checkpoint(policy, model_path)
 
 
 def main():

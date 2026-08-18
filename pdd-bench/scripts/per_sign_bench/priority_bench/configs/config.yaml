@@ -67,6 +67,7 @@ gif:
   window_m: 60
   draw_path_conflict: false  # cyan/magenta routes + yellow conflict X on GIFs
   # Optional; carl/carl_rule/plant2/plant2_rule default to pretrained:
-  #   carl*:    pdd-bench/checkpoints/carl/nuplan_51479_1B/model_best.pth
-  #   plant2*:  pdd-bench/checkpoints/plant2_pretrain/epoch=029_final_3.ckpt
+  #   carl*:      pdd-bench/checkpoints/carl/nuplan_51479_1B/model_best.pth
+  #   plant2*:    pdd-bench/checkpoints/plant2_pretrain/epoch=029_final_3.ckpt
+  #   plant2_ft:  newest *.ckpt under pdd-bench/checkpoints/plant2_finetuned/
   model_path: null

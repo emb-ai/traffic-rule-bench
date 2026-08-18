@@ -158,6 +158,8 @@ python generate_manifest.py sign=roundabout paths.split=train
 
 # Common overrides
 python generate_manifest.py sign=stop gif.enabled=true gif.policy=comprehensive_rule_expert
+python generate_manifest.py sign=stop gif.enabled=true gif.policy=plant2_ft
+# Finetuned PlanT2: newest *.ckpt under pdd-bench/checkpoints/plant2_finetuned/
 python generate_manifest.py sign=stop auxiliary.lanes_occupied=2 auxiliary.convoy_size=2
 # Stop dwell at the line (sign=stop only): default 15 steps (~1.5 s); was 30 (~3 s)
 python generate_manifest.py sign=stop expert.stop_wait_steps=15
@@ -176,12 +178,24 @@ Output lands under `data/<sign>/output/<timestamp>/`:
 
 ```bash
 python eval_pipeline.py \
-    --policies idm,comprehensive_rule_expert,plant2,plant2_rule,carl,carl_rule,ppo_lidar,rule_compliant \
+    --policies idm,comprehensive_rule_expert,plant2,plant2_ft,plant2_rule,carl,carl_rule,ppo_lidar,rule_compliant \
     --manifest data/stop/output/<timestamp> \
     --scenes-root data/stop/scenes
 ```
 
 The manifest row already carries `pdd_code` / `sign_type`.
+
+Existing test split (do not regenerate the manifest):
+
+```bash
+python eval_pipeline.py \
+    --policies plant2_ft \
+    --manifest data/stop/output/ts_test \
+    --scenes-root data/stop/scenes \
+    --out-dir data/stop/output/ts_test/eval_out_plant2_ft
+```
+
+`plant2_ft` loads the newest `*.ckpt` in `pdd-bench/checkpoints/plant2_finetuned/` (override with `--model-paths plant2_ft:/path/to.ckpt`).
 
 ## Debug tools
 

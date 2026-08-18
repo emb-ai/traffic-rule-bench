@@ -2,9 +2,9 @@
 
 Augmentation axes (each capped at ``max_*`` ≤ 3 by default):
   1. ego approach lane (from SUMO crossing approaches)
-  2. traffic density (nuPlan low/medium/high via crosswalk_sign)
+  2. traffic density (nuPlan low/medium/high)
   3. crosswalk position (near_start / middle / near_end — separate maps)
-  4. pedestrian presets (from crosswalk_sign/lib/pedestrian_presets.py)
+  4. pedestrian presets (core.scenarios.pedestrian_presets)
 
 Maps are prepared by moscow_scenes/scripts/prepare_segment_crosswalk.py.
 """
@@ -13,29 +13,20 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-_PER_SIGN_BENCH = Path(__file__).resolve().parents[3]
-_CROSSWALK_SIGN = _PER_SIGN_BENCH / "crosswalk_sign"
-if str(_CROSSWALK_SIGN) not in sys.path:
-    sys.path.insert(0, str(_CROSSWALK_SIGN))
-
-from lib.crosswalk_layout import CrosswalkApproach, build_crosswalk_approaches  # noqa: E402
-from lib.lane_keys import lane_edge_id, make_lane_key  # noqa: E402
-from lib.pedestrian_presets import (  # noqa: E402
+from core.layout.crosswalk_layout import CrosswalkApproach, build_crosswalk_approaches
+from core.scenarios.pedestrian_presets import (
     PedestrianPreset,
     list_pedestrian_presets,
     pedestrian_manager_from_preset,
 )
-from lib.traffic_density_levels import (  # noqa: E402
-    TrafficDensityLevel,
-    list_traffic_density_levels,
-)
+from core.sumo.lane_keys import lane_edge_id, make_lane_key
 
 from .manifest_expansion import shuffle_cap
+from .traffic_density_levels import TrafficDensityLevel, list_traffic_density_levels
 
 MAX_AXIS = 3
 DEFAULT_POSITIONS = ("near_start", "middle", "near_end")
@@ -55,7 +46,7 @@ class CrosswalkSimParams:
     max_density_levels: int = MAX_AXIS
     max_pedestrian_presets: int = MAX_AXIS
     crosswalk_positions: Tuple[str, ...] = DEFAULT_POSITIONS
-    # Pedestrian defaults (mirrors crosswalk_sign)
+    # Pedestrian defaults
     ped_ego_spawn_distance_m: float = 50.0
     ped_speed_mean: float = 1.2
     ped_speed_std: float = 0.2

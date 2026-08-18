@@ -27,6 +27,14 @@ if str(_PDD_BENCH) not in sys.path:
 
 # Keep metadrive package unmodified: strip split-via shortcuts at graph build.
 from core.runtime.metadrive_sumo_patch import apply_metadrive_sumo_via_patch  # noqa: E402
+from core.runtime.checkpoints import (  # noqa: E402
+    CHECKPOINTS_DIR,
+    DEFAULT_MODEL_PATHS,
+    NN_NEED_CHECKPOINT,
+    PLAIN_PLANT2_POLICIES,
+    PLANT2_POLICIES,
+    resolve_nn_checkpoint,
+)
 from bench.top_down_text_patch import apply_top_down_violations_text_patch  # noqa: E402
 from bench.top_down_path_conflict_patch import (  # noqa: E402
     apply_top_down_path_conflict_overlay_patch,
@@ -141,29 +149,11 @@ BENCH_DIR = Path(__file__).resolve().parent
 PER_SIGN_BENCH_DIR = BENCH_DIR.parent
 PDD_BENCH_DIR = PER_SIGN_BENCH_DIR.parent.parent
 SDC_ROOT = PDD_BENCH_DIR.parent
-CHECKPOINTS_DIR = PDD_BENCH_DIR / "checkpoints"
-
-NN_NEED_CHECKPOINT = {"carl", "carl_rule", "plant2", "plant2_rule"}
-# Repo pretrained defaults (override with --model-path).
-DEFAULT_MODEL_PATHS: dict[str, Path] = {
-    "carl": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
-    "carl_rule": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
-    "plant2": CHECKPOINTS_DIR / "plant2_pretrain" / "epoch=029_final_3.ckpt",
-    "plant2_rule": CHECKPOINTS_DIR / "plant2_pretrain" / "epoch=029_final_3.ckpt",
-}
 
 
 def resolve_model_path(policy: str, model_path: str | None) -> str | None:
-    """Use ``--model-path`` when set; else fall back to pretrained repo defaults."""
-    if model_path:
-        return model_path
-    if policy not in NN_NEED_CHECKPOINT:
-        return None
-    default = DEFAULT_MODEL_PATHS.get(policy)
-    if default is not None and default.is_file():
-        print(f"Using default checkpoint for {policy}: {default}")
-        return str(default)
-    return None
+    """Use ``--model-path`` when set; else fall back to repo defaults."""
+    return resolve_nn_checkpoint(policy, model_path)
 
 _SUMO_SIGN_DISTANCE_CACHE: dict[Path, float] = {}
 _PROFILE_KEYS = (
@@ -784,9 +774,9 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         PlainCarlPolicy.set_checkpoint(model_path, device=device)
         policy_cls = PlainCarlPolicy
-    elif policy == "plant2":
+    elif policy in PLAIN_PLANT2_POLICIES:
         if not model_path:
-            raise ValueError("--model-path is required for --policy plant2")
+            raise ValueError(f"--model-path is required for --policy {policy}")
         PLANT2_PATH = SDC_ROOT / "plant2"
         from agents.policies.plain_plant2_policy import PlainPlanT2Policy
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -3213,7 +3203,7 @@ def run_one_episode(
         policy_cls = RuleCompliantExpertPolicy
     elif policy_type == "ppo_lidar":
         policy_cls = ExpertPolicy
-    elif policy_type in ("carl", "plant2", "carl_rule", "plant2_rule"):
+    elif policy_type in ("carl", "carl_rule") or policy_type in PLANT2_POLICIES:
         policy_cls = models.get("policy_cls")
         if policy_cls is None:
             raise RuntimeError(f"policy_cls for --policy {policy_type} not loaded; "
@@ -4084,9 +4074,10 @@ def main():
                         choices=["idm", "modified_idm", "comprehensive_rule_expert",
                                  "rule_compliant", "ppo_lidar",
                                  "carl", "carl_rule",
-                                 "plant2", "plant2_rule"])
+                                 "plant2", "plant2_rule", "plant2_ft"])
     parser.add_argument("--model-path", type=str, default=None,
-                        help="Checkpoint for carl/plant2 (defaults to pretrained under pdd-bench/checkpoints/)")
+                        help="Checkpoint for carl/plant2 (defaults under pdd-bench/checkpoints/; "
+                             "plant2_ft → checkpoints/plant2_finetuned)")
     parser.add_argument("--run-name", type=str, required=True)
     parser.add_argument("--preset", type=str, default="full", choices=["full", "full_last"])
     parser.add_argument("--benchmark-output", type=str, default="benchmark_output",

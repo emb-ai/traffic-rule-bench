@@ -20,6 +20,11 @@ from .junction_sign_placement import (
     sign_placement_long_from_start,
 )
 from .roundabout_topology import build_roundabout_layout
+from .crosswalk_layout import (
+    CrosswalkApproach,
+    build_crosswalk_approaches,
+    parse_crossing_junction_id,
+)
 
 __all__ = [
     "INTERSECTION_JUNCTION_TYPES",
@@ -38,4 +43,7 @@ __all__ = [
     "sign_placement_long",
     "sign_placement_long_from_start",
     "build_roundabout_layout",
+    "CrosswalkApproach",
+    "build_crosswalk_approaches",
+    "parse_crossing_junction_id",
 ]

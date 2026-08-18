@@ -4,9 +4,9 @@
 Per-policy rules:
   IDM family ({idm, modified_idm, comprehensive_rule_expert}):
       5 ego-variants are run (default, s1, s2, s3, s4) → 5 baselines per policy.
-  NN policies ({rule_compliant, ppo_lidar, carl, carl_rule, plant2, plant2_rule}):
+  NN policies ({rule_compliant, ppo_lidar, carl, carl_rule, plant2, plant2_rule, plant2_ft}):
       1 baseline per policy (ego-variant does not apply).
-  Checkpoint required for: carl, carl_rule, plant2, plant2_rule.
+  Checkpoint required for: carl, carl_rule, plant2, plant2_rule, plant2_ft.
 
 Supported input modes:
   1. Benchmark run folder:   --manifest <run_dir>  (reads <run_dir>/real_manifest.jsonl,
@@ -92,9 +92,21 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-# Policy categories 
+from core.runtime.checkpoints import (  # noqa: E402
+    CHECKPOINTS_DIR,
+    DEFAULT_MODEL_PATHS,
+    NN_NEED_CHECKPOINT,
+    PLANT2_POLICIES,
+    resolve_nn_checkpoint,
+)
+from core.manifest.manifest_config import (  # noqa: E402
+    DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+    enrich_manifest_row,
+    load_manifest_config,
+)
+
+# Policy categories
 IDM_FAMILY = {"idm", "modified_idm", "comprehensive_rule_expert"}
-NN_NEED_CHECKPOINT = {"carl", "carl_rule", "plant2", "plant2_rule"}
 NN_NO_CHECKPOINT = {"rule_compliant", "ppo_lidar"}
 ALL_POLICIES = IDM_FAMILY | NN_NEED_CHECKPOINT | NN_NO_CHECKPOINT
 
@@ -103,20 +115,6 @@ RUN_MANIFEST_NAME = "real_manifest.jsonl"
 RUN_EVAL_OUT_DIRNAME = "eval_out"
 BENCH_DIR = Path(__file__).resolve().parent
 PDD_BENCH_DIR = BENCH_DIR.parent.parent.parent
-CHECKPOINTS_DIR = PDD_BENCH_DIR / "checkpoints"
-
-from core.manifest.manifest_config import (
-    DEFAULT_SPAWN_DISTANCE_BEFORE_END,
-    enrich_manifest_row,
-    load_manifest_config,
-)
-
-DEFAULT_MODEL_PATHS: dict[str, Path] = {
-    "carl": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
-    "carl_rule": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
-    "plant2": CHECKPOINTS_DIR / "plant2_pretrain" / "epoch=029_final_3.ckpt",
-    "plant2_rule": CHECKPOINTS_DIR / "plant2_pretrain" / "epoch=029_final_3.ckpt",
-}
 
 
 def run(cmd: list[str], cwd: Path | None = None) -> None:
@@ -155,7 +153,7 @@ def build_benchmark_cmd(
         cmd.append("--save-gifs")
     if policy in NN_NEED_CHECKPOINT:
         cmd += ["--model-path", model_paths[policy]]
-    if policy in ("plant2", "plant2_rule"):
+    if policy in PLANT2_POLICIES:
         cmd += ["--plant2-action-mode", plant2_action_mode]
     return cmd
 
@@ -295,18 +293,16 @@ def resolve_model_paths(spec: str | None, policies: list[str]) -> dict[str, str]
     """Parse --model-paths and fill in repo defaults for missing NN checkpoints."""
     paths = parse_model_paths(spec)
     for policy in policies:
-        if policy not in NN_NEED_CHECKPOINT or policy in paths:
+        if policy not in NN_NEED_CHECKPOINT:
             continue
-        default = DEFAULT_MODEL_PATHS.get(policy)
-        if default is None:
-            continue
-        if not default.is_file():
+        resolved = resolve_nn_checkpoint(policy, paths.get(policy))
+        if not resolved:
+            default = DEFAULT_MODEL_PATHS.get(policy)
             sys.exit(
                 f"No --model-paths entry for {policy!r} and default checkpoint "
                 f"not found: {default}"
             )
-        paths[policy] = str(default)
-        print(f"Using default checkpoint for {policy}: {default}")
+        paths[policy] = resolved
     return paths
 
 

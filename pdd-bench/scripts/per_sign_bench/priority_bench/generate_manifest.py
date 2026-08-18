@@ -24,14 +24,12 @@ if str(SCRIPT_DIR) not in sys.path:
 
 PDD_BENCH_DIR = SCRIPT_DIR.parent.parent.parent
 CHECKPOINTS_DIR = PDD_BENCH_DIR / "checkpoints"
-NN_NEED_CHECKPOINT = {"carl", "carl_rule", "plant2", "plant2_rule"}
-# Pretrained defaults (same as run_benchmark / eval_pipeline).
-DEFAULT_MODEL_PATHS: dict[str, Path] = {
-    "carl": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
-    "carl_rule": CHECKPOINTS_DIR / "carl" / "nuplan_51479_1B" / "model_best.pth",
-    "plant2": CHECKPOINTS_DIR / "plant2_pretrain" / "epoch=029_final_3.ckpt",
-    "plant2_rule": CHECKPOINTS_DIR / "plant2_pretrain" / "epoch=029_final_3.ckpt",
-}
+
+from core.runtime.checkpoints import (  # noqa: E402
+    DEFAULT_MODEL_PATHS,
+    NN_NEED_CHECKPOINT,
+    resolve_nn_checkpoint,
+)
 
 from core.layout.junction_priority_layout import (
     JunctionLayoutError,
@@ -235,16 +233,12 @@ class GifConfig:
 
 
 def resolve_gif_model_path(policy: str, model_path: Optional[str]) -> Optional[str]:
-    """Resolve checkpoint for GIF NN policies (carl / plant2 + *_rule)."""
-    if model_path:
-        return str(model_path)
-    if policy not in NN_NEED_CHECKPOINT:
-        return None
-    default = DEFAULT_MODEL_PATHS.get(policy)
-    if default is not None and default.is_file():
-        print(f"[GIF] Using default checkpoint for {policy}: {default}")
-        return str(default)
-    if default is not None:
+    """Resolve checkpoint for GIF NN policies (carl / plant2 / plant2_ft / *_rule)."""
+    resolved = resolve_nn_checkpoint(policy, model_path)
+    if resolved:
+        return resolved
+    if policy in NN_NEED_CHECKPOINT:
+        default = DEFAULT_MODEL_PATHS.get(policy)
         print(
             f"[GIF] Default checkpoint missing for {policy}: {default} "
             f"(pass gif.model_path=...)",
