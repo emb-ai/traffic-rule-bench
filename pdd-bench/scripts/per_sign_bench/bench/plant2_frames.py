@@ -145,7 +145,7 @@ _CLASS_TO_PDD = {
 _PDD_ICON_RE = re.compile(r"^(\d+(?:\.\d+)*)")
 
 # How far a traffic sign stays in the ego-centric object list.
-_SIGN_RADIUS_M = float(os.environ.get("PLANT2_SIGN_RADIUS_M", 75.0))
+_SIGN_RADIUS_M = float(os.environ.get("PLANT2_SIGN_RADIUS_M", 120.0))
 
 # Codes whose plate carries a number, and the attribute holding it (km/h).
 # Restricted by code on purpose: reading any `speed_limit` attribute that
@@ -367,9 +367,11 @@ def collect_boxes(engine, vehicle,
             continue
         x, y = _ego_xy(sign)
         # 30 m was inherited from stop signs, where the rule bites at a point.
-        # A speed sign needs 35 m just to brake from 60 to 20 km/h, so at 30 m
-        # the decision is already too late; 75 m is still inside the object
-        # filter cars get (50 m, x2 forward).
+        # A speed zone is 103 m long at the median, and the check is symmetric,
+        # so a radius that spans it keeps the sign in frame BEHIND the ego too —
+        # at x=-60 the token reads "I passed a 3.24 sixty metres back", which is
+        # the memory seq_len=1 does not otherwise have. Braking from 60 to
+        # 20 km/h also needs 35 m, more than the old radius allowed.
         if x * x + y * y > _SIGN_RADIUS_M ** 2:
             _dbg(f"sign skip: pdd={pdd} id={sign_id} dist={math.hypot(x, y):.1f}m "
                  f"> {_SIGN_RADIUS_M:.0f}m")
@@ -452,31 +454,22 @@ def row_has_speed_target(row: dict) -> bool:
     return row.get("v_target_kmh") is not None or row.get("v_target_raw_kmh") is not None
 
 
-def applicable_limit_mps(vehicle, engine, row: dict) -> float:
-    """The limit in force at this instant (m/s) — the model's speed_limit input.
+def road_limit_mps(row: dict) -> float:
+    """The ROAD's own speed (m/s) — the model's speed_limit input.
 
-    Outside the sign's zone it is the road's own speed; inside it is the number
-    on the plate. It therefore SWITCHES as the ego crosses the sign, which is
-    what makes the token a statement about the rule in force rather than about
-    the road.
+    Deliberately NOT the limit in force. Switching this token at the zone
+    boundary was tried and reverted: the boundary is computed by the simulator,
+    so the token would hand the model the fact that a rule is now active, and
+    in-zone compliance would become copying rather than reading a sign. It also
+    could not carry the value — speed_cats is {50, 80, 100, 120}, so 20, 30 and
+    40 all snap to 50.
 
-    Crossing is not a hint the model can lean on: the expert has to be at the
-    lower speed BY the sign, so the braking starts some 35 m earlier, while
-    this token still reads the road speed. Anticipating that is only possible
-    from the sign itself — which is the behaviour under test.
+    Which rule applies is the sign's job to say: the plate's number rides in the
+    sign's own object token, and the sign stays in the object list well past the
+    ego, so "I passed a 3.24 sixty metres ago" is derivable from an object the
+    model actually saw.
     """
-    v_raw = float(row["v_target_raw_kmh"] if row.get("v_target_raw_kmh") is not None else 80) / 3.6
-    if not row_has_speed_target(row):
-        return v_raw
-    v_sign = float(row["v_target_kmh"] if row.get("v_target_kmh") is not None else v_raw * 3.6) / 3.6
-
-    from bench.sign_eval import _ego_in_sign_zone
-
-    sign_mgr = getattr(engine, "traffic_sign_manager", None) if engine is not None else None
-    if sign_mgr is None or vehicle is None:
-        return v_raw
-    in_zone = any(_ego_in_sign_zone(s, vehicle) for s in sign_mgr.signs)
-    return v_sign if in_zone else v_raw
+    return float(row["v_target_raw_kmh"] if row.get("v_target_raw_kmh") is not None else 80) / 3.6
 
 
 def target_speed_mps(vehicle, engine, row: dict) -> float:
@@ -601,7 +594,7 @@ class Plant2FrameCollector:
         # The limit in force here and now: the road's speed before the sign, the
         # plate's number inside its zone. Previously this was the road speed for
         # the whole route, so the token said nothing about the rule.
-        speed_limit_mps = applicable_limit_mps(vehicle, engine, row)
+        speed_limit_mps = road_limit_mps(row)
 
         measurements = {
             "ego_matrix": ego_matrix,
