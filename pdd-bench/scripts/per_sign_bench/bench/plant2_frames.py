@@ -144,6 +144,9 @@ _CLASS_TO_PDD = {
 
 _PDD_ICON_RE = re.compile(r"^(\d+(?:\.\d+)*)")
 
+# How far a traffic sign stays in the ego-centric object list.
+_SIGN_RADIUS_M = float(os.environ.get("PLANT2_SIGN_RADIUS_M", 75.0))
+
 # Codes whose plate carries a number, and the attribute holding it (km/h).
 # Restricted by code on purpose: reading any `speed_limit` attribute that
 # happened to exist would put a road speed on plates that prescribe nothing.
@@ -363,8 +366,13 @@ def collect_boxes(engine, vehicle,
             _dbg(f"sign skip: type={sign_type} id={sign_id} pdd={pdd!r} (unknown)")
             continue
         x, y = _ego_xy(sign)
-        if x * x + y * y > 900.0:  # 30m, same as stop_sign / TL in PlanTDataset
-            _dbg(f"sign skip: pdd={pdd} id={sign_id} dist={math.hypot(x, y):.1f}m > 30m")
+        # 30 m was inherited from stop signs, where the rule bites at a point.
+        # A speed sign needs 35 m just to brake from 60 to 20 km/h, so at 30 m
+        # the decision is already too late; 75 m is still inside the object
+        # filter cars get (50 m, x2 forward).
+        if x * x + y * y > _SIGN_RADIUS_M ** 2:
+            _dbg(f"sign skip: pdd={pdd} id={sign_id} dist={math.hypot(x, y):.1f}m "
+                 f"> {_SIGN_RADIUS_M:.0f}m")
             continue
         if hasattr(sign, "_fallback_heading"):
             heading = float(sign._fallback_heading())
@@ -444,29 +452,45 @@ def row_has_speed_target(row: dict) -> bool:
     return row.get("v_target_kmh") is not None or row.get("v_target_raw_kmh") is not None
 
 
-def target_speed_mps(vehicle, engine, row: dict) -> float:
-    """Target speed (m/s) for PlanT ego-speed head.
+def applicable_limit_mps(vehicle, engine, row: dict) -> float:
+    """The limit in force at this instant (m/s) — the model's speed_limit input.
 
-    * Speed-limit scenes (catalog has ``v_target_*``): ``v_target_kmh`` in the
-      sign zone, else ``v_target_raw_kmh``, capped at ``_MAX_TARGET_SPEED``.
-    * Other scenes: imitate expert ego speed so stop/yield profiles are
-      supervised (instead of the bogus constant 20 m/s default).
+    Outside the sign's zone it is the road's own speed; inside it is the number
+    on the plate. It therefore SWITCHES as the ego crosses the sign, which is
+    what makes the token a statement about the rule in force rather than about
+    the road.
+
+    Crossing is not a hint the model can lean on: the expert has to be at the
+    lower speed BY the sign, so the braking starts some 35 m earlier, while
+    this token still reads the road speed. Anticipating that is only possible
+    from the sign itself — which is the behaviour under test.
     """
-    ego_speed = float(getattr(vehicle, "speed", 0.0) or 0.0) if vehicle is not None else 0.0
+    v_raw = float(row["v_target_raw_kmh"] if row.get("v_target_raw_kmh") is not None else 80) / 3.6
     if not row_has_speed_target(row):
-        return min(max(ego_speed, 0.0), _MAX_TARGET_SPEED)
+        return v_raw
+    v_sign = float(row["v_target_kmh"] if row.get("v_target_kmh") is not None else v_raw * 3.6) / 3.6
 
     from bench.sign_eval import _ego_in_sign_zone
 
-    v_raw = float(row["v_target_raw_kmh"] if row.get("v_target_raw_kmh") is not None else 80) / 3.6
-    v_sign = float(row["v_target_kmh"] if row.get("v_target_kmh") is not None else v_raw * 3.6) / 3.6
     sign_mgr = getattr(engine, "traffic_sign_manager", None) if engine is not None else None
-    if sign_mgr is not None and vehicle is not None:
-        in_zone = any(_ego_in_sign_zone(s, vehicle) for s in sign_mgr.signs)
-        target = v_sign if in_zone else v_raw
-    else:
-        target = v_raw
-    return min(max(target, 0.0), _MAX_TARGET_SPEED)
+    if sign_mgr is None or vehicle is None:
+        return v_raw
+    in_zone = any(_ego_in_sign_zone(s, vehicle) for s in sign_mgr.signs)
+    return v_sign if in_zone else v_raw
+
+
+def target_speed_mps(vehicle, engine, row: dict) -> float:
+    """Target speed (m/s) for PlanT ego-speed head: the EXPERT's own speed.
+
+    Speed-limit scenes used to be labelled with the posted limit itself. Once
+    speed_limit carries that same applicable limit as an input, the label would
+    be a copy of the input and the head could satisfy it without ever reading a
+    sign. Imitating the expert keeps the supervision honest: the expert slows
+    ahead of the zone and holds the limit inside it, so the profile encodes
+    compliance without handing over the answer.
+    """
+    ego_speed = float(getattr(vehicle, "speed", 0.0) or 0.0) if vehicle is not None else 0.0
+    return min(max(ego_speed, 0.0), _MAX_TARGET_SPEED)
 
 
 def expert_brake_flag(speed_mps: float, row: dict) -> bool:
@@ -574,15 +598,10 @@ class Plant2FrameCollector:
         target_speed = target_speed_mps(vehicle, engine, row)
         brake = expert_brake_flag(speed, row)
 
-        if row_has_speed_target(row):
-            v_limit_raw_kmh = float(
-                row["v_target_raw_kmh"] if row.get("v_target_raw_kmh") is not None else 80
-            )
-        else:
-            # No catalog limit: keep a neutral highway-ish embedding input;
-            # ego-speed supervision comes from target_speed (= expert speed).
-            v_limit_raw_kmh = 80.0
-        speed_limit_mps = v_limit_raw_kmh / 3.6
+        # The limit in force here and now: the road's speed before the sign, the
+        # plate's number inside its zone. Previously this was the road speed for
+        # the whole route, so the token said nothing about the rule.
+        speed_limit_mps = applicable_limit_mps(vehicle, engine, row)
 
         measurements = {
             "ego_matrix": ego_matrix,
