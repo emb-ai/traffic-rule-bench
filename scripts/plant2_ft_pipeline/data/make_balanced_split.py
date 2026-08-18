@@ -41,6 +41,14 @@ def main() -> None:
                     help="max train routes per sign (val is never capped)")
     ap.add_argument("--keep-all", action="append", default=[],
                     help="sign that keeps every route regardless of --cap")
+    ap.add_argument("--only", action="append", default=[],
+                    help="restrict the split to these signs (repeatable). A "
+                         "narrow split answers whether a signal is learnable at "
+                         "all, which a full mixture cannot: with two detour "
+                         "codes and nothing else, the side is the only thing "
+                         "there is to learn. Read such a run as a plumbing "
+                         "check, never as compliance evidence — a narrow "
+                         "finetune degenerates on everything left out.")
     args = ap.parse_args()
 
     src, out = Path(args.src), Path(args.out)
@@ -73,6 +81,13 @@ def main() -> None:
 
     rng = random.Random(SEED)
     keep_all = set(args.keep_all)
+    only = set(args.only)
+    if only:
+        missing = only - set(train_by_sign)
+        if missing:
+            raise SystemExit(f"--only names signs absent from the parent split: {sorted(missing)}")
+        train_by_sign = {k: v for k, v in train_by_sign.items() if k in only}
+        print(f"restricted to {sorted(only)}", flush=True)
     kept: dict[str, list[str]] = {}
     for sign, routes in sorted(train_by_sign.items()):
         routes = sorted(routes)
@@ -84,7 +99,16 @@ def main() -> None:
     for sign, routes in kept.items():
         for name in routes:
             link(src / "train" / "data" / name, out / "train" / "data" / name)
-    for name in (p.name for p in (src / "val" / "data").iterdir() if p.is_dir() or p.is_symlink()):
+    val_names = [p.name for p in (src / "val" / "data").iterdir() if p.is_dir() or p.is_symlink()]
+    if only:
+        # Validation must hold the same signs as training: a val loss averaged
+        # over signs the run never saw says nothing about the run.
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from make_train_val_split_fv_experts_signs import sign_of  # noqa: E402
+        val_names = [n for n in val_names if sign_of(n) in only]
+        print(f"val restricted to {len(val_names)} routes", flush=True)
+    for name in val_names:
         link(src / "val" / "data" / name, out / "val" / "data" / name)
 
     for half in ("train", "val"):
