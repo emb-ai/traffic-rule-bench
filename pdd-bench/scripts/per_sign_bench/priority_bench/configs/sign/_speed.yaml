@@ -1,6 +1,9 @@
 # @package _global_
-# Shared base for detour signs 4.2.1 / 4.2.2 / 4.2.3.
-# Sign yamls: `defaults: [_detour]` then only `sign` + `paths.output_base`.
+# Shared base for speed-family signs 3.24 / 4.6 / 5.21 / 5.31.
+# Sign yamls: `defaults: [_speed]` then only `sign` + `paths.output_base`.
+#
+# Manifest expansion / braking-accel spawn are not wired yet.
+# Scenes: moscow_scenes/scenes/segment/straight (crop_kind: segment).
 
 paths:
   scenes_dir: scenes
@@ -20,9 +23,10 @@ simulation:
   spawn_velocity_ms: 5.0
   traffic_density: 0.0
   traffic_density_augment: true
-  spawn_offset_from_start: 10.0
+  spawn_offset_from_start: 5.0
   max_path_length_m: 150.0
-  # Fallback for the shared SimulationConfig field (detour spawn uses offset).
   spawn_distance_before_end: 80.0
-  # Sign is placed at sign_s from meta; this is unused at runtime for detour.
   sign_distance_before_end: 12.0
+  max_ego_lanes: 8
+  zone_tail_m: 8.0
+  zone_min_m: 20.0

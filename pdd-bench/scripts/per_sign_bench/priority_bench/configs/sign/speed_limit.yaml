@@ -1,0 +1,8 @@
+# @package _global_
+# PDD 3.24 — maximum speed limit.
+defaults:
+  - _speed
+
+sign: speed_limit
+paths:
+  output_base: data/speed_limit/output

@@ -1,4 +1,4 @@
-"""Sign profiles for priority-junction benches (2.1–2.5 / 3.1 / 3.18 / 4.1.x / 4.2.x / 4.3 / 3.2 / 5.7.x / 5.19)."""
+"""Sign profiles for priority-junction benches (2.1–2.5 / 3.1 / 3.18 / 3.24 / 4.1.x / 4.2.x / 4.3 / 3.2 / 4.6 / 5.7.x / 5.19 / 5.21 / 5.31)."""
 
 from __future__ import annotations
 
@@ -277,6 +277,56 @@ DETOUR_EITHER = SignProfile(
     ego_road_class=None,
 )
 
+# 3.24: straight Moscow segments (no intersection). Sign offset is chosen later
+# in speed expansion (braking runway on the same edge), not from OSM.
+SPEED_LIMIT = SignProfile(
+    id="speed_limit",
+    pdd_code="3.24",
+    sign_type="speed",
+    sign_name="Maximum speed limit (3.24)",
+    layout_mode="main_main",
+    spawn_strategy="speed_zone",
+    data_subdir="speed_limit",
+    output_code="3_24",
+    ego_road_class=None,
+)
+
+MIN_SPEED = SignProfile(
+    id="min_speed",
+    pdd_code="4.6",
+    sign_type="speed",
+    sign_name="Minimum speed (4.6)",
+    layout_mode="main_main",
+    spawn_strategy="speed_zone",
+    data_subdir="min_speed",
+    output_code="4_6",
+    ego_road_class=None,
+)
+
+RESIDENTIAL_ZONE = SignProfile(
+    id="residential_zone",
+    pdd_code="5.21",
+    sign_type="speed",
+    sign_name="Residential zone (5.21)",
+    layout_mode="main_main",
+    spawn_strategy="speed_zone",
+    data_subdir="residential_zone",
+    output_code="5_21",
+    ego_road_class=None,
+)
+
+ZONE_SPEED_LIMIT = SignProfile(
+    id="zone_speed_limit",
+    pdd_code="5.31",
+    sign_type="speed",
+    sign_name="Zone speed limit (5.31)",
+    layout_mode="main_main",
+    spawn_strategy="speed_zone",
+    data_subdir="zone_speed_limit",
+    output_code="5_31",
+    ego_road_class=None,
+)
+
 # 5.19: segment maps with injected SUMO crosswalk (moscow_scenes/segment_crosswalk).
 CROSSWALK = SignProfile(
     id="crosswalk",
@@ -311,6 +361,10 @@ _PROFILES = (
     DETOUR_RIGHT,
     DETOUR_LEFT,
     DETOUR_EITHER,
+    SPEED_LIMIT,
+    MIN_SPEED,
+    RESIDENTIAL_ZONE,
+    ZONE_SPEED_LIMIT,
     CROSSWALK,
 )
 
@@ -335,6 +389,10 @@ _REGISTRY: dict[str, SignProfile] = {
     DETOUR_RIGHT.id: DETOUR_RIGHT,
     DETOUR_LEFT.id: DETOUR_LEFT,
     DETOUR_EITHER.id: DETOUR_EITHER,
+    SPEED_LIMIT.id: SPEED_LIMIT,
+    MIN_SPEED.id: MIN_SPEED,
+    RESIDENTIAL_ZONE.id: RESIDENTIAL_ZONE,
+    ZONE_SPEED_LIMIT.id: ZONE_SPEED_LIMIT,
     CROSSWALK.id: CROSSWALK,
     # aliases
     "2.1": MAIN_ROAD,
@@ -389,6 +447,18 @@ _REGISTRY: dict[str, SignProfile] = {
     "4.2.3": DETOUR_EITHER,
     "4_2_3": DETOUR_EITHER,
     "detour_either": DETOUR_EITHER,
+    "3.24": SPEED_LIMIT,
+    "3_24": SPEED_LIMIT,
+    "speed_limit": SPEED_LIMIT,
+    "4.6": MIN_SPEED,
+    "4_6": MIN_SPEED,
+    "min_speed": MIN_SPEED,
+    "5.21": RESIDENTIAL_ZONE,
+    "5_21": RESIDENTIAL_ZONE,
+    "residential_zone": RESIDENTIAL_ZONE,
+    "5.31": ZONE_SPEED_LIMIT,
+    "5_31": ZONE_SPEED_LIMIT,
+    "zone_speed_limit": ZONE_SPEED_LIMIT,
     "5.19": CROSSWALK,
     "5_19": CROSSWALK,
     "5.19.1": CROSSWALK,

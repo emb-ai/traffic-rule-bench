@@ -14,6 +14,10 @@
 #   python generate_manifest.py sign=direction_straight_left
 #   python generate_manifest.py sign=direction_left_right
 #   python generate_manifest.py sign=crosswalk
+#   python generate_manifest.py sign=speed_limit
+#   python generate_manifest.py sign=min_speed
+#   python generate_manifest.py sign=residential_zone
+#   python generate_manifest.py sign=zone_speed_limit
 
 defaults:
   - _self_

@@ -52,9 +52,13 @@ signs:
   # These signs require straight road segments without intersections.
   # ============================================================================
 
-  # Speed limit sign — needs STRAIGHT segments only (straightness >= 0.99)
+  # Speed-family signs — STRAIGHT segments only (straightness >= 0.99).
   # Curve-aware IDM brakes on curves, so only straight roads isolate sign compliance.
+  # Same crop_kind; each sign samples independently from the straight pool.
   "3.24": { crop_kind: segment, segment_types: [straight] }
+  "4.6":  { crop_kind: segment, segment_types: [straight] }
+  "5.21": { crop_kind: segment, segment_types: [straight] }
+  "5.31": { crop_kind: segment, segment_types: [straight] }
 
   # Pedestrian crossing sign — curves allowed (straightness >= 0.97)
   "5.19": { crop_kind: segment, segment_types: [straight, curved] }

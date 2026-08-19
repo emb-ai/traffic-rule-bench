@@ -74,6 +74,11 @@ from traffic_signs.no_traffic_sign import NoTrafficSign
 from traffic_signs.pedestrian_crossing_sign import PedestrianCrossingSign
 from traffic_signs.pedestrian_yield_rule import PedestrianYieldRule
 from traffic_signs.detour_sign import DetourRightSign, DetourLeftSign, DetourEitherSign
+from traffic_signs.speed_limit_sign import SpeedLimitSign
+from traffic_signs.min_speed_limit_sign import MinimumSpeedLimitSign
+from traffic_signs.zone_signs import ZoneSpeedLimitSign
+from traffic_signs.residential_zone_signs import ResidentialZoneSign, EndOfResidentialZoneSign
+from traffic_signs.end_of_zone_signs import EndOfSpeedLimitSign, EndOfZoneSpeedLimitSign
 from core.sumo.lane_keys import clamp_lane_key_to_graph, lane_edge_id, make_lane_key
 from core.runtime.one_way_support import (
     OneWaySumoTrafficManager,
@@ -927,6 +932,25 @@ def _apply_manifest_ego_spawn_lane(env, row: dict) -> bool:
         return False
 
 
+def _apply_manifest_ego_spawn_velocity(env, row: dict) -> None:
+    """Re-apply spawn speed after skip_auto_signs teleport."""
+    v = float(row.get("spawn_velocity_ms") or 0.0)
+    if v <= 0:
+        return
+    vehicle = getattr(env, "agent", None) or getattr(env, "vehicle", None)
+    if vehicle is None:
+        return
+    try:
+        vehicle.set_velocity([v, 0.0], in_local_frame=True)
+    except TypeError:
+        try:
+            vehicle.set_velocity([v, 0.0])
+        except Exception:
+            pass
+    except Exception as exc:
+        print(f"[EgoSpawn] Could not set spawn velocity {v:.2f} m/s: {exc}")
+
+
 def _apply_manifest_ego_destination(env, row: dict) -> Optional[str]:
     """Clamp ego destination to a real graph lane and re-bind navigation."""
     dest = row.get("destination_lane_id")
@@ -968,6 +992,7 @@ def _apply_destination_along_cap(env, row: dict) -> None:
         or _row_uses_dual_path_nav(row)
         or _row_is_crosswalk(row)
         or _row_is_detour(row)
+        or _row_is_speed(row)
     ):
         return
     if raw is None and _row_uses_dual_path_nav(row):
@@ -1027,6 +1052,8 @@ def _apply_destination_along_cap(env, row: dict) -> None:
             label = "Crosswalk"
         elif _row_is_detour(row):
             label = "Detour"
+        elif _row_is_speed(row):
+            label = "Speed"
         else:
             label = "Roundabout"
         print(
@@ -1294,6 +1321,14 @@ def _row_is_detour(row: dict) -> bool:
     if bool(row.get("place_detour_sign")):
         return True
     return code in {"4.2.1", "4.2.2", "4.2.3", "4_2_1", "4_2_2", "4_2_3"} or sign_type == "detour"
+
+
+def _row_is_speed(row: dict) -> bool:
+    code = str(row.get("pdd_code") or row.get("sign_code") or "")
+    sign_type = str(row.get("sign_type") or row.get("sign_family") or "")
+    if bool(row.get("place_speed_sign")):
+        return True
+    return code in {"3.24", "4.6", "5.21", "5.31", "3_24", "4_6", "5_21", "5_31"} or sign_type == "speed"
 
 
 def _row_uses_dual_path_nav(row: dict) -> bool:
@@ -3095,6 +3130,105 @@ def _place_detour_signs(
         return False
 
 
+def _place_speed_signs(
+    env,
+    row: dict,
+    show_model: bool = True,
+) -> bool:
+    """Place start (and paired end) speed signs at sign_s / s_end from the manifest."""
+    from core.layout.junction_sign_placement import resolve_layout_lane
+
+    try:
+        vehicle = env.agent
+        if vehicle is None or vehicle.lane is None:
+            return False
+        sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
+        if sign_mgr is None:
+            return False
+        _clear_sign_manager(sign_mgr)
+
+        pdd_code = str(row.get("pdd_code") or row.get("sign_code") or "3.24")
+        start_cls_map = {
+            "3.24": SpeedLimitSign,
+            "4.6": MinimumSpeedLimitSign,
+            "5.21": ResidentialZoneSign,
+            "5.31": ZoneSpeedLimitSign,
+        }
+        end_cls_map = {
+            "3.25": EndOfSpeedLimitSign,
+            "5.22": EndOfResidentialZoneSign,
+            "5.32": EndOfZoneSpeedLimitSign,
+        }
+        start_cls = start_cls_map.get(pdd_code, SpeedLimitSign)
+        v_target = float(row.get("v_target_kmh") or 0.0)
+        road_id = str(row.get("road_id") or "")
+        lane_num = int(row.get("sign_lane_index", row.get("spawn_lane_num", 0)) or 0)
+        sign_s = float(row.get("sign_s", 60.0))
+
+        lane = None
+        if road_id:
+            lane = resolve_layout_lane(env, f"{road_id}_{lane_num}")
+        if lane is None:
+            lane = vehicle.lane
+
+        placement_long = max(0.1, min(sign_s, float(lane.length) - 1.0))
+        start_kwargs = dict(
+            lane=lane,
+            longitudinal_offset=placement_long,
+            lateral_offset=0,
+            show_model=show_model,
+            use_random_lane=False,
+        )
+        if start_cls is SpeedLimitSign or start_cls is ZoneSpeedLimitSign:
+            if v_target > 0:
+                start_kwargs["speed_limit_override"] = v_target
+        elif start_cls is MinimumSpeedLimitSign:
+            if v_target > 0:
+                start_kwargs["min_speed_override"] = v_target
+
+        start_sign = sign_mgr.add_sign(start_cls, **start_kwargs)
+        if start_sign is None:
+            print(f"[SpeedSign] Failed to place start {pdd_code}")
+            return False
+        start_sign.is_priority_sign = False
+
+        end_code = str(row.get("sign_type_end") or "")
+        s_end = row.get("s_end")
+        if end_code and s_end is not None:
+            end_cls = end_cls_map.get(end_code)
+            if end_cls is not None:
+                end_long = max(placement_long + 1.0, min(float(s_end), float(lane.length) - 0.5))
+                end_kwargs = dict(
+                    lane=lane,
+                    longitudinal_offset=end_long,
+                    lateral_offset=0,
+                    show_model=show_model,
+                    use_random_lane=False,
+                )
+                if end_cls is EndOfSpeedLimitSign or end_cls is EndOfZoneSpeedLimitSign:
+                    if v_target > 0:
+                        end_kwargs["speed_limit"] = v_target
+                end_sign = sign_mgr.add_sign(end_cls, **end_kwargs)
+                if end_sign is not None:
+                    end_sign.is_priority_sign = False
+            try:
+                sign_mgr.build_zones()
+            except Exception as exc:
+                print(f"[SpeedSign] build_zones failed: {exc}")
+
+        print(
+            f"[SpeedSign] Placed {pdd_code}@{placement_long:.1f}m "
+            f"v_target={v_target:.0f} end={end_code or '-'} "
+            f"s_end={float(s_end) if s_end is not None else float('nan'):.1f}"
+        )
+        return True
+    except Exception as e:
+        print(f"[SpeedSign] Failed to place sign: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def _place_junction_priority_signs(
     env,
     row: dict,
@@ -3105,6 +3239,12 @@ def _place_junction_priority_signs(
     """Dispatch sign placement by row pdd_code / sign_type."""
     if _row_is_detour(row):
         return _place_detour_signs(
+            env,
+            row,
+            show_model=show_model,
+        )
+    if _row_is_speed(row):
+        return _place_speed_signs(
             env,
             row,
             show_model=show_model,
@@ -3324,8 +3464,10 @@ def run_one_episode(
         spawn_distance = float(row.get("spawn_distance_before_end", 0) or 0)
         if spawn_distance > 0:
             _reposition_ego_before_lane_end(base_env, spawn_distance)
+        if _row_is_speed(row):
+            _apply_manifest_ego_spawn_velocity(base_env, row)
         _apply_manifest_ego_destination(base_env, row)
-        if _row_is_detour(row):
+        if _row_is_detour(row) or _row_is_speed(row):
             _apply_destination_along_cap(base_env, row)
         _install_segment_crosswalk_geometry(base_env, row)
 
@@ -3348,7 +3490,7 @@ def run_one_episode(
         # Validate route: check that destination is different from spawn.
         # Detour finishes on the same obstacle edge (along-cap), so skip this.
         nav = getattr(base_env.vehicle, "navigation", None)
-        if nav is not None and not _row_is_detour(row):
+        if nav is not None and not _row_is_detour(row) and not _row_is_speed(row):
             checkpoints = getattr(nav, "checkpoints", [])
             spawn_lane_idx = getattr(base_env.vehicle.lane, "index", None)
             if checkpoints and spawn_lane_idx:
@@ -3385,6 +3527,7 @@ def run_one_episode(
                 and not _row_uses_dual_path_nav(row)
                 and not _row_is_crosswalk(row)
                 and not _row_is_detour(row)
+                and not _row_is_speed(row)
             ):
                 _place_right_hand_yield_tracker(
                     base_env,
@@ -3759,6 +3902,7 @@ def run_one_episode(
                 or _row_uses_dual_path_nav(row)
                 or _row_is_crosswalk(row)
                 or _row_is_detour(row)
+                or _row_is_speed(row)
             ):
                 raw_cap = row.get("destination_max_along_m")
                 if raw_cap is None:
@@ -3774,7 +3918,7 @@ def run_one_episode(
             capped_arrive = capped_arrive or _ego_reached_capped_destination(
                 vehicle,
                 max_along_m=dest_cap_m,
-                allow_same_lane=_row_is_detour(row),
+                allow_same_lane=_row_is_detour(row) or _row_is_speed(row),
             )
             natural_done = bool(terminated or truncated)
 

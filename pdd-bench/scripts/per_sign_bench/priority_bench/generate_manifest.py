@@ -99,6 +99,13 @@ from core.manifest.detour_expansion import (
     discover_segment_detour_scenes,
     expand_detour_scene_entries,
 )
+from core.manifest.speed_expansion import (
+    SpeedExpansionConfig,
+    SpeedSimParams,
+    discover_segment_speed_scenes,
+    expand_speed_scene_entries,
+)
+from core.scenarios.speed_scene_design import assign_limit_kmh
 from core.scenarios.scene_augmentation import (
     SpawnScenario,
     pick_default_main_spawn_meta_for_net,
@@ -205,6 +212,10 @@ class SimulationConfig:
     # Detour (4.2.x) only:
     spawn_offset_from_start: float = 10.0
     max_path_length_m: float = 100.0
+    # Speed family (3.24 / 4.6 / 5.21 / 5.31):
+    max_ego_lanes: int = 8
+    zone_tail_m: float = 8.0
+    zone_min_m: float = 20.0
 
 
 @dataclass
@@ -2195,6 +2206,164 @@ def generate_detour_manifest(
 
 
 # -----------------------------------------------------------------------------
+# PDD 3.24 / 4.6 / 5.21 / 5.31 speed-family manifest
+# -----------------------------------------------------------------------------
+def generate_speed_manifest(
+    scenes_dir: Path,
+    output_dir: Path,
+    scenario_cfg: ScenarioConfig,
+    sim_cfg: SimulationConfig,
+    expansion_cfg: ExpansionConfig,
+    split: str = "all",
+    *,
+    max_density_levels: int = 3,
+    traffic_density_augment: bool = True,
+) -> List[Dict]:
+    """Generate real_manifest.jsonl for speed-family signs on segment maps."""
+    split = normalize_split(split)
+    pdd_code = PDD_CODE
+    all_scenes = discover_segment_speed_scenes(scenes_dir)
+    print(f"Scenes root: {scenes_dir.resolve()}")
+    print(f"Discovered {len(all_scenes)} segment scene(s) for {pdd_code}")
+
+    try:
+        scenes, split_by_id, skipped_unknown = filter_scene_dirs_by_split(
+            all_scenes, split=split, scenes_dir=scenes_dir
+        )
+    except FileNotFoundError as exc:
+        raise SystemExit(f"[error] {exc}") from exc
+
+    if skipped_unknown:
+        preview = ", ".join(skipped_unknown[:8])
+        more = f" (+{len(skipped_unknown) - 8} more)" if len(skipped_unknown) > 8 else ""
+        print(
+            f"  [split] Skipping {len(skipped_unknown)} scene(s) not in "
+            f"{pool_path(scenes_dir).name}: {preview}{more}"
+        )
+    print(f"Split filter: {split} → {len(scenes)} scene(s)")
+    print(
+        f"Augmentation axes: spawn_lane × density={max_density_levels} "
+        f"(traffic_density_augment={bool(traffic_density_augment)})"
+    )
+
+    sim_params = SpeedSimParams(
+        spawn_offset_from_start=float(sim_cfg.spawn_offset_from_start),
+        max_path_length_m=float(sim_cfg.max_path_length_m),
+        horizon=int(sim_cfg.horizon),
+        traffic_density=float(sim_cfg.traffic_density),
+        traffic_density_augment=bool(traffic_density_augment),
+        max_density_levels=int(max_density_levels),
+        max_ego_lanes=int(sim_cfg.max_ego_lanes),
+        zone_tail_m=float(sim_cfg.zone_tail_m),
+        zone_min_m=float(sim_cfg.zone_min_m),
+    )
+    speed_expansion = SpeedExpansionConfig(
+        max_scenarios=scenario_cfg.max_scenarios,
+    )
+
+    entries: List[Dict] = []
+    used_scene_ids: List[str] = []
+    skipped_short = 0
+
+    for scene_idx, scene_dir in enumerate(scenes):
+        meta = load_scene_metadata(scene_dir)
+        scene_name = meta.get("scene_name", scene_dir.name)
+        v_target_kmh = assign_limit_kmh(pdd_code, scene_idx)
+        print(f"\n=== {scene_name}  v_target={v_target_kmh:.0f} km/h ===")
+
+        scene_entries = expand_speed_scene_entries(
+            scene_dir=scene_dir,
+            scenes_root=scenes_dir,
+            meta=meta,
+            sim=sim_params,
+            expansion=speed_expansion,
+            pdd_code=pdd_code,
+            v_target_kmh=v_target_kmh,
+        )
+        if not scene_entries:
+            skipped_short += 1
+            print(f"  Skipping {scene_name}: no room for sign+zone before dest cap")
+            continue
+
+        scene_split = split_by_id.get(scene_name) or split_by_id.get(scene_dir.name)
+        for entry in scene_entries:
+            entry["split"] = scene_split
+        entries.extend(scene_entries)
+        used_scene_ids.append(scene_dir.name)
+
+    pre_total = len(entries)
+    max_total = scenario_cfg.max_total
+    if max_total is not None and max_total >= 0 and pre_total > max_total:
+        rng = random.Random(
+            hash(("max_total_shuffle", int(max_total), split, pdd_code)) & 0xFFFFFFFF
+        )
+        rng.shuffle(entries)
+        entries = entries[: int(max_total)]
+        used_scene_ids = sorted({str(e.get("scene_name")) for e in entries if e.get("scene_name")})
+        print(
+            f"[max_total] Retained {len(entries)} of {pre_total} manifest entries "
+            f"(shuffled, cap={max_total})"
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / "real_manifest.jsonl"
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        for entry in entries:
+            f.write(json.dumps(entry, default=str) + "\n")
+
+    summary = {
+        "pdd_code": pdd_code,
+        "sign_type": SIGN_TYPE,
+        "sign_name": SIGN_NAME,
+        "sign_class": {
+            "3.24": "SpeedLimitSign",
+            "4.6": "MinimumSpeedLimitSign",
+            "5.21": "ResidentialZoneSign",
+            "5.31": "ZoneSpeedLimitSign",
+        }.get(pdd_code, "SpeedLimitSign"),
+        "sign_placement": (
+            f"ego at road start; start sign at spawn+approach; "
+            f"dest min(edge_end, {sim_cfg.max_path_length_m}m)"
+        ),
+        "split_filter": split,
+        "total_scenes": len(used_scene_ids),
+        "total_entries": len(entries),
+        "total_entries_before_max_total": pre_total,
+        "skipped_short_scenes": skipped_short,
+        "max_scenarios": scenario_cfg.max_scenarios,
+        "max_total": scenario_cfg.max_total,
+        "max_density_levels": max_density_levels,
+        "traffic_density_augment": bool(traffic_density_augment),
+        "spawn_offset_from_start": sim_cfg.spawn_offset_from_start,
+        "max_path_length_m": sim_cfg.max_path_length_m,
+        "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
+        "horizon": sim_cfg.horizon,
+        "auxiliary_agent": False,
+        "generated_at": datetime.now().isoformat(),
+        "scenes": list(used_scene_ids),
+    }
+    summary_path = output_dir / "real_manifest_summary.json"
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+    manifest_meta_path = output_dir / "manifest.json"
+    with open(manifest_meta_path, "w", encoding="utf-8") as f:
+        json.dump({"entries_file": "real_manifest.jsonl", **summary}, f, indent=2)
+
+    repro_dir = write_repro_artifacts(
+        output_dir=output_dir,
+        scenes_dir=scenes_dir,
+        split_filter=split,
+        used_scene_ids=used_scene_ids,
+        split_by_id=split_by_id,
+        pdd_code=pdd_code,
+    )
+    print(f"Wrote repro artifacts → {repro_dir}")
+    print(f"\nGenerated {len(entries)} manifest entries from {len(used_scene_ids)} scenes")
+    print(f"  Manifest: {manifest_path}")
+    return entries
+
+
+# -----------------------------------------------------------------------------
 # Manifest generation
 # -----------------------------------------------------------------------------
 def generate_manifest(
@@ -2623,6 +2792,9 @@ def main(cfg: DictConfig) -> None:
         max_path_length_m=float(
             getattr(cfg.simulation, "max_path_length_m", 100.0) or 100.0
         ),
+        max_ego_lanes=int(getattr(cfg.simulation, "max_ego_lanes", 8) or 8),
+        zone_tail_m=float(getattr(cfg.simulation, "zone_tail_m", 8.0) or 8.0),
+        zone_min_m=float(getattr(cfg.simulation, "zone_min_m", 20.0) or 20.0),
     )
     expert_cfg = ExpertConfig(
         stop_wait_steps=int(
@@ -2758,6 +2930,19 @@ def main(cfg: DictConfig) -> None:
         )
     elif profile.spawn_strategy == "detour":
         entries = generate_detour_manifest(
+            scenes_dir=scenes_dir,
+            output_dir=experiment_dir,
+            scenario_cfg=scenario_cfg,
+            sim_cfg=sim_cfg,
+            expansion_cfg=expansion_cfg,
+            split=split,
+            max_density_levels=int(getattr(cfg.scenario, "max_density_levels", 3) or 3),
+            traffic_density_augment=bool(
+                getattr(cfg.simulation, "traffic_density_augment", True)
+            ),
+        )
+    elif profile.spawn_strategy == "speed_zone":
+        entries = generate_speed_manifest(
             scenes_dir=scenes_dir,
             output_dir=experiment_dir,
             scenario_cfg=scenario_cfg,
