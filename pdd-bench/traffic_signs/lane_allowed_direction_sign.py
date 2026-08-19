@@ -1,23 +1,15 @@
 from traffic_signs.base_traffic_sign import BaseTrafficSign
+from traffic_signs.sumo_outgoing import SumoOutgoingMixin, normalize_turn_direction
 
 
 def _normalize_turn_direction(raw_dir: str) -> str:
-    d = str(raw_dir or "").strip().lower()
-    if d in ("r", "right"):
-        return "r"
-    if d in ("l", "left"):
-        return "l"
-    if d in ("s", "straight"):
-        return "s"
-    if d in ("t", "u", "uturn", "u-turn"):
-        return "t"
-    return d
+    return normalize_turn_direction(raw_dir)
 
 
 _CARDINAL_DIRS = frozenset({"l", "r", "s"})
 
 
-class LaneAllowedDirectionSign(BaseTrafficSign):
+class LaneAllowedDirectionSign(SumoOutgoingMixin, BaseTrafficSign):
     ALLOWED_DIRS = frozenset()
 
     def __init__(self, lane, **kwargs):
@@ -31,6 +23,7 @@ class LaneAllowedDirectionSign(BaseTrafficSign):
         self._preset_applicable_lane_indices = kwargs.pop("applicable_lane_indices", None)
         # lane_id -> last seen approach lane while agent still under this sign
         self.active_agents = {}
+        self._sumo_agent_states = {}
         # Agents whose *first* departure from the signed approach was already
         # judged. Dual-path compliant routes (esp. 4.1.2) often loop back onto
         # the same approach and continue with a different exit; that second
@@ -40,6 +33,7 @@ class LaneAllowedDirectionSign(BaseTrafficSign):
         self.applicable_lanes = self._collect_applicable_lanes()
         self.applicable_lane_ids = {getattr(l, "index", None) for l in self.applicable_lanes}
         self.allowed_lanes_by_source = self._build_allowed_targets()
+        self._sumo_outgoing_mapped = None
 
     def _collect_applicable_lanes(self):
         lanes = [self.lane]
@@ -171,13 +165,12 @@ class LaneAllowedDirectionSign(BaseTrafficSign):
                 continue
         return poses
 
-    def _is_violating(self, vehicle) -> bool:
-        # Without turn metadata (typical for MetaDrive PG maps) we cannot
-        # enumerate allowed exit lanes, so the rule is unverifiable and must
-        # NOT report a violation on every lane transition.
-        if not self._has_turn_metadata:
-            return False
+    def _ensure_sumo_outgoing_context(self) -> None:
+        if self._sumo_outgoing_mapped and self._sumo_outgoing_mapped.get("all_outgoing"):
+            return
+        self._sumo_outgoing_mapped = self._map_sumo_outgoing_from_lanes(self.applicable_lanes)
 
+    def _is_violating_lane_targets(self, vehicle) -> bool:
         agent_id = vehicle.name
         current_lane = vehicle.lane_index
 
@@ -194,8 +187,6 @@ class LaneAllowedDirectionSign(BaseTrafficSign):
                 if isinstance(current_lane, str) and (
                     "junction_" in current_lane or "lane_:" in current_lane
                 ):
-                    # Still inside the junction connector; wait for the landing
-                    # lane before judging the first exit.
                     return False
                 allowed_targets = self.allowed_lanes_by_source.get(prev_lane, set())
                 src_lane_obj = self._lane_for_id(prev_lane)
@@ -207,6 +198,31 @@ class LaneAllowedDirectionSign(BaseTrafficSign):
                     return True
                 return False
         return False
+
+    def _is_violating(self, vehicle) -> bool:
+        # Without turn metadata (typical for MetaDrive PG maps) we cannot
+        # enumerate allowed exit lanes, so the rule is unverifiable and must
+        # NOT report a violation on every lane transition.
+        if not self._has_turn_metadata:
+            return False
+
+        if self._is_sumo_network():
+            self._ensure_sumo_outgoing_context()
+            mapped = self._sumo_outgoing_mapped or {}
+            all_outgoing = set(mapped.get("all_outgoing") or ())
+            if all_outgoing:
+                allowed = self._allowed_outgoing_edges(mapped, self.ALLOWED_DIRS)
+                return self._judge_sumo_outgoing(
+                    vehicle.name,
+                    vehicle.lane_index,
+                    approach_roads=mapped.get("approach_roads") or set(),
+                    all_outgoing=all_outgoing,
+                    violate_roads=all_outgoing - allowed,
+                    states=self._sumo_agent_states,
+                    cleared=self._cleared_agents,
+                )
+
+        return self._is_violating_lane_targets(vehicle)
 
 
 

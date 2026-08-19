@@ -111,12 +111,44 @@ def _index_dual_path_scenes(moscow_scenes: Path) -> Dict[str, dict]:
     return out
 
 
+def _index_segment_detour_scenes(moscow_scenes: Path) -> Dict[str, dict]:
+    """Build scene_id → meta(+path) for ``scenes/segment_detour/{straight,curved}/…``."""
+    root = moscow_scenes / "segment_detour"
+    out: Dict[str, dict] = {}
+    if not root.is_dir():
+        return out
+    for type_dir in sorted(root.iterdir()):
+        if not type_dir.is_dir() or type_dir.name not in {"straight", "curved"}:
+            continue
+        for scene_dir in sorted(type_dir.iterdir()):
+            if not scene_dir.is_dir():
+                continue
+            meta_path = scene_dir / "meta.json"
+            if not meta_path.is_file():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            sid = str(meta.get("scene_name") or meta.get("scene_id") or scene_dir.name)
+            row = dict(meta)
+            row["scene_id"] = sid
+            row["shape"] = str(meta.get("segment_type") or type_dir.name)
+            row["crop_kind"] = "segment_detour"
+            row["_path"] = str(scene_dir)
+            out[sid] = row
+    return out
+
+
 def _resolve_scene_row(
     sid: str,
     *,
     junction_index: Dict[str, dict],
     dual_index: Dict[str, dict],
+    detour_index: Dict[str, dict],
 ) -> dict:
+    if sid in detour_index:
+        return detour_index[sid]
     if sid in dual_index:
         return dual_index[sid]
     if sid in junction_index:
@@ -126,6 +158,10 @@ def _resolve_scene_row(
     if _is_dual_path_scene_id(sid):
         raise KeyError(
             f"dual_path scene not found under scenes/dual_path/: {sid}"
+        )
+    if str(sid).startswith("seg_") and "detour" in str(sid):
+        raise KeyError(
+            f"segment_detour scene not found under scenes/segment_detour/: {sid}"
         )
     raise KeyError(f"not in junction index: {sid}")
 
@@ -155,6 +191,17 @@ def _ensure_cropped(
             raise FileNotFoundError(
                 f"Missing dual_path crop {dest} "
                 "(run moscow_scenes/scripts/crop_dual_path_scenes.py)"
+            )
+        return dest
+    if crop_kind == "segment_detour":
+        if row.get("_path"):
+            dest = Path(str(row["_path"]))
+        else:
+            dest = moscow_scenes / "segment_detour" / shape / scene_id
+        if not (dest / "map.net.xml").is_file():
+            raise FileNotFoundError(
+                f"Missing segment_detour scene {dest} "
+                "(run moscow_scenes/scripts/prepare_segment_detour.py)"
             )
         return dest
 
@@ -236,6 +283,7 @@ def _materialize_one(
     half: str,
     junction_index: Dict[str, dict],
     dual_index: Dict[str, dict],
+    detour_index: Dict[str, dict],
     dest_scenes: Path,
     moscow_scenes: Path,
     moscow_net: Path,
@@ -245,10 +293,15 @@ def _materialize_one(
     mode: str,
 ) -> dict:
     row = _resolve_scene_row(
-        sid, junction_index=junction_index, dual_index=dual_index
+        sid, junction_index=junction_index, dual_index=dual_index, detour_index=detour_index
     )
     crop_kind = str(row.get("crop_kind") or "junction")
-    if crop_missing or crop_kind == "dual_path" or _is_dual_path_scene_id(sid):
+    if (
+        crop_missing
+        or crop_kind == "dual_path"
+        or crop_kind == "segment_detour"
+        or _is_dual_path_scene_id(sid)
+    ):
         src = _ensure_cropped(
             row,
             moscow_scenes=moscow_scenes,
@@ -300,6 +353,7 @@ def materialize(
     block = alloc_doc["signs"][sign]
     junction_index = _index_by_scene_id(index_path)
     dual_index = _index_dual_path_scenes(moscow_scenes)
+    detour_index = _index_segment_detour_scenes(moscow_scenes)
 
     halves = ["train", "test"] if split == "all" else [split]
     scene_ids: List[str] = []
@@ -320,6 +374,7 @@ def materialize(
                 half=half_of[sid],
                 junction_index=junction_index,
                 dual_index=dual_index,
+                detour_index=detour_index,
                 dest_scenes=dest_scenes,
                 moscow_scenes=moscow_scenes,
                 moscow_net=moscow_net,
@@ -492,6 +547,7 @@ def refill(
     excluded = _excluded_ids(dest_scenes, block)
     junction_index = _index_by_scene_id(index_path)
     dual_index = _index_dual_path_scenes(moscow_scenes)
+    detour_index = _index_segment_detour_scenes(moscow_scenes)
 
     print(
         f"[refill] targets train={n_train} test={n_test}; "
@@ -538,6 +594,7 @@ def refill(
                     half=half,
                     junction_index=junction_index,
                     dual_index=dual_index,
+                    detour_index=detour_index,
                     dest_scenes=dest_scenes,
                     moscow_scenes=moscow_scenes,
                     moscow_net=moscow_net,

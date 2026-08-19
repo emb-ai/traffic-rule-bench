@@ -1,17 +1,9 @@
 from traffic_signs.base_traffic_sign import BaseTrafficSign
+from traffic_signs.sumo_outgoing import SumoOutgoingMixin, normalize_turn_direction
 
 
 def _normalize_turn_direction(raw_dir: str) -> str:
-    d = str(raw_dir or "").strip().lower()
-    if d in ("r", "right"):
-        return "r"
-    if d in ("l", "left"):
-        return "l"
-    if d in ("s", "straight"):
-        return "s"
-    if d in ("t", "u", "uturn", "u-turn"):
-        return "t"
-    return d
+    return normalize_turn_direction(raw_dir)
 
 
 def _edge_id_from_lane_index(lane_index):
@@ -37,7 +29,7 @@ def _allowed_turn_dirs_for_sign(not_allowed_direction: str):
     return {"l", "r", "s", "t"}
 
 
-class OneWayEntrySign(BaseTrafficSign):
+class OneWayEntrySign(SumoOutgoingMixin, BaseTrafficSign):
     """
     Sign 5.7.1 / 5.7.2: entry to a one-way road from a multi-direction approach.
 
@@ -61,8 +53,10 @@ class OneWayEntrySign(BaseTrafficSign):
         # Alias used by SignComplianceMixin / GIF overlays (same as No*TurnSign).
         self.prohibited_maneuver = self.not_allowed_direction
         self.active_agents = {}
+        self._sumo_agent_states = {}
         self.applicable_lanes = self._collect_applicable_lanes()
         self.applicable_lane_ids = {getattr(l, "index", None) for l in self.applicable_lanes}
+        self._sumo_outgoing_mapped = None
 
     def _collect_applicable_lanes(self):
         """Collect all approach lanes where this sign should be visible/active.
@@ -195,16 +189,19 @@ class OneWayEntrySign(BaseTrafficSign):
             return False
         return abs(num_a - num_b) == 1
 
-    def _is_violating(self, vehicle) -> bool:
-        """Same SUMO check as ``NoLeftTurnSign`` / ``NoRightTurnSign``.
+    def _ensure_sumo_outgoing_context(self) -> None:
+        if self._sumo_outgoing_mapped and self._sumo_outgoing_mapped.get("all_outgoing"):
+            return
+        mapped = self._map_sumo_outgoing_from_lanes(self.applicable_lanes)
+        forbidden = self._forbidden_outgoing_edges(mapped, self.not_allowed_direction)
+        extra = getattr(self, "one_way_forbidden_edges", None) or ()
+        forbidden |= {str(e) for e in extra}
+        all_outgoing = set(mapped.get("all_outgoing") or ()) | forbidden
+        mapped["all_outgoing"] = all_outgoing
+        mapped["forbidden"] = forbidden
+        self._sumo_outgoing_mapped = mapped
 
-        5.7.1 ≡ no-left (forbidden ``l``); 5.7.2 ≡ no-right (forbidden ``r``).
-        A violation is recorded when the ego leaves the signed approach via a
-        turn whose ``direction`` matches ``not_allowed_direction`` — including
-        the moment it enters the forbidden junction ``via_lane`` (not only the
-        downstream ``to_lane``). Unknown exits are *not* violations (unlike the
-        previous OneWay-only path that treated any unmatched exit as a fault).
-        """
+    def _is_violating_lane_targets(self, vehicle) -> bool:
         agent_id = vehicle.name
         current_lane = vehicle.lane_index
         prohibited = self.not_allowed_direction
@@ -220,7 +217,6 @@ class OneWayEntrySign(BaseTrafficSign):
         if prev_lane not in self.applicable_lane_ids or current_lane == prev_lane:
             return False
 
-        # Peer lane-change on the same approach is not a turn violation.
         if self._is_neighbor_lane(prev_lane, current_lane):
             self.active_agents.pop(agent_id, None)
             return False
@@ -241,12 +237,35 @@ class OneWayEntrySign(BaseTrafficSign):
             ),
             None,
         )
-        # Always clear arming once the vehicle has left the approach, matching
-        # No*TurnSign: one decision per departure from the signed lane.
         self.active_agents.pop(agent_id, None)
         if turn_info and _normalize_turn_direction(turn_info.get("direction")) == prohibited:
             return True
         return False
+
+    def _is_violating(self, vehicle) -> bool:
+        """Same SUMO check as ``NoLeftTurnSign`` / ``NoRightTurnSign``.
+
+        5.7.1 ≡ no-left (forbidden ``l``); 5.7.2 ≡ no-right (forbidden ``r``).
+        Judge the first real outgoing *edge* after the signed approach, not the
+        exact ``to_lane`` / ``via_lane`` ids (NN policies often land on a
+        sibling lane of the same road).
+        """
+        if self._is_sumo_network():
+            self._ensure_sumo_outgoing_context()
+            mapped = self._sumo_outgoing_mapped or {}
+            extra = {str(e) for e in (getattr(self, "one_way_forbidden_edges", None) or ())}
+            forbidden = set(mapped.get("forbidden") or ()) | extra
+            all_outgoing = set(mapped.get("all_outgoing") or ()) | forbidden
+            if all_outgoing:
+                return self._judge_sumo_outgoing(
+                    vehicle.name,
+                    vehicle.lane_index,
+                    approach_roads=mapped.get("approach_roads") or set(),
+                    all_outgoing=all_outgoing,
+                    violate_roads=forbidden,
+                    states=self._sumo_agent_states,
+                )
+        return self._is_violating_lane_targets(vehicle)
 
     def get_rule_description(self) -> str:
         side = "right" if self.not_allowed_direction == "l" else "left"

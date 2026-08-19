@@ -1,8 +1,9 @@
 from traffic_signs.base_traffic_sign import BaseTrafficSign
+from traffic_signs.sumo_outgoing import SumoOutgoingMixin
 import re
 
 
-class _BaseNoTurnSign(BaseTrafficSign):
+class _BaseNoTurnSign(SumoOutgoingMixin, BaseTrafficSign):
     """
     Shared logic for no-turn signs.
     - SUMO: uses lane.turns direction labels.
@@ -22,6 +23,12 @@ class _BaseNoTurnSign(BaseTrafficSign):
         self.prohibited_maneuver = self.PROHIBITED_MANEUVER
         self.active_agents = {}
         self._semantic_forbidden_targets_by_render = {}
+        # SUMO: outgoing edges after the signed approach, keyed by turn dir.
+        self._sumo_approach_roads = set()
+        self._sumo_outgoing_by_dir = {"l": set(), "r": set(), "s": set(), "t": set()}
+        self._sumo_all_outgoing = set()
+        self._sumo_forbidden_outgoing = set()
+        self._sumo_outgoing_ready = False
         self.render_lanes = self._collect_render_lanes()
         self.enforcement_lanes = self._collect_enforcement_lanes()
         self.enforcement_lane_ids = {getattr(l, "index", None) for l in self.enforcement_lanes}
@@ -249,6 +256,7 @@ class _BaseNoTurnSign(BaseTrafficSign):
                 self._semantic_forbidden_targets_by_render[lid] = targets
             else:
                 self._semantic_forbidden_targets_by_render.pop(lid, None)
+        self._cache_sumo_outgoing_roads(lanes)
         return lanes
 
     def _collect_render_lanes(self):
@@ -289,6 +297,39 @@ class _BaseNoTurnSign(BaseTrafficSign):
         if self._is_sumo_network():
             return self._collect_sumo_signed_approach_lanes()
         return list(self.render_lanes)
+
+    def _cache_sumo_outgoing_roads(self, approach_lanes) -> None:
+        """Store junction outgoing edges and mark the prohibited turn's road."""
+        mapped = self._map_sumo_outgoing_from_lanes(approach_lanes)
+        forbidden = self._forbidden_outgoing_edges(mapped, self.prohibited_maneuver)
+        self._sumo_approach_roads = mapped["approach_roads"]
+        self._sumo_outgoing_by_dir = mapped["by_dir"]
+        self._sumo_all_outgoing = mapped["all_outgoing"]
+        self._sumo_forbidden_outgoing = forbidden
+        self._sumo_outgoing_ready = bool(self._sumo_approach_roads)
+
+        if forbidden:
+            try:
+                all_lanes = self._all_main_lanes(self.engine.current_map.road_network)
+            except Exception:
+                all_lanes = []
+            extra = {
+                getattr(other, "index", None)
+                for _key, other, _turns in all_lanes
+                if self._sumo_edge_id_from_lane_index(getattr(other, "index", None)) in forbidden
+            }
+            extra.discard(None)
+            for lane_obj in approach_lanes or []:
+                lid = getattr(lane_obj, "index", None)
+                if lid is None:
+                    continue
+                self._semantic_forbidden_targets_by_render.setdefault(lid, set()).update(extra)
+
+    def _ensure_sumo_outgoing_context(self) -> None:
+        if self._sumo_outgoing_ready and self._sumo_all_outgoing:
+            return
+        lanes = self.enforcement_lanes or self.render_lanes or [self.lane]
+        self._cache_sumo_outgoing_roads(lanes)
 
     def get_top_down_icon_poses(self):
         poses = []
@@ -458,40 +499,24 @@ class _BaseNoTurnSign(BaseTrafficSign):
         self._forbidden_target_road = self._select_forbidden_target_road(outgoing_roads, sign_outgoing)
         self._pg_initialized = True
 
+    def _is_violating_sumo(self, vehicle, agent_id, current_lane) -> bool:
+        """Arm on the signed approach; violate if ego then takes the forbidden outgoing road."""
+        self._ensure_sumo_outgoing_context()
+        return self._judge_sumo_outgoing(
+            agent_id,
+            current_lane,
+            approach_roads=self._sumo_approach_roads,
+            all_outgoing=self._sumo_all_outgoing,
+            violate_roads=self._sumo_forbidden_outgoing,
+            states=self.active_agents,
+        )
+
     def _is_violating(self, vehicle) -> bool:
         agent_id = vehicle.name
         current_lane = vehicle.lane_index
 
         if self._is_sumo_network():
-            if current_lane in self.enforcement_lane_ids:
-                self.active_agents[agent_id] = current_lane
-                return False
-
-            if agent_id in self.active_agents:
-                prev_lane = self.active_agents[agent_id]
-                if prev_lane in self.enforcement_lane_ids and current_lane != prev_lane:
-                    if self._is_neighbor_lane(prev_lane, current_lane):
-                        self.active_agents.pop(agent_id, None)
-                        return False
-                    src_lane_obj = self._lane_for_id(prev_lane)
-                    if src_lane_obj is None:
-                        self.active_agents.pop(agent_id, None)
-                        return False
-                    turn_info = next(
-                        (
-                            turn for turn in (getattr(src_lane_obj, "turns", None) or [])
-                            if (turn.get("to_lane") == current_lane or turn.get("via_lane") == current_lane)
-                        ),
-                        None
-                    )
-                    self.active_agents.pop(agent_id, None)
-                    if turn_info and self._normalize_turn_direction(turn_info.get("direction")) == self.prohibited_maneuver:
-                        return True
-                    semantic_targets = self._semantic_forbidden_targets_by_render.get(prev_lane, set())
-                    if current_lane in semantic_targets:
-                        return True
-                    return False
-            return False
+            return self._is_violating_sumo(vehicle, agent_id, current_lane)
 
         self._ensure_pg_context()
         current_road = self._lane_to_road(current_lane)

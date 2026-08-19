@@ -1,4 +1,4 @@
-"""Sign profiles for priority-junction benches (2.1–2.5 / 3.1 / 3.18 / 4.1.x / 4.3 / 3.2 / 5.7.x / 5.19)."""
+"""Sign profiles for priority-junction benches (2.1–2.5 / 3.1 / 3.18 / 4.1.x / 4.2.x / 4.3 / 3.2 / 5.7.x / 5.19)."""
 
 from __future__ import annotations
 
@@ -240,6 +240,43 @@ NO_ENTRY = SignProfile(
     ego_road_class=None,
 )
 
+# 4.2.1–4.2.3: segment maps with obstacle-lane metadata (moscow_scenes/segment_detour).
+DETOUR_RIGHT = SignProfile(
+    id="detour_right",
+    pdd_code="4.2.1",
+    sign_type="detour",
+    sign_name="Detour obstacle on the right (4.2.1)",
+    layout_mode="main_main",
+    spawn_strategy="detour",
+    data_subdir="detour_right",
+    output_code="4_2_1",
+    ego_road_class=None,
+)
+
+DETOUR_LEFT = SignProfile(
+    id="detour_left",
+    pdd_code="4.2.2",
+    sign_type="detour",
+    sign_name="Detour obstacle on the left (4.2.2)",
+    layout_mode="main_main",
+    spawn_strategy="detour",
+    data_subdir="detour_left",
+    output_code="4_2_2",
+    ego_road_class=None,
+)
+
+DETOUR_EITHER = SignProfile(
+    id="detour_either",
+    pdd_code="4.2.3",
+    sign_type="detour",
+    sign_name="Detour obstacle on either side (4.2.3)",
+    layout_mode="main_main",
+    spawn_strategy="detour",
+    data_subdir="detour_either",
+    output_code="4_2_3",
+    ego_road_class=None,
+)
+
 # 5.19: segment maps with injected SUMO crosswalk (moscow_scenes/segment_crosswalk).
 CROSSWALK = SignProfile(
     id="crosswalk",
@@ -271,6 +308,9 @@ _PROFILES = (
     NO_TURN_RIGHT,
     NO_TURN_LEFT,
     NO_ENTRY,
+    DETOUR_RIGHT,
+    DETOUR_LEFT,
+    DETOUR_EITHER,
     CROSSWALK,
 )
 
@@ -292,6 +332,9 @@ _REGISTRY: dict[str, SignProfile] = {
     NO_TURN_RIGHT.id: NO_TURN_RIGHT,
     NO_TURN_LEFT.id: NO_TURN_LEFT,
     NO_ENTRY.id: NO_ENTRY,
+    DETOUR_RIGHT.id: DETOUR_RIGHT,
+    DETOUR_LEFT.id: DETOUR_LEFT,
+    DETOUR_EITHER.id: DETOUR_EITHER,
     CROSSWALK.id: CROSSWALK,
     # aliases
     "2.1": MAIN_ROAD,
@@ -337,6 +380,15 @@ _REGISTRY: dict[str, SignProfile] = {
     "3_18_2": NO_TURN_LEFT,
     "3.1": NO_ENTRY,
     "3_1": NO_ENTRY,
+    "4.2.1": DETOUR_RIGHT,
+    "4_2_1": DETOUR_RIGHT,
+    "detour_right": DETOUR_RIGHT,
+    "4.2.2": DETOUR_LEFT,
+    "4_2_2": DETOUR_LEFT,
+    "detour_left": DETOUR_LEFT,
+    "4.2.3": DETOUR_EITHER,
+    "4_2_3": DETOUR_EITHER,
+    "detour_either": DETOUR_EITHER,
     "5.19": CROSSWALK,
     "5_19": CROSSWALK,
     "5.19.1": CROSSWALK,

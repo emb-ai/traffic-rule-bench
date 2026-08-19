@@ -73,6 +73,7 @@ from traffic_signs.priority_signs import (
 from traffic_signs.no_traffic_sign import NoTrafficSign
 from traffic_signs.pedestrian_crossing_sign import PedestrianCrossingSign
 from traffic_signs.pedestrian_yield_rule import PedestrianYieldRule
+from traffic_signs.detour_sign import DetourRightSign, DetourLeftSign, DetourEitherSign
 from core.sumo.lane_keys import clamp_lane_key_to_graph, lane_edge_id, make_lane_key
 from core.runtime.one_way_support import (
     OneWaySumoTrafficManager,
@@ -966,6 +967,7 @@ def _apply_destination_along_cap(env, row: dict) -> None:
         or _row_is_blocked_road(row)
         or _row_uses_dual_path_nav(row)
         or _row_is_crosswalk(row)
+        or _row_is_detour(row)
     ):
         return
     if raw is None and _row_uses_dual_path_nav(row):
@@ -1023,6 +1025,8 @@ def _apply_destination_along_cap(env, row: dict) -> None:
             label = "Direction"
         elif _row_is_crosswalk(row):
             label = "Crosswalk"
+        elif _row_is_detour(row):
+            label = "Detour"
         else:
             label = "Roundabout"
         print(
@@ -1067,6 +1071,7 @@ def _ego_reached_capped_destination(
     *,
     max_along_m: float,
     arrive_tol_m: float = 2.0,
+    allow_same_lane: bool = False,
 ) -> bool:
     """True when ego is on the route's final exit lane at/after the cap.
 
@@ -1101,8 +1106,13 @@ def _ego_reached_capped_destination(
     if checkpoints:
         first_cp = checkpoints[0]
         last_cp = checkpoints[-1]
-        # Degenerate route (spawn lane == dest lane) — never early-arrive.
-        if _same_road_lane_index(first_cp, last_cp) and len(checkpoints) <= 2:
+        # Degenerate route (spawn lane == dest lane) — never early-arrive,
+        # except detour: finish is a along-cap on the same obstacle edge.
+        if (
+            not allow_same_lane
+            and _same_road_lane_index(first_cp, last_cp)
+            and len(checkpoints) <= 2
+        ):
             return False
         # Must be on the final checkpoint / final_lane road — not the approach.
         on_final = _same_road_lane_index(lane_idx, last_cp) or _same_road_lane_index(
@@ -1276,6 +1286,14 @@ def _row_is_crosswalk(row: dict) -> bool:
     if bool(row.get("place_crosswalk_sign")):
         return True
     return code in {"5.19", "5_19", "5.19.1", "5.19.2"} or sign_type == "crosswalk"
+
+
+def _row_is_detour(row: dict) -> bool:
+    code = str(row.get("pdd_code") or row.get("sign_code") or "")
+    sign_type = str(row.get("sign_type") or row.get("sign_family") or "")
+    if bool(row.get("place_detour_sign")):
+        return True
+    return code in {"4.2.1", "4.2.2", "4.2.3", "4_2_1", "4_2_2", "4_2_3"} or sign_type == "detour"
 
 
 def _row_uses_dual_path_nav(row: dict) -> bool:
@@ -3007,6 +3025,76 @@ def _place_crosswalk_sign_on_spawn_lane(
         return False
 
 
+def _place_detour_signs(
+    env,
+    row: dict,
+    show_model: bool = True,
+) -> bool:
+    """Place a DetourSign (4.2.x) on the obstacle lane at sign_s from manifest meta.
+
+    The sign is placed on the lane identified by ``sign_lane_index`` at the
+    longitudinal position ``sign_s`` stored in the scene's meta.json.
+    Violation detection uses a zone: [sign_s - 30m, sign_s + 15m].
+    """
+    from core.layout.junction_sign_placement import resolve_layout_lane
+
+    try:
+        vehicle = env.agent
+        if vehicle is None or vehicle.lane is None:
+            return False
+
+        sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
+        if sign_mgr is None:
+            return False
+
+        _clear_sign_manager(sign_mgr)
+
+        pdd_code = str(row.get("pdd_code") or row.get("detour_code") or "4.2.1")
+        sign_cls_map = {
+            "4.2.1": DetourRightSign,
+            "4.2.2": DetourLeftSign,
+            "4.2.3": DetourEitherSign,
+        }
+        sign_cls = sign_cls_map.get(pdd_code, DetourRightSign)
+
+        road_id = str(row.get("road_id") or "")
+        sign_lane_index = int(row.get("sign_lane_index", 0))
+        sign_s = float(row.get("sign_s", 60.0))
+
+        lane = None
+        if road_id:
+            lane_key = f"{road_id}_{sign_lane_index}"
+            lane = resolve_layout_lane(env, lane_key)
+
+        if lane is None:
+            lane = vehicle.lane
+
+        placement_long = max(0.0, min(sign_s, lane.length - 1.0))
+        longitudinal_offset = placement_long - lane.length
+
+        sign = sign_mgr.add_sign(
+            sign_cls,
+            lane=lane,
+            longitudinal_offset=longitudinal_offset,
+            lateral_offset=0,
+            show_model=show_model,
+            use_random_lane=False,
+        )
+        if sign is not None:
+            sign.is_priority_sign = False
+            print(
+                f"[DetourSign] Placed {pdd_code} on lane "
+                f"{getattr(lane, 'index', lane_key)} "
+                f"at s={sign_s:.1f}m (zone [{sign.zone_start:.1f}, {sign.zone_end:.1f}])"
+            )
+        return sign is not None
+    except Exception as e:
+        print(f"[DetourSign] Failed to place sign: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def _place_junction_priority_signs(
     env,
     row: dict,
@@ -3015,6 +3103,12 @@ def _place_junction_priority_signs(
     show_model: bool = True,
 ) -> bool:
     """Dispatch sign placement by row pdd_code / sign_type."""
+    if _row_is_detour(row):
+        return _place_detour_signs(
+            env,
+            row,
+            show_model=show_model,
+        )
     if _row_is_crosswalk(row):
         return _place_crosswalk_sign_on_spawn_lane(
             env,
@@ -3231,6 +3325,8 @@ def run_one_episode(
         if spawn_distance > 0:
             _reposition_ego_before_lane_end(base_env, spawn_distance)
         _apply_manifest_ego_destination(base_env, row)
+        if _row_is_detour(row):
+            _apply_destination_along_cap(base_env, row)
         _install_segment_crosswalk_geometry(base_env, row)
 
         # Dual-path dest is already policy-resolved (truncated finish).
@@ -3249,9 +3345,10 @@ def run_one_episode(
                 )
             _apply_destination_along_cap(base_env, row)
 
-        # Validate route: check that destination is different from spawn
+        # Validate route: check that destination is different from spawn.
+        # Detour finishes on the same obstacle edge (along-cap), so skip this.
         nav = getattr(base_env.vehicle, "navigation", None)
-        if nav is not None:
+        if nav is not None and not _row_is_detour(row):
             checkpoints = getattr(nav, "checkpoints", [])
             spawn_lane_idx = getattr(base_env.vehicle.lane, "index", None)
             if checkpoints and spawn_lane_idx:
@@ -3287,6 +3384,7 @@ def run_one_episode(
                 and not _row_is_blocked_road(row)
                 and not _row_uses_dual_path_nav(row)
                 and not _row_is_crosswalk(row)
+                and not _row_is_detour(row)
             ):
                 _place_right_hand_yield_tracker(
                     base_env,
@@ -3660,6 +3758,7 @@ def run_one_episode(
                 or _row_is_roundabout(row)
                 or _row_uses_dual_path_nav(row)
                 or _row_is_crosswalk(row)
+                or _row_is_detour(row)
             ):
                 raw_cap = row.get("destination_max_along_m")
                 if raw_cap is None:
@@ -3675,6 +3774,7 @@ def run_one_episode(
             capped_arrive = capped_arrive or _ego_reached_capped_destination(
                 vehicle,
                 max_along_m=dest_cap_m,
+                allow_same_lane=_row_is_detour(row),
             )
             natural_done = bool(terminated or truncated)
 

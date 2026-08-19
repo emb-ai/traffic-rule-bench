@@ -66,12 +66,11 @@ class PedestrianYieldRule:
             if not self._valid_polygon(polygon):
                 continue
 
-            dist = self._distance_to_polygon(vehicle_pos, polygon)
+            dist, ahead = self._approach_metrics(vehicle, vehicle_pos, forward, polygon)
             in_crosswalk = self._vehicle_in_crosswalk(vehicle, polygon)
             if (not in_crosswalk) and dist > monitor_distance:
                 continue
 
-            ahead = self._is_polygon_ahead(vehicle_pos, forward, polygon)
             active = bool(state.get("active", False))
             in_before_no_stop_zone = (
                 not in_crosswalk
@@ -240,6 +239,40 @@ class PedestrianYieldRule:
         )
         return status
 
+    def _along_lane_to_end_crosswalk(self, vehicle, polygon: np.ndarray) -> Optional[float]:
+        """Remaining metres along the current lane when the zebra sits at lane end."""
+        lane = getattr(vehicle, "lane", None)
+        if lane is None:
+            return None
+        try:
+            long, _ = lane.local_coordinates(vehicle.position)
+            along = float(lane.length) - float(long)
+            if along <= 0.0:
+                return None
+            end_xy = np.asarray(
+                lane.position(max(0.5, float(lane.length) - 0.5), 0.0)[:2],
+                dtype=np.float64,
+            )
+            if self._distance_to_polygon(end_xy, polygon) > 8.0:
+                return None
+            return along
+        except Exception:
+            return None
+
+    def _approach_metrics(self, vehicle, vehicle_pos, forward, polygon) -> Tuple[float, bool]:
+        """Distance / ahead, using along-lane remaining when the zebra is at lane end.
+
+        Heading-cone ``ahead`` stays false around a bend until the last metres;
+        along-lane remaining is what ``yield_distance`` is supposed to measure.
+        """
+        dist = float(self._distance_to_polygon(vehicle_pos, polygon))
+        ahead = bool(self._is_polygon_ahead(vehicle_pos, forward, polygon))
+        along = self._along_lane_to_end_crosswalk(vehicle, polygon)
+        if along is not None:
+            dist = min(dist, float(along))
+            ahead = True
+        return dist, ahead
+
     @staticmethod
     def _valid_polygon(polygon: np.ndarray) -> bool:
         return polygon.ndim == 2 and polygon.shape[0] >= 3 and polygon.shape[1] >= 2
@@ -315,13 +348,14 @@ class PedestrianYieldRule:
             if not self._valid_polygon(polygon):
                 continue
 
-            dist = self._distance_to_polygon(vehicle_pos, polygon)
+            dist, ahead = self._approach_metrics(vehicle, vehicle_pos, forward, polygon)
             if dist > yield_distance:
                 continue
 
             in_crosswalk = self._point_in_polygon(vehicle_pos, polygon) or dist <= self._crosswalk_enter_tolerance
-            # Ignore crosswalk clearly behind vehicle.
-            if (not in_crosswalk) and (not self._is_polygon_ahead(vehicle_pos, forward, polygon, tolerance=-1.0)):
+            # Ignore crosswalk clearly behind vehicle (along-lane at lane-end
+            # zebra still counts as ahead around a bend).
+            if (not in_crosswalk) and (not ahead):
                 continue
 
             ret.append((str(crosswalk_id), polygon, float(dist)))
@@ -342,12 +376,11 @@ class PedestrianYieldRule:
             polygon = np.asarray(state.get("polygon", []), dtype=np.float64)
             if not self._valid_polygon(polygon):
                 continue
-            dist = self._distance_to_polygon(vehicle_pos, polygon)
+            dist, ahead = self._approach_metrics(vehicle, vehicle_pos, forward, polygon)
             in_crosswalk = self._vehicle_in_crosswalk(vehicle, polygon)
             if (not in_crosswalk) and dist > monitor_distance:
                 continue
 
-            ahead = self._is_polygon_ahead(vehicle_pos, forward, polygon)
             active = bool(state.get("active", False))
             signed_no_stop_dist = self._signed_distance_to_no_stop_zone(
                 vehicle=vehicle,
