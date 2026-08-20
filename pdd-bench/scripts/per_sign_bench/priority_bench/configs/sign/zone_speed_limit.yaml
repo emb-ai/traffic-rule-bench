@@ -1,8 +1,0 @@
-# @package _global_
-# PDD 5.31 — zone speed limit.
-defaults:
-  - _speed
-
-sign: zone_speed_limit
-paths:
-  output_base: data/zone_speed_limit/output

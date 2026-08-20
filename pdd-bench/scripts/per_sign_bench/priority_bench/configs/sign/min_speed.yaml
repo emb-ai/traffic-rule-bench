@@ -1,8 +1,0 @@
-# @package _global_
-# PDD 4.6 — minimum speed.
-defaults:
-  - _speed
-
-sign: min_speed
-paths:
-  output_base: data/min_speed/output
