@@ -12,8 +12,19 @@ def shepelev() -> Path:
     return Path(os.environ.get("SHEPELEV", _DEFAULT_SHEPELEV))
 
 
+def _checkout_root() -> Path:
+    """Repo root of the checkout this file belongs to: <root>/scripts/plant2_ft_pipeline/lib/env.py."""
+    return Path(__file__).resolve().parents[3]
+
+
 def trb_root() -> Path:
-    return Path(os.environ.get("TRB_ROOT", shepelev() / "traffic-rule-bench"))
+    env_root = os.environ.get("TRB_ROOT")
+    if env_root:
+        return Path(env_root)
+    local = _checkout_root()
+    if (local / "plant2" / "PlanT").is_dir():
+        return local
+    return shepelev() / "traffic-rule-bench"
 
 
 def plan_t() -> Path:
