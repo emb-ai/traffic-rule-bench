@@ -40,6 +40,7 @@ class FinetuneConfig:
     # each finetune. These three decide whether those start from noise at the
     # trunk's learning rate (defaults = historical behaviour) or get a warm
     # start and a group of their own.
+    custom_sampler: bool = False
     init_sign_from_stop: bool = False
     new_param_lr_mult: float = 1.0
     trunk_lr_mult: float = 1.0
@@ -100,6 +101,7 @@ def build_finetune_cmd(cfg: FinetuneConfig) -> list[str]:
     os.environ["WANDB_MODE"] = cfg.wandb_mode
     os.environ["CUDA_VISIBLE_DEVICES"] = cfg.cuda_device
     os.environ["DDP_STRATEGY"] = cfg.ddp_strategy
+    os.environ["CUSTOM_SAMPLER"] = "1" if cfg.custom_sampler else "0"
     os.environ["INIT_SIGN_FROM_STOP"] = "1" if cfg.init_sign_from_stop else "0"
     os.environ["NEW_PARAM_LR_MULT"] = str(cfg.new_param_lr_mult)
     os.environ["TRUNK_LR_MULT"] = str(cfg.trunk_lr_mult)
@@ -160,6 +162,7 @@ def run_finetune(cfg: FinetuneConfig, *, cwd: Path | None = None, log_path: Path
         f" wps_stride={os.environ.get('WPS_STRIDE', '1')}"
     )
     print(
+        f"  SAMPLER  = {'weighted (sample_weights.json)' if cfg.custom_sampler else 'uniform'}\n"
         f"  NEWPARAM = init_sign_from_stop={'1' if cfg.init_sign_from_stop else '0'}"
         f"  lr_mult={cfg.new_param_lr_mult}  trunk_mult={cfg.trunk_lr_mult}"
     )

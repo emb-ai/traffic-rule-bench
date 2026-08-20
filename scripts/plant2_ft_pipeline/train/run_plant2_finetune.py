@@ -62,6 +62,9 @@ def parse_args() -> argparse.Namespace:
                    default=float(_env("STOP_SPEED_LOSS_WEIGHT", 1.0)))
     p.add_argument("--gpus", type=int, default=int(_env("GPUS", 1)))
     p.add_argument("--ddp-strategy", default=_env("DDP_STRATEGY", "ddp_find_unused_parameters_true"))
+    p.add_argument("--custom-sampler", action=argparse.BooleanOptionalAction,
+                   default=_env_bool("CUSTOM_SAMPLER", False),
+                   help="Draw frames by sample_weights.json instead of uniformly")
     p.add_argument("--init-sign-from-stop", action=argparse.BooleanOptionalAction,
                    default=_env_bool("INIT_SIGN_FROM_STOP", False),
                    help="Seed the PDD sign tok_emb from the trained stop_sign layer")
@@ -113,6 +116,7 @@ def main() -> None:
         stop_speed_loss_weight=args.stop_speed_loss_weight,
         gpus=args.gpus,
         ddp_strategy=args.ddp_strategy,
+        custom_sampler=args.custom_sampler,
         init_sign_from_stop=args.init_sign_from_stop,
         new_param_lr_mult=args.new_param_lr_mult,
         trunk_lr_mult=args.trunk_lr_mult,
