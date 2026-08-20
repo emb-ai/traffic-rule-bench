@@ -485,8 +485,9 @@ def main() -> None:
     no_manifests = OUT / "_no_manifests"  # placeholder for build_csv
     no_manifests.mkdir(exist_ok=True)
 
+    metrics_dir = BENCH_DIR / "metrics"
     run([
-        sys.executable, str(BENCH_DIR.parent / "build_episode_metrics_csv.py"),
+        sys.executable, str(metrics_dir / "build_episode_metrics_csv.py"),
         "--runs-root",      str(OUT / "runs"),
         "--out",            str(OUT / "metrics_per_episode.csv"),
         "--vars",           "0",
@@ -494,13 +495,13 @@ def main() -> None:
     ])
 
     run([
-        sys.executable, str(BENCH_DIR.parent / "aggregate_episode_metrics.py"),
+        sys.executable, str(metrics_dir / "aggregate_episode_metrics.py"),
         "--csv",     str(OUT / "metrics_per_episode.csv"),
         "--out-dir", str(OUT),
     ])
 
     run([
-        sys.executable, str(BENCH_DIR.parent / "generate_cumulative_markdown_report.py"),
+        sys.executable, str(metrics_dir / "generate_cumulative_markdown_report.py"),
         "--run-root",   str(OUT),
         "--cumulative", str(OUT / "reports" / "cumulative.json"),
     ])

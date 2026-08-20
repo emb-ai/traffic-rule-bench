@@ -7,3 +7,6 @@ nets/*.log
 index/crop_full.log
 index/crop_smoke.log
 index/enumerate.log
+
+# Cropped scene pools (nets/png) — regenerate locally, do not commit
+scenes/

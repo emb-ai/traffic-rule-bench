@@ -53,7 +53,7 @@ from agents.policies.modified_idm_sign_compliant import ModifiedIDMSignCompliant
 from agents.policies.rule_compliant_expert import RuleCompliantExpertPolicy
 from metadrive.policy.idm_policy import IDMPolicy, ModifiedIDMPolicy
 from metadrive.policy.expert_policy import ExpertPolicy
-from scripts.per_sign_bench.factorized_space.ego_defaults import (
+from core.profiles.ego_defaults import (
     apply_ego_defaults,
     apply_ego_sampled,
     numpy_legacy_seed,
@@ -208,7 +208,7 @@ def _apply_manifest_profile_to_npcs(row: dict) -> None:
     profile = _manifest_profile(row)
     if not profile:
         return
-    from scripts.per_sign_bench.factorized_space.agent_profile_bank import apply_profile_to_idm_class
+    from core.profiles.agent_profile_bank import apply_profile_to_idm_class
 
     apply_profile_to_idm_class(profile)
 

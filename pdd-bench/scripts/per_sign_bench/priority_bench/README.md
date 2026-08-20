@@ -14,7 +14,7 @@ cd traffic-rule-bench/pdd-bench/scripts/per_sign_bench/priority_bench
 
 ```
 priority_bench/
-├── core/                 # shared libs (layout, crop, aux, augmentation, viability, …)
+├── core/                 # shared libs (layout, crop, aux, profiles, …)
 ├── signs/                # SignProfile registry (main=2.1 … 4.1.x direction, 5.7 one_way)
 ├── configs/              # Hydra (configs/sign/{main,secondary,yield,stop,roundabout}.yaml)
 ├── data/
@@ -29,6 +29,8 @@ priority_bench/
 │   └── legacy/           # old catalog / Overpass flow
 ├── tools/                # ad-hoc debug (GIF review, map render, drop analysis, …)
 ├── collect_trajectories/ # oracle / PlanT2 expert collection (SIGN=…|secondary)
+├── metrics/              # episodes → CSV → aggregations → markdown report
+├── oracle/               # select_experts lib + oracle metrics table
 ├── generate_manifest.py
 ├── run_benchmark.py
 └── eval_pipeline.py

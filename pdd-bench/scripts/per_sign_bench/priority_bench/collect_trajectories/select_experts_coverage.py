@@ -32,8 +32,8 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PRIORITY_DIR = SCRIPT_DIR.parent
-PER_SIGN_DIR = PRIORITY_DIR.parent
-for p in (str(PER_SIGN_DIR), str(SCRIPT_DIR)):
+ORACLE_DIR = PRIORITY_DIR / "oracle"
+for p in (str(ORACLE_DIR), str(SCRIPT_DIR)):
     if p not in sys.path:
         sys.path.insert(0, p)
 

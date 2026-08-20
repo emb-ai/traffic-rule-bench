@@ -13,6 +13,7 @@ core/
 ├── layout/         Junction geometry, sign placement, roundabout topology, crop
 ├── scenarios/      Ego/aux spawn enumeration and runtime aux agents
 ├── manifest/       Manifest defaults, expansion axes, viability filters
+├── profiles/       nuPlan ego/NPC IDM profiles + stable_hash (vendored)
 ├── pool/           Moscow scene pool + keep/reject selection state
 └── runtime/        MetaDrive patches applied before simulation
 ```
@@ -59,6 +60,18 @@ Which ego/aux spawn + destination combinations exist per scene.
 | `direction_bridge.py` | 4.1 dual-path from crop `meta.json` |
 
 **Used by:** manifest expansion, viability reject, `run_benchmark` aux spawn.
+
+### `profiles/`
+
+nuPlan ego/NPC IDM profiles (vendored from colleague `factorized_space`).
+
+| Module | Role |
+|--------|------|
+| `agent_profile_bank.py` | `sample_one_profile`, speed v0 / braking distance |
+| `ego_defaults.py` | `apply_ego_defaults` / `sample_ego_params` (s1–s4) |
+| `stable_hash.py` | Deterministic seeds for expansions |
+
+**Used by:** `generate_manifest` expansions, `run_benchmark`, `speed_scene_design`.
 
 ### `manifest/`
 

@@ -74,7 +74,7 @@ def braking_v0_mps(seed: int, v_target_kmh: float) -> float:
         (float(v_target_kmh) + V0_MAX_EXCESS_KMH) / 3.6,
     )
     try:
-        from factorized_space.agent_profile_bank import (
+        from core.profiles.agent_profile_bank import (
             sample_spawn_velocity_above_limit,
         )
         v0 = float(
@@ -95,7 +95,7 @@ def braking_v0_mps(seed: int, v_target_kmh: float) -> float:
 def braking_d_required_m(v0_mps: float, v_target_kmh: float) -> float:
     v_target_mps = float(v_target_kmh) / 3.6
     try:
-        from factorized_space.agent_profile_bank import braking_required_distance
+        from core.profiles.agent_profile_bank import braking_required_distance
         d_req = braking_required_distance(
             float(v0_mps),
             v_target_mps,

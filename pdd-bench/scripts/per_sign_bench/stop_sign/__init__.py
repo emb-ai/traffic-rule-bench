@@ -1,1 +1,0 @@
-# stop_sign package

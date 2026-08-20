@@ -1,16 +1,13 @@
 """Expand blocked-road (3.2) scenes into manifest rows (layout × NPC profile).
 
-NPC world params come from the same shared helpers as sumo_space:
-``factorized_space.agent_profile_bank.sample_one_profile`` and
-``sumo_space.sumo_catalog.stable_hash``. Geometry expansion stays here —
-``sumo_catalog`` / ``materialize_sumo_scene`` are tied to OSM 3.24/4.2.x signs.
+NPC world params come from ``core.profiles``
+(``sample_one_profile``, ``stable_hash``). Geometry expansion stays here.
 
 ``max_scenarios`` caps the combined (lane/dest × n_variations) pool after shuffle.
 """
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -19,13 +16,8 @@ from ..scenarios.blocked_road_route import forbidden_edge_geometry_ok
 from ..scenarios.scene_augmentation import SpawnScenario, augment_layout_for_scene
 from .manifest_expansion import shuffle_cap
 
-# per_sign_bench/ on path for factorized_space + sumo_space.
-_PER_SIGN_BENCH = Path(__file__).resolve().parents[3]
-if str(_PER_SIGN_BENCH) not in sys.path:
-    sys.path.insert(0, str(_PER_SIGN_BENCH))
-
-from factorized_space.agent_profile_bank import sample_one_profile  # noqa: E402
-from sumo_space.sumo_catalog import stable_hash  # noqa: E402
+from core.profiles.agent_profile_bank import sample_one_profile
+from core.profiles.stable_hash import stable_hash
 
 
 @dataclass(frozen=True)

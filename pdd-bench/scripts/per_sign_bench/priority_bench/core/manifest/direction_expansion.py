@@ -8,7 +8,6 @@ Lane axis and NPC world follow priority_bench (same as 5.7 / blocked_road):
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -27,12 +26,8 @@ from .dual_path_budget import (
 )
 from .manifest_expansion import shuffle_cap
 
-_PER_SIGN_BENCH = Path(__file__).resolve().parents[3]
-if str(_PER_SIGN_BENCH) not in sys.path:
-    sys.path.insert(0, str(_PER_SIGN_BENCH))
-
-from factorized_space.agent_profile_bank import sample_one_profile  # noqa: E402
-from sumo_space.sumo_catalog import stable_hash  # noqa: E402
+from core.profiles.agent_profile_bank import sample_one_profile
+from core.profiles.stable_hash import stable_hash
 
 _CARDINAL = frozenset({"s", "r", "l"})
 

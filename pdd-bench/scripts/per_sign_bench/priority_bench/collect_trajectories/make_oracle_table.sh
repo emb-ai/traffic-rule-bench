@@ -8,7 +8,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PER_SIGN="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+ORACLE_DIR="$(cd -- "$SCRIPT_DIR/../oracle" && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 OUT_BASE="${1:?usage: $0 <OUT_BASE> [experts_dir]}"
@@ -61,8 +61,7 @@ fi
 TABLE_OUT="$OUT_BASE/oracle_metrics"
 mkdir -p "$TABLE_OUT"
 
-cd "$PER_SIGN"
-"$PYTHON_BIN" make_oracle_metrics_table.py \
+"$PYTHON_BIN" "$ORACLE_DIR/make_oracle_metrics_table.py" \
     --jsonl "$ALL_RUNS" \
     --picks "$PICKS" \
     --signs "$PDD_CODE" \
