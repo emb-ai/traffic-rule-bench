@@ -1,0 +1,7 @@
+# @package _global_
+defaults:
+  - _dual_path
+
+sign: one_way_left
+paths:
+  output_base: data/one_way_left/output

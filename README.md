@@ -24,10 +24,29 @@ Autonomous driving planners are typically evaluated using aggregate metrics such
 | Rule-augmented    | CaRL + rule overlay         | `carl_rule`                   | `--model-path` required            |
 | Rule-augmented    | PlanT2 + rule overlay       | `plant2_rule`                 | `--model-path` required            |
 
-**Submodules:**
+**Third-party dependencies** (in `third_party/`):
 - [MetaDrive](https://github.com/emb-ai/metadrive) — simulation backend with sign-aware extensions
 - [PlanT2](https://github.com/emb-ai/plant2) — PlanT2 policy and training pipeline
 - [CaRL](https://github.com/autonomousvision/CaRL) — CaRL policy
+
+## Directory structure
+
+```
+traffic-rule-bench/
+├── pdd_bench/              # main Python package (pip install -e .)
+│   ├── signs/              # MetaDrive traffic sign objects & violation logic
+│   ├── envs/               # SUMO + MetaDrive simulation environments
+│   ├── agents/             # driving policies & NN adapters (CaRL, PlanT2)
+│   ├── bench/              # benchmark engine: runner, manifest, metrics, oracle
+│   │   └── core/           # shared library (layout, scenarios, profiles, …)
+│   └── scene_pipeline/     # Moscow SUMO scene harvest pipeline
+├── tools/                  # standalone visualization & debug scripts
+├── finetune/               # PlanT2 fine-tuning tooling
+├── checkpoints/            # model weights (CaRL, PlanT2)
+├── third_party/            # external submodules (CaRL, MetaDrive, PlanT2)
+├── docs/                   # paper figures & documentation
+└── pyproject.toml
+```
 
 ## 🚀 Quick start
 
@@ -45,20 +64,20 @@ Autonomous driving planners are typically evaluated using aggregate metrics such
    conda create --name metadrive_signs python=3.10
    conda activate metadrive_signs
 
-   pip install -e metadrive
+   pip install -e third_party/metadrive
    pip install eclipse-sumo sumolib pyproj stable_baselines3
    pip install pandas "geopandas<1.0" gym timm
-   pip install -e pdd-bench
+   pip install -e .
    ```
 
 3. (Optional) PlanT2 env for `plant2` / `plant2_rule` baselines:
    ```bash
-   cd plant2
+   cd third_party/plant2
    conda env update -f environment.yml --prune
    conda activate plant2
    pip install gymnasium panda3d panda3d-gltf progressbar pygame sumolib einops
    pip install -e ../metadrive
-   cd ..
+   cd ../..
    ```
 
 ### Checkpoints
@@ -67,75 +86,71 @@ TrafficRuleBench uses three checkpoint sets. **Base** CaRL and PlanT2 weights co
 
 | Model                   | Source                                                                                                  | Default location                                       |
 |-------------------------|---------------------------------------------------------------------------------------------------------|--------------------------------------------------------|
-| CaRL (base)             | [autonomousvision/CaRL](https://github.com/autonomousvision/CaRL) — see their release/checkpoints      | `pdd-bench/checkpoints/CaRL/model_best.pth`            |
-| PlanT2 (base, pretrain) | [emb-ai/plant2](https://github.com/emb-ai/plant2) / [autonomousvision/plant](https://github.com/autonomousvision/plant) | `pdd-bench/checkpoints/plant2/epoch%3D029_final_3.ckpt` |
-| PlanT2 (fine-tuned)     | [🤗 emb-ai/traffic-rule-bench-models](https://huggingface.co/emb-ai/traffic-rule-bench-models)         | `pdd-bench/checkpoints/plant2/plant2_supervised_2nd_final.pt` |
+| CaRL (base)             | [autonomousvision/CaRL](https://github.com/autonomousvision/CaRL) — see their release/checkpoints      | `checkpoints/CaRL/model_best.pth`            |
+| PlanT2 (base, pretrain) | [emb-ai/plant2](https://github.com/emb-ai/plant2) / [autonomousvision/plant](https://github.com/autonomousvision/plant) | `checkpoints/plant2/epoch%3D029_final_3.ckpt` |
+| PlanT2 (fine-tuned)     | [🤗 emb-ai/traffic-rule-bench-models](https://huggingface.co/emb-ai/traffic-rule-bench-models)         | `checkpoints/plant2/plant2_supervised_2nd_final.pt` |
 
 Download the fine-tuned PlanT2 checkpoint:
 
 ```bash
 pip install huggingface_hub
-huggingface-cli download emb-ai/traffic-rule-bench-models --local-dir pdd-bench/checkpoints
+huggingface-cli download emb-ai/traffic-rule-bench-models --local-dir checkpoints
 ```
 
-For CaRL and the PlanT2 pretrain weights, follow the download instructions in each respective upstream repository and place the resulting files under `pdd-bench/checkpoints/`.
+For CaRL and the PlanT2 pretrain weights, follow the download instructions in each respective upstream repository and place the resulting files under `checkpoints/`.
 
 ### Scenes & test manifests
 
-SUMO road layouts (`.net.xml`) and per-sign test manifests (`.jsonl`) live in the HuggingFace dataset [emb-ai/traffic-rule-bench](https://huggingface.co/datasets/emb-ai/traffic-rule-bench). Download both into `pdd-bench/`:
+SUMO road layouts (`.net.xml`) and per-sign test manifests (`.jsonl`) live in the HuggingFace dataset [emb-ai/traffic-rule-bench](https://huggingface.co/datasets/emb-ai/traffic-rule-bench). Download into the repo root:
 
 ```bash
 huggingface-cli download emb-ai/traffic-rule-bench \
     --repo-type dataset \
-    --local-dir pdd-bench
+    --local-dir .
 ```
 
 This produces:
 
 ```
-pdd-bench/
+traffic-rule-bench/
 ├── scenes/{sign_code}/sign_NNNNNN/*.net.xml
 └── test/{sign_code}/*.jsonl
 ```
 
-Pass a manifest to the runner via `--manifest pdd-bench/test/<sign>/<file>.jsonl`. Scripts default to `pdd-bench/scenes` for `--scenes-root`.
+Pass a manifest to the runner via `--manifest test/<sign>/<file>.jsonl`. Scripts default to `scenes/` for `--scenes-root`.
 
 ### Run Evaluation
 
-Each manifest in `pdd-bench/test/<sign>/<file>.jsonl` is a self-contained set of scenes for one sign. Run a baseline against any manifest with `run_benchmark.py`. Each run produces `episodes_<policy>.jsonl` plus per-episode `replay.json` sidecars (needed for the metrics pipeline).
+Each manifest in `test/<sign>/<file>.jsonl` is a self-contained set of scenes for one sign. Run a baseline against any manifest with `run_benchmark.py`. Each run produces `episodes_<policy>.jsonl` plus per-episode `replay.json` sidecars (needed for the metrics pipeline).
 
 #### 1. One baseline on one sign
 
 ```bash
-cd pdd-bench/scripts/per_sign_bench
-
-python run_benchmark.py \
+python -m pdd_bench.bench.run_benchmark \
     --policy   idm \
     --run-name idm_2_5 \
-    --manifest ../../test/2_5/real_manifest.jsonl \
+    --manifest test/2_5/real_manifest.jsonl \
     --emit-replay-sidecar
 ```
 
 Models that require checkpoints (`carl`, `plant2`, `*_rule`) need `--model-path`:
 
 ```bash
-python run_benchmark.py \
+python -m pdd_bench.bench.run_benchmark \
     --policy     plant2 \
     --run-name   plant2_2_5 \
-    --manifest   ../../test/2_5/real_manifest.jsonl \
-    --model-path ../../checkpoints/plant2/epoch%3D029_final_3.ckpt \
+    --manifest   test/2_5/real_manifest.jsonl \
+    --model-path checkpoints/plant2/epoch%3D029_final_3.ckpt \
     --emit-replay-sidecar
 ```
 
 #### 2. Loop over all signs / all manifests
 
 ```bash
-cd pdd-bench/scripts/per_sign_bench
-
-for f in ../../test/*/*.jsonl; do
+for f in test/*/*.jsonl; do
     sign=$(basename "$(dirname "$f")")
     src=$(basename "$f" .jsonl)
-    python run_benchmark.py \
+    python -m pdd_bench.bench.run_benchmark \
         --policy   idm \
         --run-name "idm_${sign}_${src}" \
         --manifest "$f" \
@@ -150,9 +165,7 @@ Repeat the loop for each baseline you want to evaluate (`comprehensive_rule_expe
 Yield (2.4) uses a dedicated runner that adds yield-specific termination conditions and an optional top-down GIF recorder:
 
 ```bash
-cd pdd-bench/scripts/per_sign_bench
-
-python yield_run_benchmark_mini_plant2.py \
+python pdd_bench/bench/yield_run_benchmark_mini_plant2.py \
     --policy    idm \
     --run-name  idm_yield \
     --manifest  /path/to/2_4_manifest.jsonl \
@@ -166,7 +179,7 @@ python yield_run_benchmark_mini_plant2.py \
 #### 1. Single-run metrics (quickest)
 
 ```bash
-bash pdd-bench/scripts/per_sign_bench/run_metrics_single_run.sh \
+bash pdd_bench/bench/run_metrics_single_run.sh \
     --run-dir eval_out/runs/idm_2_5 \
     --out-dir eval_out/metrics_idm_2_5 \
     --policy  idm
@@ -181,10 +194,10 @@ Outputs:
 #### 2. Full multi-baseline pipeline
 
 ```bash
-ROOT=eval_out bash pdd-bench/scripts/per_sign_bench/run_full_metrics_pipeline.sh
+ROOT=eval_out bash pdd_bench/bench/run_full_metrics_pipeline.sh
 
 # Skip consolidation if replay jsonl files already exist:
-SKIP_CONSOLIDATE=1 ROOT=eval_out bash pdd-bench/scripts/per_sign_bench/run_full_metrics_pipeline.sh
+SKIP_CONSOLIDATE=1 ROOT=eval_out bash pdd_bench/bench/run_full_metrics_pipeline.sh
 ```
 
 The pipeline runs:
@@ -196,7 +209,7 @@ The pipeline runs:
 #### 3. Oracle baseline only
 
 ```bash
-python3 pdd-bench/scripts/per_sign_bench/build_oracle_baseline.py \
+python3 pdd_bench/bench/oracle/build_oracle_baseline.py \
     --csv eval_out/metrics_per_episode.csv
 ```
 

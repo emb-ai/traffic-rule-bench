@@ -28,52 +28,48 @@ dist/
 *.lock
 nohup.out
 
-### Local data symlinks
-pdd-bench/data/
+### Data & checkpoints
+data/
+checkpoints/
 
-### Checkpoints
-pdd-bench/checkpoints/
-pdd-bench/scenes/
+### Benchmark runtime outputs
+database_signs
+scenes.zip
+maps/
+osm_fragments/
+outputs/
+eval_results/
+replay_results/
 
-### pdd-bench runtime outputs (top-level)
-pdd-bench/database_signs
-pdd-bench/scenes.zip
-pdd-bench/maps/
-pdd-bench/osm_fragments/
-pdd-bench/outputs/
-pdd-bench/eval_results/
-pdd-bench/replay_results/
-pdd-bench/gifs/
-pdd-bench/gifs/
-pdd-bench/scripts/per_sign_bench/benchmark_2node_eval
-traj_all_experts_ffff
-
-### pdd-bench runtime outputs (any depth)
-pdd-bench/**/runs/
-pdd-bench/**/wandb/
-pdd-bench/**/tensorboard/
-pdd-bench/**/benchmark_output/
-pdd-bench/**/gifs/
-pdd-bench/**/gifs_*/
-pdd-bench/**/trajectory_output/
-pdd-bench/**/exps_final*/
-pdd-bench/**/test_plant2/
+### Runtime outputs (any depth)
+**/runs/
+**/wandb/
+**/tensorboard/
+**/benchmark_output/
+**/gifs/
+**/gifs_*/
+**/trajectory_output/
+**/exps_final*/
+**/test_plant2/
 
 ### Top-level trajectory outputs
 traj_all_experts*/
+traj_all_experts_ffff
 
 **/*benchmark_*/
 **/*detour_speed*/
 *.zip
-
 *.csv
+
 full_test_250_x10/
 full_test_250_x10_by_var_idx/
 full_train_250_x10/
 full_train_250_x10_new/
 
-pdd-bench/scripts/per_sign_bench/expert_picks_todo.jsonl
-pdd-bench/scripts/per_sign_bench/report_cumulative.md
-pdd-bench/scripts/per_sign_bench/optim/
+### Scene pipeline data (moscow scenes)
+pdd_bench/scene_pipeline/scenes/
+pdd_bench/scene_pipeline/raw/
+pdd_bench/scene_pipeline/nets/
 
-pdd-bench/scripts/per_sign_bench/merge_and_report_2node.py
+### Benchmark data
+pdd_bench/bench/data/

@@ -1,9 +1,9 @@
 [submodule "metadrive"]
-	path = metadrive
+	path = third_party/metadrive
 	url = https://github.com/emb-ai/metadrive.git
 [submodule "plant2"]
-	path = plant2
+	path = third_party/plant2
 	url = https://github.com/emb-ai/plant2.git
 [submodule "CaRL"]
-	path = CaRL
+	path = third_party/CaRL
 	url = https://github.com/autonomousvision/CaRL.git

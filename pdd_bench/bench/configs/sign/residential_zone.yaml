@@ -1,0 +1,8 @@
+# @package _global_
+# PDD 5.21 — residential zone (fixed 20 km/h).
+defaults:
+  - _speed
+
+sign: residential_zone
+paths:
+  output_base: data/residential_zone/output
