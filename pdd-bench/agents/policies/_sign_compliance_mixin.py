@@ -219,6 +219,9 @@ class SignComplianceMixin:
         # again (NN policies often oscillate across peer lanes mid-merge).
         self._lane_dirs_nav_locked = False
         self._lane_dirs_hold_applied = False
+        # Sticky per step while a LaneDirectionsSign is in the scene.
+        # Blocks U-turn body-hold (`set_position`) — 5.15.1 is steering-only.
+        self._lane_dirs_active = False
 
     # When True (IDM experts), stub nav to [lane, dest] during 5.15.1 peer LC
     # so IDM does not dive into an injected connector. NN policies set False.
@@ -234,6 +237,7 @@ class SignComplianceMixin:
         self._no_overtaking_active = False
         self._lane_dirs_nav_locked = False
         self._lane_dirs_hold_applied = False
+        self._lane_dirs_active = False
         self._one_way_nav_clean = False
         self._no_turn_318_context = False
         self._restore_uturn_steering_limit()
@@ -1303,6 +1307,8 @@ class SignComplianceMixin:
         Only for 3.18.1 / 3.18.2 scenes (plant2 opt-in). Never for 3.19 /
         one-way / direction signs.
         """
+        if getattr(self, "_lane_dirs_active", False):
+            return False
         if not getattr(self, "APPLY_UTURN_ZONE_ASSIST", False):
             return False
         if not self._scene_has_no_turn_318():
@@ -1649,14 +1655,16 @@ class SignComplianceMixin:
 
         mid = self._uturn_midroad_target(src, rev, via, at_via=False)
         try:
-            pos = np.asarray(ego.position, dtype=float)[:2]
-            delta = np.asarray(mid, dtype=float)[:2] - pos
-            dist = float(np.linalg.norm(delta))
-            if dist > 1e-4:
-                step = delta * (
-                    min(UTURN_ZONE_SPIN_HOLD_STEP_M, dist) / dist
-                )
-                ego.set_position(pos + step)
+            # 5.15.1: never move the body. U-turn spin-hold is 3.18-only.
+            if not getattr(self, "_lane_dirs_active", False):
+                pos = np.asarray(ego.position, dtype=float)[:2]
+                delta = np.asarray(mid, dtype=float)[:2] - pos
+                dist = float(np.linalg.norm(delta))
+                if dist > 1e-4:
+                    step = delta * (
+                        min(UTURN_ZONE_SPIN_HOLD_STEP_M, dist) / dist
+                    )
+                    ego.set_position(pos + step)
             # Kill residual velocity so the hold does not fight physics.
             try:
                 ego.set_velocity([1.0, 0.0], 0.0)
@@ -1729,6 +1737,8 @@ class SignComplianceMixin:
           3. spin     — in-place ~180° until aligned with reverse lane
           4. release  — clear assist, resume base policy
         """
+        if getattr(self, "_lane_dirs_active", False):
+            return float(np.clip(steering, -1.0, 1.0))
         if not getattr(self, "APPLY_UTURN_ZONE_ASSIST", False):
             return float(np.clip(steering, -1.0, 1.0))
         if not self._scene_has_no_turn_318():
@@ -2663,17 +2673,24 @@ class SignComplianceMixin:
 
         For 5.15.1 (``LaneDirectionsSign``) with ``target_lane_num``: first
         peer-lane-change onto the lane that can reach the destination, then
-        replan from that lane.
+        replan from that lane. Steering-only — never a body snap onto the
+        via (the old 4.1 direction-exit teleport must not run here).
 
         On PG NodeRoadNetwork: keep the existing lane-change pre-positioning.
         """
+        if isinstance(sign, LaneDirectionsSign):
+            self._lane_dirs_active = True
         if not on_same_road(self.control_object.lane, sign.lane):
             return
 
         # 5.15.1: force peer lane-change onto the crop-time target lane.
         # Always starts on the WRONG lane — the whole point of the task.
+        # Always return: LaneDirectionsSign subclasses DirectionSign, so a
+        # missing target_lane_num must not fall through into 4.1/PG via-aim.
         if isinstance(sign, LaneDirectionsSign):
             target_ln = getattr(sign, "target_lane_num", None)
+            if target_ln is None:
+                return
             if target_ln is not None:
                 # After the one post-LC compliant install, never rewrite nav
                 # again. NN policies (CaRL/Plant2) often oscillate across peers
@@ -2739,6 +2756,7 @@ class SignComplianceMixin:
                             self._lane_dirs_nav_locked = True
                 self._soft_cap_into_next_checkpoint_via()
                 return
+            return
 
         nav = getattr(self.control_object, "navigation", None)
         if nav is not None and self._is_sumo_edge_nav(nav):
@@ -2900,11 +2918,82 @@ class SignComplianceMixin:
                 logger.debug("Error processing rule %s: %s", type(rule).__name__, exc)
 
     def _handle_pedestrian_yield(self, rule):
-        """Handle PedestrianYieldRule — stop before occupied crosswalk."""
+        """Stop ``yield_distance`` metres before an occupied crosswalk.
+
+        ``PedestrianYieldRule.should_vehicle_stop`` uses Euclidean distance
+        plus a heading cone. Around a bend the zebra is not "ahead" until
+        the last few metres, so this handler never fired and IDM then
+        braked for the pedestrian at the painted stop line
+        (``no_stop_before_crosswalk_m``, ~3 m). Changing
+        ``pedestrian.yield_distance`` therefore had no effect.
+
+        Injected 5.19 zebras sit at the approach lane end — treat
+        ``lane.length - s`` as the stop geometry so the config actually
+        controls the rest point.
+        """
         if not hasattr(rule, "should_vehicle_stop"):
             return
-        if rule.should_vehicle_stop(self.control_object):
+        along = self._along_distance_to_occupied_crosswalk(rule)
+        if along is None:
+            if rule.should_vehicle_stop(self.control_object):
+                self._cap_speed(0.001)
+            return
+        try:
+            engine = getattr(self, "engine", None) or getattr(
+                self.control_object, "engine", None
+            )
+            yield_d = float(rule._resolve_all_thresholds(engine)["yield_distance"])
+        except Exception:
+            yield_d = float(
+                getattr(rule, "_defaults", {}).get("yield_distance", 12.0)
+            )
+        # Virtual stop line is ``yield_distance`` before the zebra. Brake
+        # from braking-distance away; keep the cap once at/past that line
+        # so we do not roll on to the painted 3 m mark.
+        dist_to_stop = float(along) - yield_d
+        approach = max(float(self._approach_dist(0.0)), 2.0)
+        if (0.0 < dist_to_stop <= approach) or (0.0 < float(along) <= yield_d):
             self._cap_speed(0.001)
+
+    def _along_distance_to_occupied_crosswalk(self, rule):
+        """Metres remaining along the current lane to an occupied zebra at lane end.
+
+        Returns None when no occupied crosswalk sits at this lane's end
+        (caller falls back to heading-based ``should_vehicle_stop``).
+        """
+        get_state = getattr(rule, "_get_crosswalk_state", None)
+        dist_fn = getattr(rule, "_distance_to_polygon", None)
+        if get_state is None or dist_fn is None:
+            return None
+        ego = self.control_object
+        _engine, state = get_state(ego)
+        if not state:
+            return None
+        lane = getattr(ego, "lane", None)
+        if lane is None:
+            return None
+        try:
+            long, _ = lane.local_coordinates(ego.position)
+            along = float(lane.length) - float(long)
+            end_xy = np.asarray(
+                lane.position(max(0.5, float(lane.length) - 0.5), 0.0)[:2],
+                dtype=np.float64,
+            )
+        except Exception:
+            return None
+        if along <= 0.0:
+            return None
+        for st in state.values():
+            if not bool(st.get("active", False)):
+                continue
+            poly = np.asarray(st.get("polygon", []), dtype=np.float64)
+            try:
+                if float(dist_fn(end_xy, poly)) > 8.0:
+                    continue
+            except Exception:
+                continue
+            return along
+        return None
 
     # ------------------------------------------------------------------
     # Priority resolution — right-hand rule at equal-priority intersections
@@ -3161,6 +3250,7 @@ class SignComplianceMixin:
         # Cleared each `_process_signs` call; re-set when those signs are seen.
         self._no_turn_318_context = False
         self._one_way_nav_clean = False
+        self._lane_dirs_active = False
 
         for sign in self._get_signs():
             try:
@@ -3208,7 +3298,12 @@ class SignComplianceMixin:
                     self._handle_no_turn(sign)
                 elif isinstance(sign, NoOvertakingSign):
                     self._handle_no_overtaking(sign)
-                elif isinstance(sign, (DirectionSign, PGDirectionSign, LaneAllowedDirectionSign, LaneDirectionsSign)):
+                elif isinstance(sign, LaneDirectionsSign):
+                    # Must run before DirectionSign: 5.15.1 subclasses it.
+                    # Steering LC only — never the old 4.1 body snap onto a via.
+                    self._lane_dirs_active = True
+                    self._handle_direction_compliance(sign)
+                elif isinstance(sign, (DirectionSign, PGDirectionSign, LaneAllowedDirectionSign)):
                     self._handle_direction_compliance(sign)
                 elif isinstance(sign, MainRoadSign):
                     self._handle_main_road(sign)
