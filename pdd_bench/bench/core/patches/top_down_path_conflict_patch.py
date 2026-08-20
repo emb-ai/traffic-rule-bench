@@ -10,9 +10,10 @@ Injection trick: ``pygame.Surface.fill``/``blit`` are read-only, so we temporari
 wrap ``_screen_canvas`` and draw when ``get_size()`` is called at the start of the
 camera section in ``TopDownRenderer._draw``.
 
-Also patches the red destination marker so roundabout ``destination_max_along_m``
-caps land the mark at the truncated exit longitude (MetaDrive always used
-``final_lane.length``).
+Also patches navigation drawing so ``_priority_bench_dest_along_m`` caps:
+
+- the red destination marker (MetaDrive always used ``final_lane.length``);
+- the green final-route polyline (truncated at the capped along-lane finish).
 """
 
 from __future__ import annotations
@@ -37,6 +38,35 @@ def _xy_list(points) -> list[tuple[float, float]]:
         except Exception:
             continue
     return out
+
+
+def _truncate_polyline_along(polyline, dest_along: float):
+    """Cut a map polyline at ``dest_along`` meters from its start."""
+    pts = list(polyline)
+    if dest_along is None or len(pts) < 2:
+        return pts
+    try:
+        limit = float(dest_along)
+    except (TypeError, ValueError):
+        return pts
+    if limit <= 0.0:
+        return pts
+
+    cut = [pts[0]]
+    traveled = 0.0
+    for j in range(len(pts) - 1):
+        x0, y0 = float(pts[j][0]), float(pts[j][1])
+        x1, y1 = float(pts[j + 1][0]), float(pts[j + 1][1])
+        seg = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
+        if traveled + seg >= limit:
+            remain = max(0.0, limit - traveled)
+            if seg > 1e-6 and remain > 1e-6:
+                t = remain / seg
+                cut.append((x0 + t * (x1 - x0), y0 + t * (y1 - y0)))
+            break
+        cut.append(pts[j + 1])
+        traveled += seg
+    return cut
 
 
 def _draw_polyline_frame(canvas, points, color, width: int) -> None:
@@ -189,8 +219,33 @@ def _dest_along_for_agent(agent):
     return None
 
 
+def _backup_and_truncate_final_route(renderer, along: float) -> list[tuple[dict, object]]:
+    """Temporarily truncate the last checkpoint polyline; return restore pairs."""
+    agent = getattr(renderer, "current_track_agent", None)
+    nav = getattr(agent, "navigation", None) if agent is not None else None
+    checkpoints = getattr(nav, "checkpoints", None) if nav is not None else None
+    if not checkpoints:
+        return []
+
+    last_id = checkpoints[-1]
+    backups: list[tuple[dict, object]] = []
+    for block in getattr(getattr(renderer, "map", None), "blocks", []) or []:
+        map_data = getattr(block, "map_data", None)
+        if not isinstance(map_data, dict):
+            continue
+        lane_info = map_data.get(last_id)
+        if not isinstance(lane_info, dict):
+            continue
+        polyline = lane_info.get("polyline")
+        if polyline is None or len(polyline) < 2:
+            continue
+        backups.append((lane_info, polyline))
+        lane_info["polyline"] = _truncate_polyline_along(polyline, along)
+    return backups
+
+
 def apply_top_down_destination_cap_patch() -> None:
-    """Make the red top-down dest mark honor ``_priority_bench_dest_along_m``."""
+    """Honor ``_priority_bench_dest_along_m`` for dest mark + green final route."""
     global _DEST_CAP_APPLIED
     if _DEST_CAP_APPLIED:
         return
@@ -204,32 +259,43 @@ def apply_top_down_destination_cap_patch() -> None:
         nav = getattr(agent, "navigation", None) if agent is not None else None
         final = getattr(nav, "final_lane", None) if nav is not None else None
         along = _dest_along_for_agent(agent)
-        if final is None or along is None:
+        if along is None:
             return _orig_draw(self, *args, **kwargs)
 
-        orig_position = final.position
+        orig_position = None
+        if final is not None:
+            orig_position = final.position
 
-        def _capped_position(longitudinal, lateral=0.0, *rest, **kw):
-            try:
-                length = float(getattr(final, "length", 0.0) or 0.0)
-            except Exception:
-                length = 0.0
-            try:
-                req = float(longitudinal)
-            except (TypeError, ValueError):
-                return orig_position(longitudinal, lateral, *rest, **kw)
-            # Prefer the priority_bench cap whenever MetaDrive asks near lane end
-            # (or any request past the cap).
-            cap = min(float(along), max(0.5, length - 1e-3)) if length > 1e-3 else float(along)
-            if length > 1e-3 and (abs(req - length) < 1e-2 or req > cap):
-                req = cap
-            return orig_position(req, lateral, *rest, **kw)
+            def _capped_position(longitudinal, lateral=0.0, *rest, **kw):
+                try:
+                    length = float(getattr(final, "length", 0.0) or 0.0)
+                except Exception:
+                    length = 0.0
+                try:
+                    req = float(longitudinal)
+                except (TypeError, ValueError):
+                    return orig_position(longitudinal, lateral, *rest, **kw)
+                # Prefer the priority_bench cap whenever MetaDrive asks near lane end
+                # (or any request past the cap).
+                cap = (
+                    min(float(along), max(0.5, length - 1e-3))
+                    if length > 1e-3
+                    else float(along)
+                )
+                if length > 1e-3 and (abs(req - length) < 1e-2 or req > cap):
+                    req = cap
+                return orig_position(req, lateral, *rest, **kw)
 
-        final.position = _capped_position  # type: ignore[method-assign]
+            final.position = _capped_position  # type: ignore[method-assign]
+
+        backups = _backup_and_truncate_final_route(self, float(along))
         try:
             return _orig_draw(self, *args, **kwargs)
         finally:
-            final.position = orig_position  # type: ignore[method-assign]
+            if final is not None and orig_position is not None:
+                final.position = orig_position  # type: ignore[method-assign]
+            for lane_info, polyline in backups:
+                lane_info["polyline"] = polyline
 
     TopDownRenderer._draw = _patched_draw
     _DEST_CAP_APPLIED = True
@@ -239,7 +305,7 @@ def apply_top_down_path_conflict_overlay_patch() -> None:
     """Monkey-patch ``TopDownRenderer._draw`` once (idempotent).
 
     Drawing only runs when ``set_path_conflict_overlay_enabled(True)``.
-    Also installs the destination-cap patch for the red finish marker.
+    Also installs the destination-cap patch (red finish marker + green route trim).
     """
     global _APPLIED
     apply_top_down_destination_cap_patch()
