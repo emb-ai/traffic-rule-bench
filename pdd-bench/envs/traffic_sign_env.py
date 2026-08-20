@@ -202,16 +202,10 @@ class TrafficSignEnv(MetaDriveEnv):
         # Place sign(s) inside reset() — symmetric with TrafficSignSumoEnv.
         # When self._scene_row is None this is a no-op and the env behaves
         # exactly as before (callers add signs externally post-reset).
+        # PGMap auto-place lived in colleague factorized_space.benchmark_runner
+        # (module gone). Callers that set _scene_row place signs after reset.
         if self._scene_row:
-            try:
-                from factorized_space.benchmark_runner import place_pgmap_sign_from_row
-            except ImportError:
-                # factorized_space not on sys.path (caller set scene_row but
-                # the helper module isn't reachable) — silently skip.
-                place_pgmap_sign_from_row = None
-            if place_pgmap_sign_from_row is not None:
-                ok, reason = place_pgmap_sign_from_row(self, self._scene_row, seed=seed)
-                info["sign_placement_ok"] = ok
-                info["sign_placement_reason"] = reason
+            info["sign_placement_ok"] = False
+            info["sign_placement_reason"] = "pg_auto_place_unavailable"
 
         return obs, info

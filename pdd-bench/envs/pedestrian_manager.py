@@ -223,7 +223,12 @@ class CrosswalkPedestrianManager(BaseManager):
             if polygon.ndim != 2 or polygon.shape[1] < 2:
                 continue
             polygon = polygon[:, :2]
-            walk_hint = self._sumo_crossing_walk_hint(str(crosswalk_id))
+            walk_hint = None
+            feat_walk = feat.get("walk_direction")
+            if feat_walk is not None:
+                walk_hint = np.asarray(feat_walk, dtype=np.float64)
+            if walk_hint is None:
+                walk_hint = self._sumo_crossing_walk_hint(str(crosswalk_id))
             walk_start, walk_end, span_vec = self._infer_crosswalk_axes(polygon, walk_hint)
             span_len = float(np.linalg.norm(span_vec))
             walk_len = float(np.linalg.norm(walk_end - walk_start))

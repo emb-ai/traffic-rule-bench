@@ -15,7 +15,8 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).resolve()
 PDD = SCRIPT.parent.parent.parent
-for p in (str(PDD), str(PDD / "scripts" / "per_sign_bench")):
+PRIORITY_BENCH = PDD / "scripts" / "per_sign_bench" / "priority_bench"
+for p in (str(PDD), str(PRIORITY_BENCH)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
@@ -24,7 +25,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-from factorized_space.agent_profile_bank import _get_sampler, sample_spawn_velocity  # noqa: E402
+from core.profiles.agent_profile_bank import _get_sampler, sample_spawn_velocity  # noqa: E402
 
 
 def main():

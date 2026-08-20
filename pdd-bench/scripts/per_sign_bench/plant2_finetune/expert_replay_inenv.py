@@ -45,15 +45,35 @@ from typing import Optional
 import numpy as np
 
 SCRIPT_PATH = Path(__file__).resolve()
-BENCHMARK_DIR = SCRIPT_PATH.parent
-SCRIPTS_DIR = BENCHMARK_DIR.parent
-PDD_BENCH_DIR = SCRIPTS_DIR.parent
+PLANT2_DIR = SCRIPT_PATH.parent
+PER_SIGN_DIR = PLANT2_DIR.parent
+PRIORITY_BENCH_DIR = PER_SIGN_DIR / "priority_bench"
+# Historical aliases used by --scene-id replay path lookup.
+BENCHMARK_DIR = PER_SIGN_DIR
+SCRIPTS_DIR = PER_SIGN_DIR.parent
+PDD_BENCH_DIR = PER_SIGN_DIR.parent.parent
 SDC_ROOT = PDD_BENCH_DIR.parent
 METADRIVE_DIR = SDC_ROOT / "metadrive"
-for _p in (PDD_BENCH_DIR, METADRIVE_DIR, BENCHMARK_DIR):
+for _p in (PDD_BENCH_DIR, METADRIVE_DIR, PRIORITY_BENCH_DIR, PER_SIGN_DIR, PLANT2_DIR):
     _ps = str(_p)
     if _ps not in sys.path:
         sys.path.insert(0, _ps)
+
+
+def _resolve_sign_class(cls_name: str):
+    """Resolve a traffic-sign class by ``__name__`` (sidecar stores class names)."""
+    import importlib
+    import pkgutil
+    import traffic_signs
+    for info in pkgutil.walk_packages(traffic_signs.__path__, traffic_signs.__name__ + "."):
+        try:
+            mod = importlib.import_module(info.name)
+        except Exception:
+            continue
+        obj = getattr(mod, cls_name, None)
+        if isinstance(obj, type):
+            return obj
+    return None
 
 
 def _render_top_down(env, window: bool, screen_record: bool):
@@ -258,8 +278,7 @@ def replay_in_our_env(
 
     from expert_replay import _build_env    # re-use env-builder
     from bench import env_builders as _env_builders
-    from factorized_space.benchmark_runner import SIGN_CLASS_MAP
-    from factorized_space.ego_defaults import apply_ego_defaults
+    from core.profiles.ego_defaults import apply_ego_defaults
 
     row = sidecar["source_row"]
     backend = sidecar["backend"]
@@ -312,10 +331,7 @@ def replay_in_our_env(
         re_add_signs = (backend != "sumo")
         for sign_info in (sidecar.get("signs", []) if re_add_signs else []):
             cls_name = sign_info["sign_class"]
-            sign_cls = None
-            for k, v in SIGN_CLASS_MAP.items():
-                if v.__name__ == cls_name:
-                    sign_cls = v; break
+            sign_cls = _resolve_sign_class(cls_name)
             if sign_cls is None or sign_mgr is None:
                 continue
             lane_idx = sign_info.get("lane_index")

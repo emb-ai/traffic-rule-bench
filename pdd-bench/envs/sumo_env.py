@@ -1535,7 +1535,15 @@ class TrafficSignSumoEnv(BaseEnv):
         if not accel_mode:
             if insufficient and d_achieved > 0.0:
                 try:
-                    from factorized_space.agent_profile_bank import max_v0_for_distance
+                    import sys
+                    from pathlib import Path
+                    _pb = (
+                        Path(__file__).resolve().parent.parent
+                        / "scripts" / "per_sign_bench" / "priority_bench"
+                    )
+                    if str(_pb) not in sys.path:
+                        sys.path.insert(0, str(_pb))
+                    from core.profiles.agent_profile_bank import max_v0_for_distance
                     v0_fit = max_v0_for_distance(
                         d_achieved, v_target_mps,
                         float(self.config.get("ego_brake_decel", 2.5)),
