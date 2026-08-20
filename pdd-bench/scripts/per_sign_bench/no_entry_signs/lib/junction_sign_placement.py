@@ -72,9 +72,13 @@ def resolve_sign_lane_for_edge(env, edge_id: str, lane_keys: List[str]):
     road_network = env.engine.current_map.road_network
     try:
         lane_key = road_network.find_rightmost_lane_by_road_id(str(edge_id))
-        lane = road_network.get_lane(lane_key)
-        if lane is not None:
-            return lane
+        # None means the road id is not in this network. Fall through to the
+        # scene's own lane list below instead of leaning on get_lane(None) to
+        # raise: that worked, but only because the except clause is broad.
+        if lane_key is not None:
+            lane = road_network.get_lane(lane_key)
+            if lane is not None:
+                return lane
     except Exception:
         pass
 
