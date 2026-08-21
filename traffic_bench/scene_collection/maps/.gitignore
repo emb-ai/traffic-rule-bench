@@ -1,0 +1,12 @@
+# Large map artifacts (re-download via collect/build_net.py)
+raw/Moscow.osm
+raw/Moscow.osm.gz
+raw/Moscow.osm.pbf
+nets/moscow.net.xml
+nets/*.log
+index/crop_full.log
+index/crop_smoke.log
+index/enumerate.log
+
+# Cropped map pools (nets/png) — regenerate locally, do not commit
+crops/

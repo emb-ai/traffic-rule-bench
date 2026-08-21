@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Debug / materialize helper: render a scene SUMO net as a static PNG.
 
-Used by ``build_scenes/materialize_scenes.py`` for review-UI previews
+Used by ``python -m traffic_bench.scene_collection materialize`` for review-UI previews
 (``custom_cropped.png``). Also runnable ad-hoc:
 
   python -m tools.render_map <scene> --scenes-dir data/stop/scenes

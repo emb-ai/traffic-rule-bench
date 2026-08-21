@@ -38,8 +38,10 @@ traffic-rule-bench/
 │   ├── envs/                   # SUMO env + traffic/pedestrian managers
 │   ├── agents/                 # policies + CaRL/PlanT2 adapters
 │   ├── scene_collection/
-│   │   ├── map_pool/           # Moscow OSM → shared SUMO crop pool (cache: map_pool/crops/)
-│   │   └── sign_pool/          # allocate crops to each sign
+│   │   ├── collect/            # OSM → maps/ (net, index, crops)
+│   │   ├── assign/             # signs.yaml queries → sign_allocations.json
+│   │   ├── sign_scenes/        # materialize / prepare / filter
+│   │   └── maps/               # harvested data (crops gitignored)
 │   ├── eval/                   # manifests, run_benchmark, eval_pipeline, metrics
 │   └── oracle/                 # collect trajectories + expert selection
 ├── data/                       # gitignored working artifacts
@@ -54,7 +56,7 @@ traffic-rule-bench/
 └── pyproject.toml
 ```
 
-Pipeline: `scene_collection/map_pool` → `scene_collection/sign_pool` → `data/scenes/<sign>` → `eval/generate_manifest.py` (writes `data/runs/<sign>/<ts>/`) → `eval/run_benchmark.py` / `eval_pipeline.py`, and separately `oracle/collect_trajectories` → `data/trajectories/<sign>/` → `finetune/`.
+Pipeline: `python -m traffic_bench.scene_collection` (`collect` → `assign` → `materialize` / `prepare`) → `data/scenes/<sign>` → `eval/generate_manifest.py` (writes `data/runs/<sign>/<ts>/`) → `eval/run_benchmark.py` / `eval_pipeline.py`, and separately `oracle/collect_trajectories` → `data/trajectories/<sign>/` → `finetune/`.
 
 ## 🚀 Quick start
 

@@ -3,10 +3,11 @@
 Augmentation axes (each capped at ``max_*`` ≤ 3 by default):
   1. ego approach lane (from SUMO crossing approaches)
   2. traffic density (nuPlan low/medium/high)
-  3. crosswalk position (near_start / middle / near_end — separate maps)
+  3. crosswalk position (middle only — one zebra per map)
   4. pedestrian presets (core.scenarios.pedestrian_presets)
 
-Maps are prepared by scene_collection/map_pool/scripts/prepare_segment_crosswalk.py.
+Maps are prepared by ``python -m traffic_bench.scene_collection prepare --sign crosswalk``
+(zebra in the middle of the copied segment).
 """
 
 from __future__ import annotations
@@ -17,7 +18,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from traffic_bench.eval.core.layout.crosswalk_layout import CrosswalkApproach, build_crosswalk_approaches
+from traffic_bench.eval.core.layout.crosswalk_layout import (
+    CrosswalkApproach,
+    build_crosswalk_approaches,
+    net_has_crossings,
+)
 from traffic_bench.eval.core.scenarios.pedestrian_presets import (
     PedestrianPreset,
     list_pedestrian_presets,
@@ -25,11 +30,13 @@ from traffic_bench.eval.core.scenarios.pedestrian_presets import (
 )
 from traffic_bench.eval.core.sumo.lane_keys import lane_edge_id, make_lane_key
 
+from traffic_bench.scene_collection.sign_scenes.filter.selection import is_reserved_scene_dir
+
 from .manifest_expansion import shuffle_cap
 from .traffic_density_levels import TrafficDensityLevel, list_traffic_density_levels
 
 MAX_AXIS = 3
-DEFAULT_POSITIONS = ("near_start", "middle", "near_end")
+DEFAULT_POSITIONS = ("middle",)
 
 
 @dataclass(frozen=True)
@@ -66,35 +73,32 @@ def discover_segment_crosswalk_scenes(
     *,
     positions: Sequence[str] = DEFAULT_POSITIONS,
 ) -> List[Path]:
-    """Find segment_crosswalk scene dirs under straight/ and curved/."""
+    """Find dirs whose net has a SUMO crossing (flat, or leftover nested layout)."""
     want_pos = {str(p).strip() for p in positions if str(p).strip()}
     scenes: List[Path] = []
     if not scenes_root.is_dir():
         return scenes
 
-    for type_dir in sorted(scenes_root.iterdir()):
-        if not type_dir.is_dir():
+    def _maybe_add(scene_dir: Path) -> None:
+        net = scene_dir / "map.net.xml"
+        if not (scene_dir / "meta.json").is_file() or not net.is_file():
+            return
+        meta = _load_meta(scene_dir)
+        if not (_is_segment_crosswalk_meta(meta) or net_has_crossings(net)):
+            return
+        if not _meta_matches_position(meta, scene_dir.name, want_pos):
+            return
+        scenes.append(scene_dir)
+
+    for child in sorted(scenes_root.iterdir()):
+        if not child.is_dir() or is_reserved_scene_dir(child.name):
             continue
-        if type_dir.name not in {"straight", "curved"}:
-            # Also allow flat layout (scene dirs directly under root)
-            if (type_dir / "meta.json").is_file() and (type_dir / "map.net.xml").is_file():
-                meta = _load_meta(type_dir)
-                if _meta_matches_position(meta, type_dir.name, want_pos):
-                    scenes.append(type_dir)
+        if child.name in {"straight", "curved"}:
+            for scene_dir in sorted(child.iterdir()):
+                if scene_dir.is_dir():
+                    _maybe_add(scene_dir)
             continue
-        for scene_dir in sorted(type_dir.iterdir()):
-            if not scene_dir.is_dir():
-                continue
-            if not (scene_dir / "meta.json").is_file():
-                continue
-            if not (scene_dir / "map.net.xml").is_file():
-                continue
-            meta = _load_meta(scene_dir)
-            if not _is_segment_crosswalk_meta(meta):
-                continue
-            if not _meta_matches_position(meta, scene_dir.name, want_pos):
-                continue
-            scenes.append(scene_dir)
+        _maybe_add(child)
     return scenes
 
 

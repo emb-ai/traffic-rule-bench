@@ -1,15 +1,8 @@
-"""Expand segment_detour scenes into manifest rows for PDD 4.2.x.
+"""Expand corridor segment scenes into manifest rows for PDD 4.2.x.
 
-Each segment_detour scene provides:
-  - road_id: the SUMO edge with the obstacle lane
-  - sign_lane_index: SUMO lane index where the sign sits (obstacle lane)
-  - sign_s: longitudinal position of the sign on the edge (meters from start)
-  - detour_code: one of "4.2.1", "4.2.2", "4.2.3"
-
-The ego vehicle spawns on the obstacle lane and must merge to an adjacent lane
-before reaching the sign zone. Path length from spawn is capped at
-``max_path_length_m`` (same edge). Augmentation axis: traffic density
-(nuPlan low/medium/high). No auxiliary agents or pedestrians.
+Harvested ``scene_kind: segment`` maps have ``road_id``, ``vehicle_lane_indices``,
+and ``pass_right_ok`` / ``pass_left_ok``. Eval picks the obstacle lane from
+those fields (4.2.1 = pass right, 4.2.2 = pass left, 4.2.3 = either).
 """
 
 from __future__ import annotations
@@ -22,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from .manifest_expansion import shuffle_cap
 from .traffic_density_levels import TrafficDensityLevel, list_traffic_density_levels
+from traffic_bench.scene_collection.sign_scenes.filter.selection import is_reserved_scene_dir
 
 MAX_AXIS = 3
 
@@ -48,7 +42,35 @@ def _load_meta(scene_dir: Path) -> Dict[str, Any]:
 
 
 def _is_segment_detour_meta(meta: Dict[str, Any]) -> bool:
-    return str(meta.get("scene_kind") or "") == "segment_detour"
+    kind = str(meta.get("scene_kind") or "")
+    return kind in {"segment", "segment_detour"}
+
+
+def _obstacle_lane_index(meta: Dict[str, Any], pdd_code: str) -> int:
+    """Pick the blocked lane. SUMO index 0 is the rightmost vehicle lane."""
+    raw = meta.get("sign_lane_index")
+    if raw is not None and str(raw).strip() != "":
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+    indices = sorted(int(i) for i in (meta.get("vehicle_lane_indices") or []))
+    if not indices:
+        return 0
+    has_right = [i for i in indices if any(j < i for j in indices)]
+    has_left = [i for i in indices if any(j > i for j in indices)]
+    if pdd_code == "4.2.1":
+        return max(has_right) if has_right else indices[-1]
+    if pdd_code == "4.2.2":
+        return min(has_left) if has_left else indices[0]
+    both = [i for i in indices if i in has_right and i in has_left]
+    if both:
+        return both[len(both) // 2]
+    if has_right:
+        return max(has_right)
+    if has_left:
+        return min(has_left)
+    return indices[0]
 
 
 def discover_segment_detour_scenes(
@@ -56,37 +78,33 @@ def discover_segment_detour_scenes(
     *,
     detour_code: Optional[str] = None,
 ) -> List[Path]:
-    """Find segment_detour scene dirs under straight/ and curved/ sub-folders.
-
-    Optionally filters by ``detour_code`` (e.g. "4.2.1").
-    """
+    """Find corridor scene dirs (flat, or leftover straight/curved nesting)."""
     scenes: List[Path] = []
     if not scenes_root.is_dir():
         return scenes
 
-    for type_dir in sorted(scenes_root.iterdir()):
-        if not type_dir.is_dir():
+    def _maybe_add(scene_dir: Path) -> None:
+        if not (scene_dir / "meta.json").is_file():
+            return
+        if not (scene_dir / "map.net.xml").is_file():
+            return
+        meta = _load_meta(scene_dir)
+        if not _is_segment_detour_meta(meta):
+            return
+        tagged = str(meta.get("detour_code") or "")
+        if detour_code is not None and tagged and tagged != detour_code:
+            return
+        scenes.append(scene_dir)
+
+    for child in sorted(scenes_root.iterdir()):
+        if not child.is_dir() or is_reserved_scene_dir(child.name):
             continue
-        if type_dir.name not in {"straight", "curved"}:
-            if (type_dir / "meta.json").is_file() and (type_dir / "map.net.xml").is_file():
-                meta = _load_meta(type_dir)
-                if _is_segment_detour_meta(meta):
-                    if detour_code is None or str(meta.get("detour_code")) == detour_code:
-                        scenes.append(type_dir)
+        if child.name in {"straight", "curved"}:
+            for scene_dir in sorted(child.iterdir()):
+                if scene_dir.is_dir():
+                    _maybe_add(scene_dir)
             continue
-        for scene_dir in sorted(type_dir.iterdir()):
-            if not scene_dir.is_dir():
-                continue
-            if not (scene_dir / "meta.json").is_file():
-                continue
-            if not (scene_dir / "map.net.xml").is_file():
-                continue
-            meta = _load_meta(scene_dir)
-            if not _is_segment_detour_meta(meta):
-                continue
-            if detour_code is not None and str(meta.get("detour_code")) != detour_code:
-                continue
-            scenes.append(scene_dir)
+        _maybe_add(child)
     return scenes
 
 
@@ -117,9 +135,12 @@ def build_detour_manifest_entry(
     net_path = scene_dir.relative_to(scenes_root) / net_file
 
     road_id = str(meta.get("road_id") or "")
-    sign_lane_index = int(meta.get("sign_lane_index", 0))
-    sign_s = float(meta.get("sign_s", 60.0))
+    sign_lane_index = _obstacle_lane_index(meta, pdd_code)
     edge_length = float(meta.get("length_m", 200.0))
+    if meta.get("sign_s") is not None:
+        sign_s = float(meta["sign_s"])
+    else:
+        sign_s = max(20.0, edge_length - float(sim.sign_distance_before_end))
 
     spawn_lane_id = f"{road_id}_{sign_lane_index}"
     spawn_offset = float(sim.spawn_offset_from_start)

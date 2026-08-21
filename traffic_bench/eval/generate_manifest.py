@@ -112,8 +112,8 @@ from traffic_bench.eval.core.scenarios.scene_augmentation import (
     pick_default_yield_spawn_meta_for_net,
 )
 from traffic_bench.eval.core.layout.roundabout_topology import build_roundabout_layout
-from traffic_bench.scene_collection.sign_pool.scene_selection import is_reserved_scene_dir, unapplied_rejected_scenes, load_scene_selection
-from traffic_bench.scene_collection.sign_pool.moscow_pool import (
+from traffic_bench.scene_collection.sign_scenes.filter.selection import is_reserved_scene_dir, unapplied_rejected_scenes, load_scene_selection
+from traffic_bench.scene_collection.sign_scenes.materialize.pool_index import (
     count_splits,
     filter_scene_dirs_by_split,
     load_moscow_pool,
@@ -130,9 +130,10 @@ from traffic_bench.eval.sign_registry import (
 )
 
 RUN_BENCH_SCRIPT = SCRIPT_DIR / "run_benchmark.py"
-MOSCOW_ROOT = PACKAGE_DIR / "scene_collection" / "map_pool"
-DEFAULT_ALLOCATIONS = MOSCOW_ROOT / "splits" / "sign_allocations.json"
-DEFAULT_SIGNS_YAML = MOSCOW_ROOT / "splits" / "signs.yaml"
+from traffic_bench.scene_collection.paths import SIGN_ALLOCATIONS, SIGNS_YAML
+
+DEFAULT_ALLOCATIONS = SIGN_ALLOCATIONS
+DEFAULT_SIGNS_YAML = SIGNS_YAML
 
 # Set by main() from Hydra `sign=` before generation runs.
 PROFILE: SignProfile | None = None
@@ -486,7 +487,7 @@ def assert_rejected_scenes_applied(scenes_dir: Path) -> None:
     raise SystemExit(
         f"[error] {len(pending)} scene(s) are marked reject in scene_selection.json "
         f"but still live under {scenes_dir.resolve()}.\n"
-        f"  Run: python build_scenes/review_scenes.py --apply\n"
+        f"  Run: python -m traffic_bench.scene_collection review --apply\n"
         f"  Pending: {preview}{more}"
     )
 
@@ -1890,7 +1891,7 @@ def generate_crosswalk_manifest(
 ) -> List[Dict]:
     """Generate real_manifest.jsonl for PDD 5.19 (segment_crosswalk maps)."""
     split = normalize_split(split)
-    # Maps come from moscow_scenes harvest — no scene_selection / reject apply step.
+    # Maps come from scene_collection harvest — no scene_selection / reject apply step.
     positions = tuple(crosswalk_positions or DEFAULT_POSITIONS)
     all_scenes = discover_segment_crosswalk_scenes(scenes_dir, positions=positions)
     print(f"Scenes root: {scenes_dir.resolve()}")

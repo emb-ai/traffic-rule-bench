@@ -1,17 +1,16 @@
 # @package _global_
-# PDD 5.19 pedestrian crossing (segment_crosswalk maps).
-# Maps are prepared in moscow_scenes (prepare_segment_crosswalk.py).
+# PDD 5.19 pedestrian crossing.
+# Maps: allocated segments copied then zebra injected in the middle
+# (`python -m traffic_bench.scene_collection prepare --sign crosswalk`).
 # Augmentation axes (each capped at 3):
 #   1) ego approach lane
 #   2) traffic density (nuPlan low/medium/high)
-#   3) crosswalk position (near_start / middle / near_end — separate maps)
-#   4) pedestrian presets from core/scenarios/pedestrian_presets.py
+#   3) pedestrian presets from core/scenarios/pedestrian_presets.py
 
 sign: crosswalk
 
 paths:
-  # Nested segment_crosswalk harvest from map_pool/crops (straight/ + curved/).
-  scenes_dir: ${repo:traffic_bench/scene_collection/map_pool/crops/segment_crosswalk}
+  scenes_dir: ${repo:data/scenes/${sign_data:${sign}}}
   split: all
 
 augmentation:
@@ -27,8 +26,8 @@ scenario:
   max_ego_lanes: 3
   max_density_levels: 3
   max_pedestrian_presets: 3
-  # Crosswalk position variants to include (scene name suffix _cw_<pos>).
-  crosswalk_positions: [near_start, middle, near_end]
+  # One zebra per map (middle of the corridor).
+  crosswalk_positions: [middle]
 
 simulation:
   horizon: 600

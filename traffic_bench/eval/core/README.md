@@ -1,10 +1,10 @@
 # `eval/core/` — shared library for sign evaluation
 
 Used by `traffic_bench.eval` (manifests, simulation, metrics) and by
-`traffic_bench.scene_collection.map_pool` crop scripts. Imports go through
+`traffic_bench.scene_collection.collect` crop scripts. Imports go through
 `traffic_bench.eval.core.<subpackage>.<module>`.
 
-Scene-pool bookkeeping lives in `traffic_bench.scene_collection.sign_pool`, not here.
+Scene-pool bookkeeping lives in `traffic_bench.scene_collection.sign_scenes`, not here.
 
 ## Layout
 
@@ -45,7 +45,7 @@ Junction structure derived from a cropped net.
 | `roundabout_topology.py` | Ring + spoke layout for 4.3 |
 | `roundabout_yield_zone.py` | Entry conflict arcs / yield zones on the ring |
 
-**Used by:** `generate_manifest`, `run_benchmark`, `scene_collection/map_pool/scripts/crop_scenes.py`.
+**Used by:** `generate_manifest`, `run_benchmark`, `scene_collection.collect.junctions.crop`.
 
 ### `scenarios/`
 
@@ -90,7 +90,7 @@ Turning scenes into `real_manifest.jsonl` rows.
 | `one_way_expansion.py` | Dual-path × `n_variations` NPC profiles for 5.7.1 / 5.7.2 |
 | `direction_expansion.py` | Dual-path × `n_variations` NPC profiles for 4.1.1–4.1.6 |
 
-**Used by:** `generate_manifest.py`, `scenes/sign_pool/reject_unusable_scenes.py`.
+**Used by:** `generate_manifest.py`, `scene_collection.sign_scenes.filter.reject`.
 
 ### `runtime/`
 
@@ -151,4 +151,4 @@ from traffic_bench.eval.core import SpawnScenario, build_junction_priority_layou
 **3.18.x / 3.1** use dual-path crops (same stack as 4.1 / 5.7):
 `no_turn_*` / `no_entry` profiles, bridges, and expansion modules under
 `scenarios/` + `manifest/`. Slot balance is only in
-`scene_collection/map_pool/scripts/allocate_sign_scenes.py`.
+`python -m traffic_bench.scene_collection assign`.

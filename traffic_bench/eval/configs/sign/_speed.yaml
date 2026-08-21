@@ -3,7 +3,7 @@
 # Sign yamls: `defaults: [_speed]` then `sign:`.
 #
 # Manifest expansion / braking-accel spawn are not wired yet.
-# Scenes: map_pool/crops/segment/straight (crop_kind: segment).
+# Scenes: maps/crops/segment/<id>/ queried with segment_type=straight.
 
 paths:
   scenes_dir: scenes

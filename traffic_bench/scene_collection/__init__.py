@@ -1,1 +1,1 @@
-"""Scene harvest (map_pool) and per-sign allocation (sign_pool)."""
+"""Collect city maps, assign them to signs, materialize and filter scene folders."""

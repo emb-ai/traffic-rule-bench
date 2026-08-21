@@ -240,7 +240,7 @@ NO_ENTRY = SignProfile(
     ego_road_class=None,
 )
 
-# 4.2.1–4.2.3: segment maps with obstacle-lane metadata (moscow_scenes/segment_detour).
+# 4.2.1–4.2.3: same segment crops as speed signs; obstacle lane is chosen in eval.
 DETOUR_RIGHT = SignProfile(
     id="detour_right",
     pdd_code="4.2.1",
@@ -327,7 +327,7 @@ ZONE_SPEED_LIMIT = SignProfile(
     ego_road_class=None,
 )
 
-# 5.19: segment maps with injected SUMO crosswalk (moscow_scenes/segment_crosswalk).
+# 5.19: segment maps; zebra injected at materialize into data/scenes/crosswalk/.
 CROSSWALK = SignProfile(
     id="crosswalk",
     pdd_code="5.19",

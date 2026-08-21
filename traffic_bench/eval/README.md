@@ -75,25 +75,19 @@ Scenes: moscow `scenes/O/` → `data/roundabout/scenes`.
 ### Step 1A: Build scene pool (moscow → materialize → review)
 
 Full sequence:
-`[build_scenes/README.md](build_scenes/README.md)`. Short version for **2.5**:
+[`scene_collection/README.md`](../scene_collection/README.md). Short version for **2.5**:
 
 ```bash
-# Link allocated moscow junctions into data/stop/scenes/
-python build_scenes/materialize_scenes.py --sign 2.5
-
-# Review keep/reject in browser
-python build_scenes/review_scenes.py --scenes-dir data/stop/scenes
-
-# Apply rejects, then top up to signs.yaml quotas if short
-python build_scenes/review_scenes.py --scenes-dir data/stop/scenes --apply
-python build_scenes/materialize_scenes.py --sign 2.5 --refill
+python -m traffic_bench.scene_collection materialize --sign stop
+python -m traffic_bench.scene_collection review --scenes-dir data/scenes/stop
+python -m traffic_bench.scene_collection review --scenes-dir data/scenes/stop --apply
+python -m traffic_bench.scene_collection materialize --sign stop --refill
 ```
 
-Prereq: shared harvest + allocations under  
-`[../scene_collection/map_pool/](../scene_collection/map_pool/README.md)`.  
-Quotas (`n_train` / `n_test`) live in  
-`[../scene_collection/map_pool/splits/signs.yaml](../scene_collection/map_pool/splits/signs.yaml)`.  
-Old catalog/Overpass scripts live in `build_scenes/legacy/` (do not use for new pools).
+Prereq: shared harvest + allocations under
+[`../scene_collection/maps/`](../scene_collection/maps/README.md).
+Quotas (`n_train` / `n_test`) live in
+[`../scene_collection/maps/splits/signs.yaml`](../scene_collection/maps/splits/signs.yaml).
 
 ### Step 2: Generate evaluation manifest
 
