@@ -1,22 +1,13 @@
 #!/usr/bin/env python3
 """Discover dual-path atoms on the Moscow city net and crop path-union scenes.
 
-Fills a **fixed shared pool** per ``(shape, slot)`` under::
+Fills a shared pool per ``(shape, slot)`` under::
 
     crops/dual_path/{T,X}/{slot}/<scene_id>/
 
-Default ``--max-per-slot 500``. Same idea as junction T/X/O: many signs
-(5.7 / 3.18 / 4.1 / 3.1) sample the **same** train/test maps (shared pool).
-Pool size is therefore **not** ``n_train+n_test`` for one sign. We still cap
-because each dual_path scene is a path-union netconvert (costlier than
-junction-only); 500 ≈ order of the X junction inventory per bucket, enough
-diversity under 80/20 split and slot/stem filters. At most one atom per
-junction per slot; junctions shuffled with ``--seed``; early-stop when full.
-
-**Incremental by default:** each kept atom is cropped immediately and appended to
-``dual_path_candidates.jsonl`` (flushed). Interrupt-safe with ``--skip-existing``
-(resume recounts on-disk scenes toward the per-slot cap).
-
+Default ``--max-per-slot 0`` (no cap: crop until the city runs out).
+Signs sample the same train/test maps. At most one atom per junction per slot;
+junctions shuffled with ``--seed``. Interrupt-safe with ``--skip-existing``.
 Sign-free: no ``pdd_code`` in meta. Allocate later via ``lib.roles.sign_to_slots``.
 """
 
@@ -41,7 +32,7 @@ DEFAULT_OUT = ROOT / "crops" / "dual_path"
 DEFAULT_CANDIDATES = ROOT / "index" / "dual_path_candidates.jsonl"
 # Shared-pool inventory per (shape, slot). Not one-sign quota (80+20).
 # ~X-scale; dual_path is rarer/heavier than junction-only so we cap compute.
-DEFAULT_MAX_PER_SLOT = 500
+DEFAULT_MAX_PER_SLOT = 0  # 0 = no cap; harvest all of P
 
 
 def _load_index(path: Path) -> List[Dict[str, Any]]:
@@ -163,8 +154,8 @@ def main() -> None:
         type=int,
         default=DEFAULT_MAX_PER_SLOT,
         help=(
-            f"Max scenes per (shape, slot) shared pool (default {DEFAULT_MAX_PER_SLOT}; "
-            "not one-sign 80+20 quota — many signs reuse the same maps)"
+            "Max scenes per (shape, slot); 0 = no cap (harvest all of P). "
+            "Not one-sign 80+20 quota — many signs reuse the same maps."
         ),
     )
     ap.add_argument("--seed", type=int, default=42, help="Shuffle seed for junction order")
@@ -207,9 +198,11 @@ def main() -> None:
         print(f"[dual_path] existing on disk: {dict(sorted(already.items()))}")
         print(f"[dual_path] existing scene_ids: {len(existing_ids)}", flush=True)
 
+    max_per_slot = int(args.max_per_slot) if int(args.max_per_slot) > 0 else 10**9
+    cap_note = "unlimited" if int(args.max_per_slot) <= 0 else str(args.max_per_slot)
     print(
         f"[dual_path] net={args.net} junctions={len(rows)} "
-        f"slots={list(slots)} max_per_slot={args.max_per_slot} "
+        f"slots={list(slots)} max_per_slot={cap_note} "
         f"n_per_junction={args.n_per_junction_slot} seed={args.seed} "
         f"incremental={not args.batch_discover and not args.discover_only}",
         flush=True,
@@ -270,7 +263,7 @@ def main() -> None:
             junction_rows=rows,
             slots=slots,
             n_per_junction_slot=int(args.n_per_junction_slot),
-            max_per_shape_slot=int(args.max_per_slot),
+            max_per_shape_slot=max_per_slot,
             min_gain_m=float(args.min_gain_m),
             min_lane_length_m=float(args.min_lane_m),
             seed=int(args.seed),
@@ -292,7 +285,7 @@ def main() -> None:
             junction_rows=rows,
             slots=slots,
             n_per_junction_slot=int(args.n_per_junction_slot),
-            max_per_shape_slot=int(args.max_per_slot),
+            max_per_shape_slot=max_per_slot,
             min_gain_m=float(args.min_gain_m),
             min_lane_length_m=float(args.min_lane_m),
             seed=int(args.seed),

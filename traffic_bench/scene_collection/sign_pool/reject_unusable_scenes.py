@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
 """Reject scenes that cannot produce manifest scenarios, then optionally refill.
 
-Runs at the **build_scenes** stage (not generate_manifest): maps that fail the
-same viability checks used for harvest are marked reject, moved to
-``scenes/_rejected/``, and the pool can be topped up to ``signs.yaml`` quotas.
+Runs after materialize: maps that fail the same viability checks used for
+harvest are marked reject, moved to ``scenes/_rejected/``, and the pool can
+be topped up to ``signs.yaml`` quotas.
+
+``--sign`` is the eval profile id (same as ``generate_manifest.py sign=...``).
 
 Examples:
-    # Dry-run: print which live scenes would be rejected for 4.3
-    python build_scenes/reject_unusable_scenes.py --sign 4.3 --dry-run
-
-    # Reject + move to _rejected/ + refill to quota
-    python build_scenes/reject_unusable_scenes.py --sign 4.3 --apply --refill
-
-    # Loop reject→refill until the live pool is fully viable (or pool empty)
-    python build_scenes/reject_unusable_scenes.py --sign 4.3 --apply --refill --loop
+    python traffic_bench/scene_collection/sign_pool/reject_unusable_scenes.py --sign roundabout --dry-run
+    python traffic_bench/scene_collection/sign_pool/reject_unusable_scenes.py --sign roundabout --apply --refill
+    python traffic_bench/scene_collection/sign_pool/reject_unusable_scenes.py --sign roundabout --apply --refill --loop
 """
 
 from __future__ import annotations
@@ -40,7 +37,11 @@ from traffic_bench.scene_collection.sign_pool.scene_selection import (
     is_reserved_scene_dir,
     set_scene_reject,
 )
-from traffic_bench.eval.sign_registry import get_profile, scenes_dir as profile_scenes_dir
+from traffic_bench.eval.sign_registry import (
+    get_profile,
+    list_profiles,
+    scenes_dir as profile_scenes_dir,
+)
 
 # Match generate_manifest ``parse_sumo_net_for_spawn_lanes`` default min length.
 DEFAULT_MIN_EGO_LANE_M = 20.0
@@ -121,7 +122,16 @@ def _run_refill(sign: str, scenes_dir: Optional[Path]) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--sign", default="4.3", help="Sign code / profile id (e.g. 4.3, roundabout)")
+    ap.add_argument(
+        "--sign",
+        default="roundabout",
+        metavar="ID",
+        help=(
+            "Eval sign id, same as `generate_manifest.py sign=...` "
+            f"(e.g. yield, roundabout, crosswalk). "
+            f"Known: {', '.join(sorted(p.id for p in list_profiles()))}"
+        ),
+    )
     ap.add_argument(
         "--scenes-dir",
         type=Path,
@@ -204,7 +214,7 @@ def main() -> None:
 
     for loop_i in range(1, max_loops + 1):
         print(
-            f"[reject-unusable] sign={profile.pdd_code} strategy={strategy} "
+            f"[reject-unusable] sign={profile.id} ({profile.pdd_code}) strategy={strategy} "
             f"scenes={scenes_root} (loop {loop_i}/{max_loops})"
         )
         live_before = len(_live_scene_dirs(scenes_root))
@@ -267,8 +277,8 @@ def main() -> None:
     if all_audit and not args.apply and not args.dry_run:
         print(
             "[reject-unusable] Next:\n"
-            f"  python build_scenes/reject_unusable_scenes.py --sign {args.sign} "
-            "--apply --refill"
+            f"  python traffic_bench/scene_collection/sign_pool/reject_unusable_scenes.py "
+            f"--sign {profile.id} --apply --refill"
         )
 
 

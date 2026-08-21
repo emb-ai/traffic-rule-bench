@@ -12,9 +12,9 @@ unique.
     ``lib.roles.sign_to_slots`` (+ stem / carriageway for 5.7).
     Within each shape quota, scene_ids are drawn **evenly across slots**
     (e.g. 3.18.1 balances ``r_s`` vs ``r_l``; 3.1 balances all six).
-  * ``lane_direction`` — sample from ``crops/lane_direction/{shape}/``
-    (5.15.1 multi-lane LC atoms); within each shape quota, balance by
-    ``compliant_dir`` (l / r).
+  * ``segment`` — sample from ``crops/segment/<scene_id>/`` using query
+    fields in signs.yaml (``segment_types``, ``lane_count_min``,
+    ``pass_right_ok`` / ``pass_left_ok``). Split by ``osm_way_id``.
 
 Canonical quotas: ``splits/signs.yaml``.
 """
@@ -22,6 +22,7 @@ Canonical quotas: ``splits/signs.yaml``.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import sys
@@ -31,6 +32,7 @@ from typing import Any, Dict, List, Optional, Set
 ROOT = Path(__file__).resolve().parents[1]
 
 from traffic_bench.scene_collection.map_pool.lib.roles import scenario_matches_sign, sign_shape_policy, sign_to_slots
+from traffic_bench.scene_collection.map_pool.lib.segment import enrich_lane_fields
 
 DEFAULT_SIGNS_YAML = ROOT / "splits" / "signs.yaml"
 DEFAULT_TRAIN = ROOT / "splits" / "train_ids.json"
@@ -264,6 +266,43 @@ def _scan_lane_direction_pool(
     return by_shape
 
 
+def _osm_way_is_test(osm_way: str, test_frac: float) -> bool:
+    """Stable train/test stamp on OSM way id (not Python's salted hash())."""
+    digest = hashlib.md5(str(osm_way).encode("utf-8")).hexdigest()
+    return (int(digest, 16) % 10000) / 10000.0 < float(test_frac)
+
+
+def _iter_segment_scene_dirs(segment_root: Path):
+    """Yield crops/segment/<id>/; also leftover nested straight/curved dirs."""
+    if not segment_root.is_dir():
+        return
+    for child in sorted(segment_root.iterdir()):
+        if not child.is_dir():
+            continue
+        if child.name in {"straight", "curved"}:
+            for inner in sorted(child.iterdir()):
+                if inner.is_dir() and (inner / "meta.json").is_file():
+                    yield inner
+            continue
+        if (child / "meta.json").is_file():
+            yield child
+
+
+def _segment_matches_query(meta: dict, spec: dict) -> bool:
+    meta = enrich_lane_fields(meta)
+    types = {str(t) for t in (spec.get("segment_types") or ["straight", "curved"])}
+    if str(meta.get("segment_type") or "") not in types:
+        return False
+    min_lanes = spec.get("lane_count_min")
+    if min_lanes is not None and int(meta.get("lane_count") or 0) < int(min_lanes):
+        return False
+    if spec.get("pass_right_ok") and not meta.get("pass_right_ok"):
+        return False
+    if spec.get("pass_left_ok") and not meta.get("pass_left_ok"):
+        return False
+    return True
+
+
 def _load_segments_index(path: Path) -> Dict[str, Dict]:
     """Load segments.jsonl as {scene_id: row}."""
     index: Dict[str, Dict] = {}
@@ -285,114 +324,34 @@ def _scan_segment_pool(
     segment_root: Path,
     segments_index: Dict[str, Dict],
     *,
-    allowed_segment_types: Set[str],
+    spec: dict,
     allowed_osm_ways: Set[str],
 ) -> Dict[str, Dict[str, List[str]]]:
-    """Return ``by_type[segment_type][segment_type] = [scene_id, ...]``.
-
-    For segments, we don't have shape (T/X), so we use segment_type as the key.
-    Split is by osm_way_id (not junction_id) to prevent data leakage.
-    """
-    by_type: Dict[str, Dict[str, List[str]]] = {t: {} for t in allowed_segment_types}
-    if not segment_root.is_dir():
-        return by_type
-    for type_dir in sorted(segment_root.iterdir()):
-        if not type_dir.is_dir():
+    """Return ``by_type[segment_type][segment_type] = [scene_id, ...]``."""
+    allowed_types = {str(t) for t in (spec.get("segment_types") or ["straight", "curved"])}
+    by_type: Dict[str, Dict[str, List[str]]] = {t: {} for t in allowed_types}
+    for scene_dir in _iter_segment_scene_dirs(segment_root):
+        if not (scene_dir / "map.net.xml").is_file():
             continue
-        seg_type = type_dir.name
-        if seg_type not in allowed_segment_types:
+        meta_path = scene_dir / "meta.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
             continue
-        for scene_dir in sorted(type_dir.iterdir()):
-            meta_path = scene_dir / "meta.json"
-            if not meta_path.is_file():
-                continue
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            osm_way = str(meta.get("osm_way_id") or "")
-            if allowed_osm_ways and osm_way not in allowed_osm_ways:
-                continue
-            sid = str(meta.get("scene_id") or scene_dir.name)
-            by_type.setdefault(seg_type, {}).setdefault(seg_type, []).append(sid)
+        sid = str(meta.get("scene_name") or meta.get("scene_id") or scene_dir.name)
+        index_row = segments_index.get(sid) or {}
+        merged = enrich_lane_fields({**index_row, **meta})
+        if not _segment_matches_query(merged, spec):
+            continue
+        osm_way = str(merged.get("osm_way_id") or "")
+        if allowed_osm_ways and osm_way not in allowed_osm_ways:
+            continue
+        seg_type = str(merged.get("segment_type") or "")
+        by_type.setdefault(seg_type, {}).setdefault(seg_type, []).append(sid)
     for seg_type, by_sub in list(by_type.items()):
         for sub in list(by_sub):
             by_sub[sub] = sorted(set(by_sub[sub]))
     return by_type
-
-
-def _scan_segment_detour_pool(
-    segment_detour_root: Path,
-    pdd_code: str,
-    *,
-    allowed_segment_types: Set[str],
-) -> Dict[str, Dict[str, List[str]]]:
-    """Return ``by_type[segment_type][segment_type] = [scene_id, ...]`` for segment_detour.
-
-    Scans crops/segment_detour/{straight,curved}/ for scenes matching the PDD code.
-    Uses osm_way_id for train/test split.
-    """
-    by_type: Dict[str, Dict[str, List[str]]] = {t: {} for t in allowed_segment_types}
-    if not segment_detour_root.is_dir():
-        return by_type
-    for type_dir in sorted(segment_detour_root.iterdir()):
-        if not type_dir.is_dir():
-            continue
-        seg_type = type_dir.name
-        if seg_type not in allowed_segment_types:
-            continue
-        for scene_dir in sorted(type_dir.iterdir()):
-            meta_path = scene_dir / "meta.json"
-            if not meta_path.is_file():
-                continue
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            # Filter by pdd_code
-            scene_pdd = str(meta.get("pdd_code") or meta.get("detour_code") or "")
-            if scene_pdd != pdd_code:
-                continue
-            osm_way = str(meta.get("osm_way_id") or "")
-            sid = str(meta.get("scene_name") or scene_dir.name)
-            by_type.setdefault(seg_type, {}).setdefault(seg_type, []).append(sid)
-    for seg_type, by_sub in list(by_type.items()):
-        for sub in list(by_sub):
-            by_sub[sub] = sorted(set(by_sub[sub]))
-    return by_type
-
-
-def _osm_ways_from_segment_detour(
-    segment_detour_root: Path,
-    pdd_code: str,
-    allowed_segment_types: Set[str],
-) -> Dict[str, str]:
-    """Return scene_id -> osm_way_id mapping for segment_detour scenes."""
-    mapping: Dict[str, str] = {}
-    if not segment_detour_root.is_dir():
-        return mapping
-    for type_dir in sorted(segment_detour_root.iterdir()):
-        if not type_dir.is_dir():
-            continue
-        seg_type = type_dir.name
-        if seg_type not in allowed_segment_types:
-            continue
-        for scene_dir in sorted(type_dir.iterdir()):
-            meta_path = scene_dir / "meta.json"
-            if not meta_path.is_file():
-                continue
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            scene_pdd = str(meta.get("pdd_code") or meta.get("detour_code") or "")
-            if scene_pdd != pdd_code:
-                continue
-            sid = str(meta.get("scene_name") or scene_dir.name)
-            osm_way = str(meta.get("osm_way_id") or "")
-            if osm_way:
-                mapping[sid] = osm_way
-    return mapping
 
 
 def _osm_ways_for_split(
@@ -505,76 +464,29 @@ def allocate(
                 shapes=shapes, n_total=sign_n_test, x_share=x_share
             )
         elif crop_kind == "segment":
-            # Segment scenes: split by osm_way_id, not junction_id
             segment_types = set(spec.get("segment_types") or ["straight", "curved"])
-            # Build osm_way_id sets from train/test junction splits
-            # Use segments whose osm_way_id appears only in train/test junctions
-            train_ways = _osm_ways_for_split(segments_index, list(segments_index.keys()))
             test_ways: Set[str] = set()
-            # Simple hash-based split by osm_way_id
-            for sid, row in segments_index.items():
-                osm_way = str(row.get("osm_way_id", ""))
-                if osm_way:
-                    # 20% test split via hash
-                    if hash(osm_way) % 5 == 0:
-                        test_ways.add(osm_way)
-            train_ways = train_ways - test_ways
+            train_ways: Set[str] = set()
+            for row in segments_index.values():
+                osm_way = str(row.get("osm_way_id") or "")
+                if not osm_way:
+                    continue
+                if _osm_way_is_test(osm_way, test_frac):
+                    test_ways.add(osm_way)
+                else:
+                    train_ways.add(osm_way)
             train_pool = _scan_segment_pool(
                 segment_root,
                 segments_index,
-                allowed_segment_types=segment_types,
+                spec=spec,
                 allowed_osm_ways=train_ways,
             )
             test_pool = _scan_segment_pool(
                 segment_root,
                 segments_index,
-                allowed_segment_types=segment_types,
+                spec=spec,
                 allowed_osm_ways=test_ways,
             )
-            # For segments, use segment_type as the "shape" key
-            train_need = {t: sign_n_train // len(segment_types) for t in segment_types}
-            test_need = {t: sign_n_test // len(segment_types) for t in segment_types}
-            # Distribute remainder
-            for i, t in enumerate(sorted(segment_types)):
-                if i < sign_n_train % len(segment_types):
-                    train_need[t] += 1
-                if i < sign_n_test % len(segment_types):
-                    test_need[t] += 1
-        elif crop_kind == "segment_detour":
-            # Segment detour scenes: split by osm_way_id, filter by pdd_code
-            segment_types = set(spec.get("segment_types") or ["straight", "curved"])
-            # Get osm_way mapping for this sign's scenes
-            scene_to_way = _osm_ways_from_segment_detour(
-                segment_detour_root,
-                pdd_code=str(sign_code),
-                allowed_segment_types=segment_types,
-            )
-            # Build train/test osm_way sets (20% test via hash)
-            all_ways = set(scene_to_way.values())
-            test_ways: Set[str] = set()
-            for osm_way in all_ways:
-                if osm_way and hash(osm_way) % 5 == 0:
-                    test_ways.add(osm_way)
-            train_ways = all_ways - test_ways
-            # Scan pools filtering by osm_way
-            full_pool = _scan_segment_detour_pool(
-                segment_detour_root,
-                pdd_code=str(sign_code),
-                allowed_segment_types=segment_types,
-            )
-            # Split by osm_way
-            train_pool: Dict[str, Dict[str, List[str]]] = {t: {} for t in segment_types}
-            test_pool: Dict[str, Dict[str, List[str]]] = {t: {} for t in segment_types}
-            for seg_type in segment_types:
-                by_sub = full_pool.get(seg_type) or {}
-                for sub, sids in by_sub.items():
-                    for sid in sids:
-                        osm_way = scene_to_way.get(sid, "")
-                        if osm_way in train_ways:
-                            train_pool.setdefault(seg_type, {}).setdefault(sub, []).append(sid)
-                        elif osm_way in test_ways:
-                            test_pool.setdefault(seg_type, {}).setdefault(sub, []).append(sid)
-            # For segments, use segment_type as the "shape" key
             train_need = {t: sign_n_train // len(segment_types) for t in segment_types}
             test_need = {t: sign_n_test // len(segment_types) for t in segment_types}
             for i, t in enumerate(sorted(segment_types)):
@@ -593,7 +505,7 @@ def allocate(
         got_train_slots: Dict[str, Dict[str, int]] = {}
         got_test_slots: Dict[str, Dict[str, int]] = {}
 
-        if crop_kind in ("dual_path", "lane_direction", "segment", "segment_detour"):
+        if crop_kind in ("dual_path", "lane_direction", "segment"):
             for shape, need in train_need.items():
                 by_slot = dict(train_pool.get(shape) or {})
                 picked, slot_got = _sample_balanced_across_slots(
@@ -666,12 +578,15 @@ def allocate(
             block["train"]["by_segment_type"] = got_train_slots
             block["test"]["by_segment_type"] = got_test_slots
             block["segment_types"] = sorted(segment_types)
-            block["shapes"] = []  # segments don't have shapes
-        elif crop_kind == "segment_detour":
-            block["train"]["by_segment_type"] = got_train_slots
-            block["test"]["by_segment_type"] = got_test_slots
-            block["segment_types"] = sorted(segment_types)
-            block["shapes"] = []  # segment_detour doesn't have shapes
+            block["shapes"] = []
+            if spec.get("prepare"):
+                block["prepare"] = spec["prepare"]
+            if spec.get("lane_count_min") is not None:
+                block["lane_count_min"] = spec["lane_count_min"]
+            if spec.get("pass_right_ok"):
+                block["pass_right_ok"] = True
+            if spec.get("pass_left_ok"):
+                block["pass_left_ok"] = True
         allocations[str(sign_code)] = block
 
     return {
@@ -747,10 +662,6 @@ def main() -> None:
             te = block["test"].get("by_compliant_dir") or {}
             slot_note = f"  dirs_train={tr}  dirs_test={te}"
         elif block.get("crop_kind") == "segment":
-            tr = block["train"].get("by_segment_type") or {}
-            te = block["test"].get("by_segment_type") or {}
-            slot_note = f"  types_train={tr}  types_test={te}"
-        elif block.get("crop_kind") == "segment_detour":
             tr = block["train"].get("by_segment_type") or {}
             te = block["test"].get("by_segment_type") or {}
             slot_note = f"  types_train={tr}  types_test={te}"

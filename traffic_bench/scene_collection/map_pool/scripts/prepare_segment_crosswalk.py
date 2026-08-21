@@ -64,24 +64,30 @@ def discover_segment_scenes(
     scenes_root: Path,
     segment_types: Optional[List[str]] = None,
 ) -> List[Path]:
-    """Find all segment scene directories."""
+    """Find segment scene directories (flat or nested straight/curved)."""
     if segment_types is None:
         segment_types = ["straight", "curved"]
 
     scenes: List[Path] = []
-    for seg_type in segment_types:
-        type_dir = scenes_root / seg_type
-        if not type_dir.is_dir():
+    if not scenes_root.is_dir():
+        return scenes
+    for child in sorted(scenes_root.iterdir()):
+        if not child.is_dir():
             continue
-        for scene_dir in sorted(type_dir.iterdir()):
-            if not scene_dir.is_dir():
-                continue
-            if not (scene_dir / "meta.json").is_file():
-                continue
-            if not (scene_dir / "map.net.xml").is_file():
-                continue
-            scenes.append(scene_dir)
-
+        if child.name in set(segment_types):
+            for scene_dir in sorted(child.iterdir()):
+                if not scene_dir.is_dir():
+                    continue
+                if not (scene_dir / "meta.json").is_file():
+                    continue
+                if not (scene_dir / "map.net.xml").is_file():
+                    continue
+                scenes.append(scene_dir)
+            continue
+        if (child / "meta.json").is_file() and (child / "map.net.xml").is_file():
+            meta = json.loads((child / "meta.json").read_text(encoding="utf-8"))
+            if str(meta.get("segment_type") or "") in set(segment_types) or not meta.get("segment_type"):
+                scenes.append(child)
     return scenes
 
 
@@ -144,6 +150,7 @@ def process_segment_scene(
     skip_existing: bool = False,
     crosswalk_width_m: float = 4.0,
     sidewalk_width_m: float = 2.0,
+    flat: bool = False,
 ) -> List[Dict]:
     """Process a single segment scene, creating crosswalk variants.
 
@@ -210,7 +217,7 @@ def process_segment_scene(
 
     for pos_name, pos_m in pos_map.items():
         out_scene_id = f"{scene_id}_cw_{pos_name}"
-        out_dir = output_root / segment_type / out_scene_id
+        out_dir = output_root / out_scene_id if flat else output_root / segment_type / out_scene_id
 
         if skip_existing and (out_dir / "map.net.xml").is_file():
             results.append({

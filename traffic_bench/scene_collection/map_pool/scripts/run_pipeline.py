@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Moscow scene harvest: download → netconvert → enumerate → crop (+ dual_path)."""
+"""Run Moscow scene harvest: download → netconvert → enumerate → crop T/X/O, dual_path, segment."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ def main() -> None:
     ap.add_argument("--skip-enumerate", action="store_true")
     ap.add_argument("--skip-crop", action="store_true")
     ap.add_argument("--skip-dual-path", action="store_true")
+    ap.add_argument("--skip-segment", action="store_true")
     ap.add_argument("--force-download", action="store_true")
     ap.add_argument("--shapes", default="T,X,O")
     ap.add_argument("--max-per-shape", type=int, default=None)
@@ -36,8 +37,8 @@ def main() -> None:
     ap.add_argument(
         "--dual-path-max-per-slot",
         type=int,
-        default=500,
-        help="Max dual_path scenes per (shape, slot) shared pool (default 500)",
+        default=0,
+        help="Max dual_path scenes per (shape, slot); 0 = no cap",
     )
     args = ap.parse_args()
 
@@ -90,6 +91,14 @@ def main() -> None:
         if args.skip_existing:
             dual_args.append("--skip-existing")
         _run("crop_dual_path_scenes.py", dual_args)
+
+    if not args.skip_segment:
+        if not args.skip_enumerate:
+            _run("enumerate_segments.py", [])
+        seg_args = ["--max-scenes", "0"]
+        if args.skip_existing:
+            seg_args.append("--skip-existing")
+        _run("crop_segment_scenes.py", seg_args)
 
     print("\n[run_pipeline] Finished. See README.md for layout and provenance.")
 

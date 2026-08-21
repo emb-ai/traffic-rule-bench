@@ -1,32 +1,20 @@
-Сначала всем перекрёсткам Москвы вешают ярлык: train или test. Один перекрёсток — один ярлык навсегда.
+Сначала всем местам Москвы вешают ярлык: train или test. Одно место — один ярлык навсегда (`junction_id` или `osm_way_id`).
 
-1. Нашли все подходящие перекрёстки Москвы: 6457 (T 5181, X 1052, O 224). коридоров 7620
-2. Им всем повесили ярлык train/test (~80/20).
-3. Вырезали все возможные T/X/O/Dual_path/Segment.
+1. Нашли все подходящие перекрёстки Москвы: 6457 (T 5181, X 1052, O 224) и коридоров 7620.
+2. Им всем повесили ярлык train/test (~80/20) **до** раздачи знакам.
+3. Вырезали все возможные T / X / O / Dual_path / Segment (H = P, без капа 500).
 
-- T
-- X
-- O
-- Dual_path
-- Segment
+Знак = запрос к семейству, не отдельная папка кропа.
 
+- T, X, O — junction
+- Dual_path — другой net (union двух путей)
+- Segment — коридор; straight/curved и число полос — теги
 
-The scene collection stage consists of two steps: 
-1. the general pool of Moscow maps without signs (map_pool)
+4.2 семплит Segment (`lane_count ≥ 2`, сторона объезда). Полосу препятствия ставит eval.
+5.19 семплит Segment, зебру врезает materialize в `data/scenes/crosswalk/`.
+5.15 в этой итерации не собираем.
 
-map_pool/ — a common pool of maps
-Idea: slice Moscow once into geometry types (T/X intersection, two routes, straight section…) and then several signs share the same maps. Train/test is sliced by junction_id / osm_way_id so that pieces of the same road don’t end up in both halves.
+The scene collection stage consists of two steps:
 
-2. the distribution of these maps by signs (sign_pool) in data/scenes/<sign>
-
-
-
-
-## flowchart LR
-  osm[raw OSM] --> net[moscow.net.xml]
-  net --> index[index junctions/segments]
-  index --> crops[crops T/X/O dual_path segment ...]
-  crops --> split[train_ids / test_ids]
-  split --> alloc[sign_allocations.json]
-  alloc --> mat[materialize_scenes]
-  mat --> dataScenes["data/scenes/yield, main_road, ..."]
+1. the general pool of Moscow maps without signs (`map_pool`)
+2. the distribution of these maps by signs (`sign_pool`) in `data/scenes/<sign>`

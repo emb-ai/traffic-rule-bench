@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Materialize Moscow-allocated scenes into a sign pool (e.g. 2.4 yield / 5.7.1).
+"""Materialize allocated maps into a sign pool (e.g. yield / crosswalk).
 
-Reads ``moscow_scenes/splits/sign_allocations.json``, resolves each allocated
-scene under either:
+``--sign`` is the eval profile id (same as ``generate_manifest.py sign=...``),
+not the PDD code. Allocations in ``sign_allocations.json`` stay keyed by PDD.
+
+Reads ``map_pool/splits/sign_allocations.json``, resolves each allocated
+scene under:
 
 * ``crops/{T,X,O}/`` for ``crop_kind: junction``
-* ``crops/dual_path/{T,X}/{slot}/`` for ``crop_kind: dual_path`` (5.7 / 4.1 / …)
-* ``crops/segment/{straight,curved}/`` for ``crop_kind: segment`` (3.24 / speed)
-* ``crops/segment_detour/{straight,curved}/`` for ``crop_kind: segment_detour`` (4.2.x)
+* ``crops/dual_path/{T,X}/{slot}/`` for ``crop_kind: dual_path``
+* ``crops/segment/<scene_id>/`` for ``crop_kind: segment``
 
-then symlinks (or copies) them into ``data/<sign>/scenes/`` for review and
-``generate_manifest.py``.
+For crosswalk (PDD 5.19, ``prepare: crosswalk``) injects a zebra into
+``data/scenes/crosswalk/``.
 """
 
 from __future__ import annotations
@@ -48,7 +50,11 @@ from traffic_bench.scene_collection.sign_pool.scene_selection import (
     load_scene_selection,
     set_scene_verdict,
 )
-from traffic_bench.eval.sign_registry import get_profile, scenes_dir as profile_scenes_dir
+from traffic_bench.eval.sign_registry import (
+    get_profile,
+    list_profiles,
+    scenes_dir as profile_scenes_dir,
+)
 
 PREVIEW_NAME = "custom_cropped.png"
 DEFAULT_SIGNS_YAML = MOSCOW_ROOT / "splits" / "signs.yaml"
@@ -114,31 +120,37 @@ def _index_dual_path_scenes(moscow_scenes: Path) -> Dict[str, dict]:
 
 
 def _index_segment_scenes(moscow_scenes: Path) -> Dict[str, dict]:
-    """Build scene_id → meta(+path) for ``crops/segment/{straight,curved}/…``."""
+    """Build scene_id → meta(+path) for ``crops/segment/<id>/`` (or nested leftover)."""
     root = moscow_scenes / "segment"
     out: Dict[str, dict] = {}
     if not root.is_dir():
         return out
-    for type_dir in sorted(root.iterdir()):
-        if not type_dir.is_dir() or type_dir.name not in {"straight", "curved"}:
+
+    def _add(scene_dir: Path) -> None:
+        meta_path = scene_dir / "meta.json"
+        if not meta_path.is_file():
+            return
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        sid = str(meta.get("scene_name") or meta.get("scene_id") or scene_dir.name)
+        row = dict(meta)
+        row["scene_id"] = sid
+        row["shape"] = str(meta.get("segment_type") or "")
+        row["crop_kind"] = "segment"
+        row["_path"] = str(scene_dir)
+        out[sid] = row
+
+    for child in sorted(root.iterdir()):
+        if not child.is_dir():
             continue
-        for scene_dir in sorted(type_dir.iterdir()):
-            if not scene_dir.is_dir():
-                continue
-            meta_path = scene_dir / "meta.json"
-            if not meta_path.is_file():
-                continue
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            sid = str(meta.get("scene_name") or meta.get("scene_id") or scene_dir.name)
-            row = dict(meta)
-            row["scene_id"] = sid
-            row["shape"] = str(meta.get("segment_type") or type_dir.name)
-            row["crop_kind"] = "segment"
-            row["_path"] = str(scene_dir)
-            out[sid] = row
+        if child.name in {"straight", "curved"}:
+            for scene_dir in sorted(child.iterdir()):
+                if scene_dir.is_dir():
+                    _add(scene_dir)
+            continue
+        _add(child)
     return out
 
 
@@ -179,8 +191,6 @@ def _resolve_scene_row(
     detour_index: Dict[str, dict],
     segment_index: Dict[str, dict],
 ) -> dict:
-    if sid in detour_index:
-        return detour_index[sid]
     if sid in segment_index:
         return segment_index[sid]
     if sid in dual_index:
@@ -189,6 +199,8 @@ def _resolve_scene_row(
         row = dict(junction_index[sid])
         row.setdefault("crop_kind", "junction")
         return row
+    if sid in detour_index:
+        return detour_index[sid]
     if _is_dual_path_scene_id(sid):
         raise KeyError(
             f"dual_path scene not found under crops/dual_path/: {sid}"
@@ -235,11 +247,13 @@ def _ensure_cropped(
         if row.get("_path"):
             dest = Path(str(row["_path"]))
         else:
-            dest = moscow_scenes / "segment" / shape / scene_id
+            dest = moscow_scenes / "segment" / scene_id
+            if not (dest / "map.net.xml").is_file():
+                dest = moscow_scenes / "segment" / shape / scene_id
         if not (dest / "map.net.xml").is_file():
             raise FileNotFoundError(
                 f"Missing segment scene {dest} "
-                "(run moscow_scenes/scripts/crop_segment_scenes.py)"
+                "(run map_pool/scripts/crop_segment_scenes.py)"
             )
         return dest
     if crop_kind == "segment_detour":
@@ -385,6 +399,49 @@ def _materialize_one(
     }
 
 
+def _materialize_crosswalk_variants(
+    sid: str,
+    *,
+    half: str,
+    src: Path,
+    dest_scenes: Path,
+) -> List[dict]:
+    """Inject zebra variants of a segment crop into the sign scenes dir."""
+    from traffic_bench.scene_collection.map_pool.scripts.prepare_segment_crosswalk import (
+        DEFAULT_POSITIONS,
+        process_segment_scene,
+    )
+
+    results = process_segment_scene(
+        src,
+        dest_scenes,
+        list(DEFAULT_POSITIONS),
+        skip_existing=False,
+        flat=True,
+    )
+    records: List[dict] = []
+    for item in results:
+        status = item.get("status")
+        out_id = str(item.get("scene_id") or "")
+        if status == "fail":
+            raise RuntimeError(item.get("error") or f"crosswalk inject failed for {sid}")
+        if status not in {"ok", "skip"}:
+            continue
+        records.append({
+            "scene_id": out_id,
+            "shape": "",
+            "crop_kind": "segment",
+            "prepare": "crosswalk",
+            "source_segment_scene": sid,
+            "split": half,
+            "path": str(item.get("output_dir") or dest_scenes / out_id),
+            "moscow_path": str(src),
+        })
+    if not records:
+        raise RuntimeError(f"no crosswalk variants written for {sid}")
+    return records
+
+
 def materialize(
     *,
     sign: str,
@@ -422,26 +479,50 @@ def materialize(
     dest_scenes.mkdir(parents=True, exist_ok=True)
     ok = fail = 0
     records: List[dict] = []
+    prepare = str(block.get("prepare") or "")
 
     for sid in scene_ids:
         try:
-            rec = _materialize_one(
-                sid,
-                half=half_of[sid],
-                junction_index=junction_index,
-                dual_index=dual_index,
-                detour_index=detour_index,
-                segment_index=segment_index,
-                dest_scenes=dest_scenes,
-                moscow_scenes=moscow_scenes,
-                moscow_net=moscow_net,
-                radius_m=radius_m,
-                force_preview=force_preview,
-                crop_missing=crop_missing,
-                mode=mode,
-            )
-            records.append(rec)
-            ok += 1
+            if prepare == "crosswalk":
+                row = _resolve_scene_row(
+                    sid,
+                    junction_index=junction_index,
+                    dual_index=dual_index,
+                    detour_index=detour_index,
+                    segment_index=segment_index,
+                )
+                src = _ensure_cropped(
+                    row,
+                    moscow_scenes=moscow_scenes,
+                    moscow_net=moscow_net,
+                    radius_m=radius_m,
+                )
+                recs = _materialize_crosswalk_variants(
+                    sid,
+                    half=half_of[sid],
+                    src=src,
+                    dest_scenes=dest_scenes,
+                )
+                records.extend(recs)
+                ok += len(recs)
+            else:
+                rec = _materialize_one(
+                    sid,
+                    half=half_of[sid],
+                    junction_index=junction_index,
+                    dual_index=dual_index,
+                    detour_index=detour_index,
+                    segment_index=segment_index,
+                    dest_scenes=dest_scenes,
+                    moscow_scenes=moscow_scenes,
+                    moscow_net=moscow_net,
+                    radius_m=radius_m,
+                    force_preview=force_preview,
+                    crop_missing=crop_missing,
+                    mode=mode,
+                )
+                records.append(rec)
+                ok += 1
         except Exception as exc:  # noqa: BLE001
             print(f"  [fail] {sid}: {exc}")
             fail += 1
@@ -711,7 +792,16 @@ def refill(
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--sign", default="2.4", help="Sign code in sign_allocations.json")
+    ap.add_argument(
+        "--sign",
+        default="yield",
+        metavar="ID",
+        help=(
+            "Eval sign id, same as `generate_manifest.py sign=...` "
+            f"(e.g. yield, roundabout, crosswalk). "
+            f"Known: {', '.join(sorted(p.id for p in list_profiles()))}"
+        ),
+    )
     ap.add_argument(
         "--split",
         choices=("all", "train", "test"),
@@ -792,7 +882,7 @@ def main() -> None:
             sys.exit(f"ERROR: signs yaml not found: {args.signs_yaml}")
         if not args.train_ids.is_file() or not args.test_ids.is_file():
             sys.exit("ERROR: train_ids.json / test_ids.json required for --refill")
-        print(f"[refill] sign={args.sign} → {dest} (mode={args.mode})")
+        print(f"[refill] sign={profile.id} ({profile.pdd_code}) → {dest} (mode={args.mode})")
         refill(
             sign=str(profile.pdd_code),
             mode=args.mode,
@@ -810,7 +900,7 @@ def main() -> None:
         )
         return
 
-    print(f"[materialize] sign={args.sign} → {dest} (mode={args.mode})")
+    print(f"[materialize] sign={profile.id} ({profile.pdd_code}) → {dest} (mode={args.mode})")
     materialize(
         sign=str(profile.pdd_code),
         split=args.split,

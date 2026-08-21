@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Crop indexed segments into crops/segment/{straight,curved}/<scene_id>/.
+"""Crop indexed segments into crops/segment/<scene_id>/.
 
 Each scene contains the segment edge cropped to an XY boundary that ends
-BEFORE the junction (margin 10m), so the scene is a straight road without
-any intersection.
+BEFORE the junction (margin 10m), so the scene is a corridor without
+an intersection. ``segment_type`` lives in meta.json, not in the path.
 """
 
 from __future__ import annotations
@@ -15,11 +15,12 @@ import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
-from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
+
+from traffic_bench.scene_collection.map_pool.lib.segment import enrich_lane_fields
 
 
 def json_dumps(obj) -> str:
@@ -99,7 +100,7 @@ def crop_net_to_xy_boundary(
 DEFAULT_NET = ROOT / "nets" / "moscow.net.xml"
 DEFAULT_INDEX = ROOT / "index" / "segments.jsonl"
 DEFAULT_OUT = ROOT / "crops" / "segment"
-DEFAULT_MAX_PER_TYPE = 500
+DEFAULT_MAX_SCENES = 0  # 0 = no cap; crop all of P
 
 # Margin before junction (meters) — segment ends this far before the junction
 JUNCTION_MARGIN_M = 10.0
@@ -143,15 +144,74 @@ def compute_crop_bbox(
     return (xmin, ymin, xmax, ymax)
 
 
+def flatten_legacy_segment_layout(scenes_root: Path) -> int:
+    """Move crops/segment/{straight,curved}/<id>/ → crops/segment/<id>/."""
+    moved = 0
+    if not scenes_root.is_dir():
+        return moved
+    for nested in ("straight", "curved"):
+        type_dir = scenes_root / nested
+        if not type_dir.is_dir():
+            continue
+        for scene_dir in list(type_dir.iterdir()):
+            if not scene_dir.is_dir():
+                continue
+            dest = scenes_root / scene_dir.name
+            if dest.exists():
+                continue
+            shutil.move(str(scene_dir), str(dest))
+            moved += 1
+        try:
+            next(type_dir.iterdir())
+        except StopIteration:
+            type_dir.rmdir()
+        except OSError:
+            pass
+    return moved
+
+
+def backfill_segment_metas(scenes_root: Path) -> int:
+    """Write vehicle_lane_indices / pass_* onto existing meta.json files."""
+    updated = 0
+    for scene_dir in iter_segment_scene_dirs(scenes_root):
+        meta_path = scene_dir / "meta.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        new_meta = enrich_lane_fields(meta)
+        if new_meta != meta:
+            write_scene_meta(scene_dir, new_meta)
+            updated += 1
+    return updated
+
+
+def iter_segment_scene_dirs(scenes_root: Path):
+    """Yield scene dirs; supports flat layout and leftover straight/curved nests."""
+    if not scenes_root.is_dir():
+        return
+    for child in sorted(scenes_root.iterdir()):
+        if not child.is_dir():
+            continue
+        if child.name in {"straight", "curved"}:
+            for inner in sorted(child.iterdir()):
+                if inner.is_dir() and (inner / "meta.json").is_file():
+                    yield inner
+            continue
+        if (child / "meta.json").is_file():
+            yield child
+
+
 def write_scene_meta(scene_dir: Path, meta: dict) -> None:
     """Write meta.json and center.json."""
     (scene_dir / "meta.json").write_text(
         json_dumps(meta) + "\n", encoding="utf-8"
     )
-    (scene_dir / "center.json").write_text(
-        json_dumps({"lat": meta["latitude"], "lon": meta["longitude"]}) + "\n",
-        encoding="utf-8",
-    )
+    if "latitude" in meta and "longitude" in meta:
+        (scene_dir / "center.json").write_text(
+            json_dumps({"lat": meta["latitude"], "lon": meta["longitude"]}) + "\n",
+            encoding="utf-8",
+        )
 
 
 def render_segment_preview(
@@ -189,7 +249,7 @@ def crop_segment_scene(
     """Crop a single segment scene. Returns (status, scene_id, detail)."""
     scene_id = row["scene_id"]
     segment_type = row["segment_type"]
-    scene_dir = scenes_root / segment_type / scene_id
+    scene_dir = scenes_root / scene_id
     out_net = scene_dir / "map.net.xml"
 
     if skip_existing and out_net.is_file():
@@ -210,6 +270,7 @@ def crop_segment_scene(
     if not out_net.is_file():
         return ("fail", scene_id, "netconvert did not write output")
 
+    row = enrich_lane_fields(row)
     meta = {
         "scene_name": scene_id,
         "scene_kind": "segment",
@@ -220,6 +281,9 @@ def crop_segment_scene(
         "length_m": row["length_m"],
         "straightness": row["straightness"],
         "lane_count": row["lane_count"],
+        "vehicle_lane_indices": row.get("vehicle_lane_indices") or [],
+        "pass_right_ok": bool(row.get("pass_right_ok")),
+        "pass_left_ok": bool(row.get("pass_left_ok")),
         "center_xy": row["center_xy"],
         "start_xy": row["start_xy"],
         "end_xy": row["end_xy"],
@@ -229,7 +293,6 @@ def crop_segment_scene(
         "longitude": row["longitude"],
         "net_file": "map.net.xml",
         "source_net": row.get("source_net", source_net.name),
-        "source_project": "moscow_scenes",
         "harvest": "sign_free_moscow_osm",
     }
     write_scene_meta(scene_dir, meta)
@@ -260,10 +323,16 @@ def main() -> None:
         help="Comma-separated segment types to crop (default: straight,curved)",
     )
     ap.add_argument(
+        "--max-scenes",
+        type=int,
+        default=DEFAULT_MAX_SCENES,
+        help="Max scenes to crop (0 = no cap, harvest all of P)",
+    )
+    ap.add_argument(
         "--max-per-type",
         type=int,
-        default=DEFAULT_MAX_PER_TYPE,
-        help=f"Max scenes per segment type (default {DEFAULT_MAX_PER_TYPE})",
+        default=None,
+        help="Deprecated alias for --max-scenes (ignored if --max-scenes is set)",
     )
     ap.add_argument("--skip-existing", action="store_true")
     ap.add_argument(
@@ -275,7 +344,10 @@ def main() -> None:
     args = ap.parse_args()
 
     if args.png_only:
-        _rerender_existing_pngs(args.out, args.segment_types)
+        moved = flatten_legacy_segment_layout(args.out)
+        if moved:
+            print(f"[crop_segment] flattened {moved} legacy nested scenes")
+        _rerender_existing_pngs(args.out)
         return
 
     if not args.net.is_file():
@@ -288,40 +360,45 @@ def main() -> None:
         r for r in load_segments_index(args.index)
         if r.get("segment_type") in want_types
     ]
+    rows = [enrich_lane_fields(r) for r in rows]
+
+    moved = flatten_legacy_segment_layout(args.out)
+    if moved:
+        print(f"[crop_segment] flattened {moved} legacy nested scenes → {args.out}")
+    n_backfill = backfill_segment_metas(args.out)
+    if n_backfill:
+        print(f"[crop_segment] backfilled lane fields on {n_backfill} metas")
+
+    max_scenes = int(args.max_scenes or 0)
+    if max_scenes <= 0 and args.max_per_type:
+        max_scenes = int(args.max_per_type)
 
     print(f"[crop_segment] net={args.net}")
     print(f"[crop_segment] index={args.index} ({len(rows)} segments of types {want_types})")
-    print(f"[crop_segment] max_per_type={args.max_per_type}, skip_existing={args.skip_existing}")
+    cap_note = "unlimited" if max_scenes <= 0 else str(max_scenes)
+    print(f"[crop_segment] max_scenes={cap_note}, skip_existing={args.skip_existing}")
 
-    # Count existing scenes
-    existing: Dict[str, int] = defaultdict(int)
+    existing_ids: Set[str] = set()
     if args.skip_existing:
-        for seg_type in want_types:
-            type_dir = args.out / seg_type
-            if type_dir.is_dir():
-                existing[seg_type] = sum(
-                    1 for p in type_dir.iterdir()
-                    if (p / "map.net.xml").is_file()
-                )
-        if existing:
-            print(f"[crop_segment] existing on disk: {dict(existing)}")
+        for scene_dir in iter_segment_scene_dirs(args.out):
+            if (scene_dir / "map.net.xml").is_file():
+                existing_ids.add(scene_dir.name)
+        print(f"[crop_segment] existing on disk: {len(existing_ids)}")
 
-    # Shuffle for variety (stable seed)
     import random
     rng = random.Random(args.seed)
     rng.shuffle(rows)
 
-    # Cap per type
-    filled: Dict[str, int] = dict(existing)
     jobs: List[Dict] = []
     for row in rows:
-        seg_type = row["segment_type"]
-        if filled.get(seg_type, 0) >= args.max_per_type:
+        sid = str(row.get("scene_id") or "")
+        if args.skip_existing and sid in existing_ids:
             continue
         jobs.append(row)
-        filled[seg_type] = filled.get(seg_type, 0) + 1
+        if max_scenes > 0 and len(jobs) >= max_scenes:
+            break
 
-    print(f"[crop_segment] jobs to process: {len(jobs)} (target fill: {filled})")
+    print(f"[crop_segment] jobs to process: {len(jobs)}")
 
     stats = {"ok": 0, "fail": 0, "skip": 0}
     t0 = time.time()
@@ -349,17 +426,13 @@ def main() -> None:
     print(f"[crop_segment] Output: {args.out}")
 
 
-def _rerender_existing_pngs(scenes_root: Path, segment_types: str) -> None:
+def _rerender_existing_pngs(scenes_root: Path) -> None:
     """Rewrite custom_cropped.png for scenes already on disk."""
-    want_types = {s.strip() for s in segment_types.split(",") if s.strip()}
-    jobs: List[Path] = []
-    for seg_type in sorted(want_types):
-        type_dir = scenes_root / seg_type
-        if not type_dir.is_dir():
-            continue
-        for scene_dir in sorted(type_dir.iterdir()):
-            if (scene_dir / "map.net.xml").is_file() and (scene_dir / "meta.json").is_file():
-                jobs.append(scene_dir)
+    jobs = [
+        scene_dir
+        for scene_dir in iter_segment_scene_dirs(scenes_root)
+        if (scene_dir / "map.net.xml").is_file()
+    ]
 
     print(f"[crop_segment] png-only: {len(jobs)} scenes under {scenes_root}")
     ok = fail = 0

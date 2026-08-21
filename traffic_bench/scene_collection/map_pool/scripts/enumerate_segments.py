@@ -108,6 +108,9 @@ def enumerate_segments(
                 start_xy=tuple(metrics["start_xy"]),
                 end_xy=tuple(metrics["end_xy"]),
                 to_junction_xy=junction_xy,
+                vehicle_lane_indices=tuple(metrics.get("vehicle_lane_indices") or ()),
+                pass_right_ok=bool(metrics.get("pass_right_ok", False)),
+                pass_left_ok=bool(metrics.get("pass_left_ok", False)),
             )
             candidates.append(candidate)
 
@@ -137,6 +140,9 @@ def write_segments_index(
             "straightness": round(cand.straightness, 5),
             "segment_type": cand.segment_type,
             "lane_count": cand.lane_count,
+            "vehicle_lane_indices": list(cand.vehicle_lane_indices),
+            "pass_right_ok": cand.pass_right_ok,
+            "pass_left_ok": cand.pass_left_ok,
             "center_xy": [round(cand.center_xy[0], 2), round(cand.center_xy[1], 2)],
             "start_xy": [round(cand.start_xy[0], 2), round(cand.start_xy[1], 2)],
             "end_xy": [round(cand.end_xy[0], 2), round(cand.end_xy[1], 2)],

@@ -15,7 +15,7 @@ import math
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 # Straightness thresholds
 STRAIGHT_THRESHOLD = 0.99  # for speed signs (3.24, 3.25)
@@ -41,6 +41,9 @@ class SegmentCandidate:
     start_xy: Tuple[float, float]
     end_xy: Tuple[float, float]
     to_junction_xy: Tuple[float, float]  # junction position (segment ends here)
+    vehicle_lane_indices: Tuple[int, ...] = ()
+    pass_right_ok: bool = False
+    pass_left_ok: bool = False
 
     @property
     def segment_type(self) -> str:
@@ -55,6 +58,36 @@ class SegmentCandidate:
         """Unique scene identifier safe for filesystem paths."""
         safe = self.edge_id.replace(":", "_").replace("#", "_").replace("-", "m")
         return f"seg_{safe}"
+
+
+def pass_ok_from_indices(indices: Sequence[int]) -> Tuple[bool, bool]:
+    """Whether a detour sign can pass right (4.2.1) or left (4.2.2).
+
+    SUMO lane 0 is the rightmost. pass_right_ok if some vehicle lane has a
+    lower-index vehicle neighbor; pass_left_ok if some has a higher-index one.
+    """
+    lanes = sorted({int(i) for i in indices})
+    if len(lanes) < 2:
+        return False, False
+    pass_right = any(any(j < i for j in lanes) for i in lanes)
+    pass_left = any(any(j > i for j in lanes) for i in lanes)
+    return pass_right, pass_left
+
+
+def enrich_lane_fields(meta: dict) -> dict:
+    """Fill vehicle_lane_indices / pass_* on a segment meta or index row."""
+    out = dict(meta)
+    raw = out.get("vehicle_lane_indices")
+    if raw:
+        indices = tuple(int(i) for i in raw)
+    else:
+        n = int(out.get("lane_count") or 0)
+        indices = tuple(range(n))
+    pass_right, pass_left = pass_ok_from_indices(indices)
+    out["vehicle_lane_indices"] = list(indices)
+    out["pass_right_ok"] = pass_right
+    out["pass_left_ok"] = pass_left
+    return out
 
 
 def osm_way_id_from_edge(edge_id: str) -> str:
@@ -129,35 +162,52 @@ def get_edge_metrics(
         if not vehicle_lanes:
             return None
 
-        # Use first vehicle lane for geometry
-        lane = vehicle_lanes[0]
-        shape_str = lane.get("shape", "")
-        points = parse_shape_string(shape_str)
-        if len(points) < 2:
+        metrics = _metrics_from_vehicle_lanes(edge_id, vehicle_lanes)
+        if metrics is None:
             return None
-
-        arc_len, chord_len, straightness = calculate_straightness(points)
-        if arc_len < 1.0:
-            return None
-
-        # Center and endpoints
-        mid_idx = len(points) // 2
-        center_xy = points[mid_idx]
-        start_xy = points[0]
-        end_xy = points[-1]
-
-        return {
-            "edge_id": edge_id,
-            "length_m": arc_len,
-            "straightness": straightness,
-            "lane_count": len(vehicle_lanes),
-            "center_xy": center_xy,
-            "start_xy": start_xy,
-            "end_xy": end_xy,
-            "shape_points": points,
-        }
+        return metrics
 
     return None
+
+
+def _vehicle_lane_indices(vehicle_lanes: List[ET.Element]) -> Tuple[int, ...]:
+    out: List[int] = []
+    for i, lane in enumerate(vehicle_lanes):
+        raw = lane.get("index")
+        try:
+            out.append(int(raw) if raw is not None else i)
+        except ValueError:
+            out.append(i)
+    return tuple(out)
+
+
+def _metrics_from_vehicle_lanes(
+    edge_id: str,
+    vehicle_lanes: List[ET.Element],
+) -> Optional[Dict]:
+    indices = _vehicle_lane_indices(vehicle_lanes)
+    pass_right, pass_left = pass_ok_from_indices(indices)
+    lane = vehicle_lanes[0]
+    points = parse_shape_string(lane.get("shape", ""))
+    if len(points) < 2:
+        return None
+    arc_len, chord_len, straightness = calculate_straightness(points)
+    if arc_len < 1.0:
+        return None
+    mid_idx = len(points) // 2
+    return {
+        "edge_id": edge_id,
+        "length_m": arc_len,
+        "straightness": straightness,
+        "lane_count": len(vehicle_lanes),
+        "vehicle_lane_indices": list(indices),
+        "pass_right_ok": pass_right,
+        "pass_left_ok": pass_left,
+        "center_xy": points[mid_idx],
+        "start_xy": points[0],
+        "end_xy": points[-1],
+        "shape_points": points,
+    }
 
 
 def _is_pedestrian_only(lane_el: ET.Element) -> bool:
@@ -188,26 +238,11 @@ def build_edge_metrics_cache(net_path: Path) -> Dict[str, Dict]:
         if not vehicle_lanes:
             continue
 
-        lane = vehicle_lanes[0]
-        shape_str = lane.get("shape", "")
-        points = parse_shape_string(shape_str)
-        if len(points) < 2:
+        metrics = _metrics_from_vehicle_lanes(edge_id, vehicle_lanes)
+        if metrics is None:
             continue
-
-        arc_len, chord_len, straightness = calculate_straightness(points)
-        if arc_len < 1.0:
-            continue
-
-        mid_idx = len(points) // 2
-        cache[edge_id] = {
-            "edge_id": edge_id,
-            "length_m": arc_len,
-            "straightness": straightness,
-            "lane_count": len(vehicle_lanes),
-            "center_xy": points[mid_idx],
-            "start_xy": points[0],
-            "end_xy": points[-1],
-        }
+        metrics.pop("shape_points", None)
+        cache[edge_id] = metrics
 
     return cache
 

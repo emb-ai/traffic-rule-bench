@@ -23,7 +23,9 @@ from .segment import (
     build_edge_metrics_cache,
     build_junction_positions_cache,
     calculate_straightness,
+    enrich_lane_fields,
     osm_way_id_from_edge,
+    pass_ok_from_indices,
 )
 from .stem import is_t_stem_approach
 from .crosswalk_inject import (
@@ -59,7 +61,9 @@ __all__ = [
     "build_edge_metrics_cache",
     "build_junction_positions_cache",
     "calculate_straightness",
+    "enrich_lane_fields",
     "osm_way_id_from_edge",
+    "pass_ok_from_indices",
     # stem
     "is_t_stem_approach",
     # crosswalk_inject

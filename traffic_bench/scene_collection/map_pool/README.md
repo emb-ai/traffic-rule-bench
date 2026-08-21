@@ -1,130 +1,123 @@
-# map_pool — Moscow map harvest (junction + dual_path + segment)
+# map_pool — sign-free Moscow harvest
 
-Sign-free scene harvest for Moscow. Lives at `traffic_bench/scene_collection/map_pool/`.
+Shared pool of maps. Signs do not own crop folders; they query a family in
+`splits/signs.yaml`. Lives at `traffic_bench/scene_collection/map_pool/`.
 
-Sign-free scene harvest for Moscow. Junction / dual_path scenes are keyed by
-**SUMO `junction_id`** (or roundabout fingerprint). Segment scenes are keyed by
-incoming **edge_id** and split by **OSM way id**.
-
-Formerly `moscow_junctions`. Renamed because the pool now includes **dual_path**
-crops (path-union bbox) and **segment** crops (straight-road stubs), not only
-junction-only maps.
-
-> Naming: use **dual_path**, not “detour” (PDD **4.2.1** is the detour sign).
+Junction / dual_path maps are keyed by SUMO `junction_id`. Segment maps are
+keyed by incoming `edge_id` and split by OSM way id.
 
 ## Layout
 
 ```
-moscow_scenes/
-├── README.md
-├── raw/ … nets/ … index/
-├── lib/                         # dual_path, lane_direction, segment, roles, stem
+map_pool/
+├── raw/  nets/  index/
+├── lib/                 # dual_path, segment, roles, stem
 ├── crops/
-│   ├── {T,X,O}/                 # junction-only (~80 m arms)
-│   ├── dual_path/{T,X}/{slot}/  # path-union crops (l_s, l_r, …)
-│   ├── lane_direction/{T,X}/    # 5.15.1 multi-lane LC crops
-│   └── segment/{straight,curved}/  # straight-road stubs (no intersection)
+│   ├── {T,X,O}/                    # junction-only (~80 m arms)
+│   ├── dual_path/{T,X}/{slot}/     # path-union bbox
+│   └── segment/<scene_id>/         # corridor; type is meta.segment_type
 ├── splits/
 │   ├── signs.yaml / signs.json
 │   ├── train_ids.json / test_ids.json
 │   └── sign_allocations.json
 └── scripts/
-    ├── build_net.py / enumerate_junctions.py / crop_scenes.py
-    ├── crop_dual_path_scenes.py / crop_lane_direction_scenes.py
-    ├── enumerate_segments.py / crop_segment_scenes.py
-    ├── make_junction_split.py / allocate_sign_scenes.py
-    └── run_pipeline.py
 ```
 
-## Crop kinds
+Unused leftovers that may still sit on disk: `crops/lane_direction`,
+`crops/segment_detour`, `crops/segment_crosswalk`.
 
+## Crop families
 
-| Kind             | Path                                  | Used by                         |
-| ---------------- | ------------------------------------- | ------------------------------- |
-| `junction`       | `crops/{T,X,O}/`                     | 2.x, 3.2, 4.3, …                |
-| `dual_path`      | `crops/dual_path/{T,X}/{slot}/`      | 5.7, 3.18, 4.1, 3.1             |
-| `lane_direction` | `crops/lane_direction/{T,X}/`        | **5.15.1** (multi-lane LC)      |
-| `segment`        | `crops/segment/{straight,curved}/`   | **3.24**, **5.19**, **4.2.x**   |
+| Kind        | Path                               | Used by                                      |
+| ----------- | ---------------------------------- | -------------------------------------------- |
+| `junction`  | `crops/{T,X,O}/`                   | 2.x, 3.2, 4.3                                |
+| `dual_path` | `crops/dual_path/{T,X}/{slot}/`    | 3.1, 3.18, 4.1, 5.7                          |
+| `segment`   | `crops/segment/<scene_id>/`        | 3.24, 4.6, 5.21, 5.31, 4.2.x, 5.19           |
 
+**Why dual_path is a family and “2 lanes” is not:** T/X is an ~80 m junction
+crop. dual_path is a different net (union of two routes). Lane count and
+straightness are columns on the same segment crop.
 
 ### Dual-path slots
 
-Atomic slot = exact `(baseline_dir, compliant_dir)` among `{l,s,r}`:
+Atomic slot = `(baseline_dir, compliant_dir)` among `{l,s,r}`:
+`l_s` `l_r` `r_s` `r_l` `s_l` `s_r`.
 
-`l_s` `l_r` `r_s` `r_l` `s_l` `s_r`
+No per-slot cap in this iteration (H = P). At most one atom per junction per
+slot. Sign → slots: `lib/roles.py`. Extra gates: **5.7** → T only, stem /
+carriageway.
 
-**Pool size:** at most **500** scenes per `(shape, slot)` (default `--max-per-slot 500`).
+### Segments
 
-Same shared-pool idea as junction `T/X/O` (many signs reuse train/test maps).
-Do **not** size the pool as one sign’s `n_train+n_test`. Cap exists only because
-each dual_path crop is a path-union netconvert (heavier than junction-only); 500
-is roughly X-inventory scale per bucket and leaves headroom under 80/20 split and
-slot/stem filters. At most **one** atom per junction per slot; shuffle `--seed 42`;
-early-stop when buckets are full.
+Incoming edges from `index/junctions.jsonl`, cropped so the scene **ends
+before the junction** (10 m margin). Inclusion gates (`lib/segment.py`):
 
-Sign → slots (allocate filter): see `lib/roles.py` (`SIGN_TO_SLOTS`).
-Extra gates: **5.7** → T only, `ego_is_t_stem`, `carriageway_pair`.
+- length ≥ **150 m** — braking 60→20 km/h plus a compliance zone
+- **straight** — chord/arc ≥ 0.99 (speed signs; curve-aware IDM must not brake)
+- **curved** — 0.97 ≤ chord/arc < 0.99 (4.2 / 5.19; slight bend OK)
 
-### Segments (straight-road signs)
+Written on each `meta.json` / index row: `length_m`, `straightness`,
+`segment_type`, `lane_count` (passenger lanes only), `vehicle_lane_indices`
+(SUMO 0 = rightmost), `pass_right_ok`, `pass_left_ok`, `osm_way_id`.
 
-These signs are tested **on a road, not at an intersection**. Source is
-`incoming_edge_ids` from `index/junctions.jsonl`: the approach is cropped so the
-scene **ends before the junction** (10 m margin). That reuses the existing
-junction harvest and keeps the map a plain corridor.
+Not written at harvest: obstacle lane, `sign_s`, zebra (5.19 injects at
+materialize).
 
-Filters (`lib/segment.py`):
+## Sign queries (`splits/signs.yaml`)
 
-- length ≥ **150 m** — covers braking from ego spawn 60 km/h to a 20 km/h limit
-  (`d_brake ≈ 47 m` at 3.5 m/s²) plus a ~60 m compliance zone and buffers
-- **straight** — chord/arc ≥ 0.99 → **3.24** (curve-aware IDM must not brake
-  from geometry)
-- **curved** — chord/arc ≥ 0.97 → **5.19**, **4.2.x** (slight curvature OK)
+- 3.24 / 4.6 / 5.21 / 5.31 → `segment_type: straight`
+- 4.2.1 → `lane_count_min: 2` and `pass_right_ok`
+- 4.2.2 → `lane_count_min: 2` and `pass_left_ok`
+- 4.2.3 → `lane_count_min: 2`
+- 5.19 → any segment, then `prepare: crosswalk` at materialize
+- 5.15 is **not** listed (no harvest)
 
-Each scene: `map.net.xml`, `meta.json`, `center.json`, `custom_cropped.png`.
+4.2 maps in the pool are the **same segment crops** as speed signs. Obstacle
+lane placement is an eval concern, not a harvest column.
 
 ## Pipeline
 
+T/X/O are already cropped for the full junction index. Overnight, finish P for
+dual_path and segment (~5 s/netconvert, independent of family):
+
 ```bash
 cd traffic-rule-bench
-# from repo root; map_pool scripts use ROOT = this package dir
-python traffic_bench/scene_collection/map_pool/scripts/run_pipeline.py --skip-download --skip-netconvert
 
-# Junction-only harvest (existing)
-python scripts/run_pipeline.py --skip-download --skip-netconvert
+# dual_path: resume past the old 500-per-slot cap
+python traffic_bench/scene_collection/map_pool/scripts/crop_dual_path_scenes.py \
+  --max-per-slot 0 --skip-existing
 
-# Dual-path harvest (among the same enumerated T/X junctions)
-# Default: 500 scenes per (shape, slot) — shared pool, not one-sign quota.
-# Crops incrementally (each atom → disk + candidates flush); Ctrl+C safe with
-# --skip-existing (resume recounts on-disk scenes toward the cap).
-python scripts/crop_dual_path_scenes.py --max-per-slot 500 --skip-existing
-# smoke:  python scripts/crop_dual_path_scenes.py --max-per-slot 5 --discover-only
-# subset: python scripts/crop_dual_path_scenes.py --max-per-slot 500 --slots l_s,l_r
+# segment: all remaining index rows → crops/segment/<id>/
+python traffic_bench/scene_collection/map_pool/scripts/crop_segment_scenes.py \
+  --max-scenes 0 --skip-existing
 
-# Lane-direction harvest for 5.15.1 (multi-lane approach + exclusive L/R peer exit)
-python scripts/crop_lane_direction_scenes.py --max-per-shape 500 --skip-existing
-# smoke:  python scripts/crop_lane_direction_scenes.py --max-junctions 50 --max-per-shape 5
+python traffic_bench/scene_collection/map_pool/scripts/allocate_sign_scenes.py
+```
 
-# Segment harvest for 3.24 / 5.19 / 4.2.x (incoming edges, cropped before junction)
-python scripts/enumerate_segments.py
-python scripts/crop_segment_scenes.py --max-per-type 500 --skip-existing
-# smoke:  python scripts/crop_segment_scenes.py --max-per-type 10
+`crop_segment_scenes.py` flattens leftover `segment/{straight,curved}/` dirs
+and backfills `pass_*` on existing metas (no recrop).
 
-python scripts/make_junction_split.py  # global train/test split among X/T/O
-python scripts/allocate_sign_scenes.py
+Smoke:
+
+```bash
+python traffic_bench/scene_collection/map_pool/scripts/crop_dual_path_scenes.py --max-per-slot 5 --discover-only
+python traffic_bench/scene_collection/map_pool/scripts/crop_segment_scenes.py --max-scenes 10
+```
+
+Full pipeline (download → net → enumerate → all crops):
+
+```bash
+python traffic_bench/scene_collection/map_pool/scripts/run_pipeline.py --skip-download --skip-netconvert --skip-existing
 ```
 
 ## Train / test
 
 1. Shared pool — not owned by any sign.
-2. Junction / dual_path / lane_direction: prefer split by `**junction_id**` so
-  crops of the same junction stay on the same side (no road leakage across
-  train/test).
-3. Segments: split by `**osm_way_id**` so consecutive SUMO edges of one OSM way
-  cannot land in both train and test.
-4. Signs sample from the matching `crop_kind` with shape / slot / segment_type
-  filters.
+2. Stamp place ids **before** allocating signs (`make_junction_split.py` for
+   junctions; md5 of `osm_way_id` for segments).
+3. Signs sample independently; the same map may appear under several signs.
 
-Quotas: `splits/signs.yaml` (`n_train`, `n_test`, `seed`, `crop_kind`, …).
+Quotas: `splits/signs.yaml` (`n_train`, `n_test`, `seed`, query fields).
 
 ## Provenance
 
