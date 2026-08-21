@@ -7,8 +7,9 @@ import numpy as np
 
 
 SCRIPT_PATH = Path(__file__).resolve()
-PDD_BENCH_DIR = SCRIPT_PATH.parent.parent
-SDC_ROOT = PDD_BENCH_DIR.parent
+REPO_ROOT = SCRIPT_PATH.parent.parent
+PDD_BENCH_DIR = REPO_ROOT / "traffic_bench"
+SDC_ROOT = REPO_ROOT
 METADRIVE_DIR = SDC_ROOT / "third_party" / "metadrive"
 
 for path in (METADRIVE_DIR,):
@@ -30,9 +31,9 @@ from metadrive.envs.top_down_env import TopDownMetaDrive
 
 from metadrive.policy.idm_policy import ManualControlPolicy
 
-from pdd_bench.signs.stop_sign import StopSign
-from pdd_bench.signs.no_stopping_allowed_sign import NoStoppingAllowedSign
-from pdd_bench.signs.speed_limit_sign import SpeedLimitSign
+from traffic_bench.signs.stop_sign import StopSign
+from traffic_bench.signs.no_stopping_allowed_sign import NoStoppingAllowedSign
+from traffic_bench.signs.speed_limit_sign import SpeedLimitSign
 
 SIGN_TYPE_TO_CLASS = {
     "2.5": StopSign,
@@ -41,7 +42,7 @@ SIGN_TYPE_TO_CLASS = {
     
 }
 
-from pdd_bench.envs.sumo_env import TrafficSignSumoEnv
+from traffic_bench.envs.sumo_env import TrafficSignSumoEnv
         
 
 import re

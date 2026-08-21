@@ -67,7 +67,7 @@ Tips:
 
 - **Reviewer pQWL — twin-gap chart, correlation heatmap & bootstrap-CI forest**:
   regenerate with `python docs/_build_figures.py` (reads CSVs from
-  `pdd-bench/.../reviewer_evidence/tables/`, writes dark-styled PNGs).
+  `traffic-bench/.../reviewer_evidence/tables/`, writes dark-styled PNGs).
 - **Reviewer YBmX — Fig. 2**: slider compares
   `fig2_nuplan_stats_orig.png` vs `fig2_nuplan_stats_new.png`
   (new PNG rendered from `nuplan_stats_new.pdf`). Regenerate with:

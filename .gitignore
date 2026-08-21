@@ -67,9 +67,8 @@ full_train_250_x10/
 full_train_250_x10_new/
 
 ### Scene pipeline data (moscow scenes)
-pdd_bench/scene_pipeline/scenes/
-pdd_bench/scene_pipeline/raw/
-pdd_bench/scene_pipeline/nets/
+traffic_bench/scenes/map_pool/scenes/
+traffic_bench/scenes/map_pool/raw/
+traffic_bench/scenes/map_pool/nets/
 
-### Benchmark data
-pdd_bench/bench/data/
+### Benchmark working data lives at repo-root data/ (see "Data & checkpoints" above)

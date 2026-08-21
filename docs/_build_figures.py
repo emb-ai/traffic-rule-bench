@@ -1,7 +1,7 @@
 """Rebuild reviewer-evidence figures in the site's dark palette.
 
 Data source (single source of truth):
-  pdd-bench/scripts/per_sign_bench/benchmark_output/ready_test_summary/reviewer_evidence/tables/
+  traffic-bench/scripts/per_sign_bench/benchmark_output/ready_test_summary/reviewer_evidence/tables/
 Outputs:
   docs/static/images/figures/corr_heatmap_dark.png
   docs/static/images/figures/rcr_ci_forest_dark.png
@@ -19,7 +19,7 @@ from matplotlib.colors import LinearSegmentedColormap, to_rgb
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 DOCS = Path(__file__).resolve().parent
-TABLES = (DOCS / "../pdd-bench/scripts/per_sign_bench/benchmark_output/"
+TABLES = (DOCS / "../traffic-bench/scripts/per_sign_bench/benchmark_output/"
           "ready_test_summary/reviewer_evidence/tables").resolve()
 OUT = DOCS / "static/images/figures"
 

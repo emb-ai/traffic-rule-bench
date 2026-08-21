@@ -63,8 +63,8 @@ def _resolve_sign_class(cls_name: str):
     """Resolve a traffic-sign class by ``__name__`` (sidecar stores class names)."""
     import importlib
     import pkgutil
-    import pdd_bench.signs
-    for info in pkgutil.walk_packages(pdd_bench.signs.__path__, pdd_bench.signs.__name__ + "."):
+    import traffic_bench.signs
+    for info in pkgutil.walk_packages(traffic_bench.signs.__path__, traffic_bench.signs.__name__ + "."):
         try:
             mod = importlib.import_module(info.name)
         except Exception:
@@ -277,7 +277,7 @@ def replay_in_our_env(
 
     from expert_replay import _build_env    # re-use env-builder
     import env_flags as _env_flags
-    from pdd_bench.bench.core.profiles.ego_defaults import apply_ego_defaults
+    from traffic_bench.eval.core.profiles.ego_defaults import apply_ego_defaults
 
     row = sidecar["source_row"]
     backend = sidecar["backend"]
@@ -832,7 +832,7 @@ def main():
                         help="Default 500 (single) / 1500 (batch/--save-plant2-dir)")
     parser.add_argument("--scenes-root", type=str, default=None,
                         help="Root dir sidecar net_path entries resolve against "
-                             "(default: pdd-bench/scenes)")
+                             "(default: traffic-bench/scenes)")
     parser.add_argument("--save-plant2-dir", type=str, default=None,
                         help="Dump PlanT2 boxes/measurements under "
                              "<dir>/data/<scene_uid>_<variant>/")

@@ -33,20 +33,25 @@ Autonomous driving planners are typically evaluated using aggregate metrics such
 
 ```
 traffic-rule-bench/
-├── pdd_bench/              # main Python package (pip install -e .)
-│   ├── signs/              # MetaDrive traffic sign objects & violation logic
-│   ├── envs/               # SUMO + MetaDrive simulation environments
-│   ├── agents/             # driving policies & NN adapters (CaRL, PlanT2)
-│   ├── bench/              # benchmark engine: runner, manifest, metrics, oracle
-│   │   └── core/           # shared library (layout, scenarios, profiles, …)
-│   └── scene_pipeline/     # Moscow SUMO scene harvest pipeline
-├── tools/                  # standalone visualization & debug scripts
-├── finetune/               # PlanT2 fine-tuning tooling
-├── checkpoints/            # model weights (CaRL, PlanT2)
-├── third_party/            # external submodules (CaRL, MetaDrive, PlanT2)
-├── docs/                   # paper figures & documentation
+├── traffic_bench/              # main Python package (pip install -e .)
+│   ├── signs/                  # sign objects & violation checkers
+│   ├── envs/                   # SUMO env + traffic/pedestrian managers
+│   ├── agents/                 # policies + CaRL/PlanT2 adapters
+│   ├── scenes/
+│   │   ├── map_pool/           # Moscow OSM → shared SUMO crop pool
+│   │   └── sign_pool/          # allocate crops to each sign
+│   ├── eval/                   # manifests, run_benchmark, eval_pipeline, metrics
+│   └── oracle/                 # collect trajectories + expert selection
+├── data/                       # working artifacts per sign (gitignored)
+├── tools/                      # ad-hoc visualization & debug scripts
+├── finetune/                   # PlanT2 fine-tuning on oracle trajectories
+├── checkpoints/
+├── third_party/
+├── docs/
 └── pyproject.toml
 ```
+
+Pipeline: `scenes/map_pool` → `scenes/sign_pool` → `eval/generate_manifest.py` → `eval/run_benchmark.py` (metrics via `eval_pipeline.py`) and, separately, `oracle/collect_trajectories` → `oracle/select_experts*` → `finetune/`.
 
 ## 🚀 Quick start
 
@@ -126,7 +131,7 @@ Each manifest in `test/<sign>/<file>.jsonl` is a self-contained set of scenes fo
 #### 1. One baseline on one sign
 
 ```bash
-python -m pdd_bench.bench.run_benchmark \
+python -m traffic_bench.eval.run_benchmark \
     --policy   idm \
     --run-name idm_2_5 \
     --manifest test/2_5/real_manifest.jsonl \
@@ -136,7 +141,7 @@ python -m pdd_bench.bench.run_benchmark \
 Models that require checkpoints (`carl`, `plant2`, `*_rule`) need `--model-path`:
 
 ```bash
-python -m pdd_bench.bench.run_benchmark \
+python -m traffic_bench.eval.run_benchmark \
     --policy     plant2 \
     --run-name   plant2_2_5 \
     --manifest   test/2_5/real_manifest.jsonl \
@@ -150,7 +155,7 @@ python -m pdd_bench.bench.run_benchmark \
 for f in test/*/*.jsonl; do
     sign=$(basename "$(dirname "$f")")
     src=$(basename "$f" .jsonl)
-    python -m pdd_bench.bench.run_benchmark \
+    python -m traffic_bench.eval.run_benchmark \
         --policy   idm \
         --run-name "idm_${sign}_${src}" \
         --manifest "$f" \
@@ -160,56 +165,32 @@ done
 
 Repeat the loop for each baseline you want to evaluate (`comprehensive_rule_expert`, `carl`, `plant2`, etc.).
 
-#### 3. Yield-sign scenarios (sign 2.4)
-
-Yield (2.4) uses a dedicated runner that adds yield-specific termination conditions and an optional top-down GIF recorder:
+Yield (2.4) uses the same runner; pass a 2.4 manifest:
 
 ```bash
-python pdd_bench/bench/yield_run_benchmark_mini_plant2.py \
-    --policy    idm \
-    --run-name  idm_yield \
-    --manifest  /path/to/2_4_manifest.jsonl \
+python -m traffic_bench.eval.run_benchmark \
+    --policy   idm \
+    --run-name idm_yield \
+    --manifest test/2_4/real_manifest.jsonl \
     --sign-type 2.4 \
-    --emit-replay-sidecar \
-    --save-gifs                    # optional: record top-down GIFs
+    --emit-replay-sidecar
 ```
 
 ### Compute Metrics
 
-#### 1. Single-run metrics (quickest)
-
 ```bash
-bash pdd_bench/bench/run_metrics_single_run.sh \
-    --run-dir eval_out/runs/idm_2_5 \
-    --out-dir eval_out/metrics_idm_2_5 \
-    --policy  idm
+python -m traffic_bench.eval.eval_pipeline \
+    --policies idm \
+    --manifest test/2_5/real_manifest.jsonl \
+    --scenes-root scenes
 ```
 
-Outputs:
-- `metrics_per_episode.csv` — episode-level table
-- `aggregations/agg_per_baseline.csv` — per-baseline summary
-- `reports/report_cumulative.md` — markdown report table
-- `reports/report_cumulative_categories.md` — per-category breakdown
+The pipeline writes `metrics_per_episode.csv`, aggregations, and `reports/report_cumulative.md`.
 
-#### 2. Full multi-baseline pipeline
+Oracle baseline from an existing CSV:
 
 ```bash
-ROOT=eval_out bash pdd_bench/bench/run_full_metrics_pipeline.sh
-
-# Skip consolidation if replay jsonl files already exist:
-SKIP_CONSOLIDATE=1 ROOT=eval_out bash pdd_bench/bench/run_full_metrics_pipeline.sh
-```
-
-The pipeline runs:
-1. `consolidate_replays.py` — merges `replay.json` sidecars → `<baseline>_replays.jsonl`
-2. `build_episode_metrics_csv.py` — builds `metrics_per_episode.csv`
-3. `build_oracle_baseline.py` — adds `oracle_rule` synthetic baseline
-4. `aggregate_episode_metrics.py` — aggregates to per-baseline and per-sign CSVs
-
-#### 3. Oracle baseline only
-
-```bash
-python3 pdd_bench/bench/oracle/build_oracle_baseline.py \
+python -m traffic_bench.oracle.build_oracle_baseline \
     --csv eval_out/metrics_per_episode.csv
 ```
 

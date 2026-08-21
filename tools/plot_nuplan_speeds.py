@@ -17,7 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-from pdd_bench.bench.core.profiles.agent_profile_bank import _get_sampler, sample_spawn_velocity
+from traffic_bench.eval.core.profiles.agent_profile_bank import _get_sampler, sample_spawn_velocity
 
 
 def main():
