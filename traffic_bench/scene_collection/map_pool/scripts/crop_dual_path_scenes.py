@@ -3,7 +3,7 @@
 
 Fills a **fixed shared pool** per ``(shape, slot)`` under::
 
-    scenes/dual_path/{T,X}/{slot}/<scene_id>/
+    crops/dual_path/{T,X}/{slot}/<scene_id>/
 
 Default ``--max-per-slot 500``. Same idea as junction T/X/O: many signs
 (5.7 / 3.18 / 4.1 / 3.1) sample the **same** train/test maps (shared pool).
@@ -32,12 +32,12 @@ from typing import Any, Dict, List, Set, Tuple
 ROOT = Path(__file__).resolve().parents[1]
 
 from traffic_bench.eval.core.layout.junction_priority_layout import JunctionLayoutError
-from traffic_bench.scenes.map_pool.lib.dual_path import crop_to_dual_path, fill_slots_for_junctions
-from traffic_bench.scenes.map_pool.lib.roles import SLOTS, slots_from_iterable
+from traffic_bench.scene_collection.map_pool.lib.dual_path import crop_to_dual_path, fill_slots_for_junctions
+from traffic_bench.scene_collection.map_pool.lib.roles import SLOTS, slots_from_iterable
 
 DEFAULT_NET = ROOT / "nets" / "moscow.net.xml"
 DEFAULT_INDEX = ROOT / "index" / "junctions.jsonl"
-DEFAULT_OUT = ROOT / "scenes" / "dual_path"
+DEFAULT_OUT = ROOT / "crops" / "dual_path"
 DEFAULT_CANDIDATES = ROOT / "index" / "dual_path_candidates.jsonl"
 # Shared-pool inventory per (shape, slot). Not one-sign quota (80+20).
 # ~X-scale; dual_path is rarer/heavier than junction-only so we cap compute.

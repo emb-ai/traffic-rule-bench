@@ -6,7 +6,7 @@ Augmentation axes (each capped at ``max_*`` ≤ 3 by default):
   3. crosswalk position (near_start / middle / near_end — separate maps)
   4. pedestrian presets (core.scenarios.pedestrian_presets)
 
-Maps are prepared by moscow_scenes/scripts/prepare_segment_crosswalk.py.
+Maps are prepared by scene_collection/map_pool/scripts/prepare_segment_crosswalk.py.
 """
 
 from __future__ import annotations

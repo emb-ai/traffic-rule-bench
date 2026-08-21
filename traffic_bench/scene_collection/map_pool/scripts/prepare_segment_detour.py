@@ -7,8 +7,8 @@ This script transforms segment scenes (multi-lane roads) into detour scenes by:
 3. Calculating sign position (sign_s)
 4. Copying the network and writing updated meta.json
 
-Input:  scenes/segment/{straight,curved}/<scene_id>/
-Output: scenes/segment_detour/{straight,curved}/<scene_id>_detour_<code>/
+Input:  crops/segment/{straight,curved}/<scene_id>/
+Output: crops/segment_detour/{straight,curved}/<scene_id>_detour_<code>/
 
 SUMO convention: lane 0 is the rightmost; physically further right = LOWER index.
   4.2.1 (pass on the right) -> the obstacle lane must have a lower-index neighbor;
@@ -50,8 +50,8 @@ TARGET_SIGN_S = 60.0
 EDGE_TAIL_MARGIN = 12.0
 SHORT_RUNWAY_S = 40.0
 
-DEFAULT_SEGMENT_SCENES = ROOT / "scenes" / "segment"
-DEFAULT_OUTPUT = ROOT / "scenes" / "segment_detour"
+DEFAULT_SEGMENT_SCENES = ROOT / "crops" / "segment"
+DEFAULT_OUTPUT = ROOT / "crops" / "segment_detour"
 DEFAULT_MAX_PER_CODE = 500
 
 

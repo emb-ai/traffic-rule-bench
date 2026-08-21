@@ -112,8 +112,8 @@ from traffic_bench.eval.core.scenarios.scene_augmentation import (
     pick_default_yield_spawn_meta_for_net,
 )
 from traffic_bench.eval.core.layout.roundabout_topology import build_roundabout_layout
-from traffic_bench.scenes.sign_pool.scene_selection import is_reserved_scene_dir, unapplied_rejected_scenes, load_scene_selection
-from traffic_bench.scenes.sign_pool.moscow_pool import (
+from traffic_bench.scene_collection.sign_pool.scene_selection import is_reserved_scene_dir, unapplied_rejected_scenes, load_scene_selection
+from traffic_bench.scene_collection.sign_pool.moscow_pool import (
     count_splits,
     filter_scene_dirs_by_split,
     load_moscow_pool,
@@ -130,7 +130,7 @@ from traffic_bench.eval.sign_registry import (
 )
 
 RUN_BENCH_SCRIPT = SCRIPT_DIR / "run_benchmark.py"
-MOSCOW_ROOT = PACKAGE_DIR / "scenes" / "map_pool"
+MOSCOW_ROOT = PACKAGE_DIR / "scene_collection" / "map_pool"
 DEFAULT_ALLOCATIONS = MOSCOW_ROOT / "splits" / "sign_allocations.json"
 DEFAULT_SIGNS_YAML = MOSCOW_ROOT / "splits" / "signs.yaml"
 

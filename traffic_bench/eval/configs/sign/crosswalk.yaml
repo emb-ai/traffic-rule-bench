@@ -10,8 +10,8 @@
 sign: crosswalk
 
 paths:
-  # Nested segment_crosswalk harvest from moscow_scenes (straight/ + curved/).
-  scenes_dir: ../moscow_scenes/scenes/segment_crosswalk
+  # Nested segment_crosswalk harvest from map_pool/crops (straight/ + curved/).
+  scenes_dir: ${repo:traffic_bench/scene_collection/map_pool/crops/segment_crosswalk}
   split: all
 
 augmentation:

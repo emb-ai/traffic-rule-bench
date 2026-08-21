@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Crop indexed segments into scenes/segment/{straight,curved}/<scene_id>/.
+"""Crop indexed segments into crops/segment/{straight,curved}/<scene_id>/.
 
 Each scene contains the segment edge cropped to an XY boundary that ends
 BEFORE the junction (margin 10m), so the scene is a straight road without
@@ -98,7 +98,7 @@ def crop_net_to_xy_boundary(
 
 DEFAULT_NET = ROOT / "nets" / "moscow.net.xml"
 DEFAULT_INDEX = ROOT / "index" / "segments.jsonl"
-DEFAULT_OUT = ROOT / "scenes" / "segment"
+DEFAULT_OUT = ROOT / "crops" / "segment"
 DEFAULT_MAX_PER_TYPE = 500
 
 # Margin before junction (meters) — segment ends this far before the junction

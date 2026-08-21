@@ -18,7 +18,7 @@ from traffic_bench.eval.core.layout.junction_crop import (
 )
 from traffic_bench.eval.core.layout.junction_priority_layout import INTERSECTION_JUNCTION_TYPES
 
-from traffic_bench.scenes.map_pool.scripts.geo_utils import net_xy_to_latlon_proj
+from traffic_bench.scene_collection.map_pool.scripts.geo_utils import net_xy_to_latlon_proj
 
 DEFAULT_NET = ROOT / "nets" / "moscow.net.xml"
 DEFAULT_INDEX = ROOT / "index" / "junctions.jsonl"

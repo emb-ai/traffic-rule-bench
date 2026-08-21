@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Set
 
 ROOT = Path(__file__).resolve().parents[1]
 
-from traffic_bench.scenes.map_pool.lib.segment import (
+from traffic_bench.scene_collection.map_pool.lib.segment import (
     CURVED_THRESHOLD,
     MIN_SEGMENT_LENGTH_M,
     STRAIGHT_THRESHOLD,
@@ -32,7 +32,7 @@ from traffic_bench.scenes.map_pool.lib.segment import (
     build_junction_positions_cache,
     osm_way_id_from_edge,
 )
-from traffic_bench.scenes.map_pool.scripts.geo_utils import net_xy_to_latlon_proj
+from traffic_bench.scene_collection.map_pool.scripts.geo_utils import net_xy_to_latlon_proj
 
 DEFAULT_NET = ROOT / "nets" / "moscow.net.xml"
 DEFAULT_JUNCTIONS_INDEX = ROOT / "index" / "junctions.jsonl"

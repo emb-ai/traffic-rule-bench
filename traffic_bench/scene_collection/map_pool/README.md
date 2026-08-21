@@ -1,6 +1,6 @@
 # map_pool — Moscow map harvest (junction + dual_path + segment)
 
-Sign-free scene harvest for Moscow. Lives at `traffic_bench/scenes/map_pool/`.
+Sign-free scene harvest for Moscow. Lives at `traffic_bench/scene_collection/map_pool/`.
 
 Sign-free scene harvest for Moscow. Junction / dual_path scenes are keyed by
 **SUMO `junction_id`** (or roundabout fingerprint). Segment scenes are keyed by
@@ -19,7 +19,7 @@ moscow_scenes/
 ├── README.md
 ├── raw/ … nets/ … index/
 ├── lib/                         # dual_path, lane_direction, segment, roles, stem
-├── scenes/
+├── crops/
 │   ├── {T,X,O}/                 # junction-only (~80 m arms)
 │   ├── dual_path/{T,X}/{slot}/  # path-union crops (l_s, l_r, …)
 │   ├── lane_direction/{T,X}/    # 5.15.1 multi-lane LC crops
@@ -41,10 +41,10 @@ moscow_scenes/
 
 | Kind             | Path                                  | Used by                         |
 | ---------------- | ------------------------------------- | ------------------------------- |
-| `junction`       | `scenes/{T,X,O}/`                     | 2.x, 3.2, 4.3, …                |
-| `dual_path`      | `scenes/dual_path/{T,X}/{slot}/`      | 5.7, 3.18, 4.1, 3.1             |
-| `lane_direction` | `scenes/lane_direction/{T,X}/`        | **5.15.1** (multi-lane LC)      |
-| `segment`        | `scenes/segment/{straight,curved}/`   | **3.24**, **5.19**, **4.2.x**   |
+| `junction`       | `crops/{T,X,O}/`                     | 2.x, 3.2, 4.3, …                |
+| `dual_path`      | `crops/dual_path/{T,X}/{slot}/`      | 5.7, 3.18, 4.1, 3.1             |
+| `lane_direction` | `crops/lane_direction/{T,X}/`        | **5.15.1** (multi-lane LC)      |
+| `segment`        | `crops/segment/{straight,curved}/`   | **3.24**, **5.19**, **4.2.x**   |
 
 
 ### Dual-path slots
@@ -87,7 +87,7 @@ Each scene: `map.net.xml`, `meta.json`, `center.json`, `custom_cropped.png`.
 ```bash
 cd traffic-rule-bench
 # from repo root; map_pool scripts use ROOT = this package dir
-python traffic_bench/scenes/map_pool/scripts/run_pipeline.py --skip-download --skip-netconvert
+python traffic_bench/scene_collection/map_pool/scripts/run_pipeline.py --skip-download --skip-netconvert
 
 # Junction-only harvest (existing)
 python scripts/run_pipeline.py --skip-download --skip-netconvert

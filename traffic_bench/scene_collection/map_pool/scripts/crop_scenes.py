@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Crop indexed junctions into scenes/{T,X,O}/<scene_id>/."""
+"""Crop indexed junctions into crops/{T,X,O}/<scene_id>/."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from traffic_bench.eval.core.layout.junction_priority_layout import JunctionLayo
 
 DEFAULT_NET = ROOT / "nets" / "moscow.net.xml"
 DEFAULT_INDEX = ROOT / "index" / "junctions.jsonl"
-DEFAULT_SCENES = ROOT / "scenes"
+DEFAULT_SCENES = ROOT / "crops"
 
 
 def _load_index(path: Path) -> List[Dict[str, Any]]:

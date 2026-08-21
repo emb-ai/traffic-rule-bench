@@ -7,12 +7,12 @@ unique.
 
 ``crop_kind`` in signs.yaml:
   * ``junction`` (default) — sample ``junc_*`` / ``rb_*`` ids from train/test json
-  * ``dual_path`` — sample from ``scenes/dual_path/{shape}/{slot}/`` whose
+  * ``dual_path`` — sample from ``crops/dual_path/{shape}/{slot}/`` whose
     ``junction_id`` is on the train/test side (via index), filtered by
     ``lib.roles.sign_to_slots`` (+ stem / carriageway for 5.7).
     Within each shape quota, scene_ids are drawn **evenly across slots**
     (e.g. 3.18.1 balances ``r_s`` vs ``r_l``; 3.1 balances all six).
-  * ``lane_direction`` — sample from ``scenes/lane_direction/{shape}/``
+  * ``lane_direction`` — sample from ``crops/lane_direction/{shape}/``
     (5.15.1 multi-lane LC atoms); within each shape quota, balance by
     ``compliant_dir`` (l / r).
 
@@ -30,17 +30,17 @@ from typing import Any, Dict, List, Optional, Set
 
 ROOT = Path(__file__).resolve().parents[1]
 
-from traffic_bench.scenes.map_pool.lib.roles import scenario_matches_sign, sign_shape_policy, sign_to_slots
+from traffic_bench.scene_collection.map_pool.lib.roles import scenario_matches_sign, sign_shape_policy, sign_to_slots
 
 DEFAULT_SIGNS_YAML = ROOT / "splits" / "signs.yaml"
 DEFAULT_TRAIN = ROOT / "splits" / "train_ids.json"
 DEFAULT_TEST = ROOT / "splits" / "test_ids.json"
 DEFAULT_INDEX = ROOT / "index" / "junctions.jsonl"
 DEFAULT_SEGMENTS_INDEX = ROOT / "index" / "segments.jsonl"
-DEFAULT_DUAL_ROOT = ROOT / "scenes" / "dual_path"
-DEFAULT_LANE_DIR_ROOT = ROOT / "scenes" / "lane_direction"
-DEFAULT_SEGMENT_ROOT = ROOT / "scenes" / "segment"
-DEFAULT_SEGMENT_DETOUR_ROOT = ROOT / "scenes" / "segment_detour"
+DEFAULT_DUAL_ROOT = ROOT / "crops" / "dual_path"
+DEFAULT_LANE_DIR_ROOT = ROOT / "crops" / "lane_direction"
+DEFAULT_SEGMENT_ROOT = ROOT / "crops" / "segment"
+DEFAULT_SEGMENT_DETOUR_ROOT = ROOT / "crops" / "segment_detour"
 DEFAULT_OUT = ROOT / "splits" / "sign_allocations.json"
 
 
@@ -329,7 +329,7 @@ def _scan_segment_detour_pool(
 ) -> Dict[str, Dict[str, List[str]]]:
     """Return ``by_type[segment_type][segment_type] = [scene_id, ...]`` for segment_detour.
 
-    Scans scenes/segment_detour/{straight,curved}/ for scenes matching the PDD code.
+    Scans crops/segment_detour/{straight,curved}/ for scenes matching the PDD code.
     Uses osm_way_id for train/test split.
     """
     by_type: Dict[str, Dict[str, List[str]]] = {t: {} for t in allowed_segment_types}

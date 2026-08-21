@@ -1,6 +1,6 @@
 # tools — ad-hoc debug helpers
 
-Not part of the main pipeline. Scene pools: `traffic_bench/scenes/`.
+Not part of the main pipeline. Scene pools: `traffic_bench/scene_collection/`.
 
 | Script | Role |
 |--------|------|

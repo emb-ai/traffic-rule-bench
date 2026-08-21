@@ -1,6 +1,6 @@
 # sign_pool — per-sign scene pool (materialize → viability reject → review)
 
-Pulls allocated maps from `traffic_bench/scenes/map_pool` into `data/scenes/<sign>/`.
+Pulls allocated maps from `traffic_bench/scene_collection/map_pool` into `data/scenes/<sign>/`.
 Debug helpers: repo-root `tools/`.
 
 ## Layout
@@ -19,9 +19,9 @@ build_scenes/
 
 ## Flow (example: 2.4 yield; same for 2.1 / 2.3 / 2.5 / 3.2 / 4.3)
 
-Prereq: `moscow_scenes` has `nets/moscow.net.xml`, `index/junctions.jsonl`,
-and `splits/sign_allocations.json` (see `../moscow_scenes/README.md`).
-Map quotas live in `moscow_scenes/splits/signs.yaml` (`n_train` / `n_test`).
+Prereq: `map_pool` has `nets/moscow.net.xml`, `index/junctions.jsonl`,
+and `splits/sign_allocations.json` (see `../map_pool/README.md`).
+Map quotas live in `map_pool/splits/signs.yaml` (`n_train` / `n_test`).
 
 ```bash
 cd traffic-rule-bench/traffic-bench/sign_bench
@@ -90,7 +90,7 @@ Reasons are stored in `scenes/scene_selection.json` under `reject_reasons`.
 | `--split train|test|all`               | Which half of the allocation (default `all`)                               |
 | `--refill`                             | Add unused maps until kept train/test hit `signs.yaml` quotas              |
 | `--mode symlink|copy`                  | Symlink into sign pool (default) or full copy                              |
-| `--crop-missing` / `--no-crop-missing` | Crop from city net if missing under `moscow_scenes/scenes` (default: crop) |
+| `--crop-missing` / `--no-crop-missing` | Crop from city net if missing under `map_pool/crops` (default: crop) |
 | `--force-preview`                      | Rebuild `custom_cropped.png` for the review UI                             |
 
 
@@ -101,7 +101,7 @@ Keep train+test in one `scenes/` folder; choose half at manifest time with
 ## Relation to moscow_scenes
 
 ```
-moscow_scenes/scenes/{T,X,O}/…   ← city harvest (shared)
+moscow_scenes/crops/{T,X,O}/…   ← city harvest (shared)
         │  allocate (splits/sign_allocations.json)
         ▼
 build_scenes/materialize_scenes.py --sign 4.3

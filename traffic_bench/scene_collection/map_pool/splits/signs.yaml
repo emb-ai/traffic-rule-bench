@@ -3,10 +3,10 @@
 # signs.json is a generated twin written by allocate_sign_scenes.py.
 #
 # crop_kind:
-#   junction        → scenes/{T,X,O}/
-#   dual_path       → scenes/dual_path/{T,X}/{slot}/  (filter via lib.roles.sign_to_slots)
-#   lane_direction  → scenes/lane_direction/{T,X}/    (5.15.1 multi-lane LC atoms)
-#   segment         → scenes/segment/{straight,curved}/  (straight road segments)
+#   junction        → crops/{T,X,O}/
+#   dual_path       → crops/dual_path/{T,X}/{slot}/  (filter via lib.roles.sign_to_slots)
+#   lane_direction  → crops/lane_direction/{T,X}/    (5.15.1 multi-lane LC atoms)
+#   segment         → crops/segment/{straight,curved}/  (straight road segments)
 #
 # segment_types for crop_kind=segment:
 #   straight        → straightness >= 0.99 (for speed signs, curve-aware IDM won't brake)

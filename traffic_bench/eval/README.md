@@ -3,7 +3,7 @@
 Run from the **repository root** after `pip install -e .`.
 
 Sign profiles: `eval/sign_registry.py`. Shared engine: `eval/core/`.
-Scene construction is in `traffic_bench/scenes/`. Oracle collection is in `traffic_bench/oracle/`.
+Scene construction is in `traffic_bench/scene_collection/`. Oracle collection is in `traffic_bench/oracle/`.
 Working data at repo root: `data/scenes/<sign>/`, `data/runs/<sign>/<ts>/`, `data/trajectories/<sign>/`.
 `sign=main` writes under `main_road`.
 
@@ -90,9 +90,9 @@ python build_scenes/materialize_scenes.py --sign 2.5 --refill
 ```
 
 Prereq: shared harvest + allocations under  
-`[../moscow_scenes/](../moscow_scenes/README.md)`.  
+`[../scene_collection/map_pool/](../scene_collection/map_pool/README.md)`.  
 Quotas (`n_train` / `n_test`) live in  
-`[../moscow_scenes/splits/signs.yaml](../moscow_scenes/splits/signs.yaml)`.  
+`[../scene_collection/map_pool/splits/signs.yaml](../scene_collection/map_pool/splits/signs.yaml)`.  
 Old catalog/Overpass scripts live in `build_scenes/legacy/` (do not use for new pools).
 
 ### Step 2: Generate evaluation manifest

@@ -37,8 +37,8 @@ traffic-rule-bench/
 │   ├── signs/                  # sign objects & violation checkers
 │   ├── envs/                   # SUMO env + traffic/pedestrian managers
 │   ├── agents/                 # policies + CaRL/PlanT2 adapters
-│   ├── scenes/
-│   │   ├── map_pool/           # Moscow OSM → shared SUMO crop pool
+│   ├── scene_collection/
+│   │   ├── map_pool/           # Moscow OSM → shared SUMO crop pool (cache: map_pool/crops/)
 │   │   └── sign_pool/          # allocate crops to each sign
 │   ├── eval/                   # manifests, run_benchmark, eval_pipeline, metrics
 │   └── oracle/                 # collect trajectories + expert selection
@@ -54,7 +54,7 @@ traffic-rule-bench/
 └── pyproject.toml
 ```
 
-Pipeline: `scenes/map_pool` → `scenes/sign_pool` → `data/scenes/<sign>` → `eval/generate_manifest.py` (writes `data/runs/<sign>/<ts>/`) → `eval/run_benchmark.py` / `eval_pipeline.py`, and separately `oracle/collect_trajectories` → `data/trajectories/<sign>/` → `finetune/`.
+Pipeline: `scene_collection/map_pool` → `scene_collection/sign_pool` → `data/scenes/<sign>` → `eval/generate_manifest.py` (writes `data/runs/<sign>/<ts>/`) → `eval/run_benchmark.py` / `eval_pipeline.py`, and separately `oracle/collect_trajectories` → `data/trajectories/<sign>/` → `finetune/`.
 
 ## 🚀 Quick start
 

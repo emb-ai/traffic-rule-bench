@@ -43,7 +43,7 @@ SCENES_DIR_DEFAULT = REPO_ROOT / "data" / "scenes" / "yield"
 SELECTION_FILE = "scene_selection.json"
 PREVIEW_NAME_DEFAULT = "custom_cropped.png"
 
-from traffic_bench.scenes.sign_pool.scene_selection import (
+from traffic_bench.scene_collection.sign_pool.scene_selection import (
     REJECTED_SUBDIR,
     RESERVED_SCENE_DIRS,
     VERDICT_KEEP,

@@ -8,8 +8,8 @@ into crosswalk scenes by:
 3. Defining a pedestrian crossing at the new junction
 4. Running netconvert to generate the full pedestrian infrastructure
 
-Input:  scenes/segment/{straight,curved}/<scene_id>/
-Output: scenes/segment_crosswalk/{straight,curved}/<scene_id>_cw_<position>/
+Input:  crops/segment/{straight,curved}/<scene_id>/
+Output: crops/segment_crosswalk/{straight,curved}/<scene_id>_cw_<position>/
 
 Examples:
     # Process all segment scenes, all positions
@@ -40,7 +40,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 
-from traffic_bench.scenes.map_pool.lib.crosswalk_inject import (
+from traffic_bench.scene_collection.map_pool.lib.crosswalk_inject import (
     CrosswalkInjection,
     calculate_crosswalk_positions,
     find_paired_edges,
@@ -49,8 +49,8 @@ from traffic_bench.scenes.map_pool.lib.crosswalk_inject import (
     validate_crosswalk_net,
 )
 
-DEFAULT_SEGMENT_SCENES = ROOT / "scenes" / "segment"
-DEFAULT_OUTPUT = ROOT / "scenes" / "segment_crosswalk"
+DEFAULT_SEGMENT_SCENES = ROOT / "crops" / "segment"
+DEFAULT_OUTPUT = ROOT / "crops" / "segment_crosswalk"
 DEFAULT_POSITIONS = ["near_start", "middle", "near_end"]
 DEFAULT_MAX_PER_TYPE = 500
 

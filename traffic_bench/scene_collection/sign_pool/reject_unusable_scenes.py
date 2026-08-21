@@ -34,7 +34,7 @@ from traffic_bench.eval.core.manifest.manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 )
 from traffic_bench.eval.core.manifest.manifest_viability import check_scene_dir_viability
-from traffic_bench.scenes.sign_pool.scene_selection import (
+from traffic_bench.scene_collection.sign_pool.scene_selection import (
     REJECTED_SUBDIR,
     apply_rejected_scenes,
     is_reserved_scene_dir,

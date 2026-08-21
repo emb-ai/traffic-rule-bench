@@ -4,10 +4,10 @@
 Reads ``moscow_scenes/splits/sign_allocations.json``, resolves each allocated
 scene under either:
 
-* ``scenes/{T,X,O}/`` for ``crop_kind: junction``
-* ``scenes/dual_path/{T,X}/{slot}/`` for ``crop_kind: dual_path`` (5.7 / 4.1 / …)
-* ``scenes/segment/{straight,curved}/`` for ``crop_kind: segment`` (3.24 / speed)
-* ``scenes/segment_detour/{straight,curved}/`` for ``crop_kind: segment_detour`` (4.2.x)
+* ``crops/{T,X,O}/`` for ``crop_kind: junction``
+* ``crops/dual_path/{T,X}/{slot}/`` for ``crop_kind: dual_path`` (5.7 / 4.1 / …)
+* ``crops/segment/{straight,curved}/`` for ``crop_kind: segment`` (3.24 / speed)
+* ``crops/segment_detour/{straight,curved}/`` for ``crop_kind: segment_detour`` (4.2.x)
 
 then symlinks (or copies) them into ``data/<sign>/scenes/`` for review and
 ``generate_manifest.py``.
@@ -31,17 +31,17 @@ MOSCOW_ROOT = SCENES_PKG_DIR / "map_pool"
 BUILD_SCENES_DIR = SIGN_POOL_DIR
 PRIORITY_BENCH = REPO_ROOT
 
-from traffic_bench.scenes.map_pool.scripts.allocate_sign_scenes import (
+from traffic_bench.scene_collection.map_pool.scripts.allocate_sign_scenes import (
     _counts_for_sign,
     _load_yaml,
     _sample,
 )
-from traffic_bench.scenes.sign_pool.moscow_pool import (
+from traffic_bench.scene_collection.sign_pool.moscow_pool import (
     load_moscow_pool,
     save_moscow_pool,
     scene_split_map,
 )
-from traffic_bench.scenes.sign_pool.scene_selection import (
+from traffic_bench.scene_collection.sign_pool.scene_selection import (
     REJECTED_SUBDIR,
     VERDICT_REJECT,
     is_reserved_scene_dir,
@@ -81,7 +81,7 @@ def _is_dual_path_scene_id(scene_id: str) -> bool:
 
 
 def _index_dual_path_scenes(moscow_scenes: Path) -> Dict[str, dict]:
-    """Build scene_id → meta(+path) for ``scenes/dual_path/{T,X}/{slot}/…``."""
+    """Build scene_id → meta(+path) for ``crops/dual_path/{T,X}/{slot}/…``."""
     root = moscow_scenes / "dual_path"
     out: Dict[str, dict] = {}
     if not root.is_dir():
@@ -114,7 +114,7 @@ def _index_dual_path_scenes(moscow_scenes: Path) -> Dict[str, dict]:
 
 
 def _index_segment_scenes(moscow_scenes: Path) -> Dict[str, dict]:
-    """Build scene_id → meta(+path) for ``scenes/segment/{straight,curved}/…``."""
+    """Build scene_id → meta(+path) for ``crops/segment/{straight,curved}/…``."""
     root = moscow_scenes / "segment"
     out: Dict[str, dict] = {}
     if not root.is_dir():
@@ -143,7 +143,7 @@ def _index_segment_scenes(moscow_scenes: Path) -> Dict[str, dict]:
 
 
 def _index_segment_detour_scenes(moscow_scenes: Path) -> Dict[str, dict]:
-    """Build scene_id → meta(+path) for ``scenes/segment_detour/{straight,curved}/…``."""
+    """Build scene_id → meta(+path) for ``crops/segment_detour/{straight,curved}/…``."""
     root = moscow_scenes / "segment_detour"
     out: Dict[str, dict] = {}
     if not root.is_dir():
@@ -191,15 +191,15 @@ def _resolve_scene_row(
         return row
     if _is_dual_path_scene_id(sid):
         raise KeyError(
-            f"dual_path scene not found under scenes/dual_path/: {sid}"
+            f"dual_path scene not found under crops/dual_path/: {sid}"
         )
     if str(sid).startswith("seg_") and "detour" in str(sid):
         raise KeyError(
-            f"segment_detour scene not found under scenes/segment_detour/: {sid}"
+            f"segment_detour scene not found under crops/segment_detour/: {sid}"
         )
     if str(sid).startswith("seg_"):
         raise KeyError(
-            f"segment scene not found under scenes/segment/: {sid}"
+            f"segment scene not found under crops/segment/: {sid}"
         )
     raise KeyError(f"not in junction index: {sid}")
 
@@ -751,7 +751,7 @@ def main() -> None:
     ap.add_argument(
         "--moscow-scenes",
         type=Path,
-        default=MOSCOW_ROOT / "scenes",
+        default=MOSCOW_ROOT / "crops",
     )
     ap.add_argument(
         "--moscow-net",

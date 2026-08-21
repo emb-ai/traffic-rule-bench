@@ -3,7 +3,7 @@
 
 Shared pool under::
 
-    scenes/lane_direction/{T,X}/<scene_id>/
+    crops/lane_direction/{T,X}/<scene_id>/
 
 Each atom: multi-lane approach where a peer lane has an exclusive L/R exit the
 spawn lane lacks. Meta ``dual_path.kind=lane_change``; preview draws
@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 ROOT = Path(__file__).resolve().parents[1]
 
 from traffic_bench.eval.core.layout.junction_priority_layout import JunctionLayoutError
-from traffic_bench.scenes.map_pool.lib.lane_direction import (
+from traffic_bench.scene_collection.map_pool.lib.lane_direction import (
     DualPathScenario,
     build_edge_graph,
     crop_scene_to_dual_path_scenario,
@@ -35,7 +35,7 @@ from traffic_bench.scenes.map_pool.lib.lane_direction import (
 
 DEFAULT_NET = ROOT / "nets" / "moscow.net.xml"
 DEFAULT_INDEX = ROOT / "index" / "junctions.jsonl"
-DEFAULT_OUT = ROOT / "scenes" / "lane_direction"
+DEFAULT_OUT = ROOT / "crops" / "lane_direction"
 DEFAULT_CANDIDATES = ROOT / "index" / "lane_direction_candidates.jsonl"
 DEFAULT_MAX_PER_SHAPE = 500
 
