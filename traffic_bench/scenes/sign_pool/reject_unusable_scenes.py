@@ -126,7 +126,7 @@ def main() -> None:
         "--scenes-dir",
         type=Path,
         default=None,
-        help="Scenes root (default: data/<profile>/scenes)",
+        help="Scenes root (default: data/scenes/<profile>)",
     )
     ap.add_argument(
         "--min-ego-lane-m",

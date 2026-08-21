@@ -2406,7 +2406,7 @@ def generate_manifest(
         print(
             f"[warn] No scenes with meta.json + net found under {scenes_dir} "
             f"(after paths.split={split}). "
-            "Check data/<sign>/scenes / paths.scenes_dir / moscow_pool.json."
+            "Check data/scenes/<sign> / paths.scenes_dir / moscow_pool.json."
         )
     entries = []
 
@@ -2725,7 +2725,7 @@ def main(cfg: DictConfig) -> None:
     if configured_out != expected_out and profile.data_subdir not in str(configured_out):
         print(
             f"[warn] paths.output_base={cfg.paths.output_base} may not match sign={profile.id}; "
-            f"preferred: data/{profile.data_subdir}/output"
+            f"preferred: data/runs/{profile.data_subdir}"
         )
 
 

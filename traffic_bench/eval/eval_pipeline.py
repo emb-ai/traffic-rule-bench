@@ -308,7 +308,9 @@ def resolve_manifest_path(path: Path) -> tuple[Path, Path | None]:
     """
     path = path.expanduser()
     if path.is_file():
-        return path.resolve(), None
+        resolved = path.resolve()
+        run_dir = resolved.parent if resolved.name == RUN_MANIFEST_NAME else None
+        return resolved, run_dir
     if path.is_dir():
         manifest = path / RUN_MANIFEST_NAME
         if not manifest.is_file():

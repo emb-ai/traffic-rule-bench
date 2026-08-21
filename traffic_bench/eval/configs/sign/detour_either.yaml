@@ -4,5 +4,3 @@ defaults:
   - _detour
 
 sign: detour_either
-paths:
-  output_base: data/detour_either/output

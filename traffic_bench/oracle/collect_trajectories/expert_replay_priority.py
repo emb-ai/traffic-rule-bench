@@ -469,7 +469,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--scenes-root",
         default=None,
-        help="Scenes root (default: data/<sign>/scenes from profile)",
+        help="Scenes root (default: data/scenes/<sign>)",
     )
     p.add_argument("--policy", required=True, choices=POLICY_CHOICES)
     p.add_argument("--model-path", default=None,

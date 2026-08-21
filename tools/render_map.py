@@ -24,7 +24,7 @@ PACKAGE_DIR = TOOLS_DIR.parent
 
 from traffic_bench.eval.core.sumo.sumo_utils import resolve_net_file, load_scene_meta, resolve_scene_dir
 
-SCENES_DIR_DEFAULT = PACKAGE_DIR / "data" / "yield" / "scenes"
+SCENES_DIR_DEFAULT = PACKAGE_DIR / "data" / "scenes" / "yield"
 Point = Tuple[float, float]
 
 

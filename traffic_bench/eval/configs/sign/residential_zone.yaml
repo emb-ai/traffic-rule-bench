@@ -4,5 +4,3 @@ defaults:
   - _speed
 
 sign: residential_zone
-paths:
-  output_base: data/residential_zone/output

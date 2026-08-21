@@ -3,7 +3,7 @@
 Collector for sign evaluation (`yield` 2.4 / `main` 2.1 / `stop` 2.5 / …).
 
 - episodes go through `traffic_bench.eval.run_benchmark.run_one_episode`
-- scenes / manifests under `data/<sign>/` (repo root)
+- scenes / manifests under `data/scenes/<sign>/` and `data/runs/<sign>/`
 - `replay.pkl` written for PlanT2 training
 
 Train/test is **not** split here — use `paths.split=train|test` at
@@ -12,21 +12,19 @@ Train/test is **not** split here — use `paths.split=train|test` at
 
 ## Per-sign inputs / outputs
 
-`SIGN` selects a data tree under `priority_bench/data/<sign>/`:
+`SIGN` selects a data tree under `data/{scenes,runs,trajectories}/<subdir>/`:
 
 
-|                    | yield                                            | main                                                 | stop                                            | secondary                                       |
-| ------------------ | ------------------------------------------------ | ---------------------------------------------------- | ----------------------------------------------- | ----------------------------------------------- |
-| scenes             | `data/yield/scenes`                              | `data/main_road/scenes`                              | `data/stop/scenes`                              | `data/secondary_road/scenes`                    |
-| auto `MANIFEST`    | latest `data/yield/output/*/real_manifest.jsonl` | latest `data/main_road/output/*/real_manifest.jsonl` | latest `data/stop/output/*/real_manifest.jsonl` | latest `data/secondary_road/output/*/real_manifest.jsonl` |
-| default `OUT_BASE` | `data/yield/trajectories/trajectories_<ts>/`     | `data/main_road/trajectories/trajectories_<ts>/`     | `data/stop/trajectories/trajectories_<ts>/`     | `data/secondary_road/trajectories/trajectories_<ts>/` |
-| sidecar slug       | `2_4`                                            | `2_1`                                                | `2_5`                                           | `2_3`                                           |
+|                    | yield                                      | main                                             | stop                                     | secondary                                          |
+| ------------------ | ------------------------------------------ | ------------------------------------------------ | ---------------------------------------- | -------------------------------------------------- |
+| scenes             | `data/scenes/yield`                        | `data/scenes/main_road`                          | `data/scenes/stop`                       | `data/scenes/secondary_road`                       |
+| auto `MANIFEST`    | latest `data/runs/yield/*/real_manifest.jsonl` | latest `data/runs/main_road/*/real_manifest.jsonl` | latest `data/runs/stop/*/real_manifest.jsonl` | latest `data/runs/secondary_road/*/real_manifest.jsonl` |
+| default `OUT_BASE` | `data/trajectories/yield/trajectories_<ts>/` | `data/trajectories/main_road/trajectories_<ts>/` | `data/trajectories/stop/trajectories_<ts>/` | `data/trajectories/secondary_road/trajectories_<ts>/` |
+| sidecar slug       | `2_4`                                      | `2_1`                                            | `2_5`                                    | `2_3`                                              |
 
 
 So `SIGN=yield SMOKE=1 ./collect_trajectories.sh` without `MANIFEST` picks the
-newest yield eval/manifest run and writes under `data/yield/trajectories/…`
-(never into `data/main_road/`). Override with
-`MANIFEST=…/real_manifest.jsonl` and/or `OUT_BASE=…` when needed.
+newest yield eval run and writes under `data/trajectories/yield/…`.
 
 ## Layout
 

@@ -3,5 +3,3 @@ defaults:
   - _dual_path
 
 sign: no_turn_left
-paths:
-  output_base: data/no_turn_left/output

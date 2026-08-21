@@ -32,7 +32,8 @@ hydra:
     chdir: false
 
 paths:
-  scenes_dir: scenes
+  scenes_dir: ${repo:data/scenes/${sign_data:${sign}}}
+  output_base: ${repo:data/runs/${sign_data:${sign}}}
   split: all  # all | train | test
   experiment_name: ${now:%Y-%m-%d_%H-%M-%S}
 

@@ -39,7 +39,7 @@ BUILD_SCENES_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BUILD_SCENES_DIR.parent.parent.parent
 PACKAGE_DIR = REPO_ROOT
 # Prefer the yield (2.4) pool; override with --scenes-dir for other signs.
-SCENES_DIR_DEFAULT = REPO_ROOT / "data" / "yield" / "scenes"
+SCENES_DIR_DEFAULT = REPO_ROOT / "data" / "scenes" / "yield"
 SELECTION_FILE = "scene_selection.json"
 PREVIEW_NAME_DEFAULT = "custom_cropped.png"
 

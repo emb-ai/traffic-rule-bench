@@ -4,5 +4,3 @@ defaults:
   - _speed
 
 sign: min_speed
-paths:
-  output_base: data/min_speed/output

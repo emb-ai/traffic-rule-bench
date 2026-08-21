@@ -1,7 +1,5 @@
 # @package _global_
 sign: yield
-paths:
-  output_base: data/yield/output
 
 augmentation:
   layout: true          # ego × aux spawn scenarios (yield strategy)

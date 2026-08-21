@@ -12,12 +12,12 @@ Not part of eval / manifest / oracle-selection.
 | `env_flags.py` | `RELOCATE_EGO_TO_SIGN_LANE` |
 
 Typical input: picks from `traffic_bench/oracle` (`experts_scene_uid_top1.jsonl`)
-+ scenes under `data/<sign>/scenes`.
++ scenes under `data/scenes/<sign>/`.
 
 ```bash
 python finetune/expert_replay_inenv.py \
     --experts /path/to/experts_scene_uid_top1.jsonl \
-    --scenes-root data/<sign>/scenes \
+    --scenes-root data/scenes/<sign> \
     --save-plant2-dir ./plant2_out \
     --count 5 --save-gifs
 ```

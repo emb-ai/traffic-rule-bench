@@ -3,5 +3,3 @@ defaults:
   - _dual_path
 
 sign: no_entry
-paths:
-  output_base: data/no_entry/output

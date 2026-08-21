@@ -733,7 +733,7 @@ def main() -> None:
         "--scenes-dir",
         type=Path,
         default=None,
-        help="Destination scenes root (default: data/<profile>/scenes)",
+        help="Destination scenes root (default: data/scenes/<profile>)",
     )
     ap.add_argument(
         "--allocations",

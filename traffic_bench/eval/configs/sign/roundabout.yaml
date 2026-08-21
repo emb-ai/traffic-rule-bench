@@ -1,7 +1,5 @@
 # @package _global_
 sign: roundabout
-paths:
-  output_base: data/roundabout/output
 
 augmentation:
   layout: true

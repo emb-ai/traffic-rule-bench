@@ -4,5 +4,3 @@ defaults:
   - _detour
 
 sign: detour_left
-paths:
-  output_base: data/detour_left/output

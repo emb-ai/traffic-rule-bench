@@ -1,6 +1,6 @@
 # sign_pool — per-sign scene pool (materialize → viability reject → review)
 
-Pulls allocated maps from `traffic_bench/scenes/map_pool` into `data/<sign>/scenes/`.
+Pulls allocated maps from `traffic_bench/scenes/map_pool` into `data/scenes/<sign>/`.
 Debug helpers: repo-root `tools/`.
 
 ## Layout

@@ -21,7 +21,7 @@ class SignProfile:
     sign_name: str
     layout_mode: LayoutMode
     spawn_strategy: SpawnStrategy
-    data_subdir: str  # under priority_bench/data/
+    data_subdir: str  # under data/{scenes,runs,trajectories}/
     output_code: str  # e.g. "2_1" for paths
 
     # Optional: ego must be on this road_class (None = any arm)
@@ -489,13 +489,38 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def data_dir(profile: SignProfile) -> Path:
-    return repo_root() / "data" / profile.data_subdir
+def artifact_root() -> Path:
+    """Working artifacts: ``<repo>/data/{scenes,runs,trajectories}/``."""
+    return repo_root() / "data"
 
 
 def scenes_dir(profile: SignProfile) -> Path:
-    return data_dir(profile) / "scenes"
+    return artifact_root() / "scenes" / profile.data_subdir
+
+
+def runs_dir(profile: SignProfile) -> Path:
+    return artifact_root() / "runs" / profile.data_subdir
+
+
+def trajectories_dir(profile: SignProfile) -> Path:
+    return artifact_root() / "trajectories" / profile.data_subdir
 
 
 def output_dir(profile: SignProfile) -> Path:
-    return data_dir(profile) / "output"
+    """Hydra run parent (alias of ``runs_dir``)."""
+    return runs_dir(profile)
+
+
+def register_path_resolvers() -> None:
+    """Hydra interpolators: ``${repo:rel}`` and ``${sign_data:main}`` → ``main_road``."""
+    from omegaconf import OmegaConf
+
+    OmegaConf.register_new_resolver(
+        "repo", lambda rel: str(repo_root() / rel), replace=True
+    )
+    OmegaConf.register_new_resolver(
+        "sign_data", lambda sid: get_profile(sid).data_subdir, replace=True
+    )
+
+
+register_path_resolvers()

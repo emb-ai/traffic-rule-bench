@@ -1,7 +1,5 @@
 # @package _global_
 sign: stop
-paths:
-  output_base: data/stop/output
 
 augmentation:
   layout: true          # ego × aux spawn scenarios (same yield strategy as 2.4)

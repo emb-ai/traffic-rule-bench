@@ -77,8 +77,10 @@ case "$SIGN" in
         ;;
 esac
 
-DATA_ROOT="$REPO_ROOT/data/$DATA_SUBDIR"
-: "${SCENES_ROOT:=$DATA_ROOT/scenes}"
+DATA_SCENES="$REPO_ROOT/data/scenes/$DATA_SUBDIR"
+DATA_RUNS="$REPO_ROOT/data/runs/$DATA_SUBDIR"
+DATA_TRAJ="$REPO_ROOT/data/trajectories/$DATA_SUBDIR"
+: "${SCENES_ROOT:=$DATA_SCENES}"
 : "${SIGNS_FILTER:=$SIGN_SLUG}"
 
 # ---------------------------------------------------------------------------
@@ -167,8 +169,8 @@ fi
 
 TS="$(date +%Y%m%d_%H%M%S)"
 : "${NODE_ID:=$(hostname -s 2>/dev/null || echo local)}"
-# Per-sign storage (same tree as scenes/eval): data/<sign>/trajectories/...
-: "${OUT_BASE:=$DATA_ROOT/trajectories/trajectories_$TS}"
+# Per-sign storage: data/trajectories/<sign>/...
+: "${OUT_BASE:=$DATA_TRAJ/trajectories_$TS}"
 : "${LOG_DIR:=$OUT_BASE/_logs/run_node${NODE_ID}_${TS}}"
 MERGED_DIR="$OUT_BASE/_merged"
 MANIFESTS_DIR="$OUT_BASE/_manifests/$SIGN_SLUG"
@@ -210,17 +212,17 @@ fi
 mkdir -p "$OUT_BASE" "$LOG_DIR" "$MERGED_DIR" "$MANIFESTS_DIR"
 exec > >(tee -a "$LOG_DIR/progress.log") 2>&1
 
-# Resolve default manifest: latest data/<sign>/output/*/real_manifest.jsonl
-# (SIGN=yield → data/yield/…; SIGN=main → data/main_road/…; SIGN=stop → data/stop/…).
+# Resolve default manifest: latest data/runs/<sign>/*/real_manifest.jsonl
+# (SIGN=yield → data/runs/yield/…; SIGN=main → data/runs/main_road/…).
 # Prefer an explicit MANIFEST=…/real_manifest.jsonl from the desired
 # generate_manifest run (e.g. paths.split=train).
 if [ -z "$MANIFEST" ]; then
-    CAND=$(ls -1d "$DATA_ROOT"/output/*/real_manifest.jsonl 2>/dev/null | sort | tail -1 || true)
+    CAND=$(ls -1d "$DATA_RUNS"/*/real_manifest.jsonl 2>/dev/null | sort | tail -1 || true)
     if [ -n "$CAND" ]; then
         MANIFEST="$CAND"
-        echo "[auto] MANIFEST=$MANIFEST  (from $DATA_ROOT/output)"
+        echo "[auto] MANIFEST=$MANIFEST  (from $DATA_RUNS)"
     else
-        echo "[FAIL] set MANIFEST=.../real_manifest.jsonl (no auto find under $DATA_ROOT/output)"
+        echo "[FAIL] set MANIFEST=.../real_manifest.jsonl (no auto find under $DATA_RUNS)"
         exit 1
     fi
 fi

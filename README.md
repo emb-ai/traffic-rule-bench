@@ -42,7 +42,10 @@ traffic-rule-bench/
 │   │   └── sign_pool/          # allocate crops to each sign
 │   ├── eval/                   # manifests, run_benchmark, eval_pipeline, metrics
 │   └── oracle/                 # collect trajectories + expert selection
-├── data/                       # working artifacts per sign (gitignored)
+├── data/                       # gitignored working artifacts
+│   ├── scenes/<sign>/          # sign-allocated maps (main_road, yield, …)
+│   ├── runs/<sign>/<ts>/       # manifest, gifs, eval_out
+│   └── trajectories/<sign>/    # collect_trajectories → finetune
 ├── tools/                      # ad-hoc visualization & debug scripts
 ├── finetune/                   # PlanT2 fine-tuning on oracle trajectories
 ├── checkpoints/
@@ -51,7 +54,7 @@ traffic-rule-bench/
 └── pyproject.toml
 ```
 
-Pipeline: `scenes/map_pool` → `scenes/sign_pool` → `eval/generate_manifest.py` → `eval/run_benchmark.py` (metrics via `eval_pipeline.py`) and, separately, `oracle/collect_trajectories` → `oracle/select_experts*` → `finetune/`.
+Pipeline: `scenes/map_pool` → `scenes/sign_pool` → `data/scenes/<sign>` → `eval/generate_manifest.py` (writes `data/runs/<sign>/<ts>/`) → `eval/run_benchmark.py` / `eval_pipeline.py`, and separately `oracle/collect_trajectories` → `data/trajectories/<sign>/` → `finetune/`.
 
 ## 🚀 Quick start
 

@@ -1,7 +1,5 @@
 # @package _global_
 sign: blocked_road
-paths:
-  output_base: data/blocked_road/output
 
 augmentation:
   layout: true           # through-path ego × forbidden-dest scenarios

@@ -4,7 +4,8 @@ Run from the **repository root** after `pip install -e .`.
 
 Sign profiles: `eval/sign_registry.py`. Shared engine: `eval/core/`.
 Scene construction is in `traffic_bench/scenes/`. Oracle collection is in `traffic_bench/oracle/`.
-Working data: `data/<sign>/{scenes,output,trajectories}` at the repo root.
+Working data at repo root: `data/scenes/<sign>/`, `data/runs/<sign>/<ts>/`, `data/trajectories/<sign>/`.
+`sign=main` writes under `main_road`.
 
 ```bash
 python -m traffic_bench.eval.generate_manifest sign=stop
@@ -139,7 +140,7 @@ python -m traffic_bench.eval.generate_manifest sign=stop expert.stop_wait_steps=
 python -m traffic_bench.eval.generate_manifest sign=stop scenario.max_total=20
 ```
 
-Output lands under `data/<sign>/output/<timestamp>/`:
+Output lands under `data/runs/<sign>/<timestamp>/` (`sign=main` → `data/runs/main_road/`):
 
 - `real_manifest.jsonl` — scenario definitions (each row has `split`)
 - `repro/` — pool snapshot + split filter + allocations ref (for reproduction)
@@ -199,7 +200,7 @@ See `configs/config.yaml` and `configs/sign/{main,secondary,yield,stop,roundabou
 
 | Group            | Key examples                                                                                                                                                                                       |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `paths.*`        | `scenes_dir`, `output_base` (`data/<sign>/output`), `experiment_name`                                                                                                                              |
+| `paths.*`        | `scenes_dir`, `output_base` (`data/runs/<sign>/`), `experiment_name`                                                                                                                              |
 | `scenario.*`     | `max_scenarios` (cap **after** all axes)                                                                                                                                                           |
 | `augmentation.`* | `enabled`, `layout`, `auxiliary` — which axes run (per sign yaml)                                                                                                                                  |
 | `simulation.`*   | `spawn_velocity_ms`, `horizon`, `spawn_distance_before_end` (default **15 m**)                                                                                                                     |

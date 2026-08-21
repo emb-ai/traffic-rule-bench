@@ -1,7 +1,5 @@
 # @package _global_
 sign: main
-paths:
-  output_base: data/main/output
 
 augmentation:
   layout: true          # ego × right-arm aux spawn scenarios

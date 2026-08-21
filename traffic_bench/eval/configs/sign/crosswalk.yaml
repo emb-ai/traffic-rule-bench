@@ -12,7 +12,6 @@ sign: crosswalk
 paths:
   # Nested segment_crosswalk harvest from moscow_scenes (straight/ + curved/).
   scenes_dir: ../moscow_scenes/scenes/segment_crosswalk
-  output_base: data/crosswalk/output
   split: all
 
 augmentation:

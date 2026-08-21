@@ -3,5 +3,3 @@ defaults:
   - _dual_path
 
 sign: direction_straight_left
-paths:
-  output_base: data/direction_straight_left/output
