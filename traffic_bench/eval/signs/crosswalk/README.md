@@ -8,11 +8,13 @@ spawns on the approach to it.
 | --- | --- |
 | `crosswalk` | 5.19 |
 
-## Today → tomorrow
-
-| Today | Tomorrow |
+| File | Role |
 | --- | --- |
-| `core/manifest/crosswalk_expansion.py` | `expand.py` |
-| `core/layout/crosswalk_layout.py` | `spec.py` |
-| `core/scenarios/pedestrian_presets.py` | `spawn.py` |
-| `run_benchmark.py` crosswalk placement | `place.py` |
+| `spec.py` | Parse SUMO crossing approaches |
+| `spawn.py` | Pedestrian preset bank |
+| `expand.py` | lane × density × preset → manifest rows |
+| `place.py` | Reconstruct zebra + place 5.19 plate |
+
+`generate_crosswalk_manifest` still lives in `generate_manifest.py`.
+Old `core.layout.crosswalk_layout` / `core.manifest.crosswalk_expansion`
+/ `core.scenarios.pedestrian_presets` imports are shims.

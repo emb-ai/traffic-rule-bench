@@ -9,9 +9,10 @@ Same segment crops as speed signs. Eval picks the obstacle lane from
 | `detour_left` | 4.2.2 |
 | `detour_either` | 4.2.3 |
 
-## Today → tomorrow
-
-| Today | Tomorrow |
+| File | Role |
 | --- | --- |
-| `core/manifest/detour_expansion.py` | `expand.py` |
-| `run_benchmark.py` detour placement | `place.py` |
+| `expand.py` | corridor × density → manifest rows |
+| `place.py` | DetourSign on the obstacle lane at `sign_s` |
+
+`generate_detour_manifest` still lives in `generate_manifest.py`.
+`core.manifest.detour_expansion` is a shim.

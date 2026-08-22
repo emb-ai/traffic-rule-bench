@@ -23,5 +23,5 @@ Per-family files (skip if unused):
 | `place.py` | Where plates go in MetaDrive |
 | `spec.py` | Plate class / dual-path crop-meta bridge |
 
-`dual_path/`, `blocked/`, `junction/`, and `roundabout/` have code. Other
-family READMEs list today's files and the target names.
+Every family folder has code (`expand.py` / `place.py` / `spec.py` as needed).
+`generate_*_manifest` shells still live in `generate_manifest.py`.

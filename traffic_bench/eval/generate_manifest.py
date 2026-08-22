@@ -67,26 +67,26 @@ from traffic_bench.eval.signs.dual_path.expand import (
     build_dual_path_manifest_entry,
     expand_dual_path_scene_entries,
 )
-from traffic_bench.eval.core.manifest.crosswalk_expansion import (
+from traffic_bench.eval.signs.crosswalk.expand import (
     CrosswalkExpansionConfig,
     CrosswalkSimParams,
     DEFAULT_POSITIONS,
     discover_segment_crosswalk_scenes,
     expand_crosswalk_scene_entries,
 )
-from traffic_bench.eval.core.manifest.detour_expansion import (
+from traffic_bench.eval.signs.detour.expand import (
     DetourExpansionConfig,
     DetourSimParams,
     discover_segment_detour_scenes,
     expand_detour_scene_entries,
 )
-from traffic_bench.eval.core.manifest.speed_expansion import (
+from traffic_bench.eval.signs.speed.expand import (
     SpeedExpansionConfig,
     SpeedSimParams,
     discover_segment_speed_scenes,
     expand_speed_scene_entries,
 )
-from traffic_bench.eval.core.scenarios.speed_scene_design import assign_limit_kmh
+from traffic_bench.eval.signs.speed.spec import assign_limit_kmh
 from traffic_bench.eval.core.scenarios.scene_augmentation import (
     SpawnScenario,
     pick_default_main_spawn_meta_for_net,
@@ -2272,7 +2272,7 @@ def main(cfg: DictConfig) -> None:
             expansion_cfg=expansion_cfg,
             split=split,
         )
-    elif profile.spawn_strategy == "crosswalk":
+    elif profile.family == "crosswalk":
         positions_raw = getattr(cfg.scenario, "crosswalk_positions", None)
         if positions_raw is None:
             positions_list = list(DEFAULT_POSITIONS)
@@ -2306,7 +2306,7 @@ def main(cfg: DictConfig) -> None:
             ),
             ped_cfg=ped_cfg,
         )
-    elif profile.spawn_strategy == "detour":
+    elif profile.family == "detour":
         entries = generate_detour_manifest(
             scenes_dir=scenes_dir,
             output_dir=experiment_dir,
@@ -2319,7 +2319,7 @@ def main(cfg: DictConfig) -> None:
                 getattr(cfg.simulation, "traffic_density_augment", True)
             ),
         )
-    elif profile.spawn_strategy == "speed_zone":
+    elif profile.family == "speed":
         entries = generate_speed_manifest(
             scenes_dir=scenes_dir,
             output_dir=experiment_dir,

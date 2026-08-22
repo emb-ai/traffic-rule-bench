@@ -7,11 +7,10 @@ Hugging Face [`emb-ai/traffic-sign-bench`](https://huggingface.co/datasets/emb-a
 into `data/scenes/<sign>/`. Eval writes `data/runs/<sign>/<timestamp>/`.
 `sign=main_road` writes under `data/{scenes,runs}/main_road/`.
 
-Python still lives under `generate_manifest.py`, `run_benchmark.py`,
-`eval_pipeline.py`, and `core/`. The folders below are the **target** layout;
-`signs/` and `lib/` currently hold READMEs that map old files to new ones.
-Code moves in later PRs. Old commands (`python -m traffic_bench.eval.generate_manifest`)
-keep working.
+Family expand/place/spec live under [`signs/`](signs/README.md). Shared
+shells are still `generate_manifest.py`, `run_benchmark.py`,
+`eval_pipeline.py`, and `core/`. Old commands
+(`python -m traffic_bench.eval.generate_manifest`) keep working.
 
 ## Folders
 
