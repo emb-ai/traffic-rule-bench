@@ -1,7 +1,17 @@
-"""Top-down PNG previews of a cropped SUMO net (review UI / harvest)."""
+"""Top-down PNG previews of a cropped SUMO net (review UI / harvest).
+
+Backfill missing ``custom_cropped.png`` under a crop tree::
+
+    python -m traffic_bench.scene_collection.preview \\
+        --root traffic_bench/scene_collection/maps/crops/junction \\
+        --skip-existing --workers 16
+"""
 
 from __future__ import annotations
 
+import argparse
+import json
+import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -241,3 +251,140 @@ def render_network(
     plt.tight_layout()
     plt.savefig(out_path, bbox_inches="tight", pad_inches=0.1)
     plt.close()
+
+
+PREVIEW_NAME = "custom_cropped.png"
+
+
+def iter_scene_dirs(root: Path) -> List[Path]:
+    """Directories that already have a cropped ``map.net.xml``."""
+    if not root.is_dir():
+        return []
+    return sorted(
+        path.parent
+        for path in root.rglob("map.net.xml")
+        if path.is_file()
+    )
+
+
+def render_scene_preview(scene_dir: Path) -> Path:
+    """Write ``custom_cropped.png`` next to ``map.net.xml``."""
+    net = scene_dir / "map.net.xml"
+    if not net.is_file():
+        raise FileNotFoundError(f"no map.net.xml in {scene_dir}")
+    meta: dict = {}
+    meta_path = scene_dir / "meta.json"
+    if meta_path.is_file():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            meta = {}
+    marker = None
+    center = meta.get("center_xy")
+    if isinstance(center, (list, tuple)) and len(center) >= 2:
+        marker = (float(center[0]), float(center[1]))
+    road = meta.get("road_id")
+    baseline, compliant, _spawn = routes_from_dual_path_meta(meta)
+    if compliant is None and road:
+        compliant = [str(road)]
+    out_png = scene_dir / PREVIEW_NAME
+    edges, junctions = parse_sumo_net(net)
+    render_network(
+        edges,
+        junctions,
+        out_png,
+        figsize=(6, 6),
+        dpi=120,
+        marker_xy=marker,
+        baseline_edge_ids=baseline,
+        compliant_edge_ids=compliant,
+        legend=bool(baseline or compliant),
+    )
+    return out_png
+
+
+def _render_one(scene_dir: Path) -> Tuple[str, str, str]:
+    try:
+        render_scene_preview(scene_dir)
+        return ("ok", scene_dir.name, "")
+    except Exception as exc:  # noqa: BLE001
+        return ("fail", scene_dir.name, str(exc))
+
+
+def backfill_previews(
+    root: Path,
+    *,
+    skip_existing: bool = False,
+    workers: int = 4,
+) -> None:
+    """Render previews for cropped scenes under ``root``."""
+    jobs: List[Path] = []
+    skipped = 0
+    for scene_dir in iter_scene_dirs(root):
+        if skip_existing and (scene_dir / PREVIEW_NAME).is_file():
+            skipped += 1
+            continue
+        jobs.append(scene_dir)
+
+    print(
+        f"[preview] {len(jobs)} to render under {root} "
+        f"(skip_existing={skip_existing}, already_have={skipped}, workers={workers})"
+    )
+    ok = fail = 0
+    t0 = time.time()
+    workers = max(1, int(workers))
+
+    def _consume(i: int, status: str, scene_id: str, detail: str) -> None:
+        nonlocal ok, fail
+        if status == "ok":
+            ok += 1
+        else:
+            fail += 1
+            print(f"  [fail] {scene_id}: {detail}")
+        if i % 50 == 0 or i == len(jobs):
+            print(f"  [{i}/{len(jobs)}] ok={ok} fail={fail}")
+
+    if not jobs:
+        print("[preview] nothing to do")
+        return
+    if workers == 1:
+        for i, scene_dir in enumerate(jobs, 1):
+            status, scene_id, detail = _render_one(scene_dir)
+            _consume(i, status, scene_id, detail)
+    else:
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_render_one, scene_dir) for scene_dir in jobs]
+            for i, fut in enumerate(as_completed(futures), 1):
+                status, scene_id, detail = fut.result()
+                _consume(i, status, scene_id, detail)
+    print(f"[preview] done in {time.time() - t0:.1f}s: ok={ok} fail={fail}")
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    from traffic_bench.scene_collection.paths import CROPS
+
+    ap = argparse.ArgumentParser(
+        prog="python -m traffic_bench.scene_collection.preview",
+        description="Write custom_cropped.png for cropped SUMO scenes.",
+    )
+    ap.add_argument(
+        "--root",
+        type=Path,
+        default=CROPS,
+        help=f"crop tree (default: {CROPS})",
+    )
+    ap.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="skip scenes that already have custom_cropped.png",
+    )
+    ap.add_argument("--workers", type=int, default=8)
+    args = ap.parse_args(argv)
+    backfill_previews(args.root, skip_existing=args.skip_existing, workers=args.workers)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -229,7 +229,22 @@ def main() -> None:
         default=4,
         help="Parallel netconvert workers (default 4)",
     )
+    ap.add_argument(
+        "--png-only",
+        action="store_true",
+        help="Write custom_cropped.png for existing crops (no netconvert)",
+    )
     args = ap.parse_args()
+
+    if args.png_only:
+        from traffic_bench.scene_collection.preview import backfill_previews
+
+        backfill_previews(
+            args.scenes_root,
+            skip_existing=args.skip_existing,
+            workers=args.workers,
+        )
+        return
 
     if not args.net.is_file():
         sys.exit(f"ERROR: net not found: {args.net}")

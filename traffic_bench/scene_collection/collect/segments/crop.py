@@ -295,7 +295,11 @@ def main() -> None:
         moved = flatten_legacy_segment_layout(args.out)
         if moved:
             print(f"[crop_segment] flattened {moved} legacy nested scenes")
-        _rerender_existing_pngs(args.out)
+        _rerender_existing_pngs(
+            args.out,
+            skip_existing=args.skip_existing,
+            workers=args.workers,
+        )
         return
 
     if not args.net.is_file():
@@ -388,32 +392,69 @@ def main() -> None:
     print(f"[crop_segment] Output: {args.out}")
 
 
-def _rerender_existing_pngs(scenes_root: Path) -> None:
-    """Rewrite custom_cropped.png for scenes already on disk."""
-    jobs = [
-        scene_dir
-        for scene_dir in iter_segment_scene_dirs(scenes_root)
-        if (scene_dir / "map.net.xml").is_file()
-    ]
+def _render_one_png(scene_dir: Path) -> tuple:
+    """Worker: write custom_cropped.png. Returns (status, scene_id, detail)."""
+    try:
+        meta = json.loads((scene_dir / "meta.json").read_text(encoding="utf-8"))
+        render_segment_preview(
+            scene_dir / "map.net.xml",
+            scene_dir / "custom_cropped.png",
+            road_id=str(meta["road_id"]),
+            center_xy=(float(meta["center_xy"][0]), float(meta["center_xy"][1])),
+        )
+        return ("ok", scene_dir.name, "")
+    except Exception as exc:  # noqa: BLE001
+        return ("fail", scene_dir.name, str(exc))
 
-    print(f"[crop_segment] png-only: {len(jobs)} scenes under {scenes_root}")
+
+def _rerender_existing_pngs(
+    scenes_root: Path,
+    *,
+    skip_existing: bool = False,
+    workers: int = 1,
+) -> None:
+    """Write custom_cropped.png for cropped scenes (optionally only missing)."""
+    jobs = []
+    skipped = 0
+    for scene_dir in iter_segment_scene_dirs(scenes_root):
+        if not (scene_dir / "map.net.xml").is_file():
+            continue
+        if skip_existing and (scene_dir / "custom_cropped.png").is_file():
+            skipped += 1
+            continue
+        jobs.append(scene_dir)
+
+    print(
+        f"[crop_segment] png-only: {len(jobs)} to render "
+        f"(skip_existing={skip_existing}, already_have={skipped}, workers={workers})"
+    )
     ok = fail = 0
     t0 = time.time()
-    for i, scene_dir in enumerate(jobs, 1):
-        try:
-            meta = json.loads((scene_dir / "meta.json").read_text(encoding="utf-8"))
-            render_segment_preview(
-                scene_dir / "map.net.xml",
-                scene_dir / "custom_cropped.png",
-                road_id=str(meta["road_id"]),
-                center_xy=(float(meta["center_xy"][0]), float(meta["center_xy"][1])),
-            )
+    workers = max(1, int(workers))
+
+    def _consume(i: int, status: str, scene_id: str, detail: str) -> None:
+        nonlocal ok, fail
+        if status == "ok":
             ok += 1
-        except Exception as exc:
+        else:
             fail += 1
-            print(f"  [png fail] {scene_dir.name}: {exc}")
-        if i % 10 == 0 or i == len(jobs):
+            print(f"  [png fail] {scene_id}: {detail}")
+        if i % 50 == 0 or i == len(jobs):
             print(f"  [{i}/{len(jobs)}] ok={ok} fail={fail}")
+
+    if workers == 1:
+        for i, scene_dir in enumerate(jobs, 1):
+            status, scene_id, detail = _render_one_png(scene_dir)
+            _consume(i, status, scene_id, detail)
+    else:
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_render_one_png, scene_dir) for scene_dir in jobs]
+            for i, fut in enumerate(as_completed(futures), 1):
+                status, scene_id, detail = fut.result()
+                _consume(i, status, scene_id, detail)
+
     print(f"[crop_segment] png-only done in {time.time() - t0:.1f}s: ok={ok} fail={fail}")
 
 

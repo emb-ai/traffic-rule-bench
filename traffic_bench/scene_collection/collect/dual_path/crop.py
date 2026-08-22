@@ -171,6 +171,17 @@ def main() -> None:
         help="Resume-safe: count on-disk scenes toward caps and skip re-crops",
     )
     ap.add_argument(
+        "--png-only",
+        action="store_true",
+        help="Write custom_cropped.png for existing crops (no netconvert)",
+    )
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="Parallel workers for --png-only (default 8)",
+    )
+    ap.add_argument(
         "--discover-only",
         action="store_true",
         help="Write candidates JSONL only; do not crop",
@@ -181,6 +192,16 @@ def main() -> None:
         help="Old mode: discover all atoms first, then crop (not interrupt-safe)",
     )
     args = ap.parse_args()
+
+    if args.png_only:
+        from traffic_bench.scene_collection.preview import backfill_previews
+
+        backfill_previews(
+            args.out,
+            skip_existing=args.skip_existing,
+            workers=args.workers,
+        )
+        return
 
     shapes = {s.strip().upper() for s in args.shapes.split(",") if s.strip()}
     slots = slots_from_iterable(s.strip() for s in args.slots.split(",") if s.strip())
