@@ -1,5 +1,6 @@
 # @package _global_
+# 4.1.2 — turn right
 defaults:
-  - _dual_path
+  - /sign/direction/__base__
 
 sign: direction_right

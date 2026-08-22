@@ -1,0 +1,6 @@
+# @package _global_
+# 3.18.2 — no left turn
+defaults:
+  - /sign/no_turn/__base__
+
+sign: no_turn_left

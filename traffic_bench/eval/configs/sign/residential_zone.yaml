@@ -1,5 +1,5 @@
 # @package _global_
-# PDD 5.21 — residential zone (fixed 20 km/h).
+# 5.21 — residential zone
 defaults:
   - _speed
 

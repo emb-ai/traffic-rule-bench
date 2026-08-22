@@ -528,8 +528,8 @@ def main() -> None:
     args = build_parser().parse_args()
     profile = get_profile(args.sign)
     PROFILE_ID = profile.id
-    SIGN_CODE = profile.pdd_code
-    SIGN_SLUG = profile.output_code
+    SIGN_CODE = profile.sign_code
+    SIGN_SLUG = profile.id
     SIGN_TYPE = profile.sign_type
     if not args.scenes_root:
         args.scenes_root = str(profile_scenes_dir(profile))

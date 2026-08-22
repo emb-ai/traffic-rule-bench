@@ -585,19 +585,10 @@ def write_repro_artifacts(
 
 
 def load_scene_metadata(scene_dir: Path) -> Dict:
-    """Load and parse scene metadata from meta.json."""
+    """Load scene metadata from ``meta.json`` (lat/lon live there, not center.json)."""
     meta_path = scene_dir / "meta.json"
-    
     with open(meta_path, "r", encoding="utf-8") as f:
-        meta = json.load(f)
-    
-    center_path = scene_dir / "center.json"
-    if center_path.exists():
-        with open(center_path, "r", encoding="utf-8") as f:
-            center = json.load(f)
-            meta["center_lat"] = center.get("lat")
-            meta["center_lon"] = center.get("lon")
-    return meta
+        return json.load(f)
 
 
 # -----------------------------------------------------------------------------

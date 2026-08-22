@@ -1,0 +1,6 @@
+# @package _global_
+# 4.2.2 — pass obstacle on the left
+defaults:
+  - /sign/detour/__base__
+
+sign: detour_left

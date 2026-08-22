@@ -1,5 +1,5 @@
 # @package _global_
-# PDD 3.24 — maximum speed limit.
+# 3.24 — maximum speed limit
 defaults:
   - _speed
 

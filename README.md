@@ -2,13 +2,13 @@
 
 <p align="center">
   <a href="https://arxiv.org/abs/TODO"><img src="https://img.shields.io/badge/arXiv-TODO-b31b1b.svg" alt="ArXiv"></a>
-  <a href="https://huggingface.co/datasets/emb-ai/traffic-rule-bench"><img src="https://img.shields.io/badge/🤗%20Dataset-emb--ai%2Ftraffic--rule--bench-yellow" alt="Dataset"></a>
+  <a href="https://huggingface.co/datasets/emb-ai/traffic-sign-bench"><img src="https://img.shields.io/badge/🤗%20Dataset-emb--ai%2Ftraffic--sign--bench-yellow" alt="Dataset"></a>
   <a href="https://huggingface.co/emb-ai/traffic-rule-bench-models"><img src="https://img.shields.io/badge/🤗%20Models-emb--ai%2Ftraffic--rule--bench--models-yellow" alt="Models"></a>
 </p>
 
 ## Abstract
 
-Autonomous driving planners are typically evaluated using aggregate metrics such as collision rate, route completion, and comfort, which do not explicitly measure compliance with traffic rules. As a result, planners can achieve high benchmark scores while still exhibiting unsafe or illegal behaviors, limiting their applicability to real-world deployment. To address this gap, we introduce **TrafficRuleBench**, a large-scale, rule-centric benchmark for systematic and interpretable evaluation of traffic-rule compliance in autonomous driving. Our framework combines real-map-based simulation for realistic road layouts with rule-targeted procedural scenario generation for scalable and balanced coverage of underrepresented rules. We implement traffic rules corresponding to **45 traffic signs**, each equipped with an automatic rule checker for detecting violations during closed-loop execution. This design yields **15,200 diverse road scenes** and **18 distinct testing scenario types**, enabling controlled evaluation of rule-specific planner behavior. We construct **5,400 testing scenes** and demonstrate that current autonomous driving planners can exhibit poor traffic-rule compliance despite strong performance on standard evaluation metrics. To address this limitation, we transform existing planners into rule-compliant trajectory experts via explicit traffic-sign constraints, enabling scalable generation of high-quality oracle trajectories for fine-tuning. Code and data are publicly available at [github.com/emb-ai/traffic-rule-bench](https://github.com/emb-ai/traffic-rule-bench) and [huggingface.co/datasets/emb-ai/traffic-rule-bench](https://huggingface.co/datasets/emb-ai/traffic-rule-bench).
+Autonomous driving planners are typically evaluated using aggregate metrics such as collision rate, route completion, and comfort, which do not explicitly measure compliance with traffic rules. As a result, planners can achieve high benchmark scores while still exhibiting unsafe or illegal behaviors, limiting their applicability to real-world deployment. To address this gap, we introduce **TrafficRuleBench**, a large-scale, rule-centric benchmark for systematic and interpretable evaluation of traffic-rule compliance in autonomous driving. Our framework combines real-map-based simulation for realistic road layouts with rule-targeted procedural scenario generation for scalable and balanced coverage of underrepresented rules. We implement traffic rules corresponding to **45 traffic signs**, each equipped with an automatic rule checker for detecting violations during closed-loop execution. This design yields **15,200 diverse road scenes** and **18 distinct testing scenario types**, enabling controlled evaluation of rule-specific planner behavior. We construct **5,400 testing scenes** and demonstrate that current autonomous driving planners can exhibit poor traffic-rule compliance despite strong performance on standard evaluation metrics. To address this limitation, we transform existing planners into rule-compliant trajectory experts via explicit traffic-sign constraints, enabling scalable generation of high-quality oracle trajectories for fine-tuning. Code and data are publicly available at [github.com/emb-ai/traffic-rule-bench](https://github.com/emb-ai/traffic-rule-bench) and [huggingface.co/datasets/emb-ai/traffic-sign-bench](https://huggingface.co/datasets/emb-ai/traffic-sign-bench).
 
 ## 🤗 Supported Baselines
 
@@ -42,10 +42,10 @@ traffic-rule-bench/
 │   │   ├── assign/             # signs.yaml queries → sign_allocations.json
 │   │   ├── sign_scenes/        # materialize / prepare / filter
 │   │   └── maps/               # harvested data (crops gitignored)
-│   ├── eval/                   # manifests, run_benchmark, eval_pipeline, metrics
+│   ├── eval/                   # python -m traffic_bench.eval {manifest,run,pipeline,metrics}
 │   └── oracle/                 # collect trajectories + expert selection
 ├── data/                       # gitignored working artifacts
-│   ├── scenes/<sign>/          # sign-allocated maps (main_road, yield, …)
+│   ├── scenes/<sign>/          # from 🤗 emb-ai/traffic-sign-bench (yield, crosswalk, …)
 │   ├── runs/<sign>/<ts>/       # manifest, gifs, eval_out
 │   └── trajectories/<sign>/    # collect_trajectories → finetune
 ├── tools/                      # ad-hoc visualization & debug scripts
@@ -56,7 +56,7 @@ traffic-rule-bench/
 └── pyproject.toml
 ```
 
-Pipeline: `python -m traffic_bench.scene_collection` (`collect` → `assign` → `materialize` / `prepare`) → `data/scenes/<sign>` → `eval/generate_manifest.py` (writes `data/runs/<sign>/<ts>/`) → `eval/run_benchmark.py` / `eval_pipeline.py`, and separately `oracle/collect_trajectories` → `data/trajectories/<sign>/` → `finetune/`.
+Pipeline: `python -m traffic_bench.scene_collection` (`collect` → `assign` → `materialize` / `prepare`) → `data/scenes/<sign>` → `python -m traffic_bench.eval manifest` (writes `data/runs/<sign>/<ts>/`) → `run` / `pipeline`, and separately `oracle/collect_trajectories` → `data/trajectories/<sign>/` → `finetune/`.
 
 ## 🚀 Quick start
 
@@ -80,7 +80,16 @@ Pipeline: `python -m traffic_bench.scene_collection` (`collect` → `assign` →
    pip install -e .
    ```
 
-3. (Optional) PlanT2 env for `plant2` / `plant2_rule` baselines:
+3. Download official per-sign scenes from [emb-ai/traffic-sign-bench](https://huggingface.co/datasets/emb-ai/traffic-sign-bench) into `data/scenes/<sign>/`:
+
+   ```bash
+   pip install huggingface_hub
+   huggingface-cli download emb-ai/traffic-sign-bench \
+       --repo-type dataset \
+       --local-dir data
+   ```
+
+4. (Optional) PlanT2 env for `plant2` / `plant2_rule` baselines:
    ```bash
    cd third_party/plant2
    conda env update -f environment.yml --prune
@@ -108,26 +117,6 @@ huggingface-cli download emb-ai/traffic-rule-bench-models --local-dir checkpoint
 ```
 
 For CaRL and the PlanT2 pretrain weights, follow the download instructions in each respective upstream repository and place the resulting files under `checkpoints/`.
-
-### Scenes & test manifests
-
-SUMO road layouts (`.net.xml`) and per-sign test manifests (`.jsonl`) live in the HuggingFace dataset [emb-ai/traffic-rule-bench](https://huggingface.co/datasets/emb-ai/traffic-rule-bench). Download into the repo root:
-
-```bash
-huggingface-cli download emb-ai/traffic-rule-bench \
-    --repo-type dataset \
-    --local-dir .
-```
-
-This produces:
-
-```
-traffic-rule-bench/
-├── scenes/{sign_code}/sign_NNNNNN/*.net.xml
-└── test/{sign_code}/*.jsonl
-```
-
-Pass a manifest to the runner via `--manifest test/<sign>/<file>.jsonl`. Scripts default to `scenes/` for `--scenes-root`.
 
 ### Run Evaluation
 

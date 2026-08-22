@@ -10,7 +10,6 @@
 sign: crosswalk
 
 paths:
-  scenes_dir: ${repo:data/scenes/${sign_data:${sign}}}
   split: all
 
 augmentation:

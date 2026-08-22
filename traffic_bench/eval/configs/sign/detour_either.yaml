@@ -1,6 +1,0 @@
-# @package _global_
-# PDD 4.2.3 — pass obstacle on either side.
-defaults:
-  - _detour
-
-sign: detour_either

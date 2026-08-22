@@ -1,5 +1,5 @@
 # @package _global_
-# PDD 5.31 — zone speed limit.
+# 5.31 — zone speed limit
 defaults:
   - _speed
 

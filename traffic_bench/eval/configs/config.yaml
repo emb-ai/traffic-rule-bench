@@ -1,27 +1,10 @@
-# Priority junction bench — 2.1 main / 2.3 secondary / 2.4 yield / 2.5 stop / 4.1.x direction / 4.3 roundabout / 3.2 blocked_road / 5.7.x one_way / 5.19 crosswalk
-#   python generate_manifest.py
-#   python generate_manifest.py sign=secondary
-#   python generate_manifest.py sign=yield
-#   python generate_manifest.py sign=stop
-#   python generate_manifest.py sign=roundabout
-#   python generate_manifest.py sign=blocked_road
-#   python generate_manifest.py sign=one_way_right
-#   python generate_manifest.py sign=one_way_left
-#   python generate_manifest.py sign=direction_straight
-#   python generate_manifest.py sign=direction_right
-#   python generate_manifest.py sign=direction_left
-#   python generate_manifest.py sign=direction_straight_right
-#   python generate_manifest.py sign=direction_straight_left
-#   python generate_manifest.py sign=direction_left_right
-#   python generate_manifest.py sign=crosswalk
-#   python generate_manifest.py sign=speed_limit
-#   python generate_manifest.py sign=min_speed
-#   python generate_manifest.py sign=residential_zone
-#   python generate_manifest.py sign=zone_speed_limit
+# Hydra root. Select a sign config, then overrides.
+#   python -m traffic_bench.eval manifest sign=yield
+#   python -m traffic_bench.eval manifest sign=direction/right
 
 defaults:
   - _self_
-  - sign: main
+  - sign: main_road
   # Dual-path signs compose configs/sign/_dual_path.yaml (Hydra group base).
 
 hydra:
@@ -32,8 +15,8 @@ hydra:
     chdir: false
 
 paths:
-  scenes_dir: ${repo:data/scenes/${sign_data:${sign}}}
-  output_base: ${repo:data/runs/${sign_data:${sign}}}
+  scenes_dir: data/scenes/${sign}
+  output_base: data/runs/${sign}
   split: all  # all | train | test
   experiment_name: ${now:%Y-%m-%d_%H-%M-%S}
 

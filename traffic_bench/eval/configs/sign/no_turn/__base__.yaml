@@ -1,0 +1,3 @@
+# @package _global_
+defaults:
+  - /sign/_dual_path

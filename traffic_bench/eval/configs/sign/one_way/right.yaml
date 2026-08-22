@@ -1,0 +1,6 @@
+# @package _global_
+# 5.7.1 — one-way to the right
+defaults:
+  - /sign/one_way/__base__
+
+sign: one_way_right

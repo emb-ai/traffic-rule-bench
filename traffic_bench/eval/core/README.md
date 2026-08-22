@@ -1,5 +1,9 @@
 # `eval/core/` — shared library for sign evaluation
 
+**Target layout:** this dump splits into [`../lib/`](../lib/README.md) (shared
+engine) and [`../signs/`](../signs/README.md) (per-family rules). Imports stay
+`traffic_bench.eval.core.*` until that move. See [`../README.md`](../README.md).
+
 Used by `traffic_bench.eval` (manifests, simulation, metrics) and by
 `traffic_bench.scene_collection.collect` crop scripts. Imports go through
 `traffic_bench.eval.core.<subpackage>.<module>`.

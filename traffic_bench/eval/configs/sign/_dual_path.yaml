@@ -1,8 +1,6 @@
 # @package _global_
-# Private base for dual-path signs: 5.7.x, 4.1.x, 3.18.x, 3.1.
-# Sign yamls: `defaults: [_dual_path]` then `sign:`.
-# Override once here, or on the CLI:
-#   python generate_manifest.py sign=direction_straight scenario.dual_path_route_budget_m=200
+# Shared knobs for dual-path families. Each family folder pulls this from __base__.yaml.
+#   python -m traffic_bench.eval manifest sign=direction/right
 
 augmentation:
   layout: true           # dual-path (forbidden short + compliant long)

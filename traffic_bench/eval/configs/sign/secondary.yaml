@@ -1,5 +1,10 @@
 # @package _global_
+# 2.3 — secondary road. On-disk folder is secondary_road.
 sign: secondary
+
+paths:
+  scenes_dir: data/scenes/secondary_road
+  output_base: data/runs/secondary_road
 
 augmentation:
   layout: true          # ego × aux spawn scenarios (same yield strategy as 2.4)

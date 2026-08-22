@@ -1,9 +1,6 @@
 # @package _global_
 # Shared base for speed-family signs 3.24 / 4.6 / 5.21 / 5.31.
 # Sign yamls: `defaults: [_speed]` then `sign:`.
-#
-# Manifest expansion / braking-accel spawn are not wired yet.
-# Scenes: maps/crops/segment/<id>/ queried with segment_type=straight.
 
 paths:
   scenes_dir: scenes

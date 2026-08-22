@@ -606,7 +606,7 @@ def crop_scene_to_junction_pick(
     junction_rank: Optional[int] = None,
     core_scene_name: Optional[str] = None,
 ) -> JunctionPick:
-    """Crop ``source_net`` around ``pick``; write center.json and meta into ``output_dir``."""
+    """Crop ``source_net`` around ``pick``; write meta into ``output_dir``."""
     from ..sumo.sumo_utils import load_scene_meta
 
     scene_dir = scene_dir.resolve()
@@ -636,12 +636,6 @@ def crop_scene_to_junction_pick(
         pick.junction_id,
         out_net,
         arm_length_m=radius_m,
-    )
-
-    center_path = output_dir / "center.json"
-    center_path.write_text(
-        json_dumps({"lat": center_lat, "lon": center_lon}) + "\n",
-        encoding="utf-8",
     )
 
     scene_name = output_scene_name or meta.get("scene_name", scene_dir.name)
@@ -719,7 +713,7 @@ def crop_scene_to_junction(
     output_net_name: str = "map.net.xml",
     backup_original: bool = True,
 ) -> JunctionPick:
-    """Crop scene net around the best 4- or 3-arm junction; write center.json."""
+    """Crop scene net around the best 4- or 3-arm junction."""
     from ..sumo.sumo_utils import load_scene_meta
 
     scene_dir = scene_dir.resolve()

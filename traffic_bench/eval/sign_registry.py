@@ -1,4 +1,8 @@
-"""Sign profiles for priority-junction benches (2.1–2.5 / 3.1 / 3.18 / 3.24 / 4.1.x / 4.2.x / 4.3 / 3.2 / 4.6 / 5.7.x / 5.19 / 5.21 / 5.31)."""
+"""Eval sign index: English id → family, spawn, data folder.
+
+Official plate numbers (`sign_code`) are harvest / manifest keys and comments.
+CLI and Hydra use the English id (`yield`, `direction_right`).
+"""
 
 from __future__ import annotations
 
@@ -9,40 +13,61 @@ from typing import Literal, Optional
 from traffic_bench.eval.core.scenarios.scene_augmentation import SpawnStrategy
 
 LayoutMode = Literal["main_main", "main_secondary", "roundabout"]
+SignFamily = Literal[
+    "junction",
+    "roundabout",
+    "blocked",
+    "dual_path",
+    "crosswalk",
+    "detour",
+    "speed",
+]
+
+EVAL = Path(__file__).resolve().parent
+PACKAGE_ROOT = EVAL.parent
+REPO_ROOT = PACKAGE_ROOT.parent
+DATA = REPO_ROOT / "data"
 
 
 @dataclass(frozen=True)
 class SignProfile:
-    """Thin contract describing how one PDD priority sign differs from others."""
+    """How one eval sign differs from others (spawn, plates, data folder)."""
 
     id: str
-    pdd_code: str
+    family: SignFamily
+    sign_code: str
     sign_type: str
     sign_name: str
     layout_mode: LayoutMode
     spawn_strategy: SpawnStrategy
-    data_subdir: str  # under data/{scenes,runs,trajectories}/
-    output_code: str  # e.g. "2_1" for paths
-
-    # Optional: ego must be on this road_class (None = any arm)
+    data_subdir: str = ""
     ego_road_class: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not self.data_subdir:
+            object.__setattr__(self, "data_subdir", self.id)
+
+    @property
+    def pdd_code(self) -> str:
+        """Harvest yaml / manifest row key (legacy attribute name)."""
+        return self.sign_code
 
 
 MAIN_ROAD = SignProfile(
     id="main",
-    pdd_code="2.1",
+    family="junction",
+    sign_code="2.1",
     sign_type="main",
     sign_name="Main road (equal priority)",
     layout_mode="main_main",
     spawn_strategy="equal_priority",
     data_subdir="main_road",
-    output_code="2_1",
-    ego_road_class=None,
 )
 
 SECONDARY_ROAD = SignProfile(
     id="secondary",
-    pdd_code="2.3",
+    family="junction",
+    sign_code="2.3",
     sign_type="secondary",
     sign_name="Intersection with secondary road (2.3)",
     # Same geometry / ego / aux as yield (2.4). Main arms get 2.3.x plates
@@ -50,294 +75,242 @@ SECONDARY_ROAD = SignProfile(
     layout_mode="main_secondary",
     spawn_strategy="yield",
     data_subdir="secondary_road",
-    output_code="2_3",
     ego_road_class="secondary",
 )
 
 YIELD = SignProfile(
     id="yield",
-    pdd_code="2.4",
+    family="junction",
+    sign_code="2.4",
     sign_type="yield",
     sign_name="Yield",
     layout_mode="main_secondary",
     spawn_strategy="yield",
-    data_subdir="yield",
-    output_code="2_4",
     ego_road_class="secondary",
 )
 
 STOP = SignProfile(
     id="stop",
-    pdd_code="2.5",
+    family="junction",
+    sign_code="2.5",
     sign_type="stop",
     sign_name="Stop",
-    # Same junction geometry / spawn / aux axes as yield; only the plate +
+    # Same junction geometry / spawn / aux as yield; only the plate +
     # stop-line violation differ (handled in run_benchmark + StopSign class).
     layout_mode="main_secondary",
     spawn_strategy="yield",
-    data_subdir="stop",
-    output_code="2_5",
     ego_road_class="secondary",
 )
 
 ROUNDABOUT = SignProfile(
     id="roundabout",
-    pdd_code="4.3",
+    family="roundabout",
+    sign_code="4.3",
     sign_type="roundabout",
     sign_name="Roundabout circulation (4.3)",
     layout_mode="roundabout",
     spawn_strategy="roundabout",
-    data_subdir="roundabout",
-    output_code="4_3",
     ego_road_class="secondary",
 )
 
 BLOCKED_ROAD = SignProfile(
     id="blocked_road",
-    pdd_code="3.2",
+    family="blocked",
+    sign_code="3.2",
     sign_type="blocked_road",
     sign_name="Movement prohibited (3.2)",
     layout_mode="main_main",
     spawn_strategy="blocked_road",
-    data_subdir="blocked_road",
-    output_code="3_2",
-    ego_road_class=None,
 )
 
-# 5.7.1 / 5.7.2 share dual-path spawn; separate data pools + pdd_code.
 ONE_WAY_RIGHT = SignProfile(
     id="one_way_right",
-    pdd_code="5.7.1",
+    family="dual_path",
+    sign_code="5.7.1",
     sign_type="one_way",
     sign_name="Exit onto one-way road (right / 5.7.1)",
     layout_mode="main_main",
     spawn_strategy="one_way",
-    data_subdir="one_way_right",
-    output_code="5_7_1",
-    ego_road_class=None,
 )
 
 ONE_WAY_LEFT = SignProfile(
     id="one_way_left",
-    pdd_code="5.7.2",
+    family="dual_path",
+    sign_code="5.7.2",
     sign_type="one_way",
     sign_name="Exit onto one-way road (left / 5.7.2)",
     layout_mode="main_main",
     spawn_strategy="one_way",
-    data_subdir="one_way_left",
-    output_code="5_7_2",
-    ego_road_class=None,
 )
 
-# 4.1.1–4.1.6 share dual-path spawn; separate data pools + pdd_code.
 DIRECTION_STRAIGHT = SignProfile(
     id="direction_straight",
-    pdd_code="4.1.1",
+    family="dual_path",
+    sign_code="4.1.1",
     sign_type="direction",
     sign_name="Proceed straight (4.1.1)",
     layout_mode="main_main",
     spawn_strategy="direction",
-    data_subdir="direction_straight",
-    output_code="4_1_1",
-    ego_road_class=None,
 )
 
 DIRECTION_RIGHT = SignProfile(
     id="direction_right",
-    pdd_code="4.1.2",
+    family="dual_path",
+    sign_code="4.1.2",
     sign_type="direction",
     sign_name="Turn right (4.1.2)",
     layout_mode="main_main",
     spawn_strategy="direction",
-    data_subdir="direction_right",
-    output_code="4_1_2",
-    ego_road_class=None,
 )
 
 DIRECTION_LEFT = SignProfile(
     id="direction_left",
-    pdd_code="4.1.3",
+    family="dual_path",
+    sign_code="4.1.3",
     sign_type="direction",
     sign_name="Turn left (4.1.3)",
     layout_mode="main_main",
     spawn_strategy="direction",
-    data_subdir="direction_left",
-    output_code="4_1_3",
-    ego_road_class=None,
 )
 
 DIRECTION_STRAIGHT_RIGHT = SignProfile(
     id="direction_straight_right",
-    pdd_code="4.1.4",
+    family="dual_path",
+    sign_code="4.1.4",
     sign_type="direction",
     sign_name="Straight or right (4.1.4)",
     layout_mode="main_main",
     spawn_strategy="direction",
-    data_subdir="direction_straight_right",
-    output_code="4_1_4",
-    ego_road_class=None,
 )
 
 DIRECTION_STRAIGHT_LEFT = SignProfile(
     id="direction_straight_left",
-    pdd_code="4.1.5",
+    family="dual_path",
+    sign_code="4.1.5",
     sign_type="direction",
     sign_name="Straight or left (4.1.5)",
     layout_mode="main_main",
     spawn_strategy="direction",
-    data_subdir="direction_straight_left",
-    output_code="4_1_5",
-    ego_road_class=None,
 )
 
 DIRECTION_LEFT_RIGHT = SignProfile(
     id="direction_left_right",
-    pdd_code="4.1.6",
+    family="dual_path",
+    sign_code="4.1.6",
     sign_type="direction",
     sign_name="Right or left (4.1.6)",
     layout_mode="main_main",
     spawn_strategy="direction",
-    data_subdir="direction_left_right",
-    output_code="4_1_6",
-    ego_road_class=None,
 )
 
-# 3.18.1 / 3.18.2: dual-path; baseline = forbidden turn; plate on ego approach.
 NO_TURN_RIGHT = SignProfile(
     id="no_turn_right",
-    pdd_code="3.18.1",
+    family="dual_path",
+    sign_code="3.18.1",
     sign_type="no_turn",
     sign_name="No right turn (3.18.1)",
     layout_mode="main_main",
     spawn_strategy="no_turn",
-    data_subdir="no_turn_right",
-    output_code="3_18_1",
-    ego_road_class=None,
 )
 
 NO_TURN_LEFT = SignProfile(
     id="no_turn_left",
-    pdd_code="3.18.2",
+    family="dual_path",
+    sign_code="3.18.2",
     sign_type="no_turn",
     sign_name="No left turn (3.18.2)",
     layout_mode="main_main",
     spawn_strategy="no_turn",
-    data_subdir="no_turn_left",
-    output_code="3_18_2",
-    ego_road_class=None,
 )
 
-# 3.1: dual-path (all 6 slots); NoEntrySign on baseline first exit from start.
 NO_ENTRY = SignProfile(
     id="no_entry",
-    pdd_code="3.1",
+    family="dual_path",
+    sign_code="3.1",
     sign_type="no_entry",
     sign_name="No entry (3.1)",
     layout_mode="main_main",
     spawn_strategy="no_entry",
-    data_subdir="no_entry",
-    output_code="3_1",
-    ego_road_class=None,
 )
 
-# 4.2.1–4.2.3: same segment crops as speed signs; obstacle lane is chosen in eval.
 DETOUR_RIGHT = SignProfile(
     id="detour_right",
-    pdd_code="4.2.1",
+    family="detour",
+    sign_code="4.2.1",
     sign_type="detour",
     sign_name="Detour obstacle on the right (4.2.1)",
     layout_mode="main_main",
     spawn_strategy="detour",
-    data_subdir="detour_right",
-    output_code="4_2_1",
-    ego_road_class=None,
 )
 
 DETOUR_LEFT = SignProfile(
     id="detour_left",
-    pdd_code="4.2.2",
+    family="detour",
+    sign_code="4.2.2",
     sign_type="detour",
     sign_name="Detour obstacle on the left (4.2.2)",
     layout_mode="main_main",
     spawn_strategy="detour",
-    data_subdir="detour_left",
-    output_code="4_2_2",
-    ego_road_class=None,
 )
 
 DETOUR_EITHER = SignProfile(
     id="detour_either",
-    pdd_code="4.2.3",
+    family="detour",
+    sign_code="4.2.3",
     sign_type="detour",
     sign_name="Detour obstacle on either side (4.2.3)",
     layout_mode="main_main",
     spawn_strategy="detour",
-    data_subdir="detour_either",
-    output_code="4_2_3",
-    ego_road_class=None,
 )
 
-# 3.24: straight Moscow segments (no intersection). Sign offset is chosen later
-# in speed expansion (braking runway on the same edge), not from OSM.
 SPEED_LIMIT = SignProfile(
     id="speed_limit",
-    pdd_code="3.24",
+    family="speed",
+    sign_code="3.24",
     sign_type="speed",
     sign_name="Maximum speed limit (3.24)",
     layout_mode="main_main",
     spawn_strategy="speed_zone",
-    data_subdir="speed_limit",
-    output_code="3_24",
-    ego_road_class=None,
 )
 
 MIN_SPEED = SignProfile(
     id="min_speed",
-    pdd_code="4.6",
+    family="speed",
+    sign_code="4.6",
     sign_type="speed",
     sign_name="Minimum speed (4.6)",
     layout_mode="main_main",
     spawn_strategy="speed_zone",
-    data_subdir="min_speed",
-    output_code="4_6",
-    ego_road_class=None,
 )
 
 RESIDENTIAL_ZONE = SignProfile(
     id="residential_zone",
-    pdd_code="5.21",
+    family="speed",
+    sign_code="5.21",
     sign_type="speed",
     sign_name="Residential zone (5.21)",
     layout_mode="main_main",
     spawn_strategy="speed_zone",
-    data_subdir="residential_zone",
-    output_code="5_21",
-    ego_road_class=None,
 )
 
 ZONE_SPEED_LIMIT = SignProfile(
     id="zone_speed_limit",
-    pdd_code="5.31",
+    family="speed",
+    sign_code="5.31",
     sign_type="speed",
     sign_name="Zone speed limit (5.31)",
     layout_mode="main_main",
     spawn_strategy="speed_zone",
-    data_subdir="zone_speed_limit",
-    output_code="5_31",
-    ego_road_class=None,
 )
 
-# 5.19: segment maps; zebra injected at materialize into data/scenes/crosswalk/.
 CROSSWALK = SignProfile(
     id="crosswalk",
-    pdd_code="5.19",
+    family="crosswalk",
+    sign_code="5.19",
     sign_type="crosswalk",
     sign_name="Pedestrian crossing (5.19)",
     layout_mode="main_main",
     spawn_strategy="crosswalk",
-    data_subdir="crosswalk",
-    output_code="5_19",
-    ego_road_class=None,
 )
 
 _PROFILES = (
@@ -368,159 +341,55 @@ _PROFILES = (
     CROSSWALK,
 )
 
-_REGISTRY: dict[str, SignProfile] = {
-    MAIN_ROAD.id: MAIN_ROAD,
-    SECONDARY_ROAD.id: SECONDARY_ROAD,
-    YIELD.id: YIELD,
-    STOP.id: STOP,
-    ROUNDABOUT.id: ROUNDABOUT,
-    BLOCKED_ROAD.id: BLOCKED_ROAD,
-    ONE_WAY_RIGHT.id: ONE_WAY_RIGHT,
-    ONE_WAY_LEFT.id: ONE_WAY_LEFT,
-    DIRECTION_STRAIGHT.id: DIRECTION_STRAIGHT,
-    DIRECTION_RIGHT.id: DIRECTION_RIGHT,
-    DIRECTION_LEFT.id: DIRECTION_LEFT,
-    DIRECTION_STRAIGHT_RIGHT.id: DIRECTION_STRAIGHT_RIGHT,
-    DIRECTION_STRAIGHT_LEFT.id: DIRECTION_STRAIGHT_LEFT,
-    DIRECTION_LEFT_RIGHT.id: DIRECTION_LEFT_RIGHT,
-    NO_TURN_RIGHT.id: NO_TURN_RIGHT,
-    NO_TURN_LEFT.id: NO_TURN_LEFT,
-    NO_ENTRY.id: NO_ENTRY,
-    DETOUR_RIGHT.id: DETOUR_RIGHT,
-    DETOUR_LEFT.id: DETOUR_LEFT,
-    DETOUR_EITHER.id: DETOUR_EITHER,
-    SPEED_LIMIT.id: SPEED_LIMIT,
-    MIN_SPEED.id: MIN_SPEED,
-    RESIDENTIAL_ZONE.id: RESIDENTIAL_ZONE,
-    ZONE_SPEED_LIMIT.id: ZONE_SPEED_LIMIT,
-    CROSSWALK.id: CROSSWALK,
-    # aliases
-    "2.1": MAIN_ROAD,
-    "2_1": MAIN_ROAD,
-    "main_road": MAIN_ROAD,
-    "2.3": SECONDARY_ROAD,
-    "2_3": SECONDARY_ROAD,
-    "2.3.1": SECONDARY_ROAD,
-    "2.3.2": SECONDARY_ROAD,
-    "2.3.3": SECONDARY_ROAD,
-    "secondary_road": SECONDARY_ROAD,
-    "2.4": YIELD,
-    "2_4": YIELD,
-    "2.5": STOP,
-    "2_5": STOP,
-    "stop_sign": STOP,
-    "4.3": ROUNDABOUT,
-    "4_3": ROUNDABOUT,
-    "3.2": BLOCKED_ROAD,
-    "3_2": BLOCKED_ROAD,
-    "blocked_road": BLOCKED_ROAD,
-    "5.7.1": ONE_WAY_RIGHT,
-    "5_7_1": ONE_WAY_RIGHT,
-    "one_way_571": ONE_WAY_RIGHT,
-    "5.7.2": ONE_WAY_LEFT,
-    "5_7_2": ONE_WAY_LEFT,
-    "one_way_572": ONE_WAY_LEFT,
-    "4.1.1": DIRECTION_STRAIGHT,
-    "4_1_1": DIRECTION_STRAIGHT,
-    "4.1.2": DIRECTION_RIGHT,
-    "4_1_2": DIRECTION_RIGHT,
-    "4.1.3": DIRECTION_LEFT,
-    "4_1_3": DIRECTION_LEFT,
-    "4.1.4": DIRECTION_STRAIGHT_RIGHT,
-    "4_1_4": DIRECTION_STRAIGHT_RIGHT,
-    "4.1.5": DIRECTION_STRAIGHT_LEFT,
-    "4_1_5": DIRECTION_STRAIGHT_LEFT,
-    "4.1.6": DIRECTION_LEFT_RIGHT,
-    "4_1_6": DIRECTION_LEFT_RIGHT,
-    "3.18.1": NO_TURN_RIGHT,
-    "3_18_1": NO_TURN_RIGHT,
-    "3.18.2": NO_TURN_LEFT,
-    "3_18_2": NO_TURN_LEFT,
-    "3.1": NO_ENTRY,
-    "3_1": NO_ENTRY,
-    "4.2.1": DETOUR_RIGHT,
-    "4_2_1": DETOUR_RIGHT,
-    "detour_right": DETOUR_RIGHT,
-    "4.2.2": DETOUR_LEFT,
-    "4_2_2": DETOUR_LEFT,
-    "detour_left": DETOUR_LEFT,
-    "4.2.3": DETOUR_EITHER,
-    "4_2_3": DETOUR_EITHER,
-    "detour_either": DETOUR_EITHER,
-    "3.24": SPEED_LIMIT,
-    "3_24": SPEED_LIMIT,
-    "speed_limit": SPEED_LIMIT,
-    "4.6": MIN_SPEED,
-    "4_6": MIN_SPEED,
-    "min_speed": MIN_SPEED,
-    "5.21": RESIDENTIAL_ZONE,
-    "5_21": RESIDENTIAL_ZONE,
-    "residential_zone": RESIDENTIAL_ZONE,
-    "5.31": ZONE_SPEED_LIMIT,
-    "5_31": ZONE_SPEED_LIMIT,
-    "zone_speed_limit": ZONE_SPEED_LIMIT,
-    "5.19": CROSSWALK,
-    "5_19": CROSSWALK,
-    "5.19.1": CROSSWALK,
-    "5.19.2": CROSSWALK,
-}
+_BY_ID: dict[str, SignProfile] = {p.id: p for p in _PROFILES}
+_BY_SIGN_CODE: dict[str, SignProfile] = {p.sign_code: p for p in _PROFILES}
 
 
 def get_profile(sign_id: str) -> SignProfile:
+    """Look up by English eval id. Harvest yaml keys fall back to ``sign_code``."""
     key = str(sign_id).strip()
-    try:
-        return _REGISTRY[key]
-    except KeyError as exc:
-        known = ", ".join(sorted({p.id for p in _PROFILES}))
-        raise KeyError(f"Unknown sign {sign_id!r}. Expected one of: {known}") from exc
+    profile = _BY_ID.get(key) or _BY_SIGN_CODE.get(key)
+    if profile is None:
+        known = ", ".join(sorted(_BY_ID))
+        raise KeyError(f"Unknown sign {sign_id!r}. Expected one of: {known}")
+    return profile
 
 
 def list_profiles() -> list[SignProfile]:
     return list(_PROFILES)
 
 
+def profiles_in_family(family: SignFamily) -> list[SignProfile]:
+    return [p for p in _PROFILES if p.family == family]
+
+
 def package_root() -> Path:
     """``traffic_bench/`` package directory."""
-    return Path(__file__).resolve().parents[1]
+    return PACKAGE_ROOT
 
 
 def repo_root() -> Path:
     """Repository root (parent of the Python package)."""
-    return Path(__file__).resolve().parents[2]
+    return REPO_ROOT
 
 
 def artifact_root() -> Path:
     """Working artifacts: ``<repo>/data/{scenes,runs,trajectories}/``."""
-    return repo_root() / "data"
+    return DATA
 
 
 def scenes_dir(profile: SignProfile) -> Path:
-    return artifact_root() / "scenes" / profile.data_subdir
+    return DATA / "scenes" / profile.data_subdir
 
 
 def runs_dir(profile: SignProfile) -> Path:
-    return artifact_root() / "runs" / profile.data_subdir
+    return DATA / "runs" / profile.data_subdir
 
 
 def trajectories_dir(profile: SignProfile) -> Path:
-    return artifact_root() / "trajectories" / profile.data_subdir
+    return DATA / "trajectories" / profile.data_subdir
 
 
 def output_dir(profile: SignProfile) -> Path:
     """Hydra run parent (alias of ``runs_dir``)."""
     return runs_dir(profile)
-
-
-def register_path_resolvers() -> None:
-    """Hydra interpolators: ``${repo:rel}`` and ``${sign_data:main}`` → ``main_road``."""
-    from omegaconf import OmegaConf
-
-    OmegaConf.register_new_resolver(
-        "repo", lambda rel: str(repo_root() / rel), replace=True
-    )
-    OmegaConf.register_new_resolver(
-        "sign_data", lambda sid: get_profile(sid).data_subdir, replace=True
-    )
-
-
-register_path_resolvers()

@@ -1,6 +1,0 @@
-# @package _global_
-# PDD 4.2.1 — pass obstacle on the right.
-defaults:
-  - _detour
-
-sign: detour_right

@@ -65,21 +65,20 @@ def load_scene_inputs(scenes_dir: Path, scene_name: str) -> tuple[Path, float, f
     if not osm_path.exists():
         raise FileNotFoundError(f"OSM file not found: {osm_path}")
 
-    coords_path = scene_dir / "center.json"
-    if not coords_path.exists():
-        raise FileNotFoundError(
-            f"center.json not found in {scene_dir}. "
-            'Expected: {"lat": <float>, "lon": <float>}'
-        )
-
-    with open(coords_path, encoding="utf-8") as f:
-        coords = json.load(f)
-
-    lat = coords.get("lat", coords.get("latitude"))
-    lon = coords.get("lon", coords.get("longitude"))
+    lat = lon = None
+    meta_path = scene_dir / "meta.json"
+    if meta_path.is_file():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        lat = meta.get("latitude", meta.get("lat"))
+        lon = meta.get("longitude", meta.get("lon"))
+    leftover = scene_dir / "center.json"
+    if (lat is None or lon is None) and leftover.is_file():
+        coords = json.loads(leftover.read_text(encoding="utf-8"))
+        lat = coords.get("lat", coords.get("latitude"))
+        lon = coords.get("lon", coords.get("longitude"))
     if lat is None or lon is None:
-        raise ValueError(
-            f"{coords_path} must contain lat/lon (or latitude/longitude), got: {coords}"
+        raise FileNotFoundError(
+            f"no lat/lon in {meta_path} (or leftover center.json) for {scene_dir}"
         )
 
     return osm_path, float(lat), float(lon)
@@ -259,7 +258,7 @@ def convert_osm_to_sumo(osm_path, scene_name, scenes_dir, lat, lon, radius):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Build SUMO net from a scene folder (map.osm + center.json)",
+        description="Build SUMO net from a scene folder (map.osm + meta.json lat/lon)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )

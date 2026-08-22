@@ -1,5 +1,5 @@
 # @package _global_
-# PDD 4.6 — minimum speed.
+# 4.6 — minimum speed
 defaults:
   - _speed
 

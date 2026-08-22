@@ -1,0 +1,6 @@
+# @package _global_
+# 4.2.3 — pass obstacle on either side
+defaults:
+  - /sign/detour/__base__
+
+sign: detour_either

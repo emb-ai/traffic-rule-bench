@@ -139,7 +139,7 @@ mark the zebra from the SUMO crossing edge.
 ### 6. Manifest (eval, not harvest)
 
 ```bash
-python traffic_bench/eval/generate_manifest.py sign=yield paths.split=train
+python -m traffic_bench.eval manifest sign=yield paths.split=train
 ```
 
 ## How eval picks ego spawn

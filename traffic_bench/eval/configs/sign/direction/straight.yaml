@@ -1,0 +1,6 @@
+# @package _global_
+# 4.1.1 — proceed straight
+defaults:
+  - /sign/direction/__base__
+
+sign: direction_straight
