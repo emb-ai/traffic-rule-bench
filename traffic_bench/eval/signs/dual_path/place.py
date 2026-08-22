@@ -83,6 +83,43 @@ def row_is_no_entry(row: dict) -> bool:
     return _code_in_family(code, "no_entry") or sign_type in _NO_ENTRY_TYPES
 
 
+COMPLIANT_NAV_POLICIES = frozenset({
+    "modified_idm",
+    "comprehensive_rule_expert",
+    "rule_compliant",
+    "carl_rule",
+    "plant2_rule",
+})
+
+
+def resolve_row_for_policy(row: dict, policy_type: str) -> dict:
+    """Pick baseline vs compliant dest (and along-cap) for the active policy."""
+    if not row_uses_dual_path_nav(row):
+        return row
+    out = dict(row)
+    use_compliant = policy_type in COMPLIANT_NAV_POLICIES
+    if use_compliant:
+        dest = row.get("compliant_destination_lane_id") or row.get("destination_lane_id")
+        along = row.get("compliant_destination_max_along_m")
+        if along is None:
+            along = row.get("destination_max_along_m")
+    else:
+        dest = row.get("baseline_destination_lane_id") or row.get("destination_lane_id")
+        along = row.get("baseline_destination_max_along_m")
+        if along is None:
+            along = row.get("destination_max_along_m")
+    if dest:
+        out["destination_lane_id"] = dest
+        edge = lane_edge_id(str(dest))
+        if edge:
+            out["destination_edge_id"] = edge
+    if along is not None:
+        out["destination_max_along_m"] = float(along)
+    elif out.get("destination_max_along_m") is None:
+        out["destination_max_along_m"] = 1e9
+    return out
+
+
 def row_uses_dual_path_nav(row: dict) -> bool:
     """5.7 / 4.1 / 3.18 / 3.1: truncated dests; only rule-compliant policies replan."""
     family = str(row.get("sign_family") or "")

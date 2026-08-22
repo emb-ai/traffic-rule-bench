@@ -8,8 +8,8 @@ into `data/scenes/<sign>/`. Eval writes `data/runs/<sign>/<timestamp>/`.
 `sign=main_road` writes under `data/{scenes,runs}/main_road/`.
 
 Family expand/place/spec live under [`signs/`](signs/README.md). Shared
-shells are still `generate_manifest.py`, `run_benchmark.py`,
-`eval_pipeline.py`, and `core/`. Old commands
+shells are `manifest/`, `bench/`, `generate_manifest.py` (Hydra),
+`run_benchmark.py` (CLI), `eval_pipeline.py`, and `core/`. Old commands
 (`python -m traffic_bench.eval.generate_manifest`) keep working.
 
 ## Folders
@@ -20,7 +20,7 @@ shells are still `generate_manifest.py`, `run_benchmark.py`,
 | [`sign_registry.py`](sign_registry.py) | eval id → family, spawn, data folder |
 | [`configs/`](configs/) | Hydra YAML; paths are relative (`data/scenes/${sign}`) |
 | [`manifest/`](manifest/) | discover / write jsonl + `repro/`; Hydra still in `generate_manifest.py` |
-| [`bench/`](bench/) | *(target)* one policy, one manifest, closed-loop episodes |
+| [`bench/`](bench/) | episode loop + place dispatch; CLI still in `run_benchmark.py` |
 | [`pipeline/`](pipeline/) | *(target)* many policies + `eval_out/` |
 | [`metrics/`](metrics/README.md) | episode JSONL → CSV / markdown |
 | [`lib/`](lib/README.md) | shared engine (today: `core/`) |
@@ -34,8 +34,10 @@ writes jsonl + `repro/`. Hydra `main` and `generate_*_manifest` shells stay
 in [`generate_manifest.py`](generate_manifest.py). Family rows are built in
 `signs/<family>/expand.py`.
 
-**`bench/`** — today's [`run_benchmark.py`](run_benchmark.py) minus per-sign
-placement. One policy, one manifest:
+**`bench/`** — one policy, one manifest. Episode loop and place-dispatch
+live in [`bench/episode.py`](bench/episode.py) and
+[`bench/place.py`](bench/place.py). CLI remains
+[`run_benchmark.py`](run_benchmark.py):
 
 - wrap the MetaDrive / SUMO env
 - load IDM / PPO / CaRL / PlanT2

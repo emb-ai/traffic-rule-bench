@@ -16,7 +16,7 @@ parameterized by sign code.
 | `scene.py` | `DualPathScenario` from `meta.json` |
 | `budget.py` | Truncate both routes to a shared meter budget |
 | `expand.py` | dual-path × spawn lane × NPC → manifest rows |
-| `place.py` | Put the plate on the ego approach (or 3.1 forbidden exit) |
+| `place.py` | Plate on ego approach (or 3.1 exit); `resolve_row_for_policy` |
 
 `generate_manifest` dispatches `family == dual_path` to one generator.
 `run_benchmark` calls `place_dual_path_signs`. Old `core.manifest.*_expansion`

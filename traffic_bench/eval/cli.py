@@ -1,8 +1,9 @@
 """Eval CLI: manifest → run / pipeline → metrics.
 
-Facades over the current entry points. Hydra / episode / pipeline shells
+Facades over the current entry points. Hydra / CLI / pipeline shells
 still live in ``generate_manifest.py``, ``run_benchmark.py``, and
-``eval_pipeline.py``; family expand/place is under ``signs/``.
+``eval_pipeline.py``; the episode loop is ``bench.episode``, family
+expand/place is under ``signs/``.
 """
 
 from __future__ import annotations
