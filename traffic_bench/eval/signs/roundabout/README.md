@@ -12,6 +12,6 @@ the ego spoke; invisible RoundaboutYieldSign on the conflict-arc ring.
 | `place.py` | Plate on ego spoke + yield tracker; rebuild O-layout if missing |
 
 Ring/spoke geometry stays in `core/layout/roundabout_topology.py` and
-`roundabout_yield_zone.py`. Manifest rows still come from the shared
-`generate_manifest()` path. Spawn combinatorics stay in
-`scene_augmentation.py` until `spawn.py`.
+`roundabout_yield_zone.py`. Manifest rows still use
+`signs/junction/expand.py` (same layout × aux product). Spawn combinatorics
+stay in `scene_augmentation.py` until `spawn.py`.

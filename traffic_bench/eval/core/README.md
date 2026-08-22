@@ -87,7 +87,7 @@ Turning scenes into `real_manifest.jsonl` rows.
 | Module | Role |
 |--------|------|
 | `manifest_config.py` | Shared defaults (`spawn_distance_before_end`, stop wait, …) |
-| `manifest_expansion.py` | Layout × aux cartesian product (2.1 / 2.4 / 4.3) |
+| `manifest_expansion.py` | Shared `ExpansionConfig` / `shuffle_cap`; junction product is a shim → `signs/junction/expand.py` |
 | `manifest_viability.py` | Pre-manifest scene filters (`reject_unusable_scenes`) |
 | `blocked_road_expansion.py` | Shim → `signs/blocked/expand.py` |
 | `one_way_expansion.py` | Dual-path × `n_variations` NPC profiles for 5.7.1 / 5.7.2 |

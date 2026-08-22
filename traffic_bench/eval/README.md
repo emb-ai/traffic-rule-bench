@@ -19,7 +19,7 @@ shells are still `generate_manifest.py`, `run_benchmark.py`,
 | [`cli.py`](cli.py) | `python -m traffic_bench.eval {manifest,run,pipeline,metrics}` |
 | [`sign_registry.py`](sign_registry.py) | eval id → family, spawn, data folder |
 | [`configs/`](configs/) | Hydra YAML; paths are relative (`data/scenes/${sign}`) |
-| [`manifest/`](manifest/) | *(target)* scenes + config → `real_manifest.jsonl` |
+| [`manifest/`](manifest/) | discover / write jsonl + `repro/`; Hydra still in `generate_manifest.py` |
 | [`bench/`](bench/) | *(target)* one policy, one manifest, closed-loop episodes |
 | [`pipeline/`](pipeline/) | *(target)* many policies + `eval_out/` |
 | [`metrics/`](metrics/README.md) | episode JSONL → CSV / markdown |
@@ -28,10 +28,11 @@ shells are still `generate_manifest.py`, `run_benchmark.py`,
 
 ### What each folder stores
 
-**`manifest/`** — "scenes + Hydra → `real_manifest.jsonl`". Shared shell only:
-discover scene dirs, write `repro/`, Hydra `main`, dispatch to
-`signs/<family>/expand.py`. Not how yield vs crosswalk rows are built.
-Today this is [`generate_manifest.py`](generate_manifest.py).
+**`manifest/`** — "scenes + Hydra → `real_manifest.jsonl`". Shared shell:
+[`manifest/io.py`](manifest/io.py) discovers scenes, applies split / caps,
+writes jsonl + `repro/`. Hydra `main` and `generate_*_manifest` shells stay
+in [`generate_manifest.py`](generate_manifest.py). Family rows are built in
+`signs/<family>/expand.py`.
 
 **`bench/`** — today's [`run_benchmark.py`](run_benchmark.py) minus per-sign
 placement. One policy, one manifest:

@@ -24,4 +24,5 @@ Per-family files (skip if unused):
 | `spec.py` | Plate class / dual-path crop-meta bridge |
 
 Every family folder has code (`expand.py` / `place.py` / `spec.py` as needed).
-`generate_*_manifest` shells still live in `generate_manifest.py`.
+`generate_*_manifest` shells still live in `generate_manifest.py`; shared
+discover / write is `manifest/io.py`.

@@ -12,8 +12,9 @@ folder owns plate placement for the four eval ids.
 
 | File | Role |
 | --- | --- |
+| `expand.py` | Layout × aux cartesian product + row builder (also used by 4.3) |
 | `place.py` | Where plates go on main vs secondary arms |
 
-`generate_manifest()` (the default branch) still builds rows via
-`core/manifest/manifest_expansion.py`. Spawn combinatorics stay in
-`scene_augmentation.py` until `expand.py` / `spawn.py`.
+`generate_manifest()` (the default Hydra branch) still discovers scenes and
+writes jsonl; it calls `expand_scene_entries` here. Spawn combinatorics stay
+in `scene_augmentation.py` until `spawn.py`.
