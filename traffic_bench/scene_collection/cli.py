@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import shutil
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -152,15 +151,6 @@ def cmd_review(argv: List[str]) -> int:
     return _run_module_main(rev, argv)
 
 
-def _copy_scene_dir(src: Path, dst: Path) -> None:
-    if dst.exists():
-        shutil.rmtree(dst)
-    if src.is_symlink():
-        shutil.copytree(src.resolve(), dst, symlinks=False)
-    else:
-        shutil.copytree(src, dst, symlinks=False)
-
-
 def cmd_analysis(argv: List[str]) -> int:
     from traffic_bench.scene_collection.analysis import run as analysis_run
 
@@ -168,49 +158,47 @@ def cmd_analysis(argv: List[str]) -> int:
 
 
 def cmd_pack(argv: List[str]) -> int:
+    from traffic_bench.scene_collection.publish.layout import (
+        DEFAULT_STAGING,
+        pack_hf_dataset,
+        pack_one_sign,
+    )
+
     ap = argparse.ArgumentParser(
         prog="python -m traffic_bench.scene_collection pack",
         description=(
-            "Dereference symlinks and copy one sign's scenes into a standalone folder "
-            "(so you can share/download just that sign without maps/)."
+            "Dereference scenes into a standalone folder. "
+            "--all writes the Hugging Face layout (scenes/ + metadata/ + README)."
         ),
     )
-    ap.add_argument("--sign", required=True, help="Eval profile id, e.g. yield")
-    ap.add_argument("--out", type=Path, required=True, help="Destination directory")
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--sign", metavar="ID", help="One eval id, e.g. yield")
+    g.add_argument(
+        "--all",
+        action="store_true",
+        help="Every materialized sign → HF dataset folder",
+    )
+    ap.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help=f"Destination (default with --all: {DEFAULT_STAGING})",
+    )
     ap.add_argument("--scenes-dir", type=Path, default=None)
     args = ap.parse_args(argv)
-    from traffic_bench.eval.sign_registry import get_profile, scenes_dir as profile_scenes_dir
-    from traffic_bench.scene_collection.sign_scenes.filter.selection import is_reserved_scene_dir
+    if args.all:
+        out = args.out or DEFAULT_STAGING
+        pack_hf_dataset(out, scenes_root=args.scenes_dir)
+        return 0
+    if args.out is None:
+        ap.error("--out is required with --sign")
+    return pack_one_sign(str(args.sign), args.out, scenes_dir=args.scenes_dir)
 
-    profile = get_profile(args.sign)
-    src = args.scenes_dir or profile_scenes_dir(profile)
-    if not src.is_dir():
-        print(f"ERROR: scenes dir not found: {src}", file=sys.stderr)
-        return 1
-    out = args.out.expanduser().resolve()
-    out.mkdir(parents=True, exist_ok=True)
-    n = 0
-    for child in sorted(src.iterdir()):
-        name = child.name
-        if child.is_dir() and is_reserved_scene_dir(name):
-            continue
-        dest = out / name
-        if child.is_dir() or child.is_symlink():
-            if name in {"moscow_pool.json", "scene_selection.json"}:
-                continue
-            if child.is_file() or (child.is_symlink() and child.resolve().is_file()):
-                shutil.copy2(child, dest)
-            else:
-                _copy_scene_dir(child, dest)
-                n += 1
-        elif child.is_file():
-            shutil.copy2(child, dest)
-    print(f"[pack] {profile.id}: {n} scenes → {out}")
-    print(
-        "This folder is self-contained (symlinks followed). "
-        "You can copy it without maps/."
-    )
-    return 0
+
+def cmd_publish(argv: List[str]) -> int:
+    from traffic_bench.scene_collection.publish import run as pub
+
+    return pub.main(argv)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -223,6 +211,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "reject",
         "review",
         "pack",
+        "publish",
         "analysis",
     )
     if not argv or argv[0] in ("-h", "--help"):
@@ -237,7 +226,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             "  prepare       sign-specific surgery (crosswalk zebra)\n"
             "  reject        drop unusable scenes, optional refill\n"
             "  review        browser keep/reject UI\n"
-            "  pack          dereference symlinks into a standalone folder\n"
+            "  pack          dereference scenes; --all writes the HF dataset folder\n"
+            "  publish       pack (unless --no-pack) and upload to Hugging Face\n"
             "  analysis      harvest counts + diversity figures\n"
         )
         return 0
@@ -253,6 +243,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "reject": cmd_reject,
         "review": cmd_review,
         "pack": cmd_pack,
+        "publish": cmd_publish,
         "analysis": cmd_analysis,
     }
     return dispatch[command](argv[1:])

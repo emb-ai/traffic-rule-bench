@@ -14,6 +14,7 @@ Two stages:
 | `[collect/](collect/README.md)`         | OSM → city net → index → train/test stamp → crops           |
 | `[assign/](assign/README.md)`           | `signs.yaml` queries → `maps/splits/sign_allocations.json`  |
 | `[sign_scenes/](sign_scenes/README.md)` | Place maps into `data/scenes/<sign>/`, prepare, filter      |
+| `[publish/](publish/README.md)`         | Pack + upload official scenes to Hugging Face               |
 | `[maps/](maps/README.md)`               | Harvested data only (nets, indexes, crops, splits)          |
 | `[analysis/](analysis/README.md)`       | Counts + diversity figures (`analysis/figures/`)            |
 | `paths.py`                              | Shared path constants (`MAPS`, `CROPS`, `DATA_SCENES`, …)   |
@@ -107,8 +108,22 @@ python -m traffic_bench.scene_collection materialize --sign yield --refill
 # Standalone folder (dereferences relative links; share without maps/)
 python -m traffic_bench.scene_collection pack --sign yield --out dist/yield
 
+# Hugging Face layout (all signs) and optional upload
+python -m traffic_bench.scene_collection pack --all
+python -m traffic_bench.scene_collection publish
+
 # Harvest counts + diversity figures
 python -m traffic_bench.scene_collection analysis
+```
+
+Official scenes also live on Hugging Face
+[`emb-ai/traffic-sign-bench`](https://huggingface.co/datasets/emb-ai/traffic-sign-bench).
+Download everything into `data/scenes/<sign>/`:
+
+```bash
+huggingface-cli download emb-ai/traffic-sign-bench \
+    --repo-type dataset \
+    --local-dir data
 ```
 
 `collect` includes the train/test **split** (that step used to be missing from
