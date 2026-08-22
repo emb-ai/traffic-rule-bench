@@ -3,5 +3,5 @@
 Injects one pedestrian crossing in the **middle** of a copied segment, in place
 under `data/scenes/crosswalk/`. Does not write `_cw_<pos>` variants.
 
-- `add_zebra.py` — walk live scene dirs, skip nets that already have a crossing
+- `add_zebra.py` — walk live scene dirs, skip nets that already have a crossing, redraw `custom_cropped.png` with the zebra marked
 - `inject.py` — split the edge, add sidewalks, `netconvert` crossing

@@ -134,22 +134,18 @@ def iter_segment_scene_dirs(scenes_root: Path):
 
 
 def write_scene_meta(scene_dir: Path, meta: dict) -> None:
-    """Write meta.json and center.json."""
     (scene_dir / "meta.json").write_text(
         json_dumps(meta) + "\n", encoding="utf-8"
     )
-    if "latitude" in meta and "longitude" in meta:
-        (scene_dir / "center.json").write_text(
-            json_dumps({"lat": meta["latitude"], "lon": meta["longitude"]}) + "\n",
-            encoding="utf-8",
-        )
+    leftover = scene_dir / "center.json"
+    if leftover.is_file():
+        leftover.unlink()
 
 
 def render_segment_preview(
     net_path: Path,
     out_png: Path,
     road_id: str,
-    center_xy: Tuple[float, float],
 ) -> None:
     """Same top-down preview as junction / dual_path / lane_direction scenes."""
     edges, junctions = parse_sumo_net(net_path)
@@ -159,7 +155,6 @@ def render_segment_preview(
         out_png,
         figsize=(6, 6),
         dpi=120,
-        marker_xy=center_xy,
         compliant_edge_ids=[road_id],
         legend=True,
     )
@@ -231,7 +226,6 @@ def crop_segment_scene(
             out_net,
             out_png,
             road_id=row["edge_id"],
-            center_xy=(float(row["center_xy"][0]), float(row["center_xy"][1])),
         )
     except Exception as exc:
         print(f"  [png warn] {scene_id}: {exc}")
@@ -400,7 +394,6 @@ def _render_one_png(scene_dir: Path) -> tuple:
             scene_dir / "map.net.xml",
             scene_dir / "custom_cropped.png",
             road_id=str(meta["road_id"]),
-            center_xy=(float(meta["center_xy"][0]), float(meta["center_xy"][1])),
         )
         return ("ok", scene_dir.name, "")
     except Exception as exc:  # noqa: BLE001

@@ -54,6 +54,7 @@ def add_zebra_in_place(scene_dir: Path) -> str:
     if not meta_path.is_file() or not net_path.is_file():
         return "skip"
     if net_has_crossings(net_path):
+        _refresh_preview(scene_dir)
         return "skip"
     meta = _load_meta(scene_dir)
     edge_ids, edge_length = _edge_ids_and_length(scene_dir, meta)
@@ -78,7 +79,17 @@ def add_zebra_in_place(scene_dir: Path) -> str:
     meta["crossed_edge_ids"] = list(result.crossed_edge_ids or ())
     meta["pdd_code"] = "5.19"
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _refresh_preview(scene_dir)
     return "ok"
+
+
+def _refresh_preview(scene_dir: Path) -> None:
+    from traffic_bench.scene_collection.preview import render_scene_preview
+
+    try:
+        render_scene_preview(scene_dir)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [preview-fail] {scene_dir.name}: {exc}")
 
 
 def add_zebra_to_scenes_dir(scenes_dir: Path) -> Dict[str, int]:

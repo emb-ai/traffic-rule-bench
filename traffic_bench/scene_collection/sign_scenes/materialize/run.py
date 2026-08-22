@@ -5,8 +5,8 @@
 not the PDD code. Allocations in ``sign_allocations.json`` stay keyed by PDD.
 
 Junction crops live under ``maps/crops/junction/{T,X,O}/``.
-For ``prepare: crosswalk`` (5.19) this copies segments; zebra injection is
-``python -m traffic_bench.scene_collection prepare --sign crosswalk``.
+For ``prepare: crosswalk`` (5.19) this copies segments, then runs the yaml
+``prepare:`` hook (zebra in the middle). ``prepare`` stays available to re-run.
 """
 
 from __future__ import annotations
@@ -53,6 +53,8 @@ from traffic_bench.scene_collection.paths import (
     TRAIN_IDS,
 )
 from traffic_bench.scene_collection.preview import (
+    attach_crosswalk_overlay,
+    crosswalk_xy_from_meta,
     parse_sumo_net,
     render_network,
     routes_from_dual_path_meta,
@@ -304,10 +306,12 @@ def _render_preview(net_path: Path, out_png: Path, *, meta: Optional[dict] = Non
     For dual_path scenes, overlays short baseline (red) and long compliant (green).
     """
     edges, junctions = parse_sumo_net(net_path)
+    edges = attach_crosswalk_overlay(edges, junctions, meta)
     out_png.parent.mkdir(parents=True, exist_ok=True)
     baseline = compliant = None
     if meta:
         baseline, compliant, _spawn = routes_from_dual_path_meta(meta)
+    has_crossing = any(e.get("kind") == "crossing" for e in edges)
     render_network(
         edges,
         junctions,
@@ -316,6 +320,8 @@ def _render_preview(net_path: Path, out_png: Path, *, meta: Optional[dict] = Non
         dpi=120,
         baseline_edge_ids=baseline,
         compliant_edge_ids=compliant,
+        legend=bool(baseline or compliant or has_crossing),
+        crosswalk_xy=None if has_crossing else crosswalk_xy_from_meta(junctions, meta),
     )
 
 
@@ -330,6 +336,9 @@ def _link_or_copy(src: Path, dst: Path, *, mode: str) -> None:
         dst.symlink_to(rel)
     elif mode == "copy":
         shutil.copytree(src, dst)
+        leftover = dst / "center.json"
+        if leftover.is_file():
+            leftover.unlink()
     else:
         raise ValueError(f"Unknown mode {mode!r}")
 
@@ -720,6 +729,21 @@ def refill(
     }
 
 
+def _run_prepare_if_needed(profile, dest: Path) -> None:
+    """Run the yaml ``prepare:`` hook (e.g. crosswalk zebra) after placing maps."""
+    from traffic_bench.scene_collection.sign_scenes.prepare.run import (
+        _prepare_field,
+        prepare_sign,
+    )
+
+    hook = _prepare_field(profile.pdd_code)
+    if not hook:
+        return
+    rc = prepare_sign(profile.id, scenes_dir=dest)
+    if rc:
+        sys.exit(rc)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
@@ -735,7 +759,7 @@ def main() -> None:
     ap.add_argument(
         "--all",
         action="store_true",
-        help="Materialize every sign in signs.yaml that has no prepare: hook",
+        help="Materialize every sign in signs.yaml (runs prepare: hooks after)",
     )
     ap.add_argument(
         "--split",
@@ -807,12 +831,10 @@ def main() -> None:
     if args.all:
         cfg = load_signs_yaml(args.signs_yaml)
         signs_to_run = [
-            str(pdd)
-            for pdd, spec in (cfg.get("signs") or {}).items()
-            if spec and not spec.get("prepare")
+            str(pdd) for pdd, spec in (cfg.get("signs") or {}).items() if spec
         ]
         if not signs_to_run:
-            print("[materialize] --all: no signs without prepare:")
+            print("[materialize] --all: no signs in yaml")
             return
     else:
         signs_to_run = [str(args.sign)]
@@ -853,6 +875,7 @@ def main() -> None:
                 force_preview=args.force_preview,
                 crop_missing=args.crop_missing,
             )
+            _run_prepare_if_needed(profile, dest)
             continue
 
         print(f"[materialize] sign={profile.id} ({profile.pdd_code}) → {dest} (mode={args.mode})")
@@ -869,6 +892,7 @@ def main() -> None:
             force_preview=args.force_preview,
             crop_missing=args.crop_missing,
         )
+        _run_prepare_if_needed(profile, dest)
 
 
 if __name__ == "__main__":

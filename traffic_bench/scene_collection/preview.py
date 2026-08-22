@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -25,8 +26,24 @@ from matplotlib.collections import LineCollection
 Point = Tuple[float, float]
 
 
+def _parse_shape(shape_str: str | None) -> List[Point]:
+    if not shape_str:
+        return []
+    points: List[Point] = []
+    for token in shape_str.strip().split():
+        parts = token.split(",")
+        if len(parts) < 2:
+            continue
+        points.append((float(parts[0]), float(parts[1])))
+    return points
+
+
 def parse_sumo_net(net_path: Path):
-    """Parse SUMO net.xml and extract edges/lanes for rendering."""
+    """Parse SUMO net.xml and extract edges/lanes for rendering.
+
+    Crossing edges (``function="crossing"``) are kept even though their ids
+    start with ``:``; ``render_network`` draws them as a zebra.
+    """
     import xml.etree.ElementTree as ET
 
     tree = ET.parse(net_path)
@@ -36,26 +53,27 @@ def parse_sumo_net(net_path: Path):
     junctions = []
 
     for edge in root.findall("edge"):
-        edge_id = edge.get("id")
-        if edge_id.startswith(":"):
+        edge_id = edge.get("id") or ""
+        kind = "crossing" if edge.get("function") == "crossing" else "road"
+        if kind != "crossing" and edge_id.startswith(":"):
             continue
 
         for lane in edge.findall("lane"):
-            shape_str = lane.get("shape")
-            if shape_str:
-                points = []
-                for p in shape_str.strip().split():
-                    x, y = map(float, p.split(","))
-                    points.append((x, y))
-                if len(points) >= 2:
-                    edges.append(
-                        {
-                            "id": edge_id,
-                            "lane_id": lane.get("id"),
-                            "points": points,
-                            "width": float(lane.get("width", 3.2)),
-                        }
-                    )
+            points = _parse_shape(lane.get("shape"))
+            if kind == "crossing":
+                outline = _parse_shape(lane.get("outlineShape"))
+                if _polyline_length(outline) > _polyline_length(points):
+                    points = outline
+            if len(points) >= 2:
+                edges.append(
+                    {
+                        "id": edge_id,
+                        "lane_id": lane.get("id"),
+                        "points": points,
+                        "width": float(lane.get("width", 3.2)),
+                        "kind": kind,
+                    }
+                )
 
     for junction in root.findall("junction"):
         junc_type = junction.get("type")
@@ -63,19 +81,131 @@ def parse_sumo_net(net_path: Path):
             continue
         x = float(junction.get("x", 0))
         y = float(junction.get("y", 0))
-        shape_str = junction.get("shape")
-        if shape_str:
-            points = []
-            for p in shape_str.strip().split():
-                coords = p.split(",")
-                if len(coords) >= 2:
-                    points.append((float(coords[0]), float(coords[1])))
-            if points:
-                junctions.append(
-                    {"id": junction.get("id"), "points": points, "x": x, "y": y}
-                )
+        points = _parse_shape(junction.get("shape"))
+        junctions.append(
+            {"id": junction.get("id"), "points": points, "x": x, "y": y}
+        )
 
     return edges, junctions
+
+
+def _polyline_length(pts: Sequence[Point]) -> float:
+    return sum(
+        math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:])
+    )
+
+
+def _point_along(pts: Sequence[Point], dist: float) -> Optional[Point]:
+    if len(pts) < 2:
+        return None
+    remain = max(0.0, dist)
+    for a, b in zip(pts, pts[1:]):
+        seg = math.hypot(b[0] - a[0], b[1] - a[1])
+        if seg <= 1e-9:
+            continue
+        if remain <= seg:
+            t = remain / seg
+            return (a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]))
+        remain -= seg
+    return pts[-1]
+
+
+def _centroid(pts: Sequence[Point]) -> Point:
+    return (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+
+
+def _crossing_axes(pts: Sequence[Point]) -> tuple[Point, Point, Point]:
+    """Return (center, unit across-road, unit along-road) from a crossing polyline."""
+    cx, cy = _centroid(pts)
+    dx = pts[-1][0] - pts[0][0]
+    dy = pts[-1][1] - pts[0][1]
+    if math.hypot(dx, dy) < 1e-6:
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        dx, dy = max(xs) - min(xs), max(ys) - min(ys)
+    norm = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / norm, dy / norm
+    return (cx, cy), (ux, uy), (-uy, ux)
+
+
+def _crossing_mark_poly(
+    pts: Sequence[Point], *, along_m: float = 14.0, across_min_m: float = 12.0
+) -> List[Point]:
+    """Preview rectangle around a SUMO crossing so it stays visible on a long crop."""
+    if len(pts) < 2:
+        return []
+    (cx, cy), (ux, uy), (vx, vy) = _crossing_axes(pts)
+    half_across = max(_polyline_length(pts), across_min_m) / 2.0
+    half_along = along_m / 2.0
+    return [
+        (cx - ux * half_across - vx * half_along, cy - uy * half_across - vy * half_along),
+        (cx + ux * half_across - vx * half_along, cy + uy * half_across - vy * half_along),
+        (cx + ux * half_across + vx * half_along, cy + uy * half_across + vy * half_along),
+        (cx - ux * half_across + vx * half_along, cy - uy * half_across + vy * half_along),
+    ]
+
+
+def _zebra_hatch_lines(
+    pts: Sequence[Point], *, period: float = 2.2, half_len: float = 6.0
+) -> List[List[Point]]:
+    """Stripes along the road, across a crossing polyline."""
+    if len(pts) < 2:
+        return []
+    (cx, cy), (ux, uy), (vx, vy) = _crossing_axes(pts)
+    half_across = max(_polyline_length(pts), 12.0) / 2.0
+    ticks: List[List[Point]] = []
+    t = -half_across
+    while t <= half_across + 1e-6:
+        px, py = cx + ux * t, cy + uy * t
+        ticks.append(
+            [
+                (px - vx * half_len, py - vy * half_len),
+                (px + vx * half_len, py + vy * half_len),
+            ]
+        )
+        t += period
+    return ticks
+
+
+def crosswalk_xy_from_meta(junctions: Sequence[dict], meta: Optional[dict]) -> Optional[Point]:
+    """Fallback mark when netconvert dropped the crossing edge but kept the node."""
+    if not meta:
+        return None
+    node_id = meta.get("crosswalk_node_id")
+    if not node_id:
+        return None
+    want = str(node_id)
+    for junc in junctions:
+        if str(junc.get("id") or "") == want:
+            return (float(junc["x"]), float(junc["y"]))
+    return None
+
+
+def attach_crosswalk_overlay(edges: List[dict], junctions: Sequence[dict], meta: Optional[dict]) -> List[dict]:
+    """If the net has no crossing edge, draw the injected split-node outline instead."""
+    if any(e.get("kind") == "crossing" for e in edges):
+        return edges
+    poly = crosswalk_poly_from_meta(junctions, meta)
+    if not poly:
+        return edges
+    return [*edges, {"id": "crosswalk", "points": poly, "kind": "crossing"}]
+
+
+def crosswalk_poly_from_meta(junctions: Sequence[dict], meta: Optional[dict]) -> Optional[List[Point]]:
+    """Junction outline of the injected split node (when SUMO omitted the crossing edge)."""
+    if not meta:
+        return None
+    node_id = meta.get("crosswalk_node_id")
+    if not node_id:
+        return None
+    want = str(node_id)
+    for junc in junctions:
+        if str(junc.get("id") or "") != want:
+            continue
+        pts = list(junc.get("points") or [])
+        if len(pts) >= 3:
+            return pts
+    return None
 
 
 def _edge_centerline_map(edges: Sequence[dict]) -> Dict[str, List[Point]]:
@@ -142,15 +272,22 @@ def render_network(
     baseline_edge_ids: Optional[Sequence[str]] = None,
     compliant_edge_ids: Optional[Sequence[str]] = None,
     legend: bool = True,
+    crosswalk_xy: tuple[float, float] | None = None,
 ):
     """Render the road network to an image.
 
     Optional dual-path overlays:
       * baseline (short / forbidden) — red
       * compliant (long / allowed) — green
+
+    Crossing edges from the net are drawn as a zebra; ``crosswalk_xy`` is a
+    fallback mark when the crossing edge is missing.
     """
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
     ax.set_facecolor("#f0f0f0")
+
+    road_edges = [e for e in edges if e.get("kind") != "crossing"]
+    crossing_edges = [e for e in edges if e.get("kind") == "crossing"]
 
     for junc in junctions:
         if len(junc["points"]) >= 3:
@@ -165,7 +302,7 @@ def render_network(
             ax.add_patch(polygon)
 
     lines = []
-    for edge in edges:
+    for edge in road_edges:
         pts = edge["points"]
         if len(pts) >= 2:
             lines.append(pts)
@@ -179,6 +316,67 @@ def render_network(
         ax.add_collection(lc_center)
 
     legend_handles = []
+    drew_crossing = False
+    hatch: List[List[Point]] = []
+    for edge in crossing_edges:
+        pts = edge.get("points") or []
+        mark = _crossing_mark_poly(pts) if len(pts) >= 2 else []
+        if len(mark) >= 3:
+            ax.add_patch(
+                mpatches.Polygon(
+                    mark,
+                    closed=True,
+                    facecolor="#fff8e1",
+                    edgecolor="#1a1a1a",
+                    linewidth=1.4,
+                    alpha=0.95,
+                    zorder=12,
+                )
+            )
+            hatch.extend(_zebra_hatch_lines(pts))
+            cx, cy = _centroid(pts)
+            ax.plot(
+                cx,
+                cy,
+                marker="s",
+                markersize=9,
+                markerfacecolor="#fff8e1",
+                markeredgecolor="#1a1a1a",
+                markeredgewidth=1.1,
+                zorder=15,
+                linestyle="None",
+            )
+            drew_crossing = True
+    if hatch:
+        ax.add_collection(
+            LineCollection(
+                hatch,
+                colors="#1a1a1a",
+                linewidths=2.0,
+                alpha=0.95,
+                zorder=14,
+                capstyle="butt",
+            )
+        )
+    if drew_crossing:
+        legend_handles.append(
+            mpatches.Patch(facecolor="#fff8e1", edgecolor="#1a1a1a", label="crosswalk")
+        )
+    elif crosswalk_xy is not None:
+        ax.plot(
+            crosswalk_xy[0],
+            crosswalk_xy[1],
+            marker="s",
+            markersize=11,
+            markerfacecolor="#fff8e1",
+            markeredgecolor="#1a1a1a",
+            markeredgewidth=1.4,
+            zorder=12,
+            linestyle="None",
+            label="crosswalk",
+        )
+        legend_handles.append(ax.lines[-1])
+
     if compliant_edge_ids:
         poly = polyline_for_edge_ids(edges, compliant_edge_ids)
         if len(poly) >= 2:
@@ -237,6 +435,7 @@ def render_network(
 
     if legend and legend_handles:
         ax.legend(
+            handles=legend_handles,
             loc="upper right",
             fontsize=8,
             framealpha=0.85,
@@ -279,26 +478,24 @@ def render_scene_preview(scene_dir: Path) -> Path:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             meta = {}
-    marker = None
-    center = meta.get("center_xy")
-    if isinstance(center, (list, tuple)) and len(center) >= 2:
-        marker = (float(center[0]), float(center[1]))
     road = meta.get("road_id")
     baseline, compliant, _spawn = routes_from_dual_path_meta(meta)
     if compliant is None and road:
         compliant = [str(road)]
     out_png = scene_dir / PREVIEW_NAME
     edges, junctions = parse_sumo_net(net)
+    edges = attach_crosswalk_overlay(edges, junctions, meta)
+    has_crossing = any(e.get("kind") == "crossing" for e in edges)
     render_network(
         edges,
         junctions,
         out_png,
         figsize=(6, 6),
         dpi=120,
-        marker_xy=marker,
         baseline_edge_ids=baseline,
         compliant_edge_ids=compliant,
-        legend=bool(baseline or compliant),
+        legend=bool(baseline or compliant or has_crossing),
+        crosswalk_xy=None if has_crossing else crosswalk_xy_from_meta(junctions, meta),
     )
     return out_png
 

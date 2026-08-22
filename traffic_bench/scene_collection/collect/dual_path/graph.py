@@ -868,7 +868,7 @@ def crop_to_dual_path(
             meta["arm_count"] = base_row["arm_count"]
 
     (scene_dir / "meta.json").write_text(json_dumps(meta) + "\n", encoding="utf-8")
-    (scene_dir / "center.json").write_text(
-        json_dumps({"lat": lat, "lon": lon}) + "\n", encoding="utf-8"
-    )
+    leftover = scene_dir / "center.json"
+    if leftover.is_file():
+        leftover.unlink()
     return cropped

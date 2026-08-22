@@ -38,10 +38,9 @@ def _write_scene_meta(scene_dir: Path, meta: dict) -> None:
     (scene_dir / "meta.json").write_text(
         json_dumps(meta) + "\n", encoding="utf-8"
     )
-    (scene_dir / "center.json").write_text(
-        json_dumps({"lat": meta["latitude"], "lon": meta["longitude"]}) + "\n",
-        encoding="utf-8",
-    )
+    leftover = scene_dir / "center.json"
+    if leftover.is_file():
+        leftover.unlink()
 
 
 def _crop_keep_edges(source_net: Path, edge_ids: List[str], out_net: Path) -> None:

@@ -21,7 +21,12 @@ from traffic_bench.scene_collection.analysis.inventory import (
     scene_example_dirs,
 )
 from traffic_bench.scene_collection.collect.dual_path.roles import SLOTS
-from traffic_bench.scene_collection.preview import parse_sumo_net, render_network
+from traffic_bench.scene_collection.preview import (
+    attach_crosswalk_overlay,
+    crosswalk_xy_from_meta,
+    parse_sumo_net,
+    render_network,
+)
 
 INK = "#2b2f33"
 SLATE = "#5c6670"
@@ -267,20 +272,18 @@ def _render_missing_preview(scene_dir: Path, out_png: Path) -> bool:
         except (OSError, json.JSONDecodeError):
             meta = {}
     edges, junctions = parse_sumo_net(net)
-    marker = None
+    edges = attach_crosswalk_overlay(edges, junctions, meta)
     road = meta.get("road_id")
-    center = meta.get("center_xy")
-    if isinstance(center, (list, tuple)) and len(center) >= 2:
-        marker = (float(center[0]), float(center[1]))
+    has_crossing = any(e.get("kind") == "crossing" for e in edges)
     render_network(
         edges,
         junctions,
         out_png,
         figsize=(4, 4),
         dpi=120,
-        marker_xy=marker,
         compliant_edge_ids=[str(road)] if road else None,
         legend=False,
+        crosswalk_xy=None if has_crossing else crosswalk_xy_from_meta(junctions, meta),
     )
     return out_png.is_file()
 
