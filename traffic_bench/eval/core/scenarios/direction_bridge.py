@@ -1,48 +1,15 @@
-"""4.1.x dual-path from crop ``meta.json`` (moscow dual_path harvest).
+"""Shim — implementation is ``traffic_bench.eval.signs.dual_path``."""
 
-No import from ``direction_signs``.
-"""
-
-from __future__ import annotations
-
-from pathlib import Path
-from typing import List, Optional, Sequence
-
-from .direction_sign_spec import (
-    dual_path_role_dirs,
+from traffic_bench.eval.core.scenarios.direction_sign_spec import (
     get_direction_sign_spec,
     resolve_sign_class,
 )
-from .dual_path_scene import (
+from traffic_bench.eval.signs.dual_path.scene import (
     DualPathScenario,
     dual_path_to_spawn_scenario,
     ego_spawn_lane_nums_for_dual,
-    pick_meta_dual_path,
 )
-
-
-def discover_direction_dual_paths(
-    net_path: Path,
-    *,
-    pdd_code: str,
-    min_gain_m: float = 20.0,
-    min_lane_length_m: float = 8.0,
-    max_scenarios: int = 20,
-    junction_ids: Optional[Sequence[str]] = None,
-    scene_meta: Optional[dict] = None,
-) -> List[DualPathScenario]:
-    """Load crop-time dual-path from ``meta.json``. No net rediscovery."""
-    del net_path, min_gain_m, min_lane_length_m, max_scenarios
-    spec_code = get_direction_sign_spec(pdd_code).pdd_code
-    baseline_dirs, compliant_dirs = dual_path_role_dirs(spec_code)
-    return pick_meta_dual_path(
-        scene_meta,
-        pdd_code=spec_code,
-        baseline_dirs=baseline_dirs,
-        compliant_dirs=compliant_dirs,
-        junction_ids=junction_ids,
-    )
-
+from traffic_bench.eval.signs.dual_path.spec import discover_dual_paths as discover_direction_dual_paths
 
 __all__ = [
     "DualPathScenario",
