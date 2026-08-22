@@ -118,14 +118,26 @@ _FAMILY_DEFAULT = {
 }
 
 
+def _normalize_code(sign_code: str) -> str:
+    code = str(sign_code).strip()
+    if code in SPECS:
+        return code
+    dotted = code.replace("_", ".")
+    if dotted in SPECS:
+        return dotted
+    return code
+
+
 def get_spec(sign_code: str | None, *, family: str | None = None) -> DualPathSignSpec:
     if sign_code:
-        code = str(sign_code).strip()
+        code = _normalize_code(sign_code)
         spec = SPECS.get(code)
         if spec is not None:
             return spec
+        if code in _FAMILY_DEFAULT:
+            return SPECS[_FAMILY_DEFAULT[code]]
         raise ValueError(
-            f"Unknown dual-path sign code {code!r}; "
+            f"Unknown dual-path sign code {sign_code!r}; "
             f"expected one of: {', '.join(SPECS)}"
         )
     if family and family in _FAMILY_DEFAULT:

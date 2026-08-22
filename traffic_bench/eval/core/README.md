@@ -61,9 +61,8 @@ Which ego/aux spawn + destination combinations exist per scene.
 | `auxiliary_agent.py` | Aux convoy spawn, placement, release logic at runtime |
 | `roundabout_aux.py` | Conflict-arc placement + spillover convoy on the ring |
 | `blocked_road_route.py` | Forbidden-lane geometry checks for 3.2 |
-| `dual_path_scene.py` | Shared crop-meta dual-path geometry (4.1 / 5.7) |
-| `one_way_bridge.py` | 5.7 dual-path from crop `meta.json` |
-| `direction_bridge.py` | 4.1 dual-path from crop `meta.json` |
+| `dual_path_scene.py` | Shim → `signs/dual_path/scene.py` |
+| `one_way_bridge.py` / `direction_bridge.py` | Shims → `signs/dual_path` |
 
 **Used by:** manifest expansion, viability reject, `run_benchmark` aux spawn.
 

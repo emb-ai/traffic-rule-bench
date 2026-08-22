@@ -16,7 +16,8 @@ parameterized by sign code.
 | `scene.py` | `DualPathScenario` from `meta.json` |
 | `budget.py` | Truncate both routes to a shared meter budget |
 | `expand.py` | dual-path × spawn lane × NPC → manifest rows |
+| `place.py` | Put the plate on the ego approach (or 3.1 forbidden exit) |
 
-Old imports (`core.manifest.one_way_expansion`, `core.scenarios.one_way_bridge`, …)
-are shims. `generate_manifest` / `run_benchmark` still call those names.
-`place.py` is still inside `run_benchmark.py`.
+`generate_manifest` dispatches `family == dual_path` to one generator.
+`run_benchmark` calls `place_dual_path_signs`. Old `core.manifest.*_expansion`
+and `core.scenarios.*_bridge` files are still shims.
