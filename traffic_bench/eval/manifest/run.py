@@ -36,11 +36,24 @@ from traffic_bench.eval.manifest.types import (
 from traffic_bench.eval.sign_registry import (
     get_profile,
     output_dir as profile_output_dir,
+    resolve_repo_path,
     scenes_dir as profile_scenes_dir,
 )
 from traffic_bench.scene_collection.sign_scenes.materialize.pool_index import (
     normalize_split,
 )
+
+
+def _register_repo_resolver() -> None:
+    """Make ``${repo:data/runs/yield}`` resolve against the repo root, not cwd."""
+    OmegaConf.register_new_resolver(
+        "repo",
+        lambda rel="": str(resolve_repo_path(rel)),
+        replace=True,
+    )
+
+
+_register_repo_resolver()
 
 
 def resolve_gif_model_path(policy: str, model_path: Optional[str]) -> Optional[str]:

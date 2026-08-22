@@ -373,6 +373,14 @@ def repo_root() -> Path:
     return REPO_ROOT
 
 
+def resolve_repo_path(rel: str | Path = "") -> Path:
+    """Join a repo-relative path onto ``repo_root()`` (absolute paths stay)."""
+    path = Path(str(rel)) if rel else Path()
+    if path.is_absolute():
+        return path.resolve()
+    return (REPO_ROOT / path).resolve()
+
+
 def artifact_root() -> Path:
     """Working artifacts: ``<repo>/data/{scenes,runs,trajectories}/``."""
     return DATA

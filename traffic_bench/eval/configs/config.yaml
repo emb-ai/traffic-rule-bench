@@ -9,7 +9,7 @@ defaults:
 
 hydra:
   run:
-    dir: ${paths.output_base}/${paths.experiment_name}
+    dir: ${repo:${paths.output_base}}/${paths.experiment_name}
   output_subdir: .hydra
   job:
     chdir: false

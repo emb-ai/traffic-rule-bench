@@ -4,7 +4,8 @@ Run from the **repository root** after `pip install -e .`.
 
 Scenes come from [`scene_collection/`](../scene_collection/README.md) or
 Hugging Face [`emb-ai/traffic-sign-bench`](https://huggingface.co/datasets/emb-ai/traffic-sign-bench)
-into `data/scenes/<sign>/`. Eval writes `data/runs/<sign>/<timestamp>/`.
+into `<repo>/data/scenes/<sign>/`. Eval writes `<repo>/data/runs/<sign>/<timestamp>/`
+regardless of the current working directory.
 `sign=main_road` writes under `data/{scenes,runs}/main_road/`.
 
 Sign rules live under [`signs/`](signs/README.md). Shared engine code is

@@ -5,6 +5,16 @@ from __future__ import annotations
 import sys
 from typing import List, Optional
 
+from omegaconf import OmegaConf
+
+from traffic_bench.eval.sign_registry import resolve_repo_path
+
+OmegaConf.register_new_resolver(
+    "repo",
+    lambda rel="": str(resolve_repo_path(rel)),
+    replace=True,
+)
+
 
 def _run_module_main(module, argv: List[str]) -> int:
     old = sys.argv
