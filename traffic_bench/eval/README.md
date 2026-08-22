@@ -8,9 +8,8 @@ into `data/scenes/<sign>/`. Eval writes `data/runs/<sign>/<timestamp>/`.
 `sign=main_road` writes under `data/{scenes,runs}/main_road/`.
 
 Family expand/place/spec live under [`signs/`](signs/README.md). Shared
-shells are `manifest/`, `bench/`, `generate_manifest.py` (Hydra),
-`run_benchmark.py` (CLI), `eval_pipeline.py`, and `core/`. Old commands
-(`python -m traffic_bench.eval.generate_manifest`) keep working.
+shells are `manifest/`, `bench/`, `pipeline/`, `lib/`, and `metrics/`.
+Old commands (`python -m traffic_bench.eval.generate_manifest`) keep working.
 
 ## Folders
 
@@ -19,19 +18,20 @@ shells are `manifest/`, `bench/`, `generate_manifest.py` (Hydra),
 | [`cli.py`](cli.py) | `python -m traffic_bench.eval {manifest,run,pipeline,metrics}` |
 | [`sign_registry.py`](sign_registry.py) | eval id → family, spawn, data folder |
 | [`configs/`](configs/) | Hydra YAML; paths are relative (`data/scenes/${sign}`) |
-| [`manifest/`](manifest/) | discover / write jsonl + `repro/`; Hydra still in `generate_manifest.py` |
+| [`manifest/`](manifest/) | discover / write jsonl + `repro/`; Hydra in `manifest/run.py` |
 | [`bench/`](bench/) | episode loop + place dispatch; CLI still in `run_benchmark.py` |
-| [`pipeline/`](pipeline/) | *(target)* many policies + `eval_out/` |
+| [`pipeline/`](pipeline/) | many policies + `eval_out/` (`pipeline/run.py`) |
 | [`metrics/`](metrics/README.md) | episode JSONL → CSV / markdown |
-| [`lib/`](lib/README.md) | shared engine (today: `core/`) |
+| [`lib/`](lib/README.md) | shared engine (no sign rules) |
+| [`core/`](core/README.md) | shims → `lib/` and `signs/` |
 | [`signs/`](signs/README.md) | per-family expand / spawn / place |
 
 ### What each folder stores
 
 **`manifest/`** — "scenes + Hydra → `real_manifest.jsonl`". Shared shell:
 [`manifest/io.py`](manifest/io.py) discovers scenes, applies split / caps,
-writes jsonl + `repro/`. Hydra `main` and `generate_*_manifest` shells stay
-in [`generate_manifest.py`](generate_manifest.py). Family rows are built in
+writes jsonl + `repro/`. Hydra `main` and `generate_*_manifest` shells live
+in [`manifest/run.py`](manifest/run.py). Family rows are built in
 `signs/<family>/expand.py`.
 
 **`bench/`** — one policy, one manifest. Episode loop and place-dispatch
@@ -49,7 +49,7 @@ live in [`bench/episode.py`](bench/episode.py) and
 
 Not multi-policy orchestration (`pipeline/`) and not CSV rollups (`metrics/`).
 
-**`pipeline/`** — today's [`eval_pipeline.py`](eval_pipeline.py): loop policies
+**`pipeline/`** — [`pipeline/run.py`](pipeline/run.py): loop policies
 (IDM × ego variants s1–s4, then NN), invoke bench, collect `eval_out/`,
 trigger `metrics/`.
 
@@ -57,7 +57,8 @@ trigger `metrics/`.
 cumulative markdown.
 
 **`lib/`** — no sign rules. SUMO parse, IDM profiles, MetaDrive patches,
-HUD/GIF overlays, T/X arm geometry. Today this is [`core/`](core/README.md).
+HUD/GIF overlays, T/X arm geometry. [`core/`](core/README.md) re-exports
+these modules for old imports.
 
 **`signs/<family>/`** — only what is true for that family. Same file roles
 (skip if unused): `expand.py` (manifest rows), `spawn.py` (legal ego/aux
@@ -118,7 +119,7 @@ Augmentation axes live in `configs/sign/*.yaml` under `augmentation:`:
 
 | Axis | Meaning |
 | --- | --- |
-| `layout` | Ego × aux arm / lane / destination (`core/scenarios/scene_augmentation.py`) |
+| `layout` | Ego × aux arm / lane / destination (`lib/scenarios/scene_augmentation.py` + `signs/<family>/spawn.py`) |
 | `auxiliary` | Cartesian product of convoy `1..N` and occupied lanes `1..M` |
 
 ### 3. Evaluate

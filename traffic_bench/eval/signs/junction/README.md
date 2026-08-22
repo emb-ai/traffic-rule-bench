@@ -1,6 +1,6 @@
 # signs/junction — main, secondary, yield, stop (2.1 / 2.3 / 2.4 / 2.5)
 
-T/X priority junctions. Shared arm geometry stays in `core/layout/`; this
+T/X priority junctions. Shared arm geometry stays in `lib/layout/`; this
 folder owns plate placement for the four eval ids.
 
 | Eval id | Sign code | Ego arm | Plates |
@@ -16,6 +16,6 @@ folder owns plate placement for the four eval ids.
 | `spawn.py` | Equal-priority / yield ego×aux combinations + default spawn |
 | `place.py` | Where plates go on main vs secondary arms |
 
-`generate_manifest()` still discovers scenes and writes jsonl; it calls
+`manifest/run.py` still discovers scenes and writes jsonl; it calls
 `expand_scene_entries` here. Shared lane-parse helpers stay in
-`core/scenarios/scene_augmentation.py`.
+`lib/scenarios/scene_augmentation.py`.

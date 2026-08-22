@@ -26,4 +26,4 @@ Per-family files (skip if unused):
 Every family folder has code (`expand.py` / `spawn.py` / `place.py` /
 `spec.py` as needed). Dual-path spawn lives in `scene.py`; segment families
 enumerate inside `expand.py`. `generate_*_manifest` shells still live in
-`generate_manifest.py`; shared discover / write is `manifest/io.py`.
+`manifest/run.py`; shared discover / write is `manifest/io.py`.

@@ -1,9 +1,7 @@
 """Eval CLI: manifest → run / pipeline → metrics.
 
-Facades over the current entry points. Hydra / CLI / pipeline shells
-still live in ``generate_manifest.py``, ``run_benchmark.py``, and
-``eval_pipeline.py``; the episode loop is ``bench.episode``, family
-expand/place is under ``signs/``.
+Facades over ``manifest.run``, ``run_benchmark`` / ``bench.episode``,
+``pipeline.run``, and ``metrics/``. Family expand/place is under ``signs/``.
 """
 
 from __future__ import annotations
@@ -26,7 +24,7 @@ def _run_module_main(module, argv: List[str]) -> int:
 
 
 def cmd_manifest(argv: List[str]) -> int:
-    from traffic_bench.eval import generate_manifest
+    from traffic_bench.eval.manifest import run as generate_manifest
 
     return _run_module_main(generate_manifest, argv)
 
@@ -45,7 +43,7 @@ def cmd_run(argv: List[str]) -> int:
 
 
 def cmd_pipeline(argv: List[str]) -> int:
-    from traffic_bench.eval import eval_pipeline
+    from traffic_bench.eval.pipeline import run as eval_pipeline
 
     return _run_module_main(eval_pipeline, argv)
 

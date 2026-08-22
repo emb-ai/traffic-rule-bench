@@ -12,6 +12,6 @@ the ego spoke; invisible RoundaboutYieldSign on the conflict-arc ring.
 | `spawn.py` | Spoke-in / ring-aux combinations + default spawn + ring meta kwargs |
 | `place.py` | Plate on ego spoke + yield tracker; rebuild O-layout if missing |
 
-Ring/spoke geometry stays in `core/layout/roundabout_topology.py` and
+Ring/spoke geometry stays in `lib/layout/roundabout_topology.py` and
 `roundabout_yield_zone.py`. Manifest rows still use
 `signs/junction/expand.py` (same layout × aux product).

@@ -13,6 +13,6 @@ Junction crop; ego must not take the forbidden through path.
 | `expand.py` | through-path × NPC → manifest rows |
 | `place.py` | `NoTrafficSign` at the start of the forbidden exit |
 
-`generate_blocked_road_manifest` still lives in `generate_manifest.py`.
+`generate_blocked_road_manifest` lives in `manifest/run.py`.
 Old imports (`core.manifest.blocked_road_expansion`,
 `core.scenarios.blocked_road_route`) are shims.

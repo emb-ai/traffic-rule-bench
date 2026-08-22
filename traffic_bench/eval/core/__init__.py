@@ -1,6 +1,6 @@
-"""Shared library for priority-junction benches (2.1 / 2.4 / 4.3 / 3.2 …).
+"""Compatibility package. Engine lives in ``eval.lib``; family rules in ``eval.signs``.
 
-See ``core/README.md`` for package layout.
+See ``core/README.md``. Prefer ``traffic_bench.eval.lib.*`` in new code.
 """
 
 from .manifest.manifest_config import (
