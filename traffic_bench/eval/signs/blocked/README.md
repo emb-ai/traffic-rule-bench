@@ -6,11 +6,14 @@ Junction crop; ego must not take the forbidden through path.
 | --- | --- |
 | `blocked_road` | 3.2 |
 
-## Today → tomorrow
-
-| Today | Tomorrow |
+| File | Role |
 | --- | --- |
-| `core/manifest/blocked_road_expansion.py` | `expand.py` |
-| `core/scenarios/scene_augmentation.py` (`blocked_road`) | `spawn.py` |
-| `core/scenarios/blocked_road_route.py` | `spec.py` (forbidden-lane geometry) |
-| `run_benchmark.py` blocked-road placement | `place.py` |
+| `spec.py` | Forbidden-lane length check (sign + dest cap) |
+| `expand.py` | through-path × NPC → manifest rows |
+| `place.py` | `NoTrafficSign` at the start of the forbidden exit |
+
+`generate_blocked_road_manifest` still lives in `generate_manifest.py`
+(shared scene loop + jsonl write). Spawn combinatorics stay in
+`core/scenarios/scene_augmentation.py` until `spawn.py`.
+Old imports (`core.manifest.blocked_road_expansion`,
+`core.scenarios.blocked_road_route`) are shims.

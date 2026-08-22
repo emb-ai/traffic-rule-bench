@@ -55,7 +55,7 @@ from traffic_bench.eval.core.manifest.manifest_expansion import (
     ExpansionConfig,
     expand_scene_entries,
 )
-from traffic_bench.eval.core.manifest.blocked_road_expansion import (
+from traffic_bench.eval.signs.blocked.expand import (
     BlockedRoadExpansionConfig,
     BlockedRoadSimParams,
     build_blocked_road_manifest_entry,
@@ -2254,7 +2254,7 @@ def main(cfg: DictConfig) -> None:
     split = normalize_split(getattr(cfg.paths, "split", "all"))
     print(f"Using paths.split: {split}")
 
-    if profile.spawn_strategy == "blocked_road":
+    if profile.family == "blocked":
         entries = generate_blocked_road_manifest(
             scenes_dir=scenes_dir,
             output_dir=experiment_dir,

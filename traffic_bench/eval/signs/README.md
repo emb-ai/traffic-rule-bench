@@ -23,4 +23,5 @@ Per-family files (skip if unused):
 | `place.py` | Where plates go in MetaDrive |
 | `spec.py` | Plate class / dual-path crop-meta bridge |
 
-No Python here yet. Each family README lists today's files and the target names.
+`dual_path/` and `blocked/` have code. Other family READMEs list today's
+files and the target names.

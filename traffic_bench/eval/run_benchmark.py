@@ -65,7 +65,6 @@ from traffic_bench.signs.priority_signs import (
     StopSign,
     YieldSign,
 )
-from traffic_bench.signs.no_traffic_sign import NoTrafficSign
 from traffic_bench.signs.pedestrian_crossing_sign import PedestrianCrossingSign
 from traffic_bench.signs.pedestrian_yield_rule import PedestrianYieldRule
 from traffic_bench.signs.detour_sign import DetourRightSign, DetourLeftSign, DetourEitherSign
@@ -79,6 +78,11 @@ from traffic_bench.eval.core.runtime.one_way_support import (
     OneWaySumoTrafficManager,
     install_one_way_compliant_nav_route,
     resolve_row_background_excluded_edges,
+)
+from traffic_bench.eval.signs.blocked.place import (
+    ego_compliant_stop_before_blocked_road,
+    place_blocked_road_sign,
+    row_is_blocked_road as _row_is_blocked_road,
 )
 from traffic_bench.eval.signs.dual_path.place import (
     place_dual_path_signs,
@@ -1090,12 +1094,6 @@ def _row_is_roundabout(row: dict) -> bool:
     return code in {"4.3", "4_3"} or sign_type == "roundabout"
 
 
-def _row_is_blocked_road(row: dict) -> bool:
-    code = str(row.get("pdd_code") or row.get("sign_code") or "")
-    sign_type = str(row.get("sign_type") or "")
-    return code in {"3.2", "3_2"} or sign_type == "blocked_road"
-
-
 def _row_is_crosswalk(row: dict) -> bool:
     code = str(row.get("pdd_code") or row.get("sign_code") or "")
     sign_type = str(row.get("sign_type") or row.get("sign_family") or "")
@@ -2048,124 +2046,6 @@ def _place_roundabout_signs(
     return placed_plate > 0
 
 
-def _place_blocked_road_sign(
-    env,
-    row: dict,
-    scenes_root: Path,
-    show_model: bool = True,
-) -> bool:
-    """Place NoTrafficSign (3.2) at the start of the forbidden lane."""
-    del scenes_root
-    try:
-        sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
-        if sign_mgr is None:
-            return False
-
-        sign_road_id = row.get("sign_road_id") or row.get("destination_edge_id")
-        if not sign_road_id and row.get("destination_lane_id"):
-            sign_road_id = lane_edge_id(str(row["destination_lane_id"]))
-        if not sign_road_id:
-            print("[NoTrafficSign] Missing sign_road_id / destination edge")
-            return False
-
-        lane_keys: list = []
-        layout = row.get("junction_layout") or {}
-        for arm in layout.get("arms", []) or []:
-            if arm.get("edge_id") == sign_road_id:
-                lane_keys = list(arm.get("lane_keys") or [])
-                break
-
-        lane = resolve_sign_lane_for_edge(env, str(sign_road_id), lane_keys)
-        if lane is None:
-            print(f"[NoTrafficSign] Lane not found for forbidden edge {sign_road_id}")
-            return False
-
-        distance_from_start = float(
-            row.get("sign_distance_from_start", DEFAULT_SIGN_DISTANCE_FROM_START)
-            or DEFAULT_SIGN_DISTANCE_FROM_START
-        )
-        raw_cap = row.get("destination_max_along_m")
-        try:
-            dest_cap = float(
-                DEFAULT_DESTINATION_MAX_ALONG_M if raw_cap is None else raw_cap
-            )
-        except (TypeError, ValueError):
-            dest_cap = float(DEFAULT_DESTINATION_MAX_ALONG_M)
-        needed = max(distance_from_start + 1.0, dest_cap + 5.0)
-        lane_len = float(getattr(lane, "length", 0.0) or 0.0)
-        if lane_len <= needed:
-            print(
-                f"[NoTrafficSign] Forbidden lane too short on {sign_road_id}: "
-                f"{lane_len:.2f}m <= needed {needed:.2f}m (sign/dest cap)"
-            )
-            return False
-
-        placement_long = sign_placement_long_from_start(lane, distance_from_start)
-        longitudinal_offset = sign_longitudinal_offset_from_start(lane, distance_from_start)
-        lateral = lateral_offset_beside_lane(lane, placement_long)
-
-        _clear_sign_manager(sign_mgr)
-        sign = sign_mgr.add_sign(
-            NoTrafficSign,
-            lane=lane,
-            longitudinal_offset=longitudinal_offset,
-            lateral_offset=lateral,
-            show_model=show_model,
-            use_random_lane=False,
-        )
-        print(
-            f"[NoTrafficSign] Placed 3.2 on forbidden edge {sign_road_id} at "
-            f"{distance_from_start:.2f}m from lane start "
-            f"(long_offset={longitudinal_offset:.2f})"
-        )
-        return sign is not None
-    except Exception as e:
-        print(f"[NoTrafficSign] Failed to place: {e}")
-        return False
-
-
-def _ego_compliant_stop_before_blocked_road(
-    env,
-    vehicle,
-    *,
-    max_dist_before_sign_m: float = DEFAULT_COMPLIANT_STOP_MAX_DIST_M,
-    speed_max_mps: float = DEFAULT_COMPLIANT_STOP_SPEED_MPS,
-) -> bool:
-    """True when ego is nearly stopped just before a 3.2 sign line."""
-    if vehicle is None:
-        return False
-    try:
-        speed = float(getattr(vehicle, "speed", 0.0) or 0.0)
-    except Exception:
-        return False
-    if speed > float(speed_max_mps):
-        return False
-
-    sign_mgr = getattr(getattr(env, "engine", None), "traffic_sign_manager", None)
-    if sign_mgr is None:
-        return False
-
-    max_dist = float(max_dist_before_sign_m)
-    for sign in list(getattr(sign_mgr, "signs", None) or []):
-        if not isinstance(sign, NoTrafficSign):
-            continue
-        sign_lane = getattr(sign, "lane", None)
-        if sign_lane is None:
-            continue
-        sign_long = float(
-            getattr(sign, "sign_line_position", getattr(sign, "placement_long", 0.0))
-            or 0.0
-        )
-        try:
-            veh_long = float(sign_lane.local_coordinates(vehicle.position)[0])
-        except Exception:
-            continue
-        dist_to_line = sign_long - veh_long
-        if -0.25 < dist_to_line <= max_dist:
-            return True
-    return False
-
-
 def _iter_sumo_graph_lanes(graph) -> list:
     """Yield (lane_key, lane_obj) for EdgeRoadNetwork-style graphs."""
     if not isinstance(graph, dict):
@@ -2574,7 +2454,7 @@ def _place_junction_priority_signs(
             show_model=show_model,
         )
     if _row_is_blocked_road(row):
-        return _place_blocked_road_sign(
+        return place_blocked_road_sign(
             env,
             row,
             scenes_root=scenes_root,
@@ -3165,7 +3045,7 @@ def run_one_episode(
             dest_cap_m = 0.0
             capped_arrive = False
             if is_blocked_road_row:
-                if sign_violations == 0 and _ego_compliant_stop_before_blocked_road(
+                if sign_violations == 0 and ego_compliant_stop_before_blocked_road(
                     base_env,
                     vehicle,
                     max_dist_before_sign_m=stop_max_dist_m,
