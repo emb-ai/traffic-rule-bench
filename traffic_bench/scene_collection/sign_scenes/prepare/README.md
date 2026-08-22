@@ -1,9 +1,10 @@
-# prepare/
+# sign_scenes/prepare/ — map surgery after materialize
 
-Edits after materialize. Only **crosswalk** today: a zebra in the middle of the corridor.
+Runs yaml `prepare:` hooks. Today only **crosswalk** (PDD 5.19).
 
 ```bash
 python -m traffic_bench.scene_collection prepare --sign crosswalk
+# or: python -m traffic_bench.scene_collection prepare --all
 ```
 
-See [`crosswalk/`](crosswalk/README.md).
+`run.py` dispatches by PDD. Hooks live in subfolders; see [`crosswalk/`](crosswalk/README.md).

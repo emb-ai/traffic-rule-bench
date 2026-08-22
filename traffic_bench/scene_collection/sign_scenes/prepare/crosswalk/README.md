@@ -1,5 +1,7 @@
-# crosswalk/
+# prepare/crosswalk/ — mid-block zebra (PDD 5.19)
 
-Adds one zebra in the **middle** of each copied corridor, in place.
+Injects one pedestrian crossing in the **middle** of a copied segment, in place
+under `data/scenes/crosswalk/`. Does not write `_cw_<pos>` variants.
 
-`add_zebra.py` skips nets that already have a crossing. `inject.py` does the SUMO edit.
+- `add_zebra.py` — walk live scene dirs, skip nets that already have a crossing
+- `inject.py` — split the edge, add sidewalks, `netconvert` crossing

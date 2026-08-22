@@ -1,9 +1,12 @@
-# assign/
+# assign/ — signs as queries over the map pool
 
-`signs.yaml` + train/test ids → `sign_allocations.json`.
+Reads `maps/splits/signs.yaml` plus the global train/test ids and writes
+`maps/splits/sign_allocations.json` (keyed by PDD code).
 
 ```bash
 python -m traffic_bench.scene_collection assign
 ```
 
-Each sign samples on its own. The same map can appear under several signs.
+`crop_kind` is `junction` (default), `dual_path`, or `segment`. Signs sample
+independently; the same map may appear under several signs. Place identity
+(`junction_id` / `osm_way_id`) is stamped **before** this step.

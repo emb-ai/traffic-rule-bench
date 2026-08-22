@@ -20,6 +20,7 @@ from traffic_bench.eval.core.layout.junction_priority_layout import JunctionLayo
 from traffic_bench.scene_collection.collect.lib.crop_xy import crop_net_to_xy_boundary
 from traffic_bench.scene_collection.collect.segments.metrics import enrich_lane_fields
 from traffic_bench.scene_collection.paths import MOSCOW_NET, SEGMENT_CROPS, SEGMENTS_INDEX
+from traffic_bench.scene_collection.preview import parse_sumo_net, render_network
 
 
 def json_dumps(obj) -> str:
@@ -151,11 +152,6 @@ def render_segment_preview(
     center_xy: Tuple[float, float],
 ) -> None:
     """Same top-down preview as junction / dual_path / lane_direction scenes."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    from tools.render_map import parse_sumo_net, render_network
-
     edges, junctions = parse_sumo_net(net_path)
     render_network(
         edges,
@@ -243,6 +239,21 @@ def crop_segment_scene(
     return ("ok", scene_id, str(scene_dir))
 
 
+def _crop_one(args_tuple: tuple) -> tuple:
+    """Worker for parallel crop. Returns (status, scene_id, detail)."""
+    row, net, scenes_root, skip_existing = args_tuple
+    try:
+        return crop_segment_scene(
+            row,
+            source_net=Path(net),
+            scenes_root=Path(scenes_root),
+            skip_existing=bool(skip_existing),
+        )
+    except Exception as exc:  # noqa: BLE001 — collect failures in worker
+        scene_id = str(row.get("scene_id") or "?")
+        return ("fail", scene_id, str(exc))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--net", type=Path, default=DEFAULT_NET)
@@ -266,6 +277,12 @@ def main() -> None:
         help="Deprecated alias for --max-scenes (ignored if --max-scenes is set)",
     )
     ap.add_argument("--skip-existing", action="store_true")
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="Parallel netconvert workers (default 4)",
+    )
     ap.add_argument(
         "--png-only",
         action="store_true",
@@ -307,7 +324,7 @@ def main() -> None:
     print(f"[crop_segment] net={args.net}")
     print(f"[crop_segment] index={args.index} ({len(rows)} segments of types {want_types})")
     cap_note = "unlimited" if max_scenes <= 0 else str(max_scenes)
-    print(f"[crop_segment] max_scenes={cap_note}, skip_existing={args.skip_existing}")
+    print(f"[crop_segment] max_scenes={cap_note}, skip_existing={args.skip_existing}, workers={args.workers}")
 
     existing_ids: Set[str] = set()
     if args.skip_existing:
@@ -331,16 +348,16 @@ def main() -> None:
 
     print(f"[crop_segment] jobs to process: {len(jobs)}")
 
+    job_args = [
+        (row, str(args.net), str(args.out), bool(args.skip_existing))
+        for row in jobs
+    ]
+
     stats = {"ok": 0, "fail": 0, "skip": 0}
     t0 = time.time()
+    workers = max(1, int(args.workers))
 
-    for i, row in enumerate(jobs, 1):
-        status, scene_id, detail = crop_segment_scene(
-            row,
-            source_net=args.net,
-            scenes_root=args.out,
-            skip_existing=args.skip_existing,
-        )
+    def _consume(i: int, status: str, scene_id: str, detail: str) -> None:
         if status == "ok":
             stats["ok"] += 1
         elif status == "skip":
@@ -348,9 +365,23 @@ def main() -> None:
         else:
             stats["fail"] += 1
             print(f"  [fail] {scene_id}: {detail}")
+        if i % 25 == 0 or i == len(job_args):
+            print(
+                f"  [{i}/{len(job_args)}] ok={stats['ok']} fail={stats['fail']} skip={stats['skip']}"
+            )
 
-        if i % 25 == 0 or i == len(jobs):
-            print(f"  [{i}/{len(jobs)}] ok={stats['ok']} fail={stats['fail']} skip={stats['skip']}")
+    if workers == 1:
+        for i, job in enumerate(job_args, 1):
+            status, scene_id, detail = _crop_one(job)
+            _consume(i, status, scene_id, detail)
+    else:
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_crop_one, job) for job in job_args]
+            for i, fut in enumerate(as_completed(futures), 1):
+                status, scene_id, detail = fut.result()
+                _consume(i, status, scene_id, detail)
 
     elapsed = time.time() - t0
     print(f"[crop_segment] Done in {elapsed:.1f}s: ok={stats['ok']} fail={stats['fail']} skip={stats['skip']}")

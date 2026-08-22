@@ -106,7 +106,12 @@ def cmd_collect(argv: List[str]) -> int:
             rc = _run_module_main(enum_s, [])
             if rc:
                 return rc
-        seg_argv = ["--max-scenes", "0"]
+        seg_argv = [
+            "--max-scenes",
+            "0",
+            "--workers",
+            str(args.workers),
+        ]
         if args.skip_existing:
             seg_argv.append("--skip-existing")
         rc = _run_module_main(crop_seg, seg_argv)
@@ -154,6 +159,12 @@ def _copy_scene_dir(src: Path, dst: Path) -> None:
         shutil.copytree(src.resolve(), dst, symlinks=False)
     else:
         shutil.copytree(src, dst, symlinks=False)
+
+
+def cmd_analysis(argv: List[str]) -> int:
+    from traffic_bench.scene_collection.analysis import run as analysis_run
+
+    return analysis_run.main(argv)
 
 
 def cmd_pack(argv: List[str]) -> int:
@@ -212,6 +223,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "reject",
         "review",
         "pack",
+        "analysis",
     )
     if not argv or argv[0] in ("-h", "--help"):
         print(
@@ -226,6 +238,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "  reject        drop unusable scenes, optional refill\n"
             "  review        browser keep/reject UI\n"
             "  pack          dereference symlinks into a standalone folder\n"
+            "  analysis      harvest counts + diversity figures\n"
         )
         return 0
     command = argv[0]
@@ -240,6 +253,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "reject": cmd_reject,
         "review": cmd_review,
         "pack": cmd_pack,
+        "analysis": cmd_analysis,
     }
     return dispatch[command](argv[1:])
 

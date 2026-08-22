@@ -1,6 +1,6 @@
-# enumerate/
+# collect/enumerate/ — index places in the city net
 
-Indexes only (`maps/index/`). No cropped nets yet.
+Writes JSONL indexes under `maps/index/`. No cropped nets yet.
 
-- `junctions.py` → `junctions.jsonl` (T / X / O)
-- `segments.py` → `segments.jsonl` (long incoming edges)
+- `junctions.py` — T / X / O junctions → `junctions.jsonl`
+- `segments.py` — long incoming edges → `segments.jsonl` (split later by `osm_way_id`)

@@ -17,6 +17,7 @@ DUAL_PATH_CROPS = CROPS / "dual_path"
 SEGMENT_CROPS = CROPS / "segment"
 SPLITS = MAPS / "splits"
 PREVIEWS = MAPS / "previews"
+ANALYSIS = SCENE_COLLECTION / "analysis" / "figures"
 DATA_SCENES = REPO_ROOT / "data" / "scenes"
 
 MOSCOW_NET = NETS / "moscow.net.xml"

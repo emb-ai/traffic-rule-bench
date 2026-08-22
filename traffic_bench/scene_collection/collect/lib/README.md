@@ -1,5 +1,5 @@
-# lib/
+# collect/lib/ — shared harvest helpers
 
-- `geo.py` — XY → lat/lon
-- `crop_xy.py` — crop a net to a bbox
-- `io.py` — JSONL + `netconvert`
+- `geo.py` — net XY → lat/lon
+- `crop_xy.py` — `netconvert` crop to a cartesian bbox (dual_path and segment)
+- `io.py` — JSONL index load, `netconvert` lookup

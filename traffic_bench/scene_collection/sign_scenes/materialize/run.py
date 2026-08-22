@@ -52,6 +52,11 @@ from traffic_bench.scene_collection.paths import (
     TEST_IDS,
     TRAIN_IDS,
 )
+from traffic_bench.scene_collection.preview import (
+    parse_sumo_net,
+    render_network,
+    routes_from_dual_path_meta,
+)
 
 PREVIEW_NAME = "custom_cropped.png"
 DEFAULT_SIGNS_YAML = SIGNS_YAML
@@ -298,15 +303,6 @@ def _render_preview(net_path: Path, out_png: Path, *, meta: Optional[dict] = Non
 
     For dual_path scenes, overlays short baseline (red) and long compliant (green).
     """
-    import matplotlib
-
-    matplotlib.use("Agg")
-    from tools.render_map import (
-        parse_sumo_net,
-        render_network,
-        routes_from_dual_path_meta,
-    )
-
     edges, junctions = parse_sumo_net(net_path)
     out_png.parent.mkdir(parents=True, exist_ok=True)
     baseline = compliant = None
