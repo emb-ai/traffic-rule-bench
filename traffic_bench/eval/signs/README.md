@@ -23,5 +23,5 @@ Per-family files (skip if unused):
 | `place.py` | Where plates go in MetaDrive |
 | `spec.py` | Plate class / dual-path crop-meta bridge |
 
-`dual_path/`, `blocked/`, and `junction/` have code. Other family READMEs
-list today's files and the target names.
+`dual_path/`, `blocked/`, `junction/`, and `roundabout/` have code. Other
+family READMEs list today's files and the target names.
