@@ -13,8 +13,9 @@ folder owns plate placement for the four eval ids.
 | File | Role |
 | --- | --- |
 | `expand.py` | Layout × aux cartesian product + row builder (also used by 4.3) |
+| `spawn.py` | Equal-priority / yield ego×aux combinations + default spawn |
 | `place.py` | Where plates go on main vs secondary arms |
 
-`generate_manifest()` (the default Hydra branch) still discovers scenes and
-writes jsonl; it calls `expand_scene_entries` here. Spawn combinatorics stay
-in `scene_augmentation.py` until `spawn.py`.
+`generate_manifest()` still discovers scenes and writes jsonl; it calls
+`expand_scene_entries` here. Shared lane-parse helpers stay in
+`core/scenarios/scene_augmentation.py`.

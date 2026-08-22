@@ -24,7 +24,7 @@ from traffic_bench.eval.core.layout.roundabout_yield_zone import (
     conflict_aux_ring_edge_ids,
     entry_conflict_ring_edges,
 )
-from traffic_bench.eval.core.scenarios.scene_augmentation import _roundabout_meta_ring_kwargs
+from traffic_bench.eval.signs.roundabout.spawn import roundabout_meta_ring_kwargs
 from traffic_bench.signs.priority_signs import RoundaboutSign, RoundaboutYieldSign
 
 
@@ -69,7 +69,7 @@ def layout_from_row(row: dict, scenes_root: Path) -> dict | None:
         layout_obj = build_roundabout_layout(
             full_path,
             sign_edge_id=ego_edge,
-            **_roundabout_meta_ring_kwargs(scene_meta),
+            **roundabout_meta_ring_kwargs(scene_meta),
         )
     except JunctionLayoutError as exc:
         print(f"[JunctionLayout] Failed to build roundabout layout: {exc}")

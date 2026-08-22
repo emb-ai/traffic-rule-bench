@@ -1,8 +1,8 @@
 """Expand junction / roundabout scenes into manifest rows (layout × aux).
 
 Roundabout (4.3) still uses this cartesian product; its plates live in
-``signs/roundabout/place.py``. Spawn combinatorics stay in
-``core/scenarios/scene_augmentation.py`` until ``spawn.py``.
+``signs/roundabout/place.py``. Spawn combinatorics: ``signs/junction/spawn.py``
+and ``signs/roundabout/spawn.py``.
 """
 
 from __future__ import annotations
@@ -34,9 +34,13 @@ from traffic_bench.eval.core.scenarios.scene_augmentation import (
     SpawnScenario,
     SpawnStrategy,
     augment_layout_for_scene,
+)
+from traffic_bench.eval.signs.junction.spawn import (
     pick_default_main_spawn_meta_for_net,
-    pick_default_roundabout_spawn_meta_for_net,
     pick_default_yield_spawn_meta_for_net,
+)
+from traffic_bench.eval.signs.roundabout.spawn import (
+    pick_default_roundabout_spawn_meta_for_net,
 )
 from traffic_bench.eval.core.sumo.lane_keys import lane_edge_id, lane_num_from_key, make_lane_key
 from traffic_bench.eval.core.sumo.sumo_utils import load_vehicle_route_index

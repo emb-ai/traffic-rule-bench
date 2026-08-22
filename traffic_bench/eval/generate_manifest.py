@@ -268,14 +268,16 @@ def build_junction_layout_for_scene(
     """Build junction layout using the active sign profile's layout mode."""
     try:
         if _profile().layout_mode == "roundabout":
-            from traffic_bench.eval.core.scenarios.scene_augmentation import _roundabout_meta_ring_kwargs
+            from traffic_bench.eval.signs.roundabout.spawn import (
+                roundabout_meta_ring_kwargs,
+            )
 
             meta = scene_meta or {}
             prefer_ego = meta.get("catalog_sign_road_id") or meta.get("road_id")
             layout = build_roundabout_layout(
                 net_path,
                 sign_edge_id=prefer_ego,
-                **_roundabout_meta_ring_kwargs(meta),
+                **roundabout_meta_ring_kwargs(meta),
             )
         else:
             layout = build_junction_priority_layout(

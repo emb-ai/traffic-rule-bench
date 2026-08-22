@@ -57,7 +57,7 @@ Which ego/aux spawn + destination combinations exist per scene.
 
 | Module | Role |
 |--------|------|
-| `scene_augmentation.py` | `SpawnStrategy` enumerators (equal / yield / roundabout / blocked_road / one_way / direction) |
+| `scene_augmentation.py` | Shared `SpawnScenario` / lane-parse helpers; family enumerators are shims → `signs/*/spawn.py` |
 | `auxiliary_agent.py` | Aux convoy spawn, placement, release logic at runtime |
 | `roundabout_aux.py` | Conflict-arc placement + spillover convoy on the ring |
 | `blocked_road_route.py` | Shim → `signs/blocked/spec.py` |
