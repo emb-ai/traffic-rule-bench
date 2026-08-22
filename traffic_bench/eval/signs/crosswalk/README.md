@@ -15,6 +15,4 @@ spawns on the approach to it.
 | `expand.py` | lane × density × preset → manifest rows |
 | `place.py` | Reconstruct zebra + place 5.19 plate |
 
-`generate_crosswalk_manifest` lives in `manifest/run.py`.
-Old `core.layout.crosswalk_layout` / `core.manifest.crosswalk_expansion`
-/ `core.scenarios.pedestrian_presets` imports are shims.
+`expand.generate` writes the crosswalk manifest.

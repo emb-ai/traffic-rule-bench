@@ -1,0 +1,21 @@
+# @package _global_
+# Shared knobs for direction / one_way / no_turn / no_entry.
+
+augmentation:
+  layout: true
+  auxiliary: false
+
+auxiliary:
+  enabled: false
+
+scenario:
+  min_dual_path_gain_m: 20.0
+  dual_path_route_budget_m: 150
+
+simulation:
+  horizon: 800
+  spawn_velocity_ms: 2.5
+  n_variations: 3
+  profile_density_cap: 1.0
+  sign_distance_before_end: 0.0
+  spawn_distance_before_end: 20.0

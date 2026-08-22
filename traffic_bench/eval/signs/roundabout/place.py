@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from traffic_bench.eval.core.layout.junction_priority_layout import JunctionLayoutError
-from traffic_bench.eval.core.layout.junction_sign_placement import (
+from traffic_bench.eval.engine.map.junction_priority_layout import JunctionLayoutError
+from traffic_bench.eval.engine.map.junction_sign_placement import (
     SIGN_SHOULDER_OFFSET_M,
     arms_for_road_class,
     collect_lanes_for_keys,
@@ -15,8 +15,8 @@ from traffic_bench.eval.core.layout.junction_sign_placement import (
     sign_longitudinal_offset,
     sign_placement_long,
 )
-from traffic_bench.eval.core.layout.roundabout_topology import build_roundabout_layout
-from traffic_bench.eval.core.layout.roundabout_yield_zone import (
+from traffic_bench.eval.engine.map.roundabout_topology import build_roundabout_layout
+from traffic_bench.eval.engine.map.roundabout_yield_zone import (
     all_entry_conflict_ring_edges,
     collect_all_entry_conflict_lanes,
     collect_entry_conflict_lanes,

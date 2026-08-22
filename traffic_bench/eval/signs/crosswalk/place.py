@@ -6,13 +6,13 @@ import math
 
 import numpy as np
 
-from traffic_bench.eval.core.layout.junction_sign_placement import (
+from traffic_bench.eval.engine.map.junction_sign_placement import (
     lateral_offset_beside_lane,
     resolve_sign_lane_for_edge,
     sign_longitudinal_offset,
     sign_placement_long,
 )
-from traffic_bench.eval.core.sumo.lane_keys import clamp_lane_key_to_graph, make_lane_key
+from traffic_bench.eval.engine.map.lane_keys import clamp_lane_key_to_graph, make_lane_key
 from traffic_bench.signs.pedestrian_crossing_sign import PedestrianCrossingSign
 from traffic_bench.signs.pedestrian_yield_rule import PedestrianYieldRule
 

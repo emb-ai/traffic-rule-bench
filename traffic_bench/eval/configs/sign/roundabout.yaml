@@ -1,12 +1,5 @@
 # @package _global_
+defaults:
+  - /shared/roundabout
+
 sign: roundabout
-
-augmentation:
-  layout: true
-  auxiliary: true
-
-auxiliary:
-  enabled: true
-
-simulation:
-  destination_max_along_m: 50.0

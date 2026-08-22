@@ -20,7 +20,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
-from traffic_bench.eval.core.layout.junction_priority_layout import JunctionLayoutError
+from traffic_bench.eval.engine.map.junction_priority_layout import JunctionLayoutError
 from traffic_bench.scene_collection.collect.dual_path.graph import (
     crop_to_dual_path,
     fill_slots_for_junctions,

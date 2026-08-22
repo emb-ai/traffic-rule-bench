@@ -1,0 +1,11 @@
+# @package _global_
+
+augmentation:
+  layout: true
+  auxiliary: true
+
+auxiliary:
+  enabled: true
+
+simulation:
+  destination_max_along_m: 50.0

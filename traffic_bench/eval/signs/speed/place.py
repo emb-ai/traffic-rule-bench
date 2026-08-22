@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from traffic_bench.eval.core.layout.junction_sign_placement import resolve_layout_lane
+from traffic_bench.eval.engine.map.junction_sign_placement import resolve_layout_lane
 from traffic_bench.signs.end_of_zone_signs import EndOfSpeedLimitSign, EndOfZoneSpeedLimitSign
 from traffic_bench.signs.min_speed_limit_sign import MinimumSpeedLimitSign
 from traffic_bench.signs.residential_zone_signs import (

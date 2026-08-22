@@ -277,7 +277,7 @@ def replay_in_our_env(
 
     from expert_replay import _build_env    # re-use env-builder
     import env_flags as _env_flags
-    from traffic_bench.eval.core.profiles.ego_defaults import apply_ego_defaults
+    from traffic_bench.eval.engine.traffic.ego_defaults import apply_ego_defaults
 
     row = sidecar["source_row"]
     backend = sidecar["backend"]

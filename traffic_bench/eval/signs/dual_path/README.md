@@ -15,9 +15,6 @@ parameterized by sign code.
 | `spec.py` | Plate table, role dirs, crop-meta discover |
 | `scene.py` | `DualPathScenario` from `meta.json` |
 | `budget.py` | Truncate both routes to a shared meter budget |
-| `expand.py` | dual-path × spawn lane × NPC → manifest rows |
+| `expand.py` | `generate` + dual-path × spawn lane × NPC → manifest rows |
 | `place.py` | Plate on ego approach (or 3.1 exit); `resolve_row_for_policy` |
-
-`generate_manifest` dispatches `family == dual_path` to one generator.
-`run_benchmark` calls `place_dual_path_signs`. Old `core.manifest.*_expansion`
-and `core.scenarios.*_bridge` files are still shims.
+| `nav.py` | Compliant dual-path route at episode start |

@@ -1535,7 +1535,7 @@ class TrafficSignSumoEnv(BaseEnv):
         if not accel_mode:
             if insufficient and d_achieved > 0.0:
                 try:
-                    from traffic_bench.eval.core.profiles.agent_profile_bank import max_v0_for_distance
+                    from traffic_bench.eval.engine.traffic.agent_profile_bank import max_v0_for_distance
                     v0_fit = max_v0_for_distance(
                         d_achieved, v_target_mps,
                         float(self.config.get("ego_brake_decel", 2.5)),

@@ -2,12 +2,12 @@
 
 Collector for sign evaluation (`yield` 2.4 / `main` 2.1 / `stop` 2.5 / …).
 
-- episodes go through `traffic_bench.eval.run_benchmark.run_one_episode`
+- episodes go through `traffic_bench.eval.run.episode.run_one_episode`
 - scenes / manifests under `data/scenes/<sign>/` and `data/runs/<sign>/`
 - `replay.pkl` written for PlanT2 training
 
 Train/test is **not** split here — use `paths.split=train|test` at
-`generate_manifest` time (moscow pool), then pass that run's
+`python -m traffic_bench.eval manifest` time (moscow pool), then pass that run's
 `real_manifest.jsonl` as `MANIFEST`.
 
 ## Per-sign inputs / outputs
@@ -90,7 +90,7 @@ SMOKE_EXTRA_SAMPLES=0 \
 ## 2. Full collection
 
 Point `MANIFEST` at a train (or test) manifest from an earlier
-`generate_manifest.py … paths.split=train` run. If unset, the latest
+`python -m traffic_bench.eval manifest … paths.split=train` run. If unset, the latest
 `data/<sign>/output/*/real_manifest.jsonl` is used.
 
 ```bash

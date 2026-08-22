@@ -7,8 +7,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Tuple
 
-from traffic_bench.eval.core.layout.junction_crop import _find_netconvert
-from traffic_bench.eval.core.layout.junction_priority_layout import JunctionLayoutError
+from traffic_bench.scene_collection.collect.lib.junction_crop import _find_netconvert
+from traffic_bench.eval.engine.map.junction_priority_layout import JunctionLayoutError
 
 
 BBox = Tuple[float, float, float, float]

@@ -12,16 +12,16 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from traffic_bench.eval.core.layout.junction_priority_layout import right_arm_edge_id
-from traffic_bench.eval.core.manifest.manifest_config import DEFAULT_STOP_WAIT_STEPS
-from traffic_bench.eval.core.manifest.manifest_expansion import (
+from traffic_bench.eval.engine.map.junction_priority_layout import right_arm_edge_id
+from traffic_bench.eval.engine.expand.manifest_config import DEFAULT_STOP_WAIT_STEPS
+from traffic_bench.eval.engine.expand.manifest_expansion import (
     AuxiliaryParams,
     ExpansionConfig,
     entry_geometry_key,
     shuffle_cap,
     sizes_up_to,
 )
-from traffic_bench.eval.core.scenarios.auxiliary_agent import (
+from traffic_bench.eval.engine.spawn.auxiliary_agent import (
     main_lane_keys_for_aux,
     min_aux_spawn_lane_length,
     resolve_aux_destination_lane_key,
@@ -30,7 +30,7 @@ from traffic_bench.eval.core.scenarios.auxiliary_agent import (
     viable_aux_lane_keys,
     viable_right_aux_lane_keys,
 )
-from traffic_bench.eval.core.scenarios.scene_augmentation import (
+from traffic_bench.eval.engine.spawn.scene_augmentation import (
     SpawnScenario,
     SpawnStrategy,
     augment_layout_for_scene,
@@ -42,8 +42,8 @@ from traffic_bench.eval.signs.junction.spawn import (
 from traffic_bench.eval.signs.roundabout.spawn import (
     pick_default_roundabout_spawn_meta_for_net,
 )
-from traffic_bench.eval.core.sumo.lane_keys import lane_edge_id, lane_num_from_key, make_lane_key
-from traffic_bench.eval.core.sumo.sumo_utils import load_vehicle_route_index
+from traffic_bench.eval.engine.map.lane_keys import lane_edge_id, lane_num_from_key, make_lane_key
+from traffic_bench.eval.engine.map.sumo_utils import load_vehicle_route_index
 from traffic_bench.eval.manifest.lanes import (
     SumoLaneInfo,
     filter_spawn_lanes_to_secondary,
@@ -156,7 +156,7 @@ def _print_aux_lane_availability(
         convoy_gap_m=min(aux.convoy_gaps_m) if aux.convoy_gaps_m else 10.0,
     )
     if spawn_strategy == "roundabout":
-        from traffic_bench.eval.core.scenarios.roundabout_aux import MIN_CONFLICT_ARC_LENGTH_M
+        from traffic_bench.eval.signs.roundabout.aux import MIN_CONFLICT_ARC_LENGTH_M
 
         min_lane_for_lead = float(MIN_CONFLICT_ARC_LENGTH_M)
     if spawn_strategy in ("yield", "roundabout"):
@@ -644,3 +644,215 @@ def build_manifest_entry(
                 )
 
     return {k: v for k, v in entry.items() if v is not None}
+
+from functools import partial
+from typing import Optional
+
+from traffic_bench.eval.engine.map.junction_priority_layout import (
+    JunctionLayoutError,
+    allowed_shapes_for_mode,
+    build_junction_priority_layout,
+)
+from traffic_bench.eval.engine.map.roundabout_topology import build_roundabout_layout
+from traffic_bench.eval.manifest.io import (
+    append_scene_entries,
+    apply_max_total,
+    apply_split_filter,
+    assert_rejected_scenes_applied,
+    discover_scenes,
+    load_scene_metadata,
+    write_real_manifest,
+)
+from traffic_bench.eval.manifest.types import AuxiliaryConfig, ExpertConfig
+from traffic_bench.scene_collection.sign_scenes.materialize.pool_index import normalize_split
+def build_junction_layout_for_scene(
+    net_path: Path,
+    *,
+    profile,
+    sign_lat: Optional[float] = None,
+    sign_lon: Optional[float] = None,
+    scene_meta: Optional[dict] = None,
+) -> Optional[dict]:
+    """Build junction / roundabout layout for one scene."""
+    try:
+        if profile.layout_mode == "roundabout":
+            from traffic_bench.eval.signs.roundabout.spawn import (
+                roundabout_meta_ring_kwargs,
+            )
+
+            meta = scene_meta or {}
+            prefer_ego = meta.get("catalog_sign_road_id") or meta.get("road_id")
+            layout = build_roundabout_layout(
+                net_path,
+                sign_edge_id=prefer_ego,
+                **roundabout_meta_ring_kwargs(meta),
+            )
+        else:
+            layout = build_junction_priority_layout(
+                net_path,
+                mode=profile.layout_mode,
+                sign_lat=sign_lat,
+                sign_lon=sign_lon,
+            )
+    except JunctionLayoutError as exc:
+        print(f"  [junction_layout] {net_path.parent.name}: {exc}")
+        return None
+    return layout.to_dict()
+
+
+
+def generate(cfg, scenes=None):
+    """Junction and roundabout rows. Roundabout still uses this generator."""
+
+    profile = cfg.profile
+    PDD_CODE = profile.pdd_code
+    SIGN_TYPE = profile.sign_type
+    SIGN_NAME = profile.sign_name
+    def _profile():
+        return profile
+    scenes_dir = cfg.scenes_dir
+    output_dir = cfg.output_dir
+    scenario_cfg = cfg.scenario
+    sim_cfg = cfg.simulation
+    expansion_cfg = cfg.expansion
+    aux_cfg = cfg.auxiliary
+    expert_cfg = cfg.expert
+    split = cfg.split
+
+    expert_cfg = expert_cfg or ExpertConfig()
+    split = normalize_split(split)
+    expert_cfg = expert_cfg or ExpertConfig()
+    assert_rejected_scenes_applied(scenes_dir)
+    all_scenes = discover_scenes(scenes_dir)
+    print(f"Scenes root: {scenes_dir.resolve()}")
+    print(f"Discovered {len(all_scenes)} scene(s) on disk")
+    scenes, split_by_id = apply_split_filter(
+        all_scenes, scenes_dir=scenes_dir, split=split
+    )
+    print(
+        f"Augmentation axes: layout={expansion_cfg.layout_on}, "
+        f"auxiliary={expansion_cfg.auxiliary_on}"
+    )
+    if not scenes:
+        print(
+            f"[warn] No scenes with meta.json + net found under {scenes_dir} "
+            f"(after paths.split={split}). "
+            "Check data/scenes/<sign> / paths.scenes_dir / moscow_pool.json."
+        )
+    entries = []
+
+    aux_for_entry = aux_cfg
+    if not expansion_cfg.auxiliary_on:
+        aux_for_entry = AuxiliaryConfig(
+            enabled=False,
+            distance_from_intersection=aux_cfg.distance_from_intersection,
+            convoy_size=aux_cfg.convoy_size,
+            convoy_gap_m=aux_cfg.convoy_gap_m,
+            lanes_occupied=aux_cfg.lanes_occupied,
+            release_when_ego_within_m=aux_cfg.release_when_ego_within_m,
+        )
+
+    used_scene_ids: List[str] = []
+    for scene_dir in scenes:
+        meta = load_scene_metadata(scene_dir)
+        scene_name = meta.get("scene_name", scene_dir.name)
+        net_file = meta.get("net_file", "map.net.xml")
+        net_full_path = scene_dir / net_file
+
+        spawn_lanes = parse_sumo_net_for_spawn_lanes(net_full_path)
+        print(f"  Found {len(spawn_lanes)} intersection-approaching lane(s)")
+
+        sign_lat = meta.get("latitude") or meta.get("center_lat")
+        sign_lon = meta.get("longitude") or meta.get("center_lon")
+
+        junction_layout = build_junction_layout_for_scene(
+            net_full_path,
+            profile=profile,
+            sign_lat=float(sign_lat) if sign_lat is not None else None,
+            sign_lon=float(sign_lon) if sign_lon is not None else None,
+            scene_meta=meta,
+        )
+        if junction_layout is None:
+            print(f"  Skipping {scene_name}: no junction layout")
+            continue
+        shape = junction_layout.get("shape")
+        allowed_shapes = allowed_shapes_for_mode(profile.layout_mode)
+        if shape not in allowed_shapes:
+            print(
+                f"  Skipping {scene_name}: junction shape {shape!r} "
+                f"(need {sorted(allowed_shapes)})"
+            )
+            continue
+
+        scene_entries = expand_scene_entries(
+            scene_dir=scene_dir,
+            scenes_root=scenes_dir,
+            meta=meta,
+            net_path=net_full_path,
+            spawn_lanes=spawn_lanes,
+            junction_layout=junction_layout,
+            spawn_strategy=profile.spawn_strategy,
+            sim_cfg=sim_cfg,
+            expansion=expansion_cfg,
+            build_entry=partial(
+                build_manifest_entry, expert_cfg=expert_cfg, profile=profile
+            ),
+            aux_cfg_for_entry=aux_for_entry,
+        )
+        if not scene_entries:
+            print(f"  Skipping {scene_name}: no manifest entries after expansion")
+            continue
+        append_scene_entries(
+            entries, used_scene_ids, scene_entries,
+            scene_dir=scene_dir, meta=meta, split_by_id=split_by_id,
+        )
+
+    entries, used_scene_ids, pre_total = apply_max_total(
+        entries, used_scene_ids,
+        max_total=scenario_cfg.max_total, split=split, pdd_code=PDD_CODE,
+        log_under_cap=True,
+    )
+    summary = {
+        "pdd_code": PDD_CODE,
+        "sign_type": SIGN_TYPE,
+        "sign_name": SIGN_NAME,
+        "total_scenes": len(used_scene_ids),
+        "total_entries": len(entries),
+        "total_entries_before_max_total": pre_total,
+        "augmentation_layout": expansion_cfg.layout_on,
+        "augmentation_auxiliary": expansion_cfg.auxiliary_on,
+        "max_scenarios": scenario_cfg.max_scenarios,
+        "max_total": scenario_cfg.max_total,
+        "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
+        "traffic_density": sim_cfg.traffic_density,
+        "horizon": sim_cfg.horizon,
+        "sign_distance_before_end": sim_cfg.sign_distance_before_end,
+        "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
+        "auxiliary_agent": aux_for_entry.enabled,
+        "aux_distance_from_intersection": aux_cfg.distance_from_intersection,
+        "aux_convoy_size_max": aux_cfg.convoy_size,
+        "aux_convoy_gap_m": list(expansion_cfg.aux.convoy_gaps_m)
+        if expansion_cfg.aux is not None
+        else [aux_cfg.convoy_gap_m],
+        "aux_lanes_occupied_max": aux_cfg.lanes_occupied,
+    }
+    if profile.id == STOP.id:
+        summary["stop_wait_steps"] = int(expert_cfg.stop_wait_steps)
+    if (
+        profile.layout_mode == "roundabout"
+        and sim_cfg.destination_max_along_m is not None
+    ):
+        summary["destination_max_along_m"] = float(sim_cfg.destination_max_along_m)
+    write_real_manifest(
+        output_dir=output_dir,
+        scenes_dir=scenes_dir,
+        entries=entries,
+        used_scene_ids=used_scene_ids,
+        split_by_id=split_by_id,
+        split=split,
+        pdd_code=PDD_CODE,
+        summary=summary,
+        announce=False,
+    )
+    return entries
+

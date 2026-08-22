@@ -17,12 +17,12 @@ PDD_BENCH_DIR = PACKAGE_DIR
 SDC_ROOT = REPO_ROOT
 SCENES_ROOT = REPO_ROOT / "scenes"
 
-from traffic_bench.eval.core.runtime.metadrive_sumo_patch import apply_metadrive_sumo_via_patch
+from traffic_bench.eval.engine.sim.metadrive_sumo_patch import apply_metadrive_sumo_via_patch
 
 apply_metadrive_sumo_via_patch()
 
-from traffic_bench.eval.core.sumo.sumo_utils import resolve_net_file, load_scene_meta, find_first_edge_id, DEFAULT_NET_FILE
-from traffic_bench.eval.core.runtime.checkpoints import (
+from traffic_bench.eval.engine.map.sumo_utils import resolve_net_file, load_scene_meta, find_first_edge_id, DEFAULT_NET_FILE
+from traffic_bench.eval.engine.sim.checkpoints import (
     NN_NEED_CHECKPOINT,
     PLAIN_PLANT2_POLICIES,
     resolve_nn_checkpoint,

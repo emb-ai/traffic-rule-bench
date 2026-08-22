@@ -23,8 +23,9 @@ Two stages:
 
 
 CLI (`--sign`, Hydra `sign=`) uses **eval profile ids** (`yield`, `roundabout`,
-`crosswalk`, …), the same names as `generate_manifest.py`. Allocations in
-`signs.yaml` / `sign_allocations.json` stay keyed by PDD code internally.
+`crosswalk`, …), the same names as `python -m traffic_bench.eval manifest`.
+Allocations in `signs.yaml` / `sign_allocations.json` stay keyed by official
+plate numbers internally.
 
 The independent unit of the benchmark is a **map**. Scenario augmentations
 (≤10 per map) are correlated; quotas `n_train=80` / `n_test=20` are the
@@ -144,7 +145,7 @@ python -m traffic_bench.eval manifest sign=yield paths.split=train
 
 ## How eval picks ego spawn
 
-Dispatch: `sign_registry.spawn_strategy` → `generate_manifest.py`.
+Dispatch: `sign_registry.spawn_strategy` → `manifest/run.py` / `signs/<family>/expand.py`.
 
 - Junction 2.1: layout, any arm, longest incoming ≥20 m. Harvest meta has no `road_id`.
 - 2.3 / 2.4 / 2.5: secondary arms only (`ego_road_class="secondary"`).

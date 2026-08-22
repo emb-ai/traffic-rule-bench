@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from traffic_bench.eval.core.layout.junction_priority_layout import (
+from traffic_bench.eval.engine.map.junction_priority_layout import (
     JunctionLayoutError,
     build_junction_priority_layout,
 )
-from traffic_bench.eval.core.layout.junction_sign_placement import (
+from traffic_bench.eval.engine.map.junction_sign_placement import (
     SIGN_SHOULDER_OFFSET_M,
     lateral_offset_beside_lane,
     resolve_sign_lane_for_edge,
@@ -17,14 +17,14 @@ from traffic_bench.eval.core.layout.junction_sign_placement import (
     sign_placement_long,
     sign_placement_long_from_start,
 )
-from traffic_bench.eval.core.manifest.manifest_config import (
+from traffic_bench.eval.engine.expand.manifest_config import (
     DEFAULT_DESTINATION_MAX_ALONG_M,
     DEFAULT_SIGN_DISTANCE_FROM_START,
 )
-from traffic_bench.eval.core.runtime.one_way_support import (
+from traffic_bench.eval.signs.dual_path.nav import (
     resolve_row_background_excluded_edges,
 )
-from traffic_bench.eval.core.sumo.lane_keys import lane_edge_id
+from traffic_bench.eval.engine.map.lane_keys import lane_edge_id
 from traffic_bench.eval.signs.dual_path.spec import get_spec, resolve_sign_class
 
 _ONE_WAY_TYPES = frozenset({"one_way", "one_way_right", "one_way_left"})

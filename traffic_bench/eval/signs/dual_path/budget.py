@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from traffic_bench.eval.core.sumo.lane_keys import make_lane_key
+from traffic_bench.eval.engine.map.lane_keys import make_lane_key
 
 
 def load_sumo_edge_lengths(net_path: Path) -> Dict[str, float]:

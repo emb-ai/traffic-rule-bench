@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from traffic_bench.eval.core.layout.junction_priority_layout import (
+from traffic_bench.eval.engine.map.junction_priority_layout import (
     JunctionLayoutError,
     build_junction_priority_layout,
     right_arm_edge_id,
     secondary_side_from_main_arm,
     straight_arm_edge_id,
 )
-from traffic_bench.eval.core.layout.junction_sign_placement import (
+from traffic_bench.eval.engine.map.junction_sign_placement import (
     SIGN_SHOULDER_OFFSET_M,
     arms_for_road_class,
     collect_lanes_for_keys,

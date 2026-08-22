@@ -14,5 +14,4 @@ Same segment crops as speed signs. Eval picks the obstacle lane from
 | `expand.py` | corridor × density → manifest rows |
 | `place.py` | DetourSign on the obstacle lane at `sign_s` |
 
-`generate_detour_manifest` lives in `manifest/run.py`.
-`core.manifest.detour_expansion` is a shim.
+`expand.generate` writes the detour manifest.

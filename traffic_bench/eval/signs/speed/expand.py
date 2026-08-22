@@ -29,8 +29,8 @@ from traffic_bench.eval.signs.speed.spec import (
     paired_end_code,
     spawn_mode_for,
 )
-from traffic_bench.eval.core.manifest.manifest_expansion import shuffle_cap
-from traffic_bench.eval.core.manifest.traffic_density_levels import TrafficDensityLevel, list_traffic_density_levels
+from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
+from traffic_bench.eval.engine.traffic.traffic_density_levels import TrafficDensityLevel, list_traffic_density_levels
 
 MAX_AXIS = 3
 
@@ -292,3 +292,134 @@ def expand_speed_scene_entries(
             f"(shuffled, cap={max_sc})"
         )
     return entries
+
+from traffic_bench.eval.manifest.io import (
+    append_scene_entries,
+    apply_max_total,
+    apply_split_filter,
+    load_scene_metadata,
+    write_real_manifest,
+)
+from traffic_bench.scene_collection.sign_scenes.materialize.pool_index import normalize_split
+
+
+def generate(cfg, scenes=None):
+    """Speed-family rows from segment scenes."""
+
+    profile = cfg.profile
+    PDD_CODE = profile.pdd_code
+    SIGN_TYPE = profile.sign_type
+    SIGN_NAME = profile.sign_name
+    def _profile():
+        return profile
+    scenes_dir = cfg.scenes_dir
+    output_dir = cfg.output_dir
+    scenario_cfg = cfg.scenario
+    sim_cfg = cfg.simulation
+    expansion_cfg = cfg.expansion
+    aux_cfg = cfg.auxiliary
+    expert_cfg = cfg.expert
+    split = cfg.split
+
+    split = normalize_split(split)
+    max_density_levels = int(cfg.max_density_levels)
+    traffic_density_augment = bool(cfg.traffic_density_augment)
+    pdd_code = PDD_CODE
+    all_scenes = discover_segment_speed_scenes(scenes_dir)
+    print(f"Scenes root: {scenes_dir.resolve()}")
+    print(f"Discovered {len(all_scenes)} segment scene(s) for {pdd_code}")
+    scenes, split_by_id = apply_split_filter(
+        all_scenes, scenes_dir=scenes_dir, split=split
+    )
+    print(
+        f"Augmentation axes: spawn_lane × density={max_density_levels} "
+        f"(traffic_density_augment={bool(traffic_density_augment)})"
+    )
+
+    sim_params = SpeedSimParams(
+        spawn_offset_from_start=float(sim_cfg.spawn_offset_from_start),
+        max_path_length_m=float(sim_cfg.max_path_length_m),
+        horizon=int(sim_cfg.horizon),
+        traffic_density=float(sim_cfg.traffic_density),
+        traffic_density_augment=bool(traffic_density_augment),
+        max_density_levels=int(max_density_levels),
+        max_ego_lanes=int(sim_cfg.max_ego_lanes),
+        zone_tail_m=float(sim_cfg.zone_tail_m),
+        zone_min_m=float(sim_cfg.zone_min_m),
+    )
+    speed_expansion = SpeedExpansionConfig(
+        max_scenarios=scenario_cfg.max_scenarios,
+    )
+
+    entries: List[Dict] = []
+    used_scene_ids: List[str] = []
+    skipped_short = 0
+
+    for scene_idx, scene_dir in enumerate(scenes):
+        meta = load_scene_metadata(scene_dir)
+        scene_name = meta.get("scene_name", scene_dir.name)
+        v_target_kmh = assign_limit_kmh(pdd_code, scene_idx)
+        print(f"\n=== {scene_name}  v_target={v_target_kmh:.0f} km/h ===")
+
+        scene_entries = expand_speed_scene_entries(
+            scene_dir=scene_dir,
+            scenes_root=scenes_dir,
+            meta=meta,
+            sim=sim_params,
+            expansion=speed_expansion,
+            pdd_code=pdd_code,
+            v_target_kmh=v_target_kmh,
+        )
+        if not scene_entries:
+            skipped_short += 1
+            print(f"  Skipping {scene_name}: no room for sign+zone before dest cap")
+            continue
+        append_scene_entries(
+            entries, used_scene_ids, scene_entries,
+            scene_dir=scene_dir, meta=meta, split_by_id=split_by_id,
+        )
+
+    entries, used_scene_ids, pre_total = apply_max_total(
+        entries, used_scene_ids,
+        max_total=scenario_cfg.max_total, split=split, pdd_code=pdd_code,
+        scene_id_key="scene_name",
+    )
+    write_real_manifest(
+        output_dir=output_dir,
+        scenes_dir=scenes_dir,
+        entries=entries,
+        used_scene_ids=used_scene_ids,
+        split_by_id=split_by_id,
+        split=split,
+        pdd_code=pdd_code,
+        summary={
+            "pdd_code": pdd_code,
+            "sign_type": SIGN_TYPE,
+            "sign_name": SIGN_NAME,
+            "sign_class": {
+                "3.24": "SpeedLimitSign",
+                "4.6": "MinimumSpeedLimitSign",
+                "5.21": "ResidentialZoneSign",
+                "5.31": "ZoneSpeedLimitSign",
+            }.get(pdd_code, "SpeedLimitSign"),
+            "sign_placement": (
+                f"ego at road start; start sign at spawn+approach; "
+                f"dest min(edge_end, {sim_cfg.max_path_length_m}m)"
+            ),
+            "total_scenes": len(used_scene_ids),
+            "total_entries": len(entries),
+            "total_entries_before_max_total": pre_total,
+            "skipped_short_scenes": skipped_short,
+            "max_scenarios": scenario_cfg.max_scenarios,
+            "max_total": scenario_cfg.max_total,
+            "max_density_levels": max_density_levels,
+            "traffic_density_augment": bool(traffic_density_augment),
+            "spawn_offset_from_start": sim_cfg.spawn_offset_from_start,
+            "max_path_length_m": sim_cfg.max_path_length_m,
+            "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
+            "horizon": sim_cfg.horizon,
+            "auxiliary_agent": False,
+        },
+    )
+    return entries
+

@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 
-from traffic_bench.eval.core.sumo.sumo_utils import is_vehicle_drivable_lane
+from traffic_bench.eval.engine.map.sumo_utils import is_vehicle_drivable_lane
 
 
 def edge_length_m(net_path: Path | str, edge_id: str) -> Optional[float]:

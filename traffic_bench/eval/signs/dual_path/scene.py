@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, List, Optional, Sequence, Tuple
 
-from traffic_bench.eval.core.scenarios.scene_augmentation import SpawnScenario
-from traffic_bench.eval.core.sumo.lane_keys import lane_num_from_key, make_lane_key
+from traffic_bench.eval.engine.spawn.scene_augmentation import SpawnScenario
+from traffic_bench.eval.engine.map.lane_keys import lane_num_from_key, make_lane_key
 
 
 @dataclass(frozen=True)

@@ -37,7 +37,7 @@ from traffic_bench.scene_collection.sign_scenes.filter.selection import (
     save_scene_selection,
     set_scene_verdict,
 )
-from traffic_bench.eval.core.sumo.sumo_utils import load_scene_meta
+from traffic_bench.eval.engine.map.sumo_utils import load_scene_meta
 
 SCENES_DIR_DEFAULT = DATA_SCENES / "yield"
 SELECTION_FILE = "scene_selection.json"

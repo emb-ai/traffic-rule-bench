@@ -5,7 +5,7 @@
 defaults:
   - _self_
   - sign: main_road
-  # Dual-path signs compose configs/sign/_dual_path.yaml (Hydra group base).
+  # Shared knobs live in configs/shared/ and are pulled by sign yaml defaults.
 
 hydra:
   run:

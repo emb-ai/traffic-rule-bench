@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 
-from traffic_bench.eval.core.scenarios.scene_augmentation import SpawnStrategy
+from traffic_bench.eval.engine.spawn.scene_augmentation import SpawnStrategy
 
 LayoutMode = Literal["main_main", "main_secondary", "roundabout"]
 SignFamily = Literal[
@@ -96,7 +96,7 @@ STOP = SignProfile(
     sign_type="stop",
     sign_name="Stop",
     # Same junction geometry / spawn / aux as yield; only the plate +
-    # stop-line violation differ (handled in run_benchmark + StopSign class).
+    # stop-line violation differ (handled in run + StopSign class).
     layout_mode="main_secondary",
     spawn_strategy="yield",
     ego_road_class="secondary",

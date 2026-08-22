@@ -16,5 +16,4 @@ is chosen in expansion (braking runway on the same edge).
 | `expand.py` | lane × density → manifest rows |
 | `place.py` | Start plate + paired end plate |
 
-`generate_speed_manifest` lives in `manifest/run.py`.
-`core.manifest.speed_expansion` / `core.scenarios.speed_scene_design` are shims.
+`expand.generate` writes the speed-family manifest.

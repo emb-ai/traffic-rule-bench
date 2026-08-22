@@ -1,0 +1,9 @@
+# @package _global_
+# Shared knobs for main_road / secondary / yield / stop.
+
+augmentation:
+  layout: true
+  auxiliary: true
+
+auxiliary:
+  enabled: true

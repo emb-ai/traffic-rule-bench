@@ -1,5 +1,5 @@
 # @package _global_
 defaults:
-  - _dual_path
+  - /shared/dual_path
 
 sign: no_entry

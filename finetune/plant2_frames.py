@@ -182,7 +182,7 @@ def get_route(vehicle, num_points: int = 20, step_m: float = 1.0) -> np.ndarray:
 
 def target_speed_mps(vehicle, engine, row: dict) -> float:
     """Target speed m/s: v_target_kmh in sign zone, else v_target_raw_kmh."""
-    from traffic_bench.eval.core.runtime.sign_eval import _ego_in_sign_zone
+    from traffic_bench.eval.engine.sim.sign_eval import _ego_in_sign_zone
     v_raw = float(row.get("v_target_raw_kmh", 80)) / 3.6
     v_sign = float(row.get("v_target_kmh", v_raw * 3.6)) / 3.6
     sign_mgr = getattr(engine, "traffic_sign_manager", None)

@@ -1,8 +1,4 @@
-"""Eval CLI: manifest → run / pipeline → metrics.
-
-Facades over ``manifest.run``, ``run_benchmark`` / ``bench.episode``,
-``pipeline.run``, and ``metrics/``. Family expand/place is under ``signs/``.
-"""
+"""Eval CLI: manifest → run → metrics."""
 
 from __future__ import annotations
 
@@ -30,22 +26,9 @@ def cmd_manifest(argv: List[str]) -> int:
 
 
 def cmd_run(argv: List[str]) -> int:
-    from traffic_bench.eval import run_benchmark
+    from traffic_bench.eval.run import main as run_main
 
-    if "--run-name" not in argv and "--policy" in argv:
-        try:
-            policy = argv[argv.index("--policy") + 1]
-        except (ValueError, IndexError):
-            policy = None
-        if policy and not str(policy).startswith("-"):
-            argv = [*argv, "--run-name", policy]
-    return _run_module_main(run_benchmark, argv)
-
-
-def cmd_pipeline(argv: List[str]) -> int:
-    from traffic_bench.eval.pipeline import run as eval_pipeline
-
-    return _run_module_main(eval_pipeline, argv)
+    return _run_module_main(run_main, argv)
 
 
 def cmd_metrics(argv: List[str]) -> int:
@@ -68,26 +51,25 @@ def cmd_metrics(argv: List[str]) -> int:
         )
         return 2
     if command == "csv":
-        from traffic_bench.eval.metrics import build_episode_metrics_csv as mod
+        from traffic_bench.eval.metrics import csv as mod
     elif command == "aggregate":
-        from traffic_bench.eval.metrics import aggregate_episode_metrics as mod
+        from traffic_bench.eval.metrics import aggregate as mod
     else:
-        from traffic_bench.eval.metrics import generate_cumulative_markdown_report as mod
+        from traffic_bench.eval.metrics import report as mod
     return _run_module_main(mod, argv[1:])
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    commands = ("manifest", "run", "pipeline", "metrics")
+    commands = ("manifest", "run", "metrics")
     if not argv or argv[0] in ("-h", "--help"):
         print(
             "usage: python -m traffic_bench.eval "
             f"{{{','.join(commands)}}} ...\n\n"
-            "Build a sign manifest, run one policy, or score many policies.\n\n"
+            "Build a sign manifest, run one or many policies, or score episodes.\n\n"
             "Commands:\n"
             "  manifest    scenes + Hydra config → real_manifest.jsonl\n"
-            "  run         one policy on one manifest (closed-loop episodes)\n"
-            "  pipeline    many policies + metrics report\n"
+            "  run         one policy, or policies=[…] then metrics\n"
             "  metrics     episode JSONL → CSV / markdown\n"
         )
         return 0
@@ -102,7 +84,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     dispatch = {
         "manifest": cmd_manifest,
         "run": cmd_run,
-        "pipeline": cmd_pipeline,
         "metrics": cmd_metrics,
     }
     return dispatch[command](argv[1:])

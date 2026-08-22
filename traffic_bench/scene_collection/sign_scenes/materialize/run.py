@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Materialize allocated maps into data/scenes/<sign>/.
 
-``--sign`` is the eval profile id (same as ``generate_manifest.py sign=...``),
+``--sign`` is the eval profile id (same as ``python -m traffic_bench.eval manifest sign=...``),
 not the PDD code. Allocations in ``sign_allocations.json`` stay keyed by PDD.
 
 Junction crops live under ``maps/crops/junction/{T,X,O}/``.
@@ -751,7 +751,7 @@ def main() -> None:
         default=None,
         metavar="ID",
         help=(
-            "Eval sign id, same as `generate_manifest.py sign=...` "
+            "Eval sign id, same as `python -m traffic_bench.eval manifest sign=...` "
             f"(e.g. yield, roundabout, crosswalk). "
             f"Known: {', '.join(sorted(p.id for p in list_profiles()))}"
         ),

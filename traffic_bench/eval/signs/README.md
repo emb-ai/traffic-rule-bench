@@ -1,12 +1,12 @@
-# signs/ — one folder per sign family
+# signs/ — one folder per sign group
 
-Each family is a group of eval ids that share spawn geometry and plate
-placement. Dispatch is `sign_registry.family` → `signs.<family>.expand` /
-`.place`, not `if sign == one_way`.
+Each group is a set of eval ids that share spawn geometry and plate
+placement. Dispatch is `sign_registry.family` → `signs.<group>.expand` /
+`.place`. CLI stays `sign=yield`, not `sign=junction/yield`.
 
-| Family | Eval ids | Sign codes |
+| Group | Eval ids | Sign codes |
 | --- | --- | --- |
-| [junction](junction/README.md) | `main`, `secondary`, `yield`, `stop` | 2.1, 2.3, 2.4, 2.5 |
+| [junction](junction/README.md) | `main_road`, `secondary`, `yield`, `stop` | 2.1, 2.3, 2.4, 2.5 |
 | [roundabout](roundabout/README.md) | `roundabout` | 4.3 |
 | [blocked](blocked/README.md) | `blocked_road` | 3.2 |
 | [dual_path](dual_path/README.md) | `direction_*`, `one_way_*`, `no_turn_*`, `no_entry` | 4.1.x, 5.7.x, 3.18.x, 3.1 |
@@ -14,16 +14,14 @@ placement. Dispatch is `sign_registry.family` → `signs.<family>.expand` /
 | [detour](detour/README.md) | `detour_right`, `detour_left`, `detour_either` | 4.2.1–4.2.3 |
 | [speed](speed/README.md) | `speed_limit`, `min_speed`, `residential_zone`, `zone_speed_limit` | 3.24, 4.6, 5.21, 5.31 |
 
-Per-family files (skip if unused):
+Per-group files (skip if unused):
 
 | File | Role |
 | --- | --- |
-| `expand.py` | Manifest rows (spawn × aux × variations) |
+| `expand.py` | `generate(cfg, scenes)` + per-scene row builders |
 | `spawn.py` | Legal ego / aux approach combinations |
 | `place.py` | Where plates go in MetaDrive |
-| `spec.py` | Plate class / dual-path crop-meta bridge |
+| `spec.py` | Plate class / crop-meta bridge |
 
-Every family folder has code (`expand.py` / `spawn.py` / `place.py` /
-`spec.py` as needed). Dual-path spawn lives in `scene.py`; segment families
-enumerate inside `expand.py`. `generate_*_manifest` shells still live in
-`manifest/run.py`; shared discover / write is `manifest/io.py`.
+Dual-path spawn lives in `scene.py`; navigation is `nav.py`. Roundabout aux
+placement is `aux.py`. Junction `generate` also serves roundabout.

@@ -5,7 +5,7 @@ Runs after materialize: maps that fail the same viability checks used for
 harvest are marked reject, moved to ``scenes/_rejected/``, and the pool can
 be topped up to ``signs.yaml`` quotas.
 
-``--sign`` is the eval profile id (same as ``generate_manifest.py sign=...``).
+``--sign`` is the eval profile id (same as ``python -m traffic_bench.eval manifest sign=...``).
 
 Examples:
     python -m traffic_bench.scene_collection reject --sign roundabout --dry-run
@@ -23,10 +23,10 @@ from collections import Counter
 from pathlib import Path
 from typing import List, Optional
 
-from traffic_bench.eval.core.manifest.manifest_config import (
+from traffic_bench.eval.engine.expand.manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 )
-from traffic_bench.eval.core.manifest.manifest_viability import check_scene_dir_viability
+from traffic_bench.eval.engine.expand.manifest_viability import check_scene_dir_viability
 from traffic_bench.scene_collection.paths import REPO_ROOT
 from traffic_bench.scene_collection.sign_scenes.filter.selection import (
     REJECTED_SUBDIR,
@@ -126,7 +126,7 @@ def main() -> None:
         default="roundabout",
         metavar="ID",
         help=(
-            "Eval sign id, same as `generate_manifest.py sign=...` "
+            "Eval sign id, same as `python -m traffic_bench.eval manifest sign=...` "
             f"(e.g. yield, roundabout, crosswalk). "
             f"Known: {', '.join(sorted(p.id for p in list_profiles()))}"
         ),

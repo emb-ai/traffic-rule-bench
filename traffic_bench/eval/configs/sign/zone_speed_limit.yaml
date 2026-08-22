@@ -1,6 +1,5 @@
 # @package _global_
-# 5.31 — zone speed limit
 defaults:
-  - _speed
+  - /shared/speed
 
 sign: zone_speed_limit

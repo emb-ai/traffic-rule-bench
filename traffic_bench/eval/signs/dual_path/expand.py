@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from traffic_bench.eval.core.profiles.agent_profile_bank import sample_one_profile
-from traffic_bench.eval.core.profiles.stable_hash import stable_hash
-from traffic_bench.eval.core.manifest.manifest_expansion import shuffle_cap
-from traffic_bench.eval.core.scenarios.scene_augmentation import SpawnScenario
+from traffic_bench.eval.engine.traffic.agent_profile_bank import sample_one_profile
+from traffic_bench.eval.engine.traffic.stable_hash import stable_hash
+from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
+from traffic_bench.eval.engine.spawn.scene_augmentation import SpawnScenario
 from traffic_bench.eval.signs.dual_path.budget import (
     apply_dual_path_route_budget,
     load_sumo_edge_lengths,
@@ -374,7 +374,7 @@ def build_dual_path_manifest_entry(
     return {k: v for k, v in entry.items() if v is not None}
 
 
-# Names generate_manifest / old expansions still import.
+# Aliases kept for older expand callers.
 OneWaySimParams = DualPathSimParams
 DirectionSimParams = DualPathSimParams
 NoTurnSimParams = DualPathSimParams
@@ -395,3 +395,201 @@ build_one_way_manifest_entry = build_dual_path_manifest_entry
 build_direction_manifest_entry = build_dual_path_manifest_entry
 build_no_turn_manifest_entry = build_dual_path_manifest_entry
 build_no_entry_manifest_entry = build_dual_path_manifest_entry
+
+from functools import partial
+
+from traffic_bench.eval.engine.map.junction_priority_layout import allowed_shapes_for_mode
+from traffic_bench.eval.manifest.io import (
+    append_scene_entries,
+    apply_max_total,
+    apply_split_filter,
+    assert_rejected_scenes_applied,
+    discover_scenes,
+    load_scene_metadata,
+    write_real_manifest,
+)
+from traffic_bench.eval.manifest.lanes import parse_sumo_net_for_spawn_lanes
+from traffic_bench.eval.signs.junction.expand import build_junction_layout_for_scene
+from traffic_bench.scene_collection.sign_scenes.materialize.pool_index import normalize_split
+_DUAL_PATH_PLACEMENT = {
+    "one_way": (
+        "OneWayEntrySign on ego approach "
+        "(sign_distance_before_end); dual-path compliant nav installed at episode start"
+    ),
+    "direction": (
+        "LaneAllowedDirectionSign on ego approach "
+        "(sign_distance_before_end); dual-path compliant nav installed at episode start"
+    ),
+    "no_turn": (
+        "NoLeft/RightTurnSign on ego approach "
+        "(sign_distance_before_end); dual-path compliant nav installed at episode start"
+    ),
+    "no_entry": (
+        "NoEntrySign on baseline first exit "
+        "(sign_road_id / sign_distance_from_start≈5m); "
+        "dual-path compliant nav installed at episode start"
+    ),
+}
+
+
+
+def generate(cfg, scenes=None):
+    """Dual-path (direction / one-way / no-turn / no-entry) rows."""
+
+    profile = cfg.profile
+    PDD_CODE = profile.pdd_code
+    SIGN_TYPE = profile.sign_type
+    SIGN_NAME = profile.sign_name
+    def _profile():
+        return profile
+    scenes_dir = cfg.scenes_dir
+    output_dir = cfg.output_dir
+    scenario_cfg = cfg.scenario
+    sim_cfg = cfg.simulation
+    expansion_cfg = cfg.expansion
+    aux_cfg = cfg.auxiliary
+    expert_cfg = cfg.expert
+    split = cfg.split
+
+    split = normalize_split(split)
+    assert_rejected_scenes_applied(scenes_dir)
+    all_scenes = discover_scenes(scenes_dir)
+    print(f"Scenes root: {scenes_dir.resolve()}")
+    print(f"Discovered {len(all_scenes)} scene(s) on disk")
+    scenes, split_by_id = apply_split_filter(
+        all_scenes, scenes_dir=scenes_dir, split=split
+    )
+    n_variations = max(1, int(sim_cfg.n_variations))
+    print(
+        f"Augmentation axes: layout={expansion_cfg.layout_on}, "
+        f"n_variations={n_variations} (combined with dual-path; "
+        f"max_scenarios caps the product)"
+    )
+
+    expansion = DualPathExpansionConfig(
+        layout=expansion_cfg.layout_on,
+        max_scenarios=scenario_cfg.max_scenarios,
+        arm_counts=(3, 4),
+    )
+    sim_params = DualPathSimParams(
+        spawn_distance_before_end=sim_cfg.spawn_distance_before_end,
+        sign_distance_before_end=sim_cfg.sign_distance_before_end,
+        spawn_velocity_ms=sim_cfg.spawn_velocity_ms,
+        horizon=sim_cfg.horizon,
+        n_variations=n_variations,
+        profile_density_cap=float(sim_cfg.profile_density_cap),
+        min_dual_path_gain_m=float(scenario_cfg.min_dual_path_gain_m),
+        min_ego_lane_m=min(float(sim_cfg.spawn_distance_before_end), 8.0),
+        dual_path_route_budget_m=scenario_cfg.dual_path_route_budget_m,
+    )
+
+    family = profile.sign_type
+    print(
+        f"[{family}] NPC world: sample_one_profile in shared pool with "
+        f"dual-path (n_variations={n_variations}, "
+        f"density_cap={sim_cfg.profile_density_cap}, "
+        f"min_gain={scenario_cfg.min_dual_path_gain_m}m, "
+        f"route_budget_m={scenario_cfg.dual_path_route_budget_m}, "
+        f"horizon={sim_cfg.horizon})"
+    )
+
+    build_entry = partial(
+        build_dual_path_manifest_entry,
+        pdd_code=PDD_CODE,
+        sign_type=SIGN_TYPE,
+    )
+
+    entries: List[Dict] = []
+    used_scene_ids: List[str] = []
+    min_lane = min(float(sim_cfg.spawn_distance_before_end), 8.0)
+
+    for scene_dir in scenes:
+        meta = load_scene_metadata(scene_dir)
+        scene_name = meta.get("scene_name", scene_dir.name)
+        net_file = meta.get("net_file", "map.net.xml")
+        net_full_path = scene_dir / net_file
+        print(f"\n=== {scene_name} ===")
+
+        spawn_lanes = parse_sumo_net_for_spawn_lanes(net_full_path, min_length=min_lane)
+        print(f"  Found {len(spawn_lanes)} intersection-approaching lane(s)")
+
+        sign_lat = meta.get("latitude") or meta.get("center_lat")
+        sign_lon = meta.get("longitude") or meta.get("center_lon")
+        junction_layout = build_junction_layout_for_scene(
+            net_full_path,
+            profile=profile,
+            sign_lat=float(sign_lat) if sign_lat is not None else None,
+            sign_lon=float(sign_lon) if sign_lon is not None else None,
+            scene_meta=meta,
+        )
+        if junction_layout is None:
+            print(f"  Skipping {scene_name}: no junction layout")
+            continue
+        shape = junction_layout.get("shape")
+        allowed_shapes = allowed_shapes_for_mode(profile.layout_mode)
+        if shape not in allowed_shapes:
+            print(
+                f"  Skipping {scene_name}: junction shape {shape!r} "
+                f"(need {sorted(allowed_shapes)})"
+            )
+            continue
+
+        scene_entries = expand_dual_path_scene_entries(
+            scene_dir=scene_dir,
+            scenes_root=scenes_dir,
+            meta=meta,
+            net_path=net_full_path,
+            spawn_lanes=spawn_lanes,
+            junction_layout=junction_layout,
+            sim=sim_params,
+            expansion=expansion,
+            build_entry=build_entry,
+            pdd_code=PDD_CODE,
+        )
+        if not scene_entries:
+            print(f"  Skipping {scene_name}: no manifest entries after expansion")
+            continue
+        append_scene_entries(
+            entries, used_scene_ids, scene_entries,
+            scene_dir=scene_dir, meta=meta, split_by_id=split_by_id,
+        )
+
+    entries, used_scene_ids, pre_total = apply_max_total(
+        entries, used_scene_ids,
+        max_total=scenario_cfg.max_total, split=split, pdd_code=PDD_CODE,
+    )
+    write_real_manifest(
+        output_dir=output_dir,
+        scenes_dir=scenes_dir,
+        entries=entries,
+        used_scene_ids=used_scene_ids,
+        split_by_id=split_by_id,
+        split=split,
+        pdd_code=PDD_CODE,
+        summary={
+            "pdd_code": PDD_CODE,
+            "sign_type": SIGN_TYPE,
+            "sign_name": SIGN_NAME,
+            "sign_class": profile.sign_type,
+            "sign_placement": _DUAL_PATH_PLACEMENT.get(
+                family, _DUAL_PATH_PLACEMENT["direction"]
+            ),
+            "total_scenes": len(used_scene_ids),
+            "total_entries": len(entries),
+            "total_entries_before_max_total": pre_total,
+            "augmentation_layout": expansion_cfg.layout_on,
+            "n_variations": n_variations,
+            "npc_world": "engine.traffic.agent_profile_bank.sample_one_profile",
+            "profile_density_cap": sim_cfg.profile_density_cap,
+            "min_dual_path_gain_m": scenario_cfg.min_dual_path_gain_m,
+            "max_scenarios": scenario_cfg.max_scenarios,
+            "max_total": scenario_cfg.max_total,
+            "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
+            "horizon": sim_cfg.horizon,
+            "sign_distance_before_end": sim_cfg.sign_distance_before_end,
+            "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
+            "auxiliary_agent": False,
+        },
+    )
+    return entries
+

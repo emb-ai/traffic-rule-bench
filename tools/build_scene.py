@@ -302,7 +302,7 @@ def main():
     print(f"  python -m tools.run_simulation {args.scene}")
     print(f"  python -m tools.run_simulation {args.scene} --policy carl")
     print("\nTo generate manifest for evaluation:")
-    print(f"  python generate_manifest.py")
+    print(f"  python -m traffic_bench.eval manifest")
     print(f"{'=' * 60}")
 
 

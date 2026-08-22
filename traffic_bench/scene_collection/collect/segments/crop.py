@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
-from traffic_bench.eval.core.layout.junction_priority_layout import JunctionLayoutError as CropError
+from traffic_bench.eval.engine.map.junction_priority_layout import JunctionLayoutError as CropError
 from traffic_bench.scene_collection.collect.lib.crop_xy import crop_net_to_xy_boundary
 from traffic_bench.scene_collection.collect.segments.metrics import enrich_lane_fields
 from traffic_bench.scene_collection.paths import MOSCOW_NET, SEGMENT_CROPS, SEGMENTS_INDEX

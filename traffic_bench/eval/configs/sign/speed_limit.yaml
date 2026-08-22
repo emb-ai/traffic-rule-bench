@@ -1,6 +1,5 @@
 # @package _global_
-# 3.24 — maximum speed limit
 defaults:
-  - _speed
+  - /shared/speed
 
 sign: speed_limit

@@ -9,13 +9,13 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from traffic_bench.eval.core.layout.junction_crop import (
+from traffic_bench.scene_collection.collect.lib.junction_crop import (
     JunctionPick,
     _find_netconvert,
     crop_net_to_junction_only,
     json_dumps,
 )
-from traffic_bench.eval.core.layout.junction_priority_layout import JunctionLayoutError
+from traffic_bench.eval.engine.map.junction_priority_layout import JunctionLayoutError
 from traffic_bench.scene_collection.paths import JUNCTION_CROPS, JUNCTIONS_INDEX, MOSCOW_NET
 
 DEFAULT_NET = MOSCOW_NET

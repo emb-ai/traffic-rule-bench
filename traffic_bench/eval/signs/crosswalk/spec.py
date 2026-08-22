@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from traffic_bench.eval.core.sumo.lane_keys import lane_edge_id, make_lane_key
-from traffic_bench.eval.core.sumo.sumo_utils import VehicleRouteIndex, is_vehicle_drivable_lane, load_vehicle_route_index
+from traffic_bench.eval.engine.map.lane_keys import lane_edge_id, make_lane_key
+from traffic_bench.eval.engine.map.sumo_utils import VehicleRouteIndex, is_vehicle_drivable_lane, load_vehicle_route_index
 
 
 @dataclass(frozen=True)

@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from traffic_bench.eval.core.sumo.sumo_utils import load_scene_meta, resolve_net_file, resolve_scene_dir
+from traffic_bench.eval.engine.map.sumo_utils import load_scene_meta, resolve_net_file, resolve_scene_dir
 from traffic_bench.scene_collection.paths import DATA_SCENES
 from traffic_bench.scene_collection.preview import (
     crosswalk_xy_from_meta,

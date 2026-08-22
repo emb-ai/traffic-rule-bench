@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from traffic_bench.eval.core.layout.junction_priority_layout import JunctionPriorityLayout
-from traffic_bench.eval.core.scenarios.scene_augmentation import (
+from traffic_bench.eval.engine.map.junction_priority_layout import JunctionPriorityLayout
+from traffic_bench.eval.engine.spawn.scene_augmentation import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     ApproachSpawnLane,
     SpawnScenario,
@@ -17,7 +17,7 @@ from traffic_bench.eval.core.scenarios.scene_augmentation import (
     lane_lengths_from_spawn_lanes,
     parse_intersection_approach_lanes,
 )
-from traffic_bench.eval.core.sumo.sumo_utils import VehicleRouteIndex, load_vehicle_route_index
+from traffic_bench.eval.engine.map.sumo_utils import VehicleRouteIndex, load_vehicle_route_index
 
 
 def roundabout_meta_ring_kwargs(scene_meta: Optional[dict]) -> dict:
@@ -113,12 +113,12 @@ def enumerate_spawn_scenarios_roundabout(
     Destination: always the same exit edge/lane as ego (runtime may
     ring-circulate one hop at a time).
     """
-    from traffic_bench.eval.core.layout.roundabout_yield_zone import entry_conflict_ring_edges
-    from traffic_bench.eval.core.scenarios.roundabout_aux import (
+    from traffic_bench.eval.engine.map.roundabout_yield_zone import entry_conflict_ring_edges
+    from traffic_bench.eval.signs.roundabout.aux import (
         merge_lane_lengths_from_layout,
         resolve_aux_spawn_placement,
     )
-    from traffic_bench.eval.core.sumo.lane_keys import lane_num_from_key, pick_lane_key_on_edge
+    from traffic_bench.eval.engine.map.lane_keys import lane_num_from_key, pick_lane_key_on_edge
 
     layout_dict = layout.to_dict()
     lane_lengths = merge_lane_lengths_from_layout(layout_dict, lane_lengths or {})
@@ -340,7 +340,7 @@ def pick_default_roundabout_spawn_meta_for_net(
     min_lane_length: float = 20.0,
     scene_meta: Optional[dict] = None,
 ) -> Optional[dict]:
-    from traffic_bench.eval.core.layout.roundabout_topology import build_roundabout_layout
+    from traffic_bench.eval.engine.map.roundabout_topology import build_roundabout_layout
 
     meta = scene_meta or {}
     layout = build_roundabout_layout(

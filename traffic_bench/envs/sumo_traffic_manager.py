@@ -81,7 +81,7 @@ class SumoTrafficManager(BaseManager):
                     / "bench"
                     / "core" / "profiles"
                 )
-                from traffic_bench.eval.core.profiles.nuplan_sampler import NuPlanSampler
+                from traffic_bench.eval.engine.traffic.nuplan_sampler import NuPlanSampler
                 self._nuplan_sampler = NuPlanSampler(
                     stats_dir=str(profiles / "nuplan_statistics")
                 )

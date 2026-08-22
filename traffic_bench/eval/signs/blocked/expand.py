@@ -12,10 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from traffic_bench.eval.core.manifest.manifest_expansion import shuffle_cap
-from traffic_bench.eval.core.profiles.agent_profile_bank import sample_one_profile
-from traffic_bench.eval.core.profiles.stable_hash import stable_hash
-from traffic_bench.eval.core.scenarios.scene_augmentation import (
+from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
+from traffic_bench.eval.engine.traffic.agent_profile_bank import sample_one_profile
+from traffic_bench.eval.engine.traffic.stable_hash import stable_hash
+from traffic_bench.eval.engine.spawn.scene_augmentation import (
     SpawnScenario,
     augment_layout_for_scene,
 )
@@ -277,3 +277,183 @@ def build_blocked_road_manifest_entry(
         entry["junction_layout"] = junction_layout_cache
 
     return {k: v for k, v in entry.items() if v is not None}
+
+from functools import partial
+
+from traffic_bench.eval.engine.map.junction_priority_layout import allowed_shapes_for_mode
+from traffic_bench.eval.manifest.io import (
+    append_scene_entries,
+    apply_max_total,
+    apply_split_filter,
+    assert_rejected_scenes_applied,
+    discover_scenes,
+    load_scene_metadata,
+    write_real_manifest,
+)
+from traffic_bench.eval.manifest.lanes import parse_sumo_net_for_spawn_lanes
+from traffic_bench.eval.signs.junction.expand import build_junction_layout_for_scene
+from traffic_bench.scene_collection.sign_scenes.materialize.pool_index import normalize_split
+
+
+def generate(cfg, scenes=None):
+    """Blocked-road (3.2) rows from harvested scenes."""
+
+    profile = cfg.profile
+    PDD_CODE = profile.pdd_code
+    SIGN_TYPE = profile.sign_type
+    SIGN_NAME = profile.sign_name
+    def _profile():
+        return profile
+    scenes_dir = cfg.scenes_dir
+    output_dir = cfg.output_dir
+    scenario_cfg = cfg.scenario
+    sim_cfg = cfg.simulation
+    expansion_cfg = cfg.expansion
+    aux_cfg = cfg.auxiliary
+    expert_cfg = cfg.expert
+    split = cfg.split
+
+    split = normalize_split(split)
+    assert_rejected_scenes_applied(scenes_dir)
+    all_scenes = discover_scenes(scenes_dir)
+    print(f"Scenes root: {scenes_dir.resolve()}")
+    print(f"Discovered {len(all_scenes)} scene(s) on disk")
+    scenes, split_by_id = apply_split_filter(
+        all_scenes, scenes_dir=scenes_dir, split=split
+    )
+    n_variations = max(1, int(sim_cfg.n_variations))
+    print(
+        f"Augmentation axes: layout={expansion_cfg.layout_on}, "
+        f"n_variations={n_variations} (combined with lane/dest; "
+        f"max_scenarios caps the product)"
+    )
+
+    blocked_road_expansion = BlockedRoadExpansionConfig(
+        layout=expansion_cfg.layout_on,
+        max_scenarios=scenario_cfg.max_scenarios,
+    )
+    sim_params = BlockedRoadSimParams(
+        sign_distance_from_start=sim_cfg.sign_distance_from_start,
+        spawn_distance_before_end=sim_cfg.spawn_distance_before_end,
+        spawn_velocity_ms=sim_cfg.spawn_velocity_ms,
+        horizon=sim_cfg.horizon,
+        compliant_stop_success_seconds=sim_cfg.compliant_stop_success_seconds,
+        compliant_stop_max_dist_m=sim_cfg.compliant_stop_max_dist_m,
+        compliant_stop_speed_mps=sim_cfg.compliant_stop_speed_mps,
+        n_variations=n_variations,
+        profile_density_cap=float(sim_cfg.profile_density_cap),
+        destination_max_along_m=sim_cfg.destination_max_along_m,
+    )
+
+    print(
+        f"[blocked_road] NPC world: sample_one_profile in shared pool with "
+        f"lane/dest (n_variations={n_variations}, "
+        f"density_cap={sim_cfg.profile_density_cap})"
+    )
+
+    build_entry = partial(
+        build_blocked_road_manifest_entry,
+        pdd_code=PDD_CODE,
+        sign_type=SIGN_TYPE,
+        sign_class="NoTrafficSign",
+        sign_title="Movement prohibited",
+    )
+
+    entries: List[Dict] = []
+    used_scene_ids: List[str] = []
+    min_lane = min(float(sim_cfg.spawn_distance_before_end), 8.0)
+
+    for scene_dir in scenes:
+        meta = load_scene_metadata(scene_dir)
+        scene_name = meta.get("scene_name", scene_dir.name)
+        net_file = meta.get("net_file", "map.net.xml")
+        net_full_path = scene_dir / net_file
+        print(f"\n=== {scene_name} ===")
+
+        spawn_lanes = parse_sumo_net_for_spawn_lanes(net_full_path, min_length=min_lane)
+        print(f"  Found {len(spawn_lanes)} intersection-approaching lane(s)")
+
+        sign_lat = meta.get("latitude") or meta.get("center_lat")
+        sign_lon = meta.get("longitude") or meta.get("center_lon")
+        junction_layout = build_junction_layout_for_scene(
+            net_full_path,
+            profile=profile,
+            sign_lat=float(sign_lat) if sign_lat is not None else None,
+            sign_lon=float(sign_lon) if sign_lon is not None else None,
+            scene_meta=meta,
+        )
+        if junction_layout is None:
+            print(f"  Skipping {scene_name}: no junction layout")
+            continue
+        shape = junction_layout.get("shape")
+        allowed_shapes = allowed_shapes_for_mode(profile.layout_mode)
+        if shape not in allowed_shapes:
+            print(
+                f"  Skipping {scene_name}: junction shape {shape!r} "
+                f"(need {sorted(allowed_shapes)})"
+            )
+            continue
+
+        scene_entries = expand_blocked_road_scene_entries(
+            scene_dir=scene_dir,
+            scenes_root=scenes_dir,
+            meta=meta,
+            net_path=net_full_path,
+            spawn_lanes=spawn_lanes,
+            junction_layout=junction_layout,
+            sim=sim_params,
+            expansion=blocked_road_expansion,
+            build_entry=build_entry,
+        )
+        if not scene_entries:
+            print(f"  Skipping {scene_name}: no manifest entries after expansion")
+            continue
+        append_scene_entries(
+            entries, used_scene_ids, scene_entries,
+            scene_dir=scene_dir, meta=meta, split_by_id=split_by_id,
+        )
+
+    entries, used_scene_ids, pre_total = apply_max_total(
+        entries, used_scene_ids,
+        max_total=scenario_cfg.max_total, split=split, pdd_code=PDD_CODE,
+    )
+    write_real_manifest(
+        output_dir=output_dir,
+        scenes_dir=scenes_dir,
+        entries=entries,
+        used_scene_ids=used_scene_ids,
+        split_by_id=split_by_id,
+        split=split,
+        pdd_code=PDD_CODE,
+        summary={
+            "pdd_code": PDD_CODE,
+            "sign_type": SIGN_TYPE,
+            "sign_name": SIGN_NAME,
+            "sign_class": "NoTrafficSign",
+            "sign_placement": (
+                "artificial at start of forbidden (destination) lane "
+                "(sign_distance_from_start); ego on approach "
+                "(spawn_distance_before_end)"
+            ),
+            "total_scenes": len(used_scene_ids),
+            "total_entries": len(entries),
+            "total_entries_before_max_total": pre_total,
+            "augmentation_layout": expansion_cfg.layout_on,
+            "n_variations": n_variations,
+            "npc_world": "engine.traffic.agent_profile_bank.sample_one_profile",
+            "profile_density_cap": sim_cfg.profile_density_cap,
+            "max_scenarios": scenario_cfg.max_scenarios,
+            "max_total": scenario_cfg.max_total,
+            "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
+            "horizon": sim_cfg.horizon,
+            "sign_distance_from_start": sim_cfg.sign_distance_from_start,
+            "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
+            "destination_max_along_m": sim_cfg.destination_max_along_m,
+            "compliant_stop_success_seconds": sim_cfg.compliant_stop_success_seconds,
+            "compliant_stop_max_dist_m": sim_cfg.compliant_stop_max_dist_m,
+            "compliant_stop_speed_mps": sim_cfg.compliant_stop_speed_mps,
+            "auxiliary_agent": False,
+        },
+    )
+    return entries
+

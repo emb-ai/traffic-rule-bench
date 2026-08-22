@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-from traffic_bench.eval.core.sumo.sumo_utils import is_vehicle_drivable_lane
+from traffic_bench.eval.engine.map.sumo_utils import is_vehicle_drivable_lane
 
 
 @dataclass

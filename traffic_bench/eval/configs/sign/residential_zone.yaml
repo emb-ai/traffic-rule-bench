@@ -1,6 +1,5 @@
 # @package _global_
-# 5.21 — residential zone
 defaults:
-  - _speed
+  - /shared/speed
 
 sign: residential_zone

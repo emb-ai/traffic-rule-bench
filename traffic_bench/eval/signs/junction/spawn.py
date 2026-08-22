@@ -5,12 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from traffic_bench.eval.core.layout.junction_priority_layout import (
+from traffic_bench.eval.engine.map.junction_priority_layout import (
     JunctionPriorityLayout,
     build_junction_priority_layout,
     right_arm_for_layout,
 )
-from traffic_bench.eval.core.scenarios.scene_augmentation import (
+from traffic_bench.eval.engine.spawn.scene_augmentation import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     ApproachSpawnLane,
     SpawnScenario,
@@ -24,7 +24,7 @@ from traffic_bench.eval.core.scenarios.scene_augmentation import (
     lane_lengths_from_spawn_lanes,
     parse_intersection_approach_lanes,
 )
-from traffic_bench.eval.core.sumo.sumo_utils import VehicleRouteIndex, load_vehicle_route_index
+from traffic_bench.eval.engine.map.sumo_utils import VehicleRouteIndex, load_vehicle_route_index
 
 
 def enumerate_spawn_scenarios_equal_priority(
@@ -41,7 +41,7 @@ def enumerate_spawn_scenarios_equal_priority(
     Same ego/aux destination table as yield, but aux cannot sit on the left
     (so ego-right cases are dropped — no meaningful yield target).
     """
-    from traffic_bench.eval.core.scenarios.auxiliary_agent import min_aux_spawn_lane_length
+    from traffic_bench.eval.engine.spawn.auxiliary_agent import min_aux_spawn_lane_length
 
     lane_lengths = lane_lengths or {}
     min_aux_lane_length = min_aux_spawn_lane_length(aux_distance_from_intersection)
@@ -118,7 +118,7 @@ def enumerate_spawn_scenarios_yield(
     aux_distance_from_intersection: float = DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
 ) -> List[SpawnScenario]:
     """Ego on secondary arms; aux on main-road left/right arms (not opposite)."""
-    from traffic_bench.eval.core.scenarios.auxiliary_agent import min_aux_spawn_lane_length
+    from traffic_bench.eval.engine.spawn.auxiliary_agent import min_aux_spawn_lane_length
 
     lane_lengths = lane_lengths or {}
     min_aux_lane_length = min_aux_spawn_lane_length(aux_distance_from_intersection)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Priority-bench trajectory collector (2.1 / 2.3 / 2.4 / 2.5).
 
-Drives episodes through ``priority_bench/run_benchmark.run_one_episode`` so
+Drives episodes through ``traffic_bench.eval.run.episode.run_one_episode`` so
 auxiliary agents and sign placement match the unified eval.
 
 Writes (output-dir = <OUT>/<policy>/<slug>, slug=2_4|2_1|2_5):
@@ -30,13 +30,13 @@ HERE = Path(__file__).resolve().parent
 SIGN_BENCH_DIR = HERE.parent
 PDD_BENCH = SIGN_BENCH_DIR.parent
 
-from traffic_bench.eval.core.manifest.manifest_config import (
+from traffic_bench.eval.engine.expand.manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     DEFAULT_AUX_LANES_OCCUPIED_MAX,
     enrich_manifest_row,
     load_manifest_config,
 )
-from traffic_bench.eval.core.scenarios.auxiliary_agent import (
+from traffic_bench.eval.engine.spawn.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
     DEFAULT_CONVOY_SIZE,
     DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END,
@@ -44,14 +44,7 @@ from traffic_bench.eval.core.scenarios.auxiliary_agent import (
 )
 from traffic_bench.eval.sign_registry import get_profile, scenes_dir as profile_scenes_dir
 
-from traffic_bench.eval import run_benchmark as rb
-
-_sig = getattr(rb.run_one_episode, "__code__", None)
-if _sig is not None and "auxiliary_agent" not in _sig.co_varnames:
-    raise ImportError(
-        f"Wrong run_benchmark imported from {getattr(rb, '__file__', '?')}; "
-        "expected priority_bench/run_benchmark.py with auxiliary_agent"
-    )
+from traffic_bench.eval.run import episode as rb
 
 # Filled in main() from --sign profile.
 SIGN_CODE = "2.4"
@@ -465,7 +458,7 @@ def build_parser() -> argparse.ArgumentParser:
              "(aliases 2.4|2.1|2.5|2.3|main_road|secondary_road)",
     )
     p.add_argument("--manifest", required=True,
-                   help="real_manifest.jsonl from generate_manifest (paths.split already applied)")
+                   help="real_manifest.jsonl from eval manifest (paths.split already applied)")
     p.add_argument(
         "--scenes-root",
         default=None,
@@ -535,7 +528,7 @@ def main() -> None:
         args.scenes_root = str(profile_scenes_dir(profile))
     print(f"Sign profile: {profile.id} ({SIGN_CODE} / {SIGN_SLUG})")
     if args.policy in {"carl", "carl_rule", "plant2", "plant2_rule", "plant2_ft"}:
-        from traffic_bench.eval.core.runtime.checkpoints import resolve_nn_checkpoint
+        from traffic_bench.eval.engine.sim.checkpoints import resolve_nn_checkpoint
         args.model_path = resolve_nn_checkpoint(args.policy, args.model_path)
         if not args.model_path:
             print(f"ERROR: --model-path required for {args.policy} (no default found)",

@@ -28,12 +28,12 @@ from traffic_bench.eval.signs.crosswalk.spawn import (
     list_pedestrian_presets,
     pedestrian_manager_from_preset,
 )
-from traffic_bench.eval.core.sumo.lane_keys import lane_edge_id, make_lane_key
+from traffic_bench.eval.engine.map.lane_keys import lane_edge_id, make_lane_key
 
 from traffic_bench.scene_collection.sign_scenes.filter.selection import is_reserved_scene_dir
 
-from traffic_bench.eval.core.manifest.manifest_expansion import shuffle_cap
-from traffic_bench.eval.core.manifest.traffic_density_levels import TrafficDensityLevel, list_traffic_density_levels
+from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
+from traffic_bench.eval.engine.traffic.traffic_density_levels import TrafficDensityLevel, list_traffic_density_levels
 
 MAX_AXIS = 3
 DEFAULT_POSITIONS = ("middle",)
@@ -381,3 +381,153 @@ def expand_crosswalk_scene_entries(
         )
 
     return entries
+
+from traffic_bench.eval.manifest.io import (
+    append_scene_entries,
+    apply_max_total,
+    apply_split_filter,
+    load_scene_metadata,
+    write_real_manifest,
+)
+from traffic_bench.scene_collection.sign_scenes.materialize.pool_index import normalize_split
+
+
+def generate(cfg, scenes=None):
+    """Crosswalk (5.19) rows from segment_crosswalk scenes."""
+
+    profile = cfg.profile
+    PDD_CODE = profile.pdd_code
+    SIGN_TYPE = profile.sign_type
+    SIGN_NAME = profile.sign_name
+    def _profile():
+        return profile
+    scenes_dir = cfg.scenes_dir
+    output_dir = cfg.output_dir
+    scenario_cfg = cfg.scenario
+    sim_cfg = cfg.simulation
+    expansion_cfg = cfg.expansion
+    aux_cfg = cfg.auxiliary
+    expert_cfg = cfg.expert
+    split = cfg.split
+
+    split = normalize_split(split)
+    max_ego_lanes = int(cfg.max_ego_lanes)
+    max_density_levels = int(cfg.max_density_levels)
+    max_pedestrian_presets = int(cfg.max_pedestrian_presets)
+    crosswalk_positions = cfg.crosswalk_positions
+    traffic_density_augment = bool(cfg.traffic_density_augment)
+    ped_cfg = cfg.ped_cfg
+    # Maps come from scene_collection harvest — no scene_selection / reject apply step.
+    positions = tuple(crosswalk_positions or DEFAULT_POSITIONS)
+    all_scenes = discover_segment_crosswalk_scenes(scenes_dir, positions=positions)
+    print(f"Scenes root: {scenes_dir.resolve()}")
+    print(f"Discovered {len(all_scenes)} segment_crosswalk scene(s) on disk")
+    scenes, split_by_id = apply_split_filter(
+        all_scenes, scenes_dir=scenes_dir, split=split
+    )
+    print(
+        f"Augmentation axes (≤3 each): ego_lanes={max_ego_lanes}, "
+        f"density={max_density_levels}, ped_presets={max_pedestrian_presets}, "
+        f"positions={list(positions)}, layout={expansion_cfg.layout_on}"
+    )
+
+    ped = ped_cfg or {}
+    sim_params = CrosswalkSimParams(
+        spawn_distance_before_end=float(sim_cfg.spawn_distance_before_end),
+        sign_distance_before_end=float(sim_cfg.sign_distance_before_end),
+        spawn_velocity_ms=float(sim_cfg.spawn_velocity_ms),
+        horizon=int(sim_cfg.horizon),
+        traffic_density=float(sim_cfg.traffic_density),
+        traffic_density_augment=bool(traffic_density_augment),
+        min_hops_after_depart=int(getattr(sim_cfg, "min_hops_after_depart", 0) or 0),
+        destination_max_along_m=float(
+            sim_cfg.destination_max_along_m
+            if sim_cfg.destination_max_along_m is not None
+            else 40.0
+        ),
+        max_ego_lanes=int(max_ego_lanes),
+        max_density_levels=int(max_density_levels),
+        max_pedestrian_presets=int(max_pedestrian_presets),
+        crosswalk_positions=positions,
+        ped_ego_spawn_distance_m=float(ped.get("default_ego_spawn_distance_m", 50.0)),
+        ped_speed_mean=float(ped.get("default_speed_mean", 1.2)),
+        ped_speed_std=float(ped.get("default_speed_std", 0.2)),
+        ped_spawn_gap_s=float(ped.get("default_spawn_gap_s", 2.5)),
+        ped_yield_distance=float(ped.get("yield_distance", 12.0)),
+        ped_no_stop_before_crosswalk_m=float(ped.get("no_stop_before_crosswalk_m", 3.0)),
+    )
+    cw_expansion = CrosswalkExpansionConfig(
+        layout=expansion_cfg.layout_on,
+        max_scenarios=scenario_cfg.max_scenarios,
+    )
+
+    entries: List[Dict] = []
+    used_scene_ids: List[str] = []
+
+    for scene_dir in scenes:
+        meta = load_scene_metadata(scene_dir)
+        scene_name = meta.get("scene_name", scene_dir.name)
+        net_file = meta.get("net_file", "map.net.xml")
+        net_full_path = scene_dir / net_file
+        print(f"\n=== {scene_name} (pos={meta.get('crosswalk_position')}) ===")
+
+        scene_entries = expand_crosswalk_scene_entries(
+            scene_dir=scene_dir,
+            scenes_root=scenes_dir,
+            meta=meta,
+            net_path=net_full_path,
+            sim=sim_params,
+            expansion=cw_expansion,
+            pdd_code=PDD_CODE,
+            sign_type=SIGN_TYPE,
+        )
+        if not scene_entries:
+            print(f"  Skipping {scene_name}: no manifest entries after expansion")
+            continue
+        append_scene_entries(
+            entries, used_scene_ids, scene_entries,
+            scene_dir=scene_dir, meta=meta, split_by_id=split_by_id,
+        )
+
+    entries, used_scene_ids, pre_total = apply_max_total(
+        entries, used_scene_ids,
+        max_total=scenario_cfg.max_total, split=split, pdd_code=PDD_CODE,
+        scene_id_key="scene_name",
+    )
+    write_real_manifest(
+        output_dir=output_dir,
+        scenes_dir=scenes_dir,
+        entries=entries,
+        used_scene_ids=used_scene_ids,
+        split_by_id=split_by_id,
+        split=split,
+        pdd_code=PDD_CODE,
+        summary={
+            "pdd_code": PDD_CODE,
+            "sign_type": SIGN_TYPE,
+            "sign_name": SIGN_NAME,
+            "sign_class": "PedestrianCrossingSign",
+            "sign_placement": (
+                "PedestrianCrossingSign (5.19 icon) on ego approach lane; "
+                "yield enforced via PedestrianYieldRule + CrosswalkPedestrianManager"
+            ),
+            "total_scenes": len(used_scene_ids),
+            "total_entries": len(entries),
+            "total_entries_before_max_total": pre_total,
+            "augmentation_layout": expansion_cfg.layout_on,
+            "max_ego_lanes": max_ego_lanes,
+            "max_density_levels": max_density_levels,
+            "max_pedestrian_presets": max_pedestrian_presets,
+            "crosswalk_positions": list(positions),
+            "traffic_density_augment": bool(traffic_density_augment),
+            "max_scenarios": scenario_cfg.max_scenarios,
+            "max_total": scenario_cfg.max_total,
+            "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
+            "horizon": sim_cfg.horizon,
+            "sign_distance_before_end": sim_cfg.sign_distance_before_end,
+            "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
+            "auxiliary_agent": False,
+        },
+    )
+    return entries
+

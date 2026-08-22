@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
-from traffic_bench.eval.core.layout.junction_priority_layout import JunctionPriorityLayout
-from traffic_bench.eval.core.scenarios.scene_augmentation import (
+from traffic_bench.eval.engine.map.junction_priority_layout import JunctionPriorityLayout
+from traffic_bench.eval.engine.spawn.scene_augmentation import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
     SpawnScenario,
     _filter_real_destination_edges,
@@ -13,7 +13,7 @@ from traffic_bench.eval.core.scenarios.scene_augmentation import (
     _lane_keys_lookup,
     _pick_outgoing_lane_key,
 )
-from traffic_bench.eval.core.sumo.sumo_utils import VehicleRouteIndex
+from traffic_bench.eval.engine.map.sumo_utils import VehicleRouteIndex
 
 
 def _blocked_road_destination_edges(

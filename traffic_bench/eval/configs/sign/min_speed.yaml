@@ -1,6 +1,5 @@
 # @package _global_
-# 4.6 — minimum speed
 defaults:
-  - _speed
+  - /shared/speed
 
 sign: min_speed

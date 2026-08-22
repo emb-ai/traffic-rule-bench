@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
 
-from traffic_bench.eval.core.layout.crosswalk_layout import net_has_crossings
+from traffic_bench.eval.signs.crosswalk.spec import net_has_crossings
 from traffic_bench.scene_collection.sign_scenes.filter.selection import is_reserved_scene_dir
 from traffic_bench.scene_collection.sign_scenes.prepare.crosswalk.inject import (
     CrosswalkInjection,

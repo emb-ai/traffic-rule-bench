@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from traffic_bench.eval.core.manifest.manifest_expansion import shuffle_cap
-from traffic_bench.eval.core.manifest.traffic_density_levels import TrafficDensityLevel, list_traffic_density_levels
+from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
+from traffic_bench.eval.engine.traffic.traffic_density_levels import TrafficDensityLevel, list_traffic_density_levels
 from traffic_bench.scene_collection.sign_scenes.filter.selection import is_reserved_scene_dir
 
 MAX_AXIS = 3
@@ -267,3 +267,131 @@ def expand_detour_scene_entries(
             f"(shuffled, cap={max_sc})"
         )
     return entries
+
+from traffic_bench.eval.manifest.io import (
+    append_scene_entries,
+    apply_max_total,
+    apply_split_filter,
+    load_scene_metadata,
+    write_real_manifest,
+)
+from traffic_bench.scene_collection.sign_scenes.materialize.pool_index import normalize_split
+
+
+def generate(cfg, scenes=None):
+    """Detour (4.2.x) rows from segment_detour scenes."""
+
+    profile = cfg.profile
+    PDD_CODE = profile.pdd_code
+    SIGN_TYPE = profile.sign_type
+    SIGN_NAME = profile.sign_name
+    def _profile():
+        return profile
+    scenes_dir = cfg.scenes_dir
+    output_dir = cfg.output_dir
+    scenario_cfg = cfg.scenario
+    sim_cfg = cfg.simulation
+    expansion_cfg = cfg.expansion
+    aux_cfg = cfg.auxiliary
+    expert_cfg = cfg.expert
+    split = cfg.split
+
+    split = normalize_split(split)
+    max_density_levels = int(cfg.max_density_levels)
+    traffic_density_augment = bool(cfg.traffic_density_augment)
+
+    detour_code = PDD_CODE  # e.g. "4.2.1"
+    all_scenes = discover_segment_detour_scenes(scenes_dir, detour_code=detour_code)
+    print(f"Scenes root: {scenes_dir.resolve()}")
+    print(f"Discovered {len(all_scenes)} segment_detour scene(s) for {detour_code}")
+    scenes, split_by_id = apply_split_filter(
+        all_scenes, scenes_dir=scenes_dir, split=split
+    )
+    print(
+        f"Augmentation axes: density={max_density_levels} "
+        f"(traffic_density_augment={bool(traffic_density_augment)})"
+    )
+
+    sim_params = DetourSimParams(
+        spawn_offset_from_start=float(sim_cfg.spawn_offset_from_start),
+        max_path_length_m=float(sim_cfg.max_path_length_m),
+        sign_distance_before_end=float(sim_cfg.sign_distance_before_end),
+        spawn_velocity_ms=float(sim_cfg.spawn_velocity_ms),
+        horizon=int(sim_cfg.horizon),
+        traffic_density=float(sim_cfg.traffic_density),
+        traffic_density_augment=bool(traffic_density_augment),
+        max_density_levels=int(max_density_levels),
+    )
+    det_expansion = DetourExpansionConfig(
+        max_scenarios=scenario_cfg.max_scenarios,
+    )
+
+    entries: List[Dict] = []
+    used_scene_ids: List[str] = []
+
+    for scene_dir in scenes:
+        meta = load_scene_metadata(scene_dir)
+        scene_name = meta.get("scene_name", scene_dir.name)
+        print(f"\n=== {scene_name} ===")
+
+        scene_entries = expand_detour_scene_entries(
+            scene_dir=scene_dir,
+            scenes_root=scenes_dir,
+            meta=meta,
+            sim=sim_params,
+            expansion=det_expansion,
+            pdd_code=PDD_CODE,
+            sign_type=SIGN_TYPE,
+        )
+        if not scene_entries:
+            print(f"  Skipping {scene_name}: no manifest entries")
+            continue
+        append_scene_entries(
+            entries, used_scene_ids, scene_entries,
+            scene_dir=scene_dir, meta=meta, split_by_id=split_by_id,
+        )
+
+    entries, used_scene_ids, pre_total = apply_max_total(
+        entries, used_scene_ids,
+        max_total=scenario_cfg.max_total, split=split, pdd_code=PDD_CODE,
+        scene_id_key="scene_name",
+    )
+    sign_class_map = {
+        "4.2.1": "DetourRightSign",
+        "4.2.2": "DetourLeftSign",
+        "4.2.3": "DetourEitherSign",
+    }
+    write_real_manifest(
+        output_dir=output_dir,
+        scenes_dir=scenes_dir,
+        entries=entries,
+        used_scene_ids=used_scene_ids,
+        split_by_id=split_by_id,
+        split=split,
+        pdd_code=PDD_CODE,
+        summary={
+            "pdd_code": PDD_CODE,
+            "sign_type": SIGN_TYPE,
+            "sign_name": SIGN_NAME,
+            "sign_class": sign_class_map.get(PDD_CODE, "DetourRightSign"),
+            "sign_placement": (
+                f"DetourSign ({PDD_CODE}) placed on obstacle lane at sign_s from meta; "
+                f"ego spawns on same lane and must change to adjacent lane"
+            ),
+            "total_scenes": len(used_scene_ids),
+            "total_entries": len(entries),
+            "total_entries_before_max_total": pre_total,
+            "max_scenarios": scenario_cfg.max_scenarios,
+            "max_total": scenario_cfg.max_total,
+            "max_density_levels": max_density_levels,
+            "traffic_density_augment": bool(traffic_density_augment),
+            "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
+            "horizon": sim_cfg.horizon,
+            "sign_distance_before_end": sim_cfg.sign_distance_before_end,
+            "spawn_offset_from_start": sim_cfg.spawn_offset_from_start,
+            "max_path_length_m": sim_cfg.max_path_length_m,
+            "auxiliary_agent": False,
+        },
+    )
+    return entries
+

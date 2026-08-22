@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-CORE_SCENES_SUBDIR = "core"  # keep in sync with traffic_bench.eval.core.sumo.sumo_utils
+CORE_SCENES_SUBDIR = "core"  # keep in sync with traffic_bench.eval.engine.map.sumo_utils
 
 SELECTION_FILE = "scene_selection.json"
 REJECTED_SUBDIR = "_rejected"

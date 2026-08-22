@@ -1,17 +1,22 @@
-# manifest/ — scenes + Hydra → `real_manifest.jsonl`
+# manifest/ — scenes → `real_manifest.jsonl`
 
-Shared shell only: discover scene dirs under `data/scenes/<sign>/`, apply
-split / `max_total`, write `real_manifest.jsonl` + `repro/`, run Hydra,
-dispatch to `signs/<family>/expand.py`.
+```bash
+python -m traffic_bench.eval manifest sign=yield
+python -m traffic_bench.eval manifest sign=direction/right
+```
 
-Does **not** contain family expansion (yield vs crosswalk rows). That lives
-under `signs/`.
+[`run.py`](run.py) is the Hydra entry (`configs/config.yaml`):
+
+1. resolve `sign=` via `sign_registry`
+2. dispatch `signs.<group>.expand.generate`
+3. write `real_manifest.jsonl` + `repro/`
+4. optional GIFs via `run` in process
 
 | File | Role |
 | --- | --- |
-| `run.py` | Hydra `main` + `generate_*_manifest` shells + optional GIFs |
-| `io.py` | `discover_scenes`, split filter, `max_total`, write jsonl + `repro/` |
-| `lanes.py` | incoming-lane parse for junction / blocked / dual-path |
+| `run.py` | Hydra main + GIF |
+| `types.py` | resolved knobs passed to `generate` |
+| `io.py` | discover scenes, split, write jsonl |
+| `lanes.py` | SUMO spawn-lane parse |
 
-Command: `python -m traffic_bench.eval manifest sign=yield`.
-`python -m traffic_bench.eval.generate_manifest` is a shim to `run.py`.
+Junction and roundabout share `signs/junction/expand.generate`.

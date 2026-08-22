@@ -1,0 +1,45 @@
+# Hydra root for ``python -m traffic_bench.eval run``.
+#   policy=idm manifest=data/runs/yield/<ts>/real_manifest.jsonl
+#   policies=[idm,plant2] manifest=data/runs/yield/<ts>
+
+defaults:
+  - _self_
+
+policy: idm
+policies: null
+
+manifest: null
+scenes_root: null
+ego_variant: default
+ego_sample_seed_base: 42
+run_name: null
+output_dir: null
+max_steps: 1500
+force_rerun: false
+rerun_failed: false
+skip_error_episodes: false
+scene_id: null
+scene_uid: null
+scene_line: null
+max_scenes: null
+jobs: 8
+model_path: null
+model_paths: {}
+plant2_action_mode: pid
+emit_replay_sidecar: false
+replay_root: null
+hide_signs: false
+draw_path_conflict: false
+
+gif:
+  enabled: false
+  dir: null
+  window_m: 80.0
+  draw_path_conflict: false
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  job:
+    chdir: false

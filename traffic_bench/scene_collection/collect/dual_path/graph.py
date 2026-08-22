@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from traffic_bench.eval.core.layout.junction_crop import json_dumps, net_xy_to_latlon, parse_net_location
-from traffic_bench.eval.core.layout.junction_priority_layout import (
+from traffic_bench.scene_collection.collect.lib.junction_crop import json_dumps, net_xy_to_latlon, parse_net_location
+from traffic_bench.eval.engine.map.junction_priority_layout import (
     INTERSECTION_JUNCTION_TYPES,
     JunctionLayoutError,
     _load_net,

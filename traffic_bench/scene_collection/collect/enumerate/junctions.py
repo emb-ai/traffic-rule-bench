@@ -11,10 +11,10 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-from traffic_bench.eval.core.layout.junction_crop import (
+from traffic_bench.scene_collection.collect.lib.junction_crop import (
     collect_intersection_junction_candidates,
 )
-from traffic_bench.eval.core.layout.junction_priority_layout import INTERSECTION_JUNCTION_TYPES
+from traffic_bench.eval.engine.map.junction_priority_layout import INTERSECTION_JUNCTION_TYPES
 from traffic_bench.scene_collection.collect.lib.geo import net_xy_to_latlon_proj
 from traffic_bench.scene_collection.paths import INDEX, JUNCTIONS_INDEX, MOSCOW_NET
 
