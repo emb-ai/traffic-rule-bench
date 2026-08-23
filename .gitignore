@@ -48,6 +48,9 @@ replay_results/
 **/benchmark_output/
 **/gifs/
 **/gifs_*/
+# Site demos used by README.md and GitHub Pages
+!docs/static/gifs/
+!docs/static/gifs/**
 **/trajectory_output/
 **/exps_final*/
 **/test_plant2/

@@ -1,200 +1,255 @@
-# TrafficRuleBench: A Benchmark for Evaluating Traffic Rule Compliance in Autonomous Driving
-
 <p align="center">
-  <a href="https://arxiv.org/abs/TODO"><img src="https://img.shields.io/badge/arXiv-TODO-b31b1b.svg" alt="ArXiv"></a>
-  <a href="https://huggingface.co/datasets/emb-ai/traffic-sign-bench"><img src="https://img.shields.io/badge/🤗%20Dataset-emb--ai%2Ftraffic--sign--bench-yellow" alt="Dataset"></a>
-  <a href="https://huggingface.co/emb-ai/traffic-rule-bench-models"><img src="https://img.shields.io/badge/🤗%20Models-emb--ai%2Ftraffic--rule--bench--models-yellow" alt="Models"></a>
+  <img src="docs/static/images/signs/2.4.png" width="44" alt="Yield">
+  &nbsp;
+  <img src="docs/static/images/signs/3.1.png" width="44" alt="No entry">
+  &nbsp;
+  <img src="docs/static/images/signs/5.15.1.png" width="44" alt="Lane directions">
+  &nbsp;
+  <img src="docs/static/images/signs/5.7.1.png" width="44" alt="One-way">
 </p>
 
-## Abstract
+<h1 align="center">TrafficRuleBench</h1>
 
-Autonomous driving planners are typically evaluated using aggregate metrics such as collision rate, route completion, and comfort, which do not explicitly measure compliance with traffic rules. As a result, planners can achieve high benchmark scores while still exhibiting unsafe or illegal behaviors, limiting their applicability to real-world deployment. To address this gap, we introduce **TrafficRuleBench**, a large-scale, rule-centric benchmark for systematic and interpretable evaluation of traffic-rule compliance in autonomous driving. Our framework combines real-map-based simulation for realistic road layouts with rule-targeted procedural scenario generation for scalable and balanced coverage of underrepresented rules. We implement traffic rules corresponding to **45 traffic signs**, each equipped with an automatic rule checker for detecting violations during closed-loop execution. This design yields **15,200 diverse road scenes** and **18 distinct testing scenario types**, enabling controlled evaluation of rule-specific planner behavior. We construct **5,400 testing scenes** and demonstrate that current autonomous driving planners can exhibit poor traffic-rule compliance despite strong performance on standard evaluation metrics. To address this limitation, we transform existing planners into rule-compliant trajectory experts via explicit traffic-sign constraints, enabling scalable generation of high-quality oracle trajectories for fine-tuning. Code and data are publicly available at [github.com/emb-ai/traffic-rule-bench](https://github.com/emb-ai/traffic-rule-bench) and [huggingface.co/datasets/emb-ai/traffic-sign-bench](https://huggingface.co/datasets/emb-ai/traffic-sign-bench).
+<p align="center">
+  <b>Closed-loop traffic-rule compliance for driving planners.</b><br>
+  Real-map scenes · automatic sign checkers · oracle trajectories for fine-tuning.
+</p>
 
-## 🤗 Supported Baselines
+<p align="center">
+  <a href="https://emb-ai.github.io/traffic-rule-bench/"><img src="https://img.shields.io/badge/Website-emb--ai.github.io-0F172A?style=flat-square" alt="Website"></a>
+  <a href="https://huggingface.co/datasets/emb-ai/traffic-sign-bench"><img src="https://img.shields.io/badge/Dataset-emb--ai%2Ftraffic--sign--bench-FFD21E?style=flat-square&logo=huggingface" alt="Dataset"></a>
+  <a href="https://huggingface.co/emb-ai/traffic-rule-bench-models"><img src="https://img.shields.io/badge/Models-emb--ai%2Ftraffic--rule--bench--models-FFD21E?style=flat-square&logo=huggingface" alt="Models"></a>
+  <a href="https://github.com/emb-ai/traffic-rule-bench"><img src="https://img.shields.io/badge/Code-emb--ai%2Ftraffic--rule--bench-181717?style=flat-square&logo=github" alt="Code"></a>
+</p>
 
-| Family            | Baseline                    | `--policy`                    | Notes                              |
-|-------------------|-----------------------------|-------------------------------|------------------------------------|
-| Base              | IDM (5 ego variants)        | `idm`                         | + `--ego-variant default/s1..s4`   |
-| Base              | PPO                         | `ppo_expert`                  |                                    |
-| Base              | CaRL                        | `carl`                        | `--model-path` required            |
-| Base              | PlanT2                      | `plant2`                      | `--model-path` required            |
-| Fine-tuned        | PlanT2 fine-tuned on TrafficRuleBench | `plant2`             | `--model-path` to fine-tuned `.pt` |
-| Rule-augmented    | IDM + rule overlay          | `comprehensive_rule_expert`   | + `--ego-variant`                  |
-| Rule-augmented    | PPO + rule overlay          | `rule_compliant`              |                                    |
-| Rule-augmented    | CaRL + rule overlay         | `carl_rule`                   | `--model-path` required            |
-| Rule-augmented    | PlanT2 + rule overlay       | `plant2_rule`                 | `--model-path` required            |
+---
 
-**Third-party dependencies** (in `third_party/`):
-- [MetaDrive](https://github.com/emb-ai/metadrive) — simulation backend with sign-aware extensions
-- [PlanT2](https://github.com/emb-ai/plant2) — PlanT2 policy and training pipeline
-- [CaRL](https://github.com/autonomousvision/CaRL) — CaRL policy
+Same scene, two planners. The **base** policy often breaks the rule. The **rule expert** stays legal.
 
-## Directory structure
+<table>
+  <tr>
+    <th width="18%"></th>
+    <th width="41%">Base planner</th>
+    <th width="41%">Rule-compliant twin</th>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="docs/static/images/signs/5.7.1.png" width="52" alt="5.7.1"><br>
+      <b>One-way</b><br>
+      <sub>5.7.1 · CaRL</sub>
+    </td>
+    <td><img src="docs/static/gifs/pairs/5.7.1/carl_base.gif" alt="CaRL violates one-way"></td>
+    <td><img src="docs/static/gifs/pairs/5.7.1/carl_expert.gif" alt="CaRL expert respects one-way"></td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="docs/static/images/signs/3.1.png" width="52" alt="3.1"><br>
+      <b>No entry</b><br>
+      <sub>3.1 · IDM</sub>
+    </td>
+    <td><img src="docs/static/gifs/pairs/3.1/idm_base.gif" alt="IDM enters a no-entry road"></td>
+    <td><img src="docs/static/gifs/pairs/3.1/idm_expert.gif" alt="IDM expert avoids no-entry"></td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="docs/static/images/signs/5.15.1.png" width="52" alt="5.15.1"><br>
+      <b>Lane directions</b><br>
+      <sub>5.15.1 · IDM</sub>
+    </td>
+    <td><img src="docs/static/gifs/pairs/5.15.1/idm_base.gif" alt="IDM misses lane directions"></td>
+    <td><img src="docs/static/gifs/pairs/5.15.1/idm_expert.gif" alt="IDM expert follows lane arrows"></td>
+  </tr>
+</table>
+
+<p align="center">
+  <a href="https://emb-ai.github.io/traffic-rule-bench/">More rollouts on the project site →</a>
+</p>
+
+---
+
+## What this repo is for
+
+Standard driving scores (route completion, collisions, comfort) can look great while the planner still runs a red brick, skips a yield, or drives the wrong way. This repo is the other scoreboard:
+
+- **Evaluate** any policy in closed loop on real SUMO maps with the target sign placed and checked every step.
+- **Score** the *sign that matters* (`target_compliant_event`) plus the usual driving metrics.
+- **Collect** rule-expert trajectories and pick an oracle per scene for fine-tuning.
 
 ```
-traffic-rule-bench/
-├── traffic_bench/              # main Python package (pip install -e .)
-│   ├── signs/                  # sign objects & violation checkers
-│   ├── envs/                   # SUMO env + traffic/pedestrian managers
-│   ├── agents/                 # policies + CaRL/PlanT2 adapters
-│   ├── scene_collection/
-│   │   ├── collect/            # OSM → maps/ (net, index, crops)
-│   │   ├── assign/             # signs.yaml queries → sign_allocations.json
-│   │   ├── sign_scenes/        # materialize / prepare / filter
-│   │   └── maps/               # harvested data (crops gitignored)
-│   ├── eval/                   # python -m traffic_bench.eval {manifest,run,pipeline,metrics}
-│   └── oracle/                 # collect trajectories + expert selection
-├── data/                       # gitignored working artifacts
-│   ├── scenes/<sign>/          # from 🤗 emb-ai/traffic-sign-bench (yield, crosswalk, …)
-│   ├── runs/<sign>/<ts>/       # manifest, gifs, eval_out
-│   └── trajectories/<sign>/    # oracle collect → finetune
-├── tools/                      # ad-hoc visualization & debug scripts
-├── finetune/                   # PlanT2 fine-tuning on oracle trajectories
-├── checkpoints/
-├── third_party/
-├── docs/
-└── pyproject.toml
+data/scenes/<sign>  →  eval manifest  →  eval run  →  eval metrics
+                         └── oracle collect → select → finetune
 ```
 
-Pipeline: `python -m traffic_bench.scene_collection` (`collect` → `assign` → `materialize` / `prepare`) → `data/scenes/<sign>` → `python -m traffic_bench.eval manifest` (writes `data/runs/<sign>/<ts>/`) → `run` / `pipeline`, and separately `oracle/collect` → `data/trajectories/<sign>/` → `finetune/`.
+| You want | Command |
+|---|---|
+| Debug a sign | `python -m traffic_bench.eval manifest sign=yield` then `run policy=idm sign=yield` |
+| Full eval | `python -m traffic_bench.eval run policies=all sign=all` then `metrics combine sign=all` |
+| Oracle data | `SIGN=yield ./traffic_bench/oracle/collect/collect.sh` |
 
-## 🚀 Quick start
+Official eval ids: `yield`, `stop`, `main`, `roundabout`, `no_entry`, `direction/right`, `detour_left`, `speed_limit`, `crosswalk`, … — or `sign=all`.
 
-### Environment Set Up
+---
 
-1. Clone the repository with submodules:
-   ```bash
-   git clone --recurse-submodules https://github.com/emb-ai/traffic-rule-bench
-   cd traffic-rule-bench
-   git submodule update --init --recursive
-   ```
+## Install
 
-2. Create the main conda env:
-   ```bash
-   conda create --name metadrive_signs python=3.10
-   conda activate metadrive_signs
+```bash
+git clone --recurse-submodules https://github.com/emb-ai/traffic-rule-bench
+cd traffic-rule-bench
+git submodule update --init --recursive
 
-   pip install -e third_party/metadrive
-   pip install eclipse-sumo sumolib pyproj stable_baselines3
-   pip install pandas "geopandas<1.0" gym timm
-   pip install -e .
-   ```
+conda create -n traffic-rule-bench python=3.10
+conda activate traffic-rule-bench
 
-3. Download official per-sign scenes from [emb-ai/traffic-sign-bench](https://huggingface.co/datasets/emb-ai/traffic-sign-bench) into `data/scenes/<sign>/`:
+pip install -e third_party/metadrive
+pip install eclipse-sumo sumolib pyproj stable_baselines3
+pip install pandas "geopandas<1.0" gym timm
+pip install -e .
+```
 
-   ```bash
-   pip install huggingface_hub
-   huggingface-cli download emb-ai/traffic-sign-bench \
-       --repo-type dataset \
-       --local-dir data
-   ```
+PlanT2 / CaRL need their own weights (and PlanT2 its conda env). See [Checkpoints](#checkpoints).
 
-4. (Optional) PlanT2 env for `plant2` / `plant2_rule` baselines:
-   ```bash
-   cd third_party/plant2
-   conda env update -f environment.yml --prune
-   conda activate plant2
-   pip install gymnasium panda3d panda3d-gltf progressbar pygame sumolib einops
-   pip install -e ../metadrive
-   cd ../..
-   ```
+---
 
-### Checkpoints
+## Scenes
 
-TrafficRuleBench uses three checkpoint sets. **Base** CaRL and PlanT2 weights come from the original authors' releases; the **fine-tuned** PlanT2 weights come from our HuggingFace model hub.
-
-| Model                   | Source                                                                                                  | Default location                                       |
-|-------------------------|---------------------------------------------------------------------------------------------------------|--------------------------------------------------------|
-| CaRL (base)             | [autonomousvision/CaRL](https://github.com/autonomousvision/CaRL) — see their release/checkpoints      | `checkpoints/CaRL/model_best.pth`            |
-| PlanT2 (base, pretrain) | [emb-ai/plant2](https://github.com/emb-ai/plant2) / [autonomousvision/plant](https://github.com/autonomousvision/plant) | `checkpoints/plant2/epoch%3D029_final_3.ckpt` |
-| PlanT2 (fine-tuned)     | [🤗 emb-ai/traffic-rule-bench-models](https://huggingface.co/emb-ai/traffic-rule-bench-models)         | `checkpoints/plant2/plant2_supervised_2nd_final.pt` |
-
-Download the fine-tuned PlanT2 checkpoint:
+Download the official per-sign maps into `data/scenes/<sign>/`:
 
 ```bash
 pip install huggingface_hub
+huggingface-cli download emb-ai/traffic-sign-bench \
+    --repo-type dataset \
+    --local-dir data
+```
+
+To harvest new maps from OSM instead: [`traffic_bench/scene_collection/`](traffic_bench/scene_collection/README.md).
+
+---
+
+## Evaluate
+
+Three verbs. Outputs land in `data/runs/<sign>/<split>/`.
+
+```bash
+python -m traffic_bench.eval manifest sign=yield          # debug snapshot
+python -m traffic_bench.eval run     policy=idm sign=yield
+python -m traffic_bench.eval metrics combine sign=all
+```
+
+Locked splits: `paths.split=train` or `test`. Several policies / signs:
+
+```bash
+python -m traffic_bench.eval run \
+    policies=[idm,comprehensive_rule_expert,plant2_ft] \
+    sign=yield
+
+python -m traffic_bench.eval run policies=all sign=all
+```
+
+GIFs for a visual check:
+
+```bash
+python -m traffic_bench.eval run policy=idm sign=yield gif.enabled=true gif.max_scenes=8
+```
+
+Full contract: [`traffic_bench/eval/README.md`](traffic_bench/eval/README.md).
+
+### Metrics that actually move the needle
+
+| Metric | Meaning |
+|---|---|
+| `target_compliant_event` | Ego obeyed **this** sign inside its zone |
+| `arrived_dest` | Reached the destination |
+| `route_completion` | Fraction of the route covered |
+| `total_violations` | All sign / light / crosswalk events |
+| `comfort` | nuPlan-style kinematic smoothness |
+
+---
+
+## Policies
+
+| Family | Hydra id | Needs checkpoint |
+|---|---|---|
+| IDM | `idm` | — |
+| IDM + rules | `comprehensive_rule_expert` | — |
+| PPO + rules | `rule_compliant` | — |
+| CaRL | `carl` / `carl_rule` | yes |
+| PlanT2 | `plant2` / `plant2_rule` / `plant2_ft` | yes |
+
+`policies=all` runs the registered set. `idm` is MetaDrive `ModifiedIDMPolicy`.
+
+---
+
+## Oracle trajectories
+
+Collect expert rollouts, then pick the best run per scene:
+
+```bash
+SIGN=yield SMOKE=1 ./traffic_bench/oracle/collect/collect.sh
+
+SIGN=yield,stop,direction/right ./traffic_bench/oracle/collect/collect.sh
+
+python -m traffic_bench.oracle.select.coverage \
+    --root data/trajectories/yield/trajectories_<ts> \
+    --catalog data/trajectories/yield/trajectories_<ts>/catalog.jsonl \
+    --signs yield --horizon 1500 \
+    --out-dir data/trajectories/yield/trajectories_<ts>/experts
+```
+
+Details: [`traffic_bench/oracle/collect/README.md`](traffic_bench/oracle/collect/README.md). Fine-tune PlanT2 on the picks: [`finetune/`](finetune/README.md).
+
+---
+
+## Checkpoints
+
+| Weights | Where they come from | Default path |
+|---|---|---|
+| CaRL (base) | [autonomousvision/CaRL](https://github.com/autonomousvision/CaRL) | `checkpoints/carl/nuplan_51479_1B/model_best.pth` |
+| PlanT2 (pretrain) | [emb-ai/plant2](https://github.com/emb-ai/plant2) | `checkpoints/plant2_pretrain/epoch=029_final_3.ckpt` |
+| PlanT2 (fine-tuned) | [emb-ai/traffic-rule-bench-models](https://huggingface.co/emb-ai/traffic-rule-bench-models) | `checkpoints/plant2_finetuned/` |
+
+```bash
 huggingface-cli download emb-ai/traffic-rule-bench-models --local-dir checkpoints
 ```
 
-For CaRL and the PlanT2 pretrain weights, follow the download instructions in each respective upstream repository and place the resulting files under `checkpoints/`.
+---
 
-### Run Evaluation
+## Layout
 
-Each manifest in `data/runs/<sign>/<ts>/real_manifest.jsonl` is a self-contained set of scenes for one sign. Run a baseline with `python -m traffic_bench.eval run`. Each run produces `episodes_<policy>.jsonl` plus optional per-episode `replay.json` sidecars.
-
-#### 1. One baseline on one sign
-
-```bash
-python -m traffic_bench.eval run \
-    policy=idm \
-    run_name=idm_stop \
-    manifest=data/runs/stop/<ts>/real_manifest.jsonl \
-    emit_replay_sidecar=true
+```
+traffic_bench/
+  signs/              # runtime plates + violation checkers
+  envs/               # SUMO env, spawn, NPCs, pedestrians
+  agents/             # policies + CaRL / PlanT2 adapters
+  eval/               # manifest → run → metrics
+  oracle/             # collect → select → report
+  scene_collection/   # OSM harvest (optional)
+data/                 # gitignored working artifacts
+  scenes/<sign>/
+  runs/<sign>/<split>/
+  trajectories/<sign>/
+docs/                 # project site (GIFs, figures)
+third_party/          # MetaDrive · PlanT2 · CaRL
 ```
 
-Models that require checkpoints (`carl`, `plant2`, `*_rule`) need `model_path=`:
-
-```bash
-python -m traffic_bench.eval run \
-    policy=plant2 \
-    run_name=plant2_stop \
-    manifest=data/runs/stop/<ts>/real_manifest.jsonl \
-    model_path=checkpoints/plant2/epoch%3D029_final_3.ckpt \
-    emit_replay_sidecar=true
-```
-
-#### 2. Loop over all signs / all manifests
-
-```bash
-for f in data/runs/*/*/real_manifest.jsonl; do
-    sign=$(basename "$(dirname "$(dirname "$f")")")
-    python -m traffic_bench.eval run \
-        policy=idm \
-        run_name="idm_${sign}" \
-        manifest="$f" \
-        emit_replay_sidecar=true
-done
-```
-
-Repeat the loop for each baseline you want to evaluate (`comprehensive_rule_expert`, `carl`, `plant2`, etc.).
-
-Yield (2.4) uses the same runner; pass a yield manifest:
-
-```bash
-python -m traffic_bench.eval run \
-    policy=idm \
-    run_name=idm_yield \
-    manifest=data/runs/yield/<ts>/real_manifest.jsonl \
-    emit_replay_sidecar=true
-```
-
-### Compute Metrics
-
-```bash
-python -m traffic_bench.eval run \
-    policies=[idm] \
-    manifest=data/runs/stop/<ts>/real_manifest.jsonl
-```
-
-That writes `metrics_per_episode.csv`, aggregations, and `reports/report_cumulative.md`.
-
-Oracle baseline from an existing CSV:
-
-```bash
-python -m traffic_bench.oracle.report.baseline \
-    --csv eval_out/metrics_per_episode.csv
-```
-
-### 📊 Metrics
-
-| Metric | Description |
+| Package | Read this |
 |---|---|
-| `target_compliant_event` | Ego obeyed the target sign within its zone (primary rule metric) |
-| `arrived_dest` | Reached the destination |
-| `route_completion` | Percent of route covered (0–100) |
-| `total_violations` | Total traffic rule violations (all signs) |
-| `comfort` | Standard nuplan based kinematic smoothness ratio |
+| Eval CLI | [`traffic_bench/eval/README.md`](traffic_bench/eval/README.md) |
+| Oracle | [`traffic_bench/oracle/README.md`](traffic_bench/oracle/README.md) |
+| Signs | [`traffic_bench/eval/signs/README.md`](traffic_bench/eval/signs/README.md) |
+| Site | [`docs/README.md`](docs/README.md) · [live page](https://emb-ai.github.io/traffic-rule-bench/) |
 
-## ⭐ Citation
+Simulation backend: [emb-ai/metadrive](https://github.com/emb-ai/metadrive) (submodule).
 
-TODO
+---
+
+## Citation
+
+```bibtex
+@misc{trafficrulebench2026,
+  title        = {TrafficRuleBench: Evaluating Traffic-Rule Compliance in Autonomous Driving},
+  author       = {EMB AI},
+  year         = {2026},
+  howpublished = {\url{https://github.com/emb-ai/traffic-rule-bench}},
+  note         = {Code, scenes, and models}
+}
+```
