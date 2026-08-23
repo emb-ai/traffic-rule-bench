@@ -1,194 +1,167 @@
-# scene_collection — Moscow maps without signs, then signs as queries
+# Scene Collection
 
-Two stages:
+Scene collection pipeline for **TrafficSignBench**. It crops road scenes from Moscow OpenStreetMap (OSM) data, assigns them to sign-specific pools, and materializes the official benchmark scenes.
 
-1. **collect** — OSM → `maps/` (net, index, train/test stamp, crops).
-2. **assign / materialize / prepare / filter** — each sign samples that pool
-  (`maps/splits/signs.yaml`) into `data/scenes/<sign>/`.
+**Pipeline:**
 
-## Folders
+`OSM → collect → assign → materialize → review/reject → pack → publish`
 
+## Quick start
 
-| Path                                    | Role                                                        |
-| --------------------------------------- | ----------------------------------------------------------- |
-| `[collect/](collect/README.md)`         | OSM → city net → index → train/test stamp → crops           |
-| `[assign/](assign/README.md)`           | `signs.yaml` queries → `maps/splits/sign_allocations.json`  |
-| `[sign_scenes/](sign_scenes/README.md)` | Place maps into `data/scenes/<sign>/`, prepare, filter      |
-| `[publish/](publish/README.md)`         | Pack + upload official scenes to Hugging Face               |
-| `[maps/](maps/README.md)`               | Harvested data only (nets, indexes, crops, splits)          |
-| `[analysis/](analysis/README.md)`       | Counts + diversity figures (`analysis/figures/`)            |
-| `paths.py`                              | Shared path constants (`MAPS`, `CROPS`, `DATA_SCENES`, …)   |
-| `preview.py`                            | Top-down PNG from a cropped SUMO net (`custom_cropped.png`) |
-| `cli.py`                                | `python -m traffic_bench.scene_collection <command>`        |
-
-
-CLI (`--sign`, Hydra `sign=`) uses **eval profile ids** (`yield`, `roundabout`,
-`crosswalk`, …), the same names as `python -m traffic_bench.eval manifest`.
-Allocations in `signs.yaml` / `sign_allocations.json` stay keyed by official
-plate numbers internally.
-
-The independent unit of the benchmark is a **map**. Scenario augmentations
-(≤10 per map) are correlated; quotas `n_train=80` / `n_test=20` are the
-official protocol size, not the harvest size.
-
-Default materialize mode is a **relative symlink** into `maps/crops/…`. That
-survives remounting the NFS share. Use `--mode copy` if you need real
-directories in-repo. `**pack`** follows those links into a standalone folder
-you can copy off the machine without `maps/`.
-
-## Three sizes
-
-
-| Symbol | Meaning                             | This iteration                                          |
-| ------ | ----------------------------------- | ------------------------------------------------------- |
-| **P**  | Full Moscow population in the index | junctions 6457 (T 5181 / X 1052 / O 224); segments 7620 |
-| **H**  | Cropped nets on disk                | **H = P** (crop until the city runs out; no cap of 500) |
-| **N**  | Official maps per sign              | 80 train + 20 test                                      |
-
-
-T/X **50/50** in `signs.yaml` is PDD topology stratification, not Moscow’s
-~~83% T mix. 20 test maps is a wide CI (~~±22 pp at p=0.5); that is the protocol,
-not a sampling parameter of the harvest.
-
-## Order
-
-Stamp train/test on **place identity** before allocating to signs:
-
-- junctions / dual_path: `junction_id`
-- segments: `osm_way_id` (one street must not sit in both halves)
-
-```mermaid
-flowchart TD
-  osm[OSM Moscow] --> collect["collect: net + index + split + crops"]
-  collect --> assign["assign: signs.yaml → sign_allocations.json"]
-  assign --> mat["materialize relative symlink or copy"]
-  mat --> dataPlain["data/scenes: yield, detour_right, …"]
-  mat --> prep["prepare: zebra in the middle of copied 5.19 segments"]
-  prep --> dataCw["data/scenes/crosswalk"]
-```
-
-
-
-## Crop families
+Run all commands from the repository root (`traffic-rule-bench`).
 
 ```
-maps/crops/junction/{T,X,O}/
-maps/crops/dual_path/{T,X}/{slot}/
-maps/crops/segment/<scene_id>/
-```
-
-`straight` / `curved` / lane count are **tags** on a segment crop (`meta.json`),
-not extra folders. dual_path is a different net (path-union bbox), which is why
-it is its own family.
-
-Signs that are **not** harvested this round: **5.15** (eval code stays; no
-`lane_direction` in `signs.yaml`).
-
-## From scratch
-
-All commands from the repo root `traffic-rule-bench`.
-
-```bash
-# 1–3. OSM → net → enumerate → make_split → crop T/X/O + dual_path + segments
+# 1. Harvest Moscow maps: net + index + train/test split + crops
 python -m traffic_bench.scene_collection collect --skip-existing
 
-# 4. Query the pool per sign
+# 2. Allocate harvested maps to signs
 python -m traffic_bench.scene_collection assign
 
-# 5. Place maps into data/scenes/<sign>/ (5.19 also gets a mid-block zebra)
+# 3. Materialize scenes for all signs
 python -m traffic_bench.scene_collection materialize --all
-# or for a specific sign
-python -m traffic_bench.scene_collection materialize --sign yield
+```
+
+*Optionally:*
+
+```
+# 4. Review and reject scenes
+python -m traffic_bench.scene_collection review --scenes-dir data/scenes/yield
 python -m traffic_bench.scene_collection reject --sign yield --apply --refill --loop
 
-# Optional visual review, then refill
-python -m traffic_bench.scene_collection review --scenes-dir data/scenes/yield
-python -m traffic_bench.scene_collection review --scenes-dir data/scenes/yield --apply
-python -m traffic_bench.scene_collection materialize --sign yield --refill
-
-# Standalone folder (dereferences relative links; share without maps/)
-python -m traffic_bench.scene_collection pack --sign yield --out dist/yield
-
-# Hugging Face layout (all signs) and optional upload
+# 5. Pack scenes and optional upload Hugging Face
 python -m traffic_bench.scene_collection pack --all
 python -m traffic_bench.scene_collection publish
 
-# Harvest counts + diversity figures
+# 6. Generate statistics and diversity figures
 python -m traffic_bench.scene_collection analysis
 ```
 
-Official scenes also live on Hugging Face
-[`emb-ai/traffic-sign-bench`](https://huggingface.co/datasets/emb-ai/traffic-sign-bench).
-Download everything into `data/scenes/<sign>/`:
+*Prebuilt official scenes are available on Hugging Face:*
 
-```bash
+```
 huggingface-cli download emb-ai/traffic-sign-bench \
     --repo-type dataset \
     --local-dir data
 ```
 
-`collect` includes the train/test **split** (that step used to be missing from
-`run_pipeline.py`). Skip stages with `--skip-download`, `--skip-netconvert`,
-`--skip-enumerate`, `--skip-split`, `--skip-crop`, `--skip-dual-path`,
-`--skip-segment`.
+## Details
 
-`materialize --all` includes every sign in yaml. Signs with a `prepare:` hook
-(currently crosswalk) are copied, then that hook runs automatically — same as
-`prepare --sign crosswalk`. `prepare` stays available to re-run. Preview PNGs
-mark the zebra from the SUMO crossing edge.
+### 1. Collect
 
-### 6. Manifest (eval, not harvest)
+`collect` builds the shared map pool:
 
-```bash
-python -m traffic_bench.eval manifest sign=yield paths.split=train
+- download and convert OSM data;
+- build the city network and index;
+- create the train/test split;
+- crop junction, dual-path, and segment maps.
+
+Useful stage controls:
+
+```
+--skip-download
+--skip-netconvert
+--skip-enumerate
+--skip-split
+--skip-crop
+--skip-dual-path
+--skip-segment
 ```
 
-## How eval picks ego spawn
+### 2. Assign
 
-Dispatch: `sign_registry.spawn_strategy` → `manifest/run.py` / `signs/<family>/expand.py`.
+`assign` queries the harvested pool using `maps/splits/signs.yaml` and creates:
 
-- Junction 2.1: layout, any arm, longest incoming ≥20 m. Harvest meta has no `road_id`.
-- 2.3 / 2.4 / 2.5: secondary arms only (`ego_road_class="secondary"`).
-- 4.3: roundabout entry.
-- Dual-path: `meta.road_id` + `dual_path` paths from crop; lanes on that edge.
-- Speed: `meta.road_id` = corridor; spawn at start; lanes `0..lane_count-1`.
-- Detour 4.2.x: same `road_id`; **eval** picks the obstacle lane from
-`vehicle_lane_indices` + `pass_right_ok` / `pass_left_ok`.
-- Crosswalk after prepare: parse SUMO `crossing`, spawn on the approach to the
-zebra — do not trust harvest `road_id` after the edge split.
+```
+maps/splits/sign_allocations.json
+```
 
-Longitudinal spawn distances come from sim config, not harvest.
+CLI `--sign` and Hydra `sign=` use **eval profile IDs** (`yield`, `roundabout`, `crosswalk`, ...), matching `python -m traffic_bench.eval manifest`.
 
-## Eval id ↔ PDD (harvested this round)
+### 3. Materialize
+
+`materialize` places allocated maps into:
+
+```
+data/scenes/<sign>/
+```
+
+The default mode creates **relative symlinks** into `maps/crops/`. This keeps the materialized dataset lightweight and survives remounting the NFS share.
+
+Useful stage controls:
+
+```
+--skip-download   # for a single sign
+```
+
+Signs with a `prepare:` hook are automatically prepared after materialization. Currently this applies to `crosswalk` (5.19).
+
+## Data layout
+
+```
+maps/
+├── crops/
+│   ├── junction/{T,X,O}/
+│   ├── dual_path/{T,X}/{slot}/
+│   └── segment/<scene_id>/
+└── splits/
+    ├── signs.yaml
+    └── sign_allocations.json
+
+data/
+└── scenes/
+    ├── yield/
+    ├── stop/
+    ├── crosswalk/
+    └── ...
+```
+
+`straight`, `curved`, and lane count are **metadata tags** stored in `meta.json`; they are not separate crop families.
+
+Shared path constants are defined in `paths.py`. `preview.py` generates a top-down PNG from a cropped SUMO network.
+
+## Dataset scale
 
 
-| `--sign` / `sign=`         | PDD    | Family                             |
-| -------------------------- | ------ | ---------------------------------- |
-| `main`                     | 2.1    | junction                           |
-| `secondary`                | 2.3    | junction                           |
-| `yield`                    | 2.4    | junction                           |
-| `stop`                     | 2.5    | junction                           |
-| `blocked_road`             | 3.2    | junction                           |
-| `roundabout`               | 4.3    | junction                           |
-| `no_entry`                 | 3.1    | dual_path                          |
-| `no_turn_right`            | 3.18.1 | dual_path                          |
-| `no_turn_left`             | 3.18.2 | dual_path                          |
-| `direction_straight`       | 4.1.1  | dual_path                          |
-| `direction_right`          | 4.1.2  | dual_path                          |
-| `direction_left`           | 4.1.3  | dual_path                          |
-| `direction_straight_right` | 4.1.4  | dual_path                          |
-| `direction_straight_left`  | 4.1.5  | dual_path                          |
-| `direction_left_right`     | 4.1.6  | dual_path                          |
-| `one_way_right`            | 5.7.1  | dual_path                          |
-| `one_way_left`             | 5.7.2  | dual_path                          |
-| `speed_limit`              | 3.24   | segment                            |
-| `min_speed`                | 4.6    | segment                            |
-| `residential_zone`         | 5.21   | segment                            |
-| `zone_speed_limit`         | 5.31   | segment                            |
-| `detour_right`             | 4.2.1  | segment                            |
-| `detour_left`              | 4.2.2  | segment                            |
-| `detour_either`            | 4.2.3  | segment                            |
-| `crosswalk`                | 5.19   | segment + `prepare` zebra (middle) |
+| Symbol | Meaning                             | This iteration                                          |
+| ------ | ----------------------------------- | ------------------------------------------------------- |
+| **P**  | Full Moscow population in the index | junctions 6457 (T 5181 / X 1052 / O 224); segments 7620 |
+| **H**  | Cropped nets on disk                | **H = P** (crop until the city runs out)                |
+| **N**  | Official maps per sign              | 80 train + 20 test                                      |
 
 
-On-disk map layout: `[maps/README.md](maps/README.md)`.
+The independent benchmark unit is a **map**. Scenario augmentations (≤10 per map) are correlated. The train/test split is assigned by **place identity before sign allocation**: 1) junctions / dual-path: `junction_id`, and 2) segments: `osm_way_id`. Thus, the same street cannot appear in both train and test.
+
+The `50/50` T/X split in `signs.yaml` ensures balanced sampling across T- and X-junction topologies, rather than reflecting Moscow's natural ~83% T-junction distribution.
+
+## Sign mapping
+
+
+| `--sign` / `sign=`         | Sign ID (Moscow Traffic Rules) | Family                             |
+| -------------------------- | ------------------------------ | ---------------------------------- |
+| `main`                     | 2.1                            | junction                           |
+| `secondary`                | 2.3                            | junction                           |
+| `yield`                    | 2.4                            | junction                           |
+| `stop`                     | 2.5                            | junction                           |
+| `blocked_road`             | 3.2                            | junction                           |
+| `roundabout`               | 4.3                            | junction                           |
+| `no_entry`                 | 3.1                            | dual_path                          |
+| `no_turn_right`            | 3.18.1                         | dual_path                          |
+| `no_turn_left`             | 3.18.2                         | dual_path                          |
+| `direction_straight`       | 4.1.1                          | dual_path                          |
+| `direction_right`          | 4.1.2                          | dual_path                          |
+| `direction_left`           | 4.1.3                          | dual_path                          |
+| `direction_straight_right` | 4.1.4                          | dual_path                          |
+| `direction_straight_left`  | 4.1.5                          | dual_path                          |
+| `direction_left_right`     | 4.1.6                          | dual_path                          |
+| `one_way_right`            | 5.7.1                          | dual_path                          |
+| `one_way_left`             | 5.7.2                          | dual_path                          |
+| `speed_limit`              | 3.24                           | segment                            |
+| `min_speed`                | 4.6                            | segment                            |
+| `residential_zone`         | 5.21                           | segment                            |
+| `zone_speed_limit`         | 5.31                           | segment                            |
+| `detour_right`             | 4.2.1                          | segment                            |
+| `detour_left`              | 4.2.2                          | segment                            |
+| `detour_either`            | 4.2.3                          | segment                            |
+| `crosswalk`                | 5.19                           | segment + `prepare` zebra (middle) |
+
+
