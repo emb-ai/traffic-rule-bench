@@ -1,22 +1,15 @@
 <p align="center">
-  <img src="docs/static/images/signs/2.1.png" width="36" alt="Main road">
-  <img src="docs/static/images/signs/2.3.1.png" width="36" alt="Secondary">
-  <img src="docs/static/images/signs/2.4.png" width="36" alt="Yield">
-  <img src="docs/static/images/signs/2.5.png" width="36" alt="Stop">
-  <img src="docs/static/images/signs/3.1.png" width="36" alt="No entry">
-  <img src="docs/static/images/signs/3.2.png" width="36" alt="No traffic">
-  <img src="docs/static/images/signs/3.20.png" width="36" alt="No overtaking">
-  <img src="docs/static/images/signs/3.24.png" width="36" alt="Speed limit">
-  <img src="docs/static/images/signs/3.27.png" width="36" alt="No stopping">
-  <img src="docs/static/images/signs/4.2.1.png" width="36" alt="Pass right">
-  <img src="docs/static/images/signs/4.2.2.png" width="36" alt="Pass left">
-  <img src="docs/static/images/signs/4.2.3.png" width="36" alt="Pass either">
-  <img src="docs/static/images/signs/4.6.png" width="36" alt="Min speed">
-  <img src="docs/static/images/signs/5.7.1.png" width="36" alt="One-way">
-  <img src="docs/static/images/signs/5.11.1.png" width="36" alt="Bus lane">
-  <img src="docs/static/images/signs/5.15.1.png" width="36" alt="Lane directions">
-  <img src="docs/static/images/signs/5.19.png" width="36" alt="Crosswalk">
-  <img src="docs/static/images/signs/5.31_50.png" width="36" alt="Speed zone">
+  <img src="docs/static/images/signs/2.4.png" width="40" alt="Yield">
+  &nbsp;
+  <img src="docs/static/images/signs/2.5.png" width="40" alt="Stop">
+  &nbsp;
+  <img src="docs/static/images/signs/3.1.png" width="40" alt="No entry">
+  &nbsp;
+  <img src="docs/static/images/signs/4.2.1.png" width="40" alt="Pass right">
+  &nbsp;
+  <img src="docs/static/images/signs/5.7.1.png" width="40" alt="One-way">
+  &nbsp;
+  <img src="docs/static/images/signs/5.19.png" width="40" alt="Crosswalk">
 </p>
 
 <h1 align="center">TrafficRuleBench</h1>
