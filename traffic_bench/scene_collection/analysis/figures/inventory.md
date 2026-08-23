@@ -1,7 +1,6 @@
 # Harvest inventory
 
-Sign-free crops from the BBBike Moscow OSM extract. **P** is the catalog
-(`maps/index/`). **H** is cropped SUMO nets on disk (`maps/crops/`).
+Sign-free cropped SUMO nets on disk (`maps/crops/`).
 Per-sign quota **N** = 80 train + 20 test is sampled later (`assign`);
 it is not the harvest size.
 
@@ -13,21 +12,22 @@ python -m traffic_bench.scene_collection analysis
 
 ## Inventory
 
-| Family | P (index) | H (on disk) | H / P |
-| --- | --- | --- | --- |
-| junction | 6457 | 6458 | 100.0% |
-| dual_path | 6502 | 6507 | 100.1% |
-| segment | 7620 | 7620 | 100.0% |
+| Family | On disk |
+| --- | --- |
+| junction | 6458 |
+| dual_path | 6507 |
+| segment | 7620 |
+| total | 20585 |
 
 ![Harvest inventory](inventory.png)
 
 ## Junctions (T / X / O)
 
-| Shape | Index | On disk | Train ids | Test ids |
-| --- | --- | --- | --- | --- |
-| T | 5181 | 5182 | 4145 | 1036 |
-| X | 1052 | 1052 | 842 | 210 |
-| O | 224 | 224 | 179 | 45 |
+| Shape | On disk | Train ids | Test ids |
+| --- | --- | --- | --- |
+| T | 5182 | 4145 | 1036 |
+| X | 1052 | 842 | 210 |
+| O | 224 | 179 | 45 |
 
 Place identity (`junction_id` / `scene_id`) is split 80/20 *before*
 allocation to signs, stratified by shape.
@@ -54,8 +54,7 @@ Gates: length ≥ 150 m; **straight** chord/arc ≥ 0.99; **curved** in [0.97, 0
 
 ## Geographic coverage
 
-Points are harvest candidates (index), not the N-per-sign protocol sample.
-Dual-path locations are unique parent junctions.
+Points are cropped nets on disk. Dual-path locations are unique parent junctions.
 
 ![Geographic coverage](geo_coverage.png)
 

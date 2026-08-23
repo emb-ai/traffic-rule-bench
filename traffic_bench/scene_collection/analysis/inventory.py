@@ -9,14 +9,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from traffic_bench.scene_collection.collect.dual_path.roles import SLOTS
-from traffic_bench.scene_collection.collect.lib.io import load_index
 from traffic_bench.scene_collection.paths import (
-    DUAL_PATH_CANDIDATES,
     DUAL_PATH_CROPS,
     JUNCTION_CROPS,
-    JUNCTIONS_INDEX,
     SEGMENT_CROPS,
-    SEGMENTS_INDEX,
     TEST_IDS,
     TRAIN_IDS,
 )
@@ -52,17 +48,12 @@ def _latlon(row: Mapping[str, Any]) -> Optional[Tuple[float, float]]:
 
 @dataclass(frozen=True)
 class FamilyTally:
-    index: int
     on_disk: int
-
-    @property
-    def coverage(self) -> float:
-        return 0.0 if self.index == 0 else self.on_disk / self.index
 
 
 @dataclass
 class HarvestSnapshot:
-    """One consistent read of the Moscow harvest."""
+    """Crops that exist on disk under ``maps/crops/``."""
 
     junction_rows: List[Dict[str, Any]]
     segment_rows: List[Dict[str, Any]]
@@ -75,15 +66,15 @@ class HarvestSnapshot:
 
     @property
     def junction(self) -> FamilyTally:
-        return FamilyTally(len(self.junction_rows), sum(self.junction_on_disk.values()))
+        return FamilyTally(sum(self.junction_on_disk.values()))
 
     @property
     def dual_path(self) -> FamilyTally:
-        return FamilyTally(len(self.dual_path_rows), sum(self.dual_path_on_disk.values()))
+        return FamilyTally(sum(self.dual_path_on_disk.values()))
 
     @property
     def segment(self) -> FamilyTally:
-        return FamilyTally(len(self.segment_rows), self.segment_on_disk)
+        return FamilyTally(self.segment_on_disk)
 
     def families(self) -> Dict[str, FamilyTally]:
         return {
@@ -123,26 +114,43 @@ class HarvestSnapshot:
         return out
 
     def dual_path_geo(self) -> List[Tuple[float, float, str]]:
-        by_jid = {
-            str(r.get("junction_id") or ""): r
-            for r in self.junction_rows
-            if r.get("junction_id")
-        }
         out: List[Tuple[float, float, str]] = []
         seen: set[str] = set()
         for row in self.dual_path_rows:
-            jid = str(row.get("junction_id") or "")
+            jid = str(row.get("junction_id") or row.get("scene_id") or "")
             if not jid or jid in seen:
                 continue
-            parent = by_jid.get(jid)
-            if parent is None:
-                continue
-            xy = _latlon(parent)
+            xy = _latlon(row)
             if xy is None:
                 continue
             seen.add(jid)
             out.append((xy[0], xy[1], str(row.get("shape") or "?")))
         return out
+
+
+def _scene_dirs(root: Path) -> List[Path]:
+    if not root.is_dir():
+        return []
+    return sorted(p for p in root.iterdir() if _has_net(p))
+
+
+def _row_from_crop(path: Path, extras: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+    meta = _load_json(path / "meta.json")
+    row: Dict[str, Any] = dict(meta) if isinstance(meta, dict) else {}
+    row.setdefault("scene_id", path.name)
+    nested = row.get("dual_path")
+    if isinstance(nested, dict) and row.get("gain_m") is None and nested.get("gain_m") is not None:
+        row["gain_m"] = nested["gain_m"]
+    if extras:
+        for key, value in extras.items():
+            row.setdefault(key, value)
+    return row
+
+
+def _rows_from_crop_root(
+    root: Path, extras: Optional[Mapping[str, Any]] = None
+) -> List[Dict[str, Any]]:
+    return [_row_from_crop(path, extras) for path in _scene_dirs(root)]
 
 
 def count_junction_crops(root: Path = JUNCTION_CROPS) -> Dict[str, int]:
@@ -171,13 +179,31 @@ def _ids_by_shape(payload: Any) -> Dict[str, List[str]]:
 
 
 def load_snapshot() -> HarvestSnapshot:
+    junction_rows: List[Dict[str, Any]] = []
+    junction_on_disk: Dict[str, int] = {}
+    for shape in JUNCTION_SHAPES:
+        rows = _rows_from_crop_root(JUNCTION_CROPS / shape, {"shape": shape})
+        junction_on_disk[shape] = len(rows)
+        junction_rows.extend(rows)
+
+    dual_path_rows: List[Dict[str, Any]] = []
+    dual_path_on_disk: Dict[Tuple[str, str], int] = {}
+    for shape in DUAL_PATH_SHAPES:
+        for slot in SLOTS:
+            rows = _rows_from_crop_root(
+                DUAL_PATH_CROPS / shape / slot, {"shape": shape, "slot": slot}
+            )
+            dual_path_on_disk[(shape, slot)] = len(rows)
+            dual_path_rows.extend(rows)
+
+    segment_rows = _rows_from_crop_root(SEGMENT_CROPS)
     return HarvestSnapshot(
-        junction_rows=load_index(JUNCTIONS_INDEX) if JUNCTIONS_INDEX.is_file() else [],
-        segment_rows=load_index(SEGMENTS_INDEX) if SEGMENTS_INDEX.is_file() else [],
-        dual_path_rows=load_index(DUAL_PATH_CANDIDATES) if DUAL_PATH_CANDIDATES.is_file() else [],
-        junction_on_disk=count_junction_crops(),
-        dual_path_on_disk=count_dual_path_crops(),
-        segment_on_disk=count_segment_crops(),
+        junction_rows=junction_rows,
+        segment_rows=segment_rows,
+        dual_path_rows=dual_path_rows,
+        junction_on_disk=junction_on_disk,
+        dual_path_on_disk=dual_path_on_disk,
+        segment_on_disk=len(segment_rows),
         train_ids=_ids_by_shape(_load_json(TRAIN_IDS)),
         test_ids=_ids_by_shape(_load_json(TEST_IDS)),
     )
@@ -204,17 +230,11 @@ def scene_example_dirs(
             picked[label] = ready
 
     for shape in JUNCTION_SHAPES:
-        root = JUNCTION_CROPS / shape
-        _sample(
-            f"junction/{shape}",
-            [root / str(r["scene_id"]) for r in snap.junction_rows if r.get("shape") == shape and r.get("scene_id")],
-        )
+        _sample(f"junction/{shape}", _scene_dirs(JUNCTION_CROPS / shape))
     for shape in DUAL_PATH_SHAPES:
-        dirs = [
-            DUAL_PATH_CROPS / shape / str(r["slot"]) / str(r["scene_id"])
-            for r in snap.dual_path_rows
-            if r.get("shape") == shape and r.get("slot") and r.get("scene_id")
-        ]
+        dirs: List[Path] = []
+        for slot in SLOTS:
+            dirs.extend(_scene_dirs(DUAL_PATH_CROPS / shape / slot))
         _sample(f"dual_path/{shape}", dirs)
     for kind in ("straight", "curved"):
         dirs = [
@@ -227,21 +247,13 @@ def scene_example_dirs(
 
 
 def summary_dict(snap: HarvestSnapshot) -> Dict[str, Any]:
-    j_shape = snap.junction_index_by_shape()
     seg_type = Counter(str(r.get("segment_type") or "") for r in snap.segment_rows)
     lanes = Counter(int(r.get("lane_count") or 0) for r in snap.segment_rows)
     return {
-        "families": {
-            name: {"index": t.index, "on_disk": t.on_disk, "coverage": round(t.coverage, 4)}
-            for name, t in snap.families().items()
-        },
-        "junction_by_shape": {
-            "index": dict(j_shape),
-            "on_disk": dict(snap.junction_on_disk),
-        },
+        "families": {name: {"on_disk": t.on_disk} for name, t in snap.families().items()},
+        "junction_by_shape": dict(snap.junction_on_disk),
         "dual_path_by_slot": {
-            "index": {f"{a}/{b}": n for (a, b), n in sorted(snap.dual_path_index_by_cell().items())},
-            "on_disk": {f"{a}/{b}": n for (a, b), n in sorted(snap.dual_path_on_disk.items())},
+            f"{a}/{b}": n for (a, b), n in sorted(snap.dual_path_on_disk.items())
         },
         "segment": {
             "by_type": dict(seg_type),

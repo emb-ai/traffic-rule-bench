@@ -29,11 +29,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
 
-    print("[analysis] Reading indexes and crop folders…")
+    print("[analysis] Reading crop folders on disk…")
     snap = load_snapshot()
     stats = summary_dict(snap)
     for name, row in stats["families"].items():
-        print(f"  {name:10s}  P={row['index']:5d}  H={row['on_disk']:5d}  ({100 * row['coverage']:.1f}%)")
+        print(f"  {name:10s}  on disk={row['on_disk']:5d}")
 
     out = args.out.expanduser().resolve()
     print(f"[analysis] Writing figures → {out}")

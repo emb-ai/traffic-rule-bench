@@ -21,15 +21,13 @@ def write_report(snap: HarvestSnapshot, out_dir: Path) -> Path:
     stats = summary_dict(snap)
     (out_dir / "summary.json").write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
 
-    fam_rows = [
-        [name, t["index"], t["on_disk"], f"{100 * t['coverage']:.1f}%"]
-        for name, t in stats["families"].items()
-    ]
+    fam_rows = [[name, t["on_disk"]] for name, t in stats["families"].items()]
+    total = sum(t["on_disk"] for t in stats["families"].values())
+    fam_rows.append(["total", total])
     j_rows = [
         [
             shape,
-            stats["junction_by_shape"]["index"].get(shape, 0),
-            stats["junction_by_shape"]["on_disk"].get(shape, 0),
+            stats["junction_by_shape"].get(shape, 0),
             len(snap.train_ids.get(shape, [])),
             len(snap.test_ids.get(shape, [])),
         ]
@@ -38,8 +36,7 @@ def write_report(snap: HarvestSnapshot, out_dir: Path) -> Path:
 
     md = f"""# Harvest inventory
 
-Sign-free crops from the BBBike Moscow OSM extract. **P** is the catalog
-(`maps/index/`). **H** is cropped SUMO nets on disk (`maps/crops/`).
+Sign-free cropped SUMO nets on disk (`maps/crops/`).
 Per-sign quota **N** = 80 train + 20 test is sampled later (`assign`);
 it is not the harvest size.
 
@@ -51,13 +48,13 @@ python -m traffic_bench.scene_collection analysis
 
 ## Inventory
 
-{_md_table(["Family", "P (index)", "H (on disk)", "H / P"], fam_rows)}
+{_md_table(["Family", "On disk"], fam_rows)}
 
 ![Harvest inventory](inventory.png)
 
 ## Junctions (T / X / O)
 
-{_md_table(["Shape", "Index", "On disk", "Train ids", "Test ids"], j_rows)}
+{_md_table(["Shape", "On disk", "Train ids", "Test ids"], j_rows)}
 
 Place identity (`junction_id` / `scene_id`) is split 80/20 *before*
 allocation to signs, stratified by shape.
@@ -84,8 +81,7 @@ Gates: length ≥ 150 m; **straight** chord/arc ≥ 0.99; **curved** in [0.97, 0
 
 ## Geographic coverage
 
-Points are harvest candidates (index), not the N-per-sign protocol sample.
-Dual-path locations are unique parent junctions.
+Points are cropped nets on disk. Dual-path locations are unique parent junctions.
 
 ![Geographic coverage](geo_coverage.png)
 

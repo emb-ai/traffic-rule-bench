@@ -107,29 +107,24 @@ def inventory_bars(snap: HarvestSnapshot, out_dir: Path, *, pdf: bool = False) -
     _style()
     names = ("junction", "dual_path", "segment")
     labels = ("Junction", "Dual-path", "Segment")
-    catalog = [snap.families()[n].index for n in names]
     disk = [snap.families()[n].on_disk for n in names]
     x = np.arange(len(names))
-    width = 0.34
 
     fig, ax = plt.subplots(figsize=(5.4, 3.0))
-    ax.bar(x - width / 2, catalog, width, label="Catalog (P)", color=INDEX, zorder=2)
-    ax.bar(x + width / 2, disk, width, label="Cropped (H)", color=HARVEST, zorder=2)
+    ax.bar(x, disk, width=0.55, color=HARVEST, zorder=2)
     ax.set_xticks(x, labels)
     ax.set_ylabel("Number of maps")
-    _title(ax, "a", "Map catalog versus cropped nets")
+    _title(ax, "a", "Cropped nets on disk")
     _grid(ax)
-    ax.legend(loc="upper left")
-    ax.set_ylim(0, max(catalog + disk) * 1.12)
+    ax.set_ylim(0, max(disk) * 1.12 if disk else 1)
     return _save(fig, out_dir, "inventory", pdf=pdf)
 
 
 def junction_shapes(snap: HarvestSnapshot, out_dir: Path, *, pdf: bool = False) -> List[Path]:
     _style()
-    idx = snap.junction_index_by_shape()
     fig, axes = plt.subplots(1, 2, figsize=(6.6, 2.85))
     shapes = list(JUNCTION_SHAPES)
-    counts = [idx.get(s, 0) for s in shapes]
+    counts = [snap.junction_on_disk.get(s, 0) for s in shapes]
 
     axes[0].bar(shapes, counts, color=HARVEST, width=0.55, zorder=2)
     axes[0].set_ylabel("Number of maps")

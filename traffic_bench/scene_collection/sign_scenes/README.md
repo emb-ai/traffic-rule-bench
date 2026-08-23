@@ -1,11 +1,23 @@
-# sign_scenes/ — per-sign folders under data/scenes/
+# `sign_scenes/`
 
-Takes allocations from `assign/` and places maps into `data/scenes/<sign>/`.
+Materializes and validates the per-sign scene datasets under `data/scenes/<sign>/`.
 
-| Path | Role |
-| --- | --- |
-| [`materialize/`](materialize/README.md) | Symlink or copy allocated crops into the sign folder |
-| [`prepare/`](prepare/README.md) | Sign-specific surgery after materialize (currently 5.19 zebra) |
-| [`filter/`](filter/README.md) | Reject unusable maps, visual review, keep/reject JSON |
+**Pipeline:**
 
-Packed dataset (all signs, no symlinks): [`../publish/`](../publish/README.md).
+`allocations → materialize → prepare → filter → data/scenes/<sign>/`
+
+
+| Path           | Purpose                                                            |
+| -------------- | ------------------------------------------------------------------ |
+| `materialize/` | Materialize allocated crops as symlinks or copies                  |
+| `prepare/`     | Apply sign-specific scene modifications (currently 5.19 crosswalk) |
+| `filter/`      | Review scenes and reject unusable maps                             |
+
+
+The final scene folders are stored in:
+
+```
+data/scenes/<sign>/
+```
+
+For packing and publishing the complete dataset, see `../publish/`.
