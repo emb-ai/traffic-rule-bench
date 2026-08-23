@@ -8,7 +8,7 @@ from typing import Optional
 
 from omegaconf import OmegaConf
 
-from traffic_bench.eval.sign_registry import resolve_repo_path
+from traffic_bench.eval.sign_registry import SignProfile, resolve_repo_path, runs_dir
 
 DEBUG_LATEST = "latest"
 
@@ -76,6 +76,19 @@ def resolve_manifest_in_dir(path: Path) -> Path:
         if latest is not None:
             return latest / "real_manifest.jsonl"
     raise FileNotFoundError(f"No real_manifest.jsonl in {path}")
+
+
+def default_run_manifest_dir(profile: SignProfile) -> Optional[Path]:
+    """Prefer ``test/``, else ``debug/`` (latest timestamp or flat jsonl)."""
+    test = runs_dir(profile) / "test"
+    if (test / "real_manifest.jsonl").is_file():
+        return test
+    debug = runs_dir(profile) / "debug"
+    try:
+        resolve_manifest_in_dir(debug)
+    except FileNotFoundError:
+        return None
+    return debug
 
 
 def snapshot_output_base_and_name(experiment_dir: Path) -> tuple[str, str]:

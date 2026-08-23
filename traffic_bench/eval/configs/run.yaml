@@ -12,6 +12,8 @@ policies: null
 manifest: null
 scenes_root: null
 ego_variant: default
+# null / all → default,s1–s4 for idm + comprehensive_rule_expert
+ego_variants: null
 ego_sample_seed_base: 42
 run_name: null
 output_dir: null

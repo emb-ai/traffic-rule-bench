@@ -7,10 +7,13 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
-from traffic_bench.eval.run_layout import latest_debug_dir, register_path_resolvers
+from traffic_bench.eval.run_layout import (
+    default_run_manifest_dir,
+    latest_debug_dir,
+    register_path_resolvers,
+)
 from traffic_bench.eval.sign_registry import (
     SignProfile,
-    default_test_manifest,
     hydra_sign_override,
     resolve_sign_token,
     runs_dir,
@@ -150,7 +153,25 @@ def cmd_manifest(argv: List[str]) -> int:
     return 0
 
 
+def _reject_policy_as_list(argv: Sequence[str]) -> int:
+    raw, _ = _take_override(list(argv), "policy")
+    if raw is None:
+        return 0
+    text = raw.strip()
+    if text.startswith("[") or "," in text:
+        hint = text if text.startswith("[") else f"[{text}]"
+        print(
+            f"ERROR: policy= takes one name (got {text!r}). "
+            f"For several policies use policies={hint}",
+            file=sys.stderr,
+        )
+        return 2
+    return 0
+
+
 def cmd_run(argv: List[str]) -> int:
+    if _reject_policy_as_list(argv):
+        return 2
     from traffic_bench.eval.run import main as run_main
 
     raw_sign, rest = _take_override(argv, "sign")
@@ -167,34 +188,59 @@ def cmd_run(argv: List[str]) -> int:
     profiles = profiles_from_sign_value(raw_sign)
     if profiles is None:
         profiles = [resolve_sign_token(raw_sign)]
-    missing = [p for p in profiles if not default_test_manifest(p).is_file()]
+    chosen: list[tuple[SignProfile, Path]] = []
+    missing: list[SignProfile] = []
+    for profile in profiles:
+        found = default_run_manifest_dir(profile)
+        if found is None:
+            missing.append(profile)
+        else:
+            chosen.append((profile, found))
     if missing:
         first = missing[0]
-        path = default_test_manifest(first)
         print(
-            f"ERROR: no {path} "
-            f"(build it with: python -m traffic_bench.eval manifest "
-            f"sign={hydra_sign_override(first)} paths.split=test)",
+            f"ERROR: no test/ or debug/ manifest for {hydra_sign_override(first)} "
+            f"(tried data/runs/{first.data_subdir}/test and "
+            f"data/runs/{first.data_subdir}/debug).\n"
+            f"Build one with: python -m traffic_bench.eval manifest "
+            f"sign={hydra_sign_override(first)}",
             file=sys.stderr,
         )
         return 2
-    if len(profiles) > 1:
-        print(f"\n======== run {len(profiles)} sign(s) from data/runs/<sign>/test/ ========")
-    for idx, profile in enumerate(profiles, start=1):
-        rel = Path("data") / "runs" / profile.data_subdir / "test"
-        if len(profiles) > 1:
+    if len(chosen) > 1:
+        print(f"\n======== run {len(chosen)} sign(s) (test/ if present, else debug/latest) ========")
+    for idx, (profile, man_dir) in enumerate(chosen, start=1):
+        rel = Path("data") / "runs" / profile.data_subdir / man_dir.name
+        if len(chosen) > 1:
             print(
-                f"\n======== run [{idx}/{len(profiles)}] "
+                f"\n======== run [{idx}/{len(chosen)}] "
                 f"sign={hydra_sign_override(profile)} manifest={rel} ========"
             )
         code = _run_module_main(run_main, [f"manifest={rel}", *rest])
         if code != 0:
             return code
+    if len(chosen) > 1:
+        from traffic_bench.eval.metrics.combine import (
+            combine_from_eval_outs,
+            eval_out_from_manifest_dir,
+        )
+
+        outs: list[Path] = []
+        for _, man_dir in chosen:
+            try:
+                out = eval_out_from_manifest_dir(man_dir)
+            except FileNotFoundError:
+                continue
+            if (out / "metrics_per_episode.csv").is_file():
+                outs.append(out)
+        if outs:
+            print(f"\n======== combined report ({len(outs)} signs) ========")
+            print(combine_from_eval_outs(outs))
     return 0
 
 
 def cmd_metrics(argv: List[str]) -> int:
-    commands = ("csv", "aggregate", "report")
+    commands = ("csv", "aggregate", "report", "combine")
     if not argv or argv[0] in ("-h", "--help"):
         print(
             "usage: python -m traffic_bench.eval metrics "
@@ -202,6 +248,7 @@ def cmd_metrics(argv: List[str]) -> int:
             "  csv         episodes / replays → metrics_per_episode.csv\n"
             "  aggregate   CSV → aggregations + reports/cumulative.json\n"
             "  report      cumulative JSON → markdown table\n"
+            "  combine     per-sign CSVs → one overall report (sign=all)\n"
         )
         return 0
     command = argv[0]
@@ -216,6 +263,8 @@ def cmd_metrics(argv: List[str]) -> int:
         from traffic_bench.eval.metrics import csv as mod
     elif command == "aggregate":
         from traffic_bench.eval.metrics import aggregate as mod
+    elif command == "combine":
+        from traffic_bench.eval.metrics import combine as mod
     else:
         from traffic_bench.eval.metrics import report as mod
     return _run_module_main(mod, argv[1:])

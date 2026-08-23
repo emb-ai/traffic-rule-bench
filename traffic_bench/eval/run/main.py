@@ -252,10 +252,38 @@ def _scenes_root(cfg: DictConfig, manifest_path: Path) -> Path:
     return (REPO_ROOT / "data" / "scenes").resolve()
 
 
+def _scalar_policy_name(cfg: DictConfig) -> str:
+    """``policy=`` is one name. A Hydra list belongs on ``policies=``."""
+    raw = cfg.get("policy")
+    if OmegaConf.is_list(raw) or isinstance(raw, (list, tuple)):
+        names = ", ".join(str(x) for x in raw)
+        raise SystemExit(
+            f"ERROR: policy= takes one name, not a list [{names}]. "
+            f"Use policies=[{names}]"
+        )
+    name = str(raw).strip() if raw is not None else ""
+    if not name:
+        raise SystemExit("ERROR: policy= is empty. Example: policy=idm")
+    if name.startswith("[") or "," in name:
+        hint = name if name.startswith("[") else f"[{name}]"
+        raise SystemExit(
+            f"ERROR: policy={name!r} looks like a list. Use policies={hint}"
+        )
+    from traffic_bench.eval.run.policies import ALL_POLICIES
+
+    if name not in ALL_POLICIES:
+        known = ", ".join(sorted(ALL_POLICIES))
+        raise SystemExit(
+            f"ERROR: unknown policy {name!r}. Supported: {known}. "
+            "Several policies: policies=[idm,comprehensive_rule_expert]"
+        )
+    return name
+
+
 def run_one_policy(cfg: DictConfig) -> Path:
     rows, manifest_path = _load_rows(cfg)
     scenes_root = _scenes_root(cfg, manifest_path)
-    policy = str(cfg.policy)
+    policy = _scalar_policy_name(cfg)
     run_name = str(cfg.run_name or policy)
     if cfg.output_dir:
         out_dir = Path(str(cfg.output_dir)).resolve()

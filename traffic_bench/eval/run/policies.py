@@ -33,14 +33,36 @@ EGO_VARIANTS = ["default", "s1", "s2", "s3", "s4"]
 RUN_EVAL_OUT = "eval_out"
 
 
-def plan_baselines(policies: list[str]) -> list[tuple[str, str]]:
+def plan_baselines(
+    policies: list[str],
+    variants: list[str] | None = None,
+) -> list[tuple[str, str]]:
+    idm_variants = list(variants) if variants is not None else list(EGO_VARIANTS)
     out: list[tuple[str, str]] = []
     for policy in policies:
         if policy in IDM_FAMILY:
-            out.extend((policy, variant) for variant in EGO_VARIANTS)
+            out.extend((policy, variant) for variant in idm_variants)
         else:
             out.append((policy, "default"))
     return out
+
+
+def resolve_ego_variants(cfg: DictConfig) -> list[str] | None:
+    """``null`` / ``all`` → default,s1–s4 for IDM-family. Else a subset."""
+    raw = cfg.get("ego_variants")
+    if raw is None:
+        return None
+    if OmegaConf.is_list(raw) or isinstance(raw, (list, tuple)):
+        names = [str(x).strip() for x in raw if str(x).strip()]
+    else:
+        text = str(raw).strip()
+        if not text or text.lower() in {"all", "*"}:
+            return None
+        names = [p.strip() for p in text.split(",") if p.strip()]
+    bad = [name for name in names if name not in EGO_VARIANTS]
+    if bad:
+        raise ValueError(f"Unknown ego_variants: {bad}. Supported: {EGO_VARIANTS}")
+    return names
 
 
 def _model_paths(cfg: DictConfig, policies: list[str]) -> dict[str, str]:
@@ -56,8 +78,10 @@ def _model_paths(cfg: DictConfig, policies: list[str]) -> dict[str, str]:
             key, value = item.split(":", 1)
             parsed[key.strip()] = value.strip()
         raw = parsed
-    else:
+    elif OmegaConf.is_config(raw):
         raw = OmegaConf.to_container(raw, resolve=True) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"model_paths must be a mapping, got {type(raw).__name__}")
     paths = {str(k): str(v) for k, v in raw.items()}
     if cfg.get("model_path") and len(policies) == 1:
         paths.setdefault(policies[0], str(cfg.model_path))
@@ -105,7 +129,7 @@ def _run_metrics(out_dir: Path) -> None:
     from traffic_bench.eval.metrics import csv as csv_mod
     from traffic_bench.eval.metrics import report as report_mod
 
-    _run_module_main(
+    csv_code = _run_module_main(
         csv_mod,
         [
             "--episodes-root",
@@ -114,11 +138,15 @@ def _run_metrics(out_dir: Path) -> None:
             str(out_dir / "metrics_per_episode.csv"),
         ],
     )
-    _run_module_main(
+    if csv_code != 0:
+        raise RuntimeError(f"metrics csv failed (exit {csv_code})")
+    agg_code = _run_module_main(
         aggregate_mod,
         ["--csv", str(out_dir / "metrics_per_episode.csv"), "--out-dir", str(out_dir)],
     )
-    _run_module_main(
+    if agg_code != 0:
+        raise RuntimeError(f"metrics aggregate failed (exit {agg_code})")
+    report_code = _run_module_main(
         report_mod,
         [
             "--run-root",
@@ -127,6 +155,8 @@ def _run_metrics(out_dir: Path) -> None:
             str(out_dir / "reports" / "cumulative.json"),
         ],
     )
+    if report_code != 0:
+        raise RuntimeError(f"metrics report failed (exit {report_code})")
 
 
 def _expand_policy_names(policies: list[str]) -> list[str]:
@@ -142,8 +172,12 @@ def print_run_plan(
     policies: list[str],
     out_dir: Path,
     expand_idm: bool = True,
+    variants: list[str] | None = None,
 ) -> None:
-    baselines = plan_baselines(policies) if expand_idm else [(p, "default") for p in policies]
+    if expand_idm:
+        baselines = plan_baselines(policies, variants)
+    else:
+        baselines = [(p, "default") for p in policies]
     n_rows = len(rows)
     n_ep = n_rows * len(baselines)
     print("======== eval run ========")
@@ -181,15 +215,17 @@ def run_policy_list(cfg: DictConfig, policies: list[str]) -> None:
     else:
         out_dir = Path("./eval_out").resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    variants = resolve_ego_variants(cfg)
     print_run_plan(
         manifest_path=manifest_path,
         rows=rows,
         policies=policies,
         out_dir=out_dir,
+        variants=variants,
     )
 
     model_paths = _model_paths(cfg, policies)
-    baselines = plan_baselines(policies)
+    baselines = plan_baselines(policies, variants)
 
     input_manifest = out_dir / "input_manifest.jsonl"
     input_manifest.write_text(
@@ -197,7 +233,11 @@ def run_policy_list(cfg: DictConfig, policies: list[str]) -> None:
         encoding="utf-8",
     )
     gif_cfg = cfg.get("gif") or {}
+    save_gifs = _bool(gif_cfg.get("enabled"))
     jobs = max(1, int(cfg.get("jobs") or 1))
+    if save_gifs and jobs > 1:
+        print("gif.enabled=true: jobs=1 (Panda3D ShowBase is not thread-safe)")
+        jobs = 1
     bench_root = out_dir / "benchmark" / "full" / "policy_eval"
 
     def _one(policy: str, variant: str, shard_rows: list[dict], shard_out: Path) -> None:
@@ -216,7 +256,7 @@ def run_policy_list(cfg: DictConfig, policies: list[str]) -> None:
             skip_error_episodes=_bool(cfg.skip_error_episodes),
             emit_replay_sidecar=True,
             replay_root=out_dir / "runs" / "var_0" / f"{policy}_{variant}" / "replays",
-            save_gifs=_bool(gif_cfg.get("enabled")),
+            save_gifs=save_gifs,
             gif_dir=Path(str(gif_cfg.dir)) if gif_cfg.get("dir") else None,
             gif_window_m=float(gif_cfg.get("window_m") or 80.0),
             hide_signs=_bool(cfg.hide_signs),

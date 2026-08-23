@@ -31,7 +31,8 @@ Sign rules live under `[signs/](signs/README.md)`. Shared engine code is
 rows in `signs/<group>/expand.py` via `generate(cfg, scenes)`.
 
 `**run/**` — wrap the env, load a policy, apply a row, place plates, step,
-optional GIF. One policy is `run policy=idm sign=yield`. Several policies:
+optional GIF. One policy is `run policy=idm sign=yield` (`policy=` is a
+single name — not a list). Several policies:
 `run policies=[idm,plant2] sign=yield`. All registered policies:
 `run policies=all sign=yield` (or `sign=all`). Without `manifest=`, `run`
 reads `data/runs/<sign>/test/`.
@@ -83,8 +84,14 @@ python -m traffic_bench.eval manifest sign=all paths.split=test
 python -m traffic_bench.eval manifest sign=yield,stop,main_road paths.split=train
 # after sign=all / a list: per-sign scenes + rows, then totals
 
-# closed-loop: default input is data/runs/<sign>/test/
+# closed-loop: test/ if present, else debug/latest
 python -m traffic_bench.eval run policy=idm sign=yield
+python -m traffic_bench.eval run policy=idm sign=all gif.enabled=true
+# debug: both rule policies, default ego only, GIFs
+python -m traffic_bench.eval run \
+    policies=[idm,comprehensive_rule_expert] \
+    ego_variants=default \
+    sign=all gif.enabled=true
 python -m traffic_bench.eval run policies=all sign=yield
 python -m traffic_bench.eval run policies=all sign=all
 python -m traffic_bench.eval run policy=idm gif.enabled=true manifest=data/runs/yield/debug
@@ -93,6 +100,8 @@ python -m traffic_bench.eval run policy=idm gif.enabled=true manifest=data/runs/
 python -m traffic_bench.eval metrics csv --episodes-root <eval_out>/benchmark --out <eval_out>/metrics_per_episode.csv
 python -m traffic_bench.eval metrics aggregate --csv <eval_out>/metrics_per_episode.csv --out-dir <eval_out>
 python -m traffic_bench.eval metrics report --run-root <eval_out>
+# one overall report from per-sign CSVs (also runs at the end of sign=all)
+python -m traffic_bench.eval metrics combine sign=all
 ```
 
 Hydra overrides on `manifest`:
@@ -147,6 +156,11 @@ Many policies + report (`plant2_ft` loads the newest `*.ckpt` under
 python -m traffic_bench.eval run \
     policies=[idm,comprehensive_rule_expert,plant2_ft] \
     sign=stop
+# only default ego (skip s1–s4):
+python -m traffic_bench.eval run \
+    policies=[idm,comprehensive_rule_expert] \
+    ego_variants=default \
+    sign=all gif.enabled=true
 ```
 
 `policies=all` is the registered set: `idm` and `comprehensive_rule_expert` each

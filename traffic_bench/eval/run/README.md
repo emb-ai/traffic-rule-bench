@@ -8,11 +8,12 @@ python -m traffic_bench.eval run policies=all sign=yield
 python -m traffic_bench.eval run policies=[idm,plant2] manifest=data/runs/yield/debug
 ```
 
-`policy=` runs one policy. `policies=[…]` or `policies=all` is the same runner
+`policy=` runs one policy (a name, not a list). `policies=[…]` or `policies=all` is the same runner
 in a loop ([`policies.py`](policies.py)), then `metrics`. Without `manifest=`,
-`sign=` reads `data/runs/<sign>/test/`. `manifest=…/debug` follows
+`sign=` reads `data/runs/<sign>/test/` if it exists, otherwise `debug/latest`.
+`manifest=…/debug` follows
 `debug/latest` (or the last timestamp). IDM-family policies in the list expand
-to ego variants `default,s1–s4`.
+to ego variants `default,s1–s4` unless `ego_variants=default` (or a list).
 
 | File | Role |
 | --- | --- |

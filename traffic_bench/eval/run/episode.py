@@ -27,6 +27,7 @@ from traffic_bench.eval.engine.sim.top_down_path_conflict_patch import (
     is_path_conflict_overlay_enabled,
     set_path_conflict_overlay_enabled,
 )
+from traffic_bench.eval.engine.sim.top_down_local_film_patch import apply_top_down_local_film_patch
 from traffic_bench.eval.engine.sim.sign_eval import (
     _ego_at_fault_for_crash,
     _ego_in_sign_zone,
@@ -38,6 +39,7 @@ from traffic_bench.eval.engine.sim.sign_eval import (
 apply_metadrive_sumo_via_patch()
 apply_top_down_violations_text_patch()
 apply_top_down_path_conflict_overlay_patch()
+apply_top_down_local_film_patch()
 
 from traffic_bench.envs.sumo_env import TrafficSignSumoEnv
 from traffic_bench.envs.sumo_traffic_manager import SumoTrafficManager
@@ -873,15 +875,12 @@ def run_one_episode(
         pkl_path_str: str | None = None
         dump_error: str | None = None
 
+        scene_uid = scene_uid_from_row(row, seed)
         if replay_root is not None:
             try:
                 _sign_for_path = (row.get("_sign_code") or row.get("sign_code")
                                   or row.get("pdd_code") or row.get("sign_type") or "")
                 sign_slug = str(_sign_for_path).replace(".", "_")
-                scene_id_for_uid = row.get("scene_id") or f"scene_{seed}"
-                lane_for_uid = int(row.get("spawn_lane_num", 0) or 0)
-                var_for_uid = int(row.get("var_idx", 0) or 0)
-                scene_uid = f"{scene_id_for_uid}_lane{lane_for_uid}_seed{seed}_v{var_for_uid}"
                 expert_subdir = f"{policy_type}_{ego_variant}" if ego_variant else policy_type
 
                 out_replay = (Path(replay_root) / sign_slug / "by_sign" / sign_slug
@@ -964,7 +963,7 @@ def run_one_episode(
                     ),
                 }
                 sidecar = {
-                    "scene_id": scene_id_for_uid,
+                    "scene_id": row.get("scene_id") or f"scene_{seed}",
                     "scene_uid": scene_uid,
                     "backend": "sumo",
                     "pdd_code": (row.get("pdd_code") or row.get("sign_code")
@@ -1002,6 +1001,8 @@ def run_one_episode(
             "ok": True,
             "backend": "sumo",
             "scene_id": row.get("scene_id"),
+            "scene_uid": scene_uid,
+            "policy": policy_type,
             "sign_type": row.get("_sign_code") or row.get("sign_code") or row.get("pdd_code") or row.get("sign_type"),
             "seed": seed,
             "total_reward": total_reward,
@@ -1064,6 +1065,14 @@ def run_one_episode(
             except Exception:
                 pass
 
+
+
+def scene_uid_from_row(row: dict, seed: int | None = None) -> str:
+    resolved_seed = int(seed if seed is not None else row.get("seed") or row.get("deterministic_seed") or 0)
+    scene_id = row.get("scene_id") or f"scene_{resolved_seed}"
+    lane = int(row.get("spawn_lane_num", 0) or 0)
+    var = int(row.get("var_idx", 0) or 0)
+    return f"{scene_id}_lane{lane}_seed{resolved_seed}_v{var}"
 
 
 def _episode_key_from_row(row: dict) -> tuple[str, str, int]:

@@ -124,6 +124,19 @@ def _ensure_dict(v) -> dict:
     return v if isinstance(v, dict) else {}
 
 
+def _scene_uid_from_episode(ep: dict) -> str | None:
+    uid = ep.get("scene_uid")
+    if uid:
+        return str(uid)
+    scene_id = ep.get("scene_id")
+    if not scene_id:
+        return None
+    seed = int(ep.get("seed") or 0)
+    lane = int(ep.get("spawn_lane_num", 0) or 0)
+    var = int(ep.get("var_idx", 0) or 0)
+    return f"{scene_id}_lane{lane}_seed{seed}_v{var}"
+
+
 def _episode_to_replay(ep: dict) -> dict:
     """Normalize a run_benchmark `episodes_*.jsonl` row into the replay-shaped dict
     that `_build_row` consumes.
@@ -175,7 +188,7 @@ def _episode_to_replay(ep: dict) -> dict:
     pdd = ep.get("sign_type") or ep.get("pdd_code") or ""
     return {
         "scene_id": ep.get("scene_id"),
-        "scene_uid": ep.get("scene_uid"),
+        "scene_uid": _scene_uid_from_episode(ep),
         "backend": ep.get("backend") or "",
         "pdd_code": pdd,
         "sign_slug": ep.get("sign_slug") or (str(pdd).replace(".", "_") if pdd else ""),
