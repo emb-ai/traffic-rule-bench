@@ -38,10 +38,14 @@ from traffic_bench.eval.manifest.types import (
     ScenarioConfig,
     SimulationConfig,
 )
+from traffic_bench.eval.run_layout import (
+    point_debug_latest,
+    register_path_resolvers,
+    snapshot_output_base_and_name,
+)
 from traffic_bench.eval.sign_registry import (
     get_profile,
     output_dir as profile_output_dir,
-    resolve_repo_path,
     scenes_dir as profile_scenes_dir,
 )
 from traffic_bench.scene_collection.sign_scenes.materialize.pool_index import (
@@ -79,46 +83,44 @@ def write_run_config(
     """Snapshot the resolved Hydra cfg plus the train/test scene filter actually used."""
     payload = OmegaConf.to_container(cfg, resolve=True)
     paths = payload.setdefault("paths", {})
+    output_base, experiment_name = snapshot_output_base_and_name(experiment_dir)
     paths["scenes_dir"] = _repo_rel(scenes_dir)
-    paths["output_base"] = _repo_rel(experiment_dir.parent)
-    paths["experiment_name"] = experiment_dir.name
+    paths["output_base"] = output_base
+    paths["experiment_name"] = experiment_name
     paths["split"] = str(getattr(cfg.paths, "split", "debug"))
     paths["scene_split"] = scene_split
     path.write_text(OmegaConf.to_yaml(payload), encoding="utf-8")
 
 
-def assert_manifest_dir_clean(experiment_dir: Path) -> None:
+def assert_manifest_dir_clean(experiment_dir: Path, split: str) -> None:
+    if str(split).strip().lower() == "debug":
+        return
     leftover = [
         name
         for name in ("eval_out", "gifs")
         if _nonempty_dir(experiment_dir / name)
     ]
-    if not leftover:
+    has_jsonl = (experiment_dir / "real_manifest.jsonl").is_file()
+    if not leftover and not has_jsonl:
         return
     try:
         shown = experiment_dir.relative_to(REPO_ROOT)
     except ValueError:
         shown = experiment_dir
-    paths = " ".join(str(shown / name) for name in leftover)
+    why = []
+    if has_jsonl:
+        why.append("real_manifest.jsonl")
+    why.extend(f"{name}/" for name in leftover)
     print(
-        f"Refusing to overwrite {shown}: leftover {', '.join(leftover)}/.\n"
-        f"Remove them first:\n"
-        f"  rm -rf {paths}",
+        f"Refusing to overwrite {shown}: already has {', '.join(why)}.\n"
+        f"Remove the folder first:\n"
+        f"  rm -rf {shown}",
         file=sys.stderr,
     )
     raise SystemExit(1)
 
 
-def _register_repo_resolver() -> None:
-    """Make ``${repo:data/runs/yield}`` resolve against the repo root, not cwd."""
-    OmegaConf.register_new_resolver(
-        "repo",
-        lambda rel="": str(resolve_repo_path(rel)),
-        replace=True,
-    )
-
-
-_register_repo_resolver()
+register_path_resolvers()
 
 
 def resolve_gif_model_path(policy: str, model_path: Optional[str]) -> Optional[str]:
@@ -408,7 +410,7 @@ def main(cfg: DictConfig) -> None:
 
     experiment_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     experiment_dir.mkdir(parents=True, exist_ok=True)
-    assert_manifest_dir_clean(experiment_dir)
+    assert_manifest_dir_clean(experiment_dir, str(getattr(cfg.paths, "split", "debug")))
     job = _job_from_hydra(cfg, profile, scenes_dir, experiment_dir)
     config_path = experiment_dir / "config.yaml"
     write_run_config(
@@ -448,10 +450,13 @@ def main(cfg: DictConfig) -> None:
         print(f"  - Experiment directory: {experiment_dir}")
         print(f"  - GIF directory: {resolved_gif_dir}")
 
+    latest = point_debug_latest(experiment_dir)
     print("\nOutput files:")
     print(f"  - Manifest: {experiment_dir / 'real_manifest.jsonl'}")
     print(f"  - Repro: {experiment_dir / 'repro'}")
     print(f"  - Config: {config_path}")
+    if latest is not None:
+        print(f"  - Latest: {latest}")
 
 
 if __name__ == "__main__":

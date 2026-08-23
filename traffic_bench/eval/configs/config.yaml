@@ -2,6 +2,7 @@
 #   python -m traffic_bench.eval manifest sign=yield
 #   python -m traffic_bench.eval manifest sign=direction/right
 #   python -m traffic_bench.eval manifest sign=yield paths.split=train
+# debug → data/runs/<sign>/debug/<timestamp>/ ; train/test refuse overwrite
 
 defaults:
   - _self_
@@ -19,7 +20,7 @@ paths:
   scenes_dir: data/scenes/${sign}
   output_base: data/runs/${sign}
   split: debug
-  experiment_name: ${paths.split}
+  experiment_name: ${run_folder:${paths.split}}
 
 scenario:
   max_scenarios: 10

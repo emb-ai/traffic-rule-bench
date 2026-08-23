@@ -11,6 +11,7 @@ from typing import Any
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
+from traffic_bench.eval.run_layout import resolve_manifest_in_dir
 from traffic_bench.eval.engine.sim.checkpoints import (
     DEFAULT_MODEL_PATHS,
     NN_NEED_CHECKPOINT,
@@ -55,10 +56,10 @@ def resolve_manifest_file(raw: str | Path) -> Path:
     else:
         path = path.resolve()
     if path.is_dir():
-        candidate = path / "real_manifest.jsonl"
-        if not candidate.is_file():
-            raise FileNotFoundError(f"No real_manifest.jsonl in {path}")
-        return candidate
+        found = resolve_manifest_in_dir(path)
+        if found.parent.resolve() != path.resolve():
+            print(f"Using latest debug manifest: {found}")
+        return found
     if not path.is_file():
         raise FileNotFoundError(f"manifest not found: {path}")
     return path

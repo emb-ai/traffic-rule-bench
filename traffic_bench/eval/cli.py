@@ -7,23 +7,17 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
-from omegaconf import OmegaConf
-
+from traffic_bench.eval.run_layout import latest_debug_dir, register_path_resolvers
 from traffic_bench.eval.sign_registry import (
     SignProfile,
     default_test_manifest,
     hydra_sign_override,
-    resolve_repo_path,
     resolve_sign_token,
     runs_dir,
     profiles_from_sign_value,
 )
 
-OmegaConf.register_new_resolver(
-    "repo",
-    lambda rel="": str(resolve_repo_path(rel)),
-    replace=True,
-)
+register_path_resolvers()
 
 
 def _take_override(argv: List[str], key: str) -> Tuple[Optional[str], List[str]]:
@@ -112,9 +106,17 @@ def print_manifest_sign_summary(
     rows: list[tuple[str, int, int, str]] = []
     for profile in profiles:
         run_dir = runs_dir(profile) / folder
+        if folder == "debug":
+            latest = latest_debug_dir(run_dir)
+            if latest is not None:
+                run_dir = latest
+                rel = f"data/runs/{profile.data_subdir}/debug/{latest.name}"
+            else:
+                rel = f"data/runs/{profile.data_subdir}/debug"
+        else:
+            rel = f"data/runs/{profile.data_subdir}/{folder}"
         n_scenes = _summary_n_scenes(run_dir)
         n_rows = _jsonl_rows(run_dir / "real_manifest.jsonl")
-        rel = f"data/runs/{profile.data_subdir}/{folder}"
         rows.append((hydra_sign_override(profile), n_scenes, n_rows, rel))
     name_w = max(4, max(len(r[0]) for r in rows))
     print("\n======== manifest summary ========")

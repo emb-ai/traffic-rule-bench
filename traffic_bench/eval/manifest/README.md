@@ -2,6 +2,7 @@
 
 ```bash
 python -m traffic_bench.eval manifest sign=yield
+# → data/runs/yield/debug/<timestamp>/ + debug/latest
 python -m traffic_bench.eval manifest sign=direction/right
 python -m traffic_bench.eval manifest sign=yield paths.split=train
 python -m traffic_bench.eval manifest sign=all paths.split=test
