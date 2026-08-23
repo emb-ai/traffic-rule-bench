@@ -12,7 +12,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-from traffic_bench.envs.sumo_traffic_manager import SumoTrafficManager
+from traffic_bench.envs.traffic import SumoTrafficManager
 
 from traffic_bench.eval.engine.map.lane_keys import lane_edge_id, make_lane_key
 

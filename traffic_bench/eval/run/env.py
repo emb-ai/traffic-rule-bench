@@ -6,8 +6,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from traffic_bench.envs.sumo_env import TrafficSignSumoEnv
-from traffic_bench.envs.sumo_traffic_manager import SumoTrafficManager
+from traffic_bench.envs.sumo import TrafficSignSumoEnv
+from traffic_bench.envs.traffic import SumoTrafficManager
 from traffic_bench.eval.engine.expand.manifest_config import (
     DEFAULT_DESTINATION_MAX_ALONG_M,
     DEFAULT_STOP_WAIT_STEPS,

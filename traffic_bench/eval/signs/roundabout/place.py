@@ -25,7 +25,7 @@ from traffic_bench.eval.engine.map.roundabout_yield_zone import (
     entry_conflict_ring_edges,
 )
 from traffic_bench.eval.signs.roundabout.spawn import roundabout_meta_ring_kwargs
-from traffic_bench.signs.priority_signs import RoundaboutSign, RoundaboutYieldSign
+from traffic_bench.signs.junction import RoundaboutSign, RoundaboutYieldSign
 
 
 def row_is_roundabout(row: dict) -> bool:

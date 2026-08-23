@@ -41,10 +41,10 @@ apply_top_down_violations_text_patch()
 apply_top_down_path_conflict_overlay_patch()
 apply_top_down_local_film_patch()
 
-from traffic_bench.envs.sumo_env import TrafficSignSumoEnv
-from traffic_bench.envs.sumo_traffic_manager import SumoTrafficManager
-from traffic_bench.agents.policies.comprehensive_rule_expert import ComprehensiveRuleExpertPolicy
-from traffic_bench.agents.policies.rule_compliant_expert import RuleCompliantExpertPolicy
+from traffic_bench.envs.sumo import TrafficSignSumoEnv
+from traffic_bench.envs.traffic import SumoTrafficManager
+from traffic_bench.agents.idm_rule import ComprehensiveRuleExpertPolicy
+from traffic_bench.agents.ppo_rule import RuleCompliantExpertPolicy
 from metadrive.policy.idm_policy import ModifiedIDMPolicy
 from metadrive.policy.expert_policy import ExpertPolicy
 from traffic_bench.eval.engine.traffic.ego_defaults import (
@@ -53,7 +53,7 @@ from traffic_bench.eval.engine.traffic.ego_defaults import (
     numpy_legacy_seed,
     sample_ego_params,
 )
-from traffic_bench.signs.priority_signs import (
+from traffic_bench.signs.junction import (
     MainRoadSign,
     YieldSign,
 )

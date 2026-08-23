@@ -42,7 +42,7 @@ _NO_ENTRY_TYPES = frozenset({"no_entry"})
 
 _LOG = {
     "one_way": "OneWaySign",
-    "direction": "DirectionSign",
+    "direction": "LaneAllowedDirectionSign",
     "no_turn": "NoTurnSign",
     "no_entry": "NoEntrySign",
 }

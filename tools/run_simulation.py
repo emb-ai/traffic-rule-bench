@@ -29,7 +29,7 @@ from traffic_bench.eval.engine.sim.checkpoints import (
 )
 
 # Policy categories
-IDM_FAMILY = {"idm", "modified_idm", "comprehensive_rule_expert"}
+IDM_FAMILY = {"idm", "comprehensive_rule_expert"}
 NN_NO_CHECKPOINT = {"rule_compliant", "ppo_lidar"}
 ALL_POLICIES = IDM_FAMILY | NN_NEED_CHECKPOINT | NN_NO_CHECKPOINT
 
@@ -74,8 +74,8 @@ def build_catalog_row(scene_dir: Path, meta: dict, var_idx: int = 0) -> dict:
 
 def build_env(catalog_row: dict, scenes_root: Path, traffic_density: float, max_steps: int):
     """Build the SUMO environment."""
-    from traffic_bench.envs.sumo_env import TrafficSignSumoEnv
-    from traffic_bench.envs.sumo_traffic_manager import SumoTrafficManager
+    from traffic_bench.envs.sumo import TrafficSignSumoEnv
+    from traffic_bench.envs.traffic import SumoTrafficManager
     
     SumoTrafficManager.EGO_SAFE_RADIUS = 15
     
@@ -129,7 +129,7 @@ def load_policy_models(policy: str, model_path: str | None, plant2_action_mode: 
     if policy == "carl":
         if not model_path:
             raise ValueError("--model-path is required for --policy carl")
-        from traffic_bench.agents.policies.plain_carl_policy import PlainCarlPolicy
+        from traffic_bench.agents.carl import PlainCarlPolicy
         PlainCarlPolicy.set_checkpoint(model_path, device=device)
         policy_cls = PlainCarlPolicy
         
@@ -137,7 +137,7 @@ def load_policy_models(policy: str, model_path: str | None, plant2_action_mode: 
         if not model_path:
             raise ValueError(f"--model-path is required for --policy {policy}")
         PLANT2_PATH = SDC_ROOT / "plant2"
-        from traffic_bench.agents.policies.plain_plant2_policy import PlainPlanT2Policy
+        from traffic_bench.agents.plant2 import PlainPlanT2Policy
         PlainPlanT2Policy.set_checkpoint(
             model_path, PLANT2_PATH, device=device, action_mode=plant2_action_mode,
         )
@@ -146,7 +146,7 @@ def load_policy_models(policy: str, model_path: str | None, plant2_action_mode: 
     elif policy == "carl_rule":
         if not model_path:
             raise ValueError("--model-path is required for --policy carl_rule")
-        from traffic_bench.agents.policies.carl_sign_compliant import CarlSignCompliantPolicy
+        from traffic_bench.agents.carl_rule import CarlSignCompliantPolicy
         CarlSignCompliantPolicy.set_checkpoint(model_path, device=device)
         policy_cls = CarlSignCompliantPolicy
         
@@ -154,7 +154,7 @@ def load_policy_models(policy: str, model_path: str | None, plant2_action_mode: 
         if not model_path:
             raise ValueError("--model-path is required for --policy plant2_rule")
         PLANT2_PATH = SDC_ROOT / "plant2"
-        from traffic_bench.agents.policies.plant2_sign_compliant import PlanT2SignCompliantPolicy
+        from traffic_bench.agents.plant2_rule import PlanT2SignCompliantPolicy
         PlanT2SignCompliantPolicy.set_checkpoint(
             model_path, PLANT2_PATH, device=device, action_mode=plant2_action_mode,
         )
@@ -170,17 +170,13 @@ def make_policy(policy_type: str, vehicle, seed: int, models: dict | None = None
     # IDM family
     if policy_type == "idm":
         return IDMPolicy(vehicle, seed)
-    
-    if policy_type == "modified_idm":
-        from traffic_bench.agents.policies.modified_idm_sign_compliant import ModifiedIDMSignCompliantPolicy
-        return ModifiedIDMSignCompliantPolicy(vehicle, seed)
-    
+
     if policy_type == "comprehensive_rule_expert":
-        from traffic_bench.agents.policies.comprehensive_rule_expert import ComprehensiveRuleExpertPolicy
+        from traffic_bench.agents.idm_rule import ComprehensiveRuleExpertPolicy
         return ComprehensiveRuleExpertPolicy(vehicle, seed)
     
     if policy_type == "rule_compliant":
-        from traffic_bench.agents.policies.rule_compliant_expert import RuleCompliantExpertPolicy
+        from traffic_bench.agents.ppo_rule import RuleCompliantExpertPolicy
         return RuleCompliantExpertPolicy(vehicle, seed)
     
     if policy_type == "ppo_lidar":

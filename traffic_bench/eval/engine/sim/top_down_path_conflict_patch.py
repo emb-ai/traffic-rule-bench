@@ -137,7 +137,7 @@ def _draw_path_conflict_overlays_on_frame(renderer) -> None:
     if ego is None or canvas is None:
         return
 
-    from traffic_bench.signs.priority_signs import YieldSign
+    from traffic_bench.signs.junction import YieldSign
 
     for sign in getattr(sign_mgr, "signs", []) or []:
         if not isinstance(sign, YieldSign):

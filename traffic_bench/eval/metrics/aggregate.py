@@ -31,10 +31,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-SIGN_BENCH_DIR = SCRIPT_DIR.parent
-ORACLE_DIR = SIGN_BENCH_DIR.parent / "oracle"
 
-from traffic_bench.oracle.select_experts import (
+from traffic_bench.oracle.select.filter import (
     BETA_DEFAULT,
     HORIZON_DEFAULT,
     SIGN_CLASS_MAP,

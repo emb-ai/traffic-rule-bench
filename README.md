@@ -47,7 +47,7 @@ traffic-rule-bench/
 ├── data/                       # gitignored working artifacts
 │   ├── scenes/<sign>/          # from 🤗 emb-ai/traffic-sign-bench (yield, crosswalk, …)
 │   ├── runs/<sign>/<ts>/       # manifest, gifs, eval_out
-│   └── trajectories/<sign>/    # collect_trajectories → finetune
+│   └── trajectories/<sign>/    # oracle collect → finetune
 ├── tools/                      # ad-hoc visualization & debug scripts
 ├── finetune/                   # PlanT2 fine-tuning on oracle trajectories
 ├── checkpoints/
@@ -56,7 +56,7 @@ traffic-rule-bench/
 └── pyproject.toml
 ```
 
-Pipeline: `python -m traffic_bench.scene_collection` (`collect` → `assign` → `materialize` / `prepare`) → `data/scenes/<sign>` → `python -m traffic_bench.eval manifest` (writes `data/runs/<sign>/<ts>/`) → `run` / `pipeline`, and separately `oracle/collect_trajectories` → `data/trajectories/<sign>/` → `finetune/`.
+Pipeline: `python -m traffic_bench.scene_collection` (`collect` → `assign` → `materialize` / `prepare`) → `data/scenes/<sign>` → `python -m traffic_bench.eval manifest` (writes `data/runs/<sign>/<ts>/`) → `run` / `pipeline`, and separately `oracle/collect` → `data/trajectories/<sign>/` → `finetune/`.
 
 ## 🚀 Quick start
 
@@ -120,71 +120,68 @@ For CaRL and the PlanT2 pretrain weights, follow the download instructions in ea
 
 ### Run Evaluation
 
-Each manifest in `test/<sign>/<file>.jsonl` is a self-contained set of scenes for one sign. Run a baseline against any manifest with `run_benchmark.py`. Each run produces `episodes_<policy>.jsonl` plus per-episode `replay.json` sidecars (needed for the metrics pipeline).
+Each manifest in `data/runs/<sign>/<ts>/real_manifest.jsonl` is a self-contained set of scenes for one sign. Run a baseline with `python -m traffic_bench.eval run`. Each run produces `episodes_<policy>.jsonl` plus optional per-episode `replay.json` sidecars.
 
 #### 1. One baseline on one sign
 
 ```bash
-python -m traffic_bench.eval.run_benchmark \
-    --policy   idm \
-    --run-name idm_2_5 \
-    --manifest test/2_5/real_manifest.jsonl \
-    --emit-replay-sidecar
+python -m traffic_bench.eval run \
+    policy=idm \
+    run_name=idm_stop \
+    manifest=data/runs/stop/<ts>/real_manifest.jsonl \
+    emit_replay_sidecar=true
 ```
 
-Models that require checkpoints (`carl`, `plant2`, `*_rule`) need `--model-path`:
+Models that require checkpoints (`carl`, `plant2`, `*_rule`) need `model_path=`:
 
 ```bash
-python -m traffic_bench.eval.run_benchmark \
-    --policy     plant2 \
-    --run-name   plant2_2_5 \
-    --manifest   test/2_5/real_manifest.jsonl \
-    --model-path checkpoints/plant2/epoch%3D029_final_3.ckpt \
-    --emit-replay-sidecar
+python -m traffic_bench.eval run \
+    policy=plant2 \
+    run_name=plant2_stop \
+    manifest=data/runs/stop/<ts>/real_manifest.jsonl \
+    model_path=checkpoints/plant2/epoch%3D029_final_3.ckpt \
+    emit_replay_sidecar=true
 ```
 
 #### 2. Loop over all signs / all manifests
 
 ```bash
-for f in test/*/*.jsonl; do
-    sign=$(basename "$(dirname "$f")")
-    src=$(basename "$f" .jsonl)
-    python -m traffic_bench.eval.run_benchmark \
-        --policy   idm \
-        --run-name "idm_${sign}_${src}" \
-        --manifest "$f" \
-        --emit-replay-sidecar
+for f in data/runs/*/*/real_manifest.jsonl; do
+    sign=$(basename "$(dirname "$(dirname "$f")")")
+    python -m traffic_bench.eval run \
+        policy=idm \
+        run_name="idm_${sign}" \
+        manifest="$f" \
+        emit_replay_sidecar=true
 done
 ```
 
 Repeat the loop for each baseline you want to evaluate (`comprehensive_rule_expert`, `carl`, `plant2`, etc.).
 
-Yield (2.4) uses the same runner; pass a 2.4 manifest:
+Yield (2.4) uses the same runner; pass a yield manifest:
 
 ```bash
-python -m traffic_bench.eval.run_benchmark \
-    --policy   idm \
-    --run-name idm_yield \
-    --manifest test/2_4/real_manifest.jsonl \
-    --sign-type 2.4 \
-    --emit-replay-sidecar
+python -m traffic_bench.eval run \
+    policy=idm \
+    run_name=idm_yield \
+    manifest=data/runs/yield/<ts>/real_manifest.jsonl \
+    emit_replay_sidecar=true
 ```
 
 ### Compute Metrics
 
 ```bash
-python -m traffic_bench.eval.eval_pipeline \
-    --policies idm \
-    --manifest test/2_5/real_manifest.jsonl \
-    --scenes-root scenes
+python -m traffic_bench.eval run \
+    policies=[idm] \
+    manifest=data/runs/stop/<ts>/real_manifest.jsonl
 ```
 
-The pipeline writes `metrics_per_episode.csv`, aggregations, and `reports/report_cumulative.md`.
+That writes `metrics_per_episode.csv`, aggregations, and `reports/report_cumulative.md`.
 
 Oracle baseline from an existing CSV:
 
 ```bash
-python -m traffic_bench.oracle.build_oracle_baseline \
+python -m traffic_bench.oracle.report.baseline \
     --csv eval_out/metrics_per_episode.csv
 ```
 

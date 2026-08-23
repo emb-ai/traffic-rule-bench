@@ -174,11 +174,11 @@ def dual_path_role_dirs(sign_code: str) -> tuple[list[str], list[str]]:
 def resolve_sign_class(sign_code: str | None = None, *, family: str | None = None):
     spec = get_spec(sign_code, family=family)
     if spec.family == "one_way":
-        from traffic_bench.signs.one_way_entry_sign import OneWayEntrySignL, OneWayEntrySignR
+        from traffic_bench.signs.dual_path.one_way import OneWayEntrySignL, OneWayEntrySignR
 
         return {"5.7.1": OneWayEntrySignR, "5.7.2": OneWayEntrySignL}[spec.sign_code]
     if spec.family == "direction":
-        from traffic_bench.signs.lane_allowed_direction_sign import (
+        from traffic_bench.signs.dual_path.direction import (
             LaneAllowedDirectionSign4_1_1,
             LaneAllowedDirectionSign4_1_2,
             LaneAllowedDirectionSign4_1_3,
@@ -196,10 +196,10 @@ def resolve_sign_class(sign_code: str | None = None, *, family: str | None = Non
             "4.1.6": LaneAllowedDirectionSign4_1_6,
         }[spec.sign_code]
     if spec.family == "no_turn":
-        from traffic_bench.signs.no_turn_allowed import NoLeftTurnSign, NoRightTurnSign
+        from traffic_bench.signs.dual_path.no_turn import NoLeftTurnSign, NoRightTurnSign
 
         return {"3.18.1": NoRightTurnSign, "3.18.2": NoLeftTurnSign}[spec.sign_code]
-    from traffic_bench.signs.no_entry_sign import NoEntrySign
+    from traffic_bench.signs.dual_path.no_entry import NoEntrySign
 
     return NoEntrySign
 

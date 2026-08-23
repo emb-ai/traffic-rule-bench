@@ -25,7 +25,7 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
     if policy == "carl":
         if not model_path:
             raise ValueError("--model-path is required for --policy carl")
-        from traffic_bench.agents.policies.plain_carl_policy import PlainCarlPolicy
+        from traffic_bench.agents.carl import PlainCarlPolicy
         device = "cuda" if torch.cuda.is_available() else "cpu"
         PlainCarlPolicy.set_checkpoint(model_path, device=device)
         policy_cls = PlainCarlPolicy
@@ -33,7 +33,7 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
         if not model_path:
             raise ValueError(f"--model-path is required for --policy {policy}")
         PLANT2_PATH = SDC_ROOT / "plant2"
-        from traffic_bench.agents.policies.plain_plant2_policy import PlainPlanT2Policy
+        from traffic_bench.agents.plant2 import PlainPlanT2Policy
         device = "cuda" if torch.cuda.is_available() else "cpu"
         PlainPlanT2Policy.set_checkpoint(
             model_path, PLANT2_PATH, device=device, action_mode=plant2_action_mode,
@@ -42,7 +42,7 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
     elif policy == "carl_rule":
         if not model_path:
             raise ValueError("--model-path is required for --policy carl_rule")
-        from traffic_bench.agents.policies.carl_sign_compliant import CarlSignCompliantPolicy
+        from traffic_bench.agents.carl_rule import CarlSignCompliantPolicy
         device = "cuda" if torch.cuda.is_available() else "cpu"
         CarlSignCompliantPolicy.set_checkpoint(model_path, device=device)
         policy_cls = CarlSignCompliantPolicy
@@ -50,7 +50,7 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
         if not model_path:
             raise ValueError("--model-path is required for --policy plant2_rule")
         PLANT2_PATH = SDC_ROOT / "plant2"
-        from traffic_bench.agents.policies.plant2_sign_compliant import PlanT2SignCompliantPolicy
+        from traffic_bench.agents.plant2_rule import PlanT2SignCompliantPolicy
         device = "cuda" if torch.cuda.is_available() else "cpu"
         PlanT2SignCompliantPolicy.set_checkpoint(
             model_path, PLANT2_PATH, device=device, action_mode=plant2_action_mode,

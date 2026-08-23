@@ -28,12 +28,12 @@ for p in (str(METADRIVE_DIR),):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from traffic_bench.envs.sumo_env import TrafficSignSumoEnv
+from traffic_bench.envs.sumo import TrafficSignSumoEnv
 
 
 def _make_policy(veh, seed):
     try:
-        from traffic_bench.agents.policies.comprehensive_rule_expert import ComprehensiveRuleExpertPolicy
+        from traffic_bench.agents.idm_rule import ComprehensiveRuleExpertPolicy
         return ComprehensiveRuleExpertPolicy(veh, seed)
     except Exception:
         try:

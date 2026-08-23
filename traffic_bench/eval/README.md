@@ -172,7 +172,7 @@ Always pass an explicit train manifest:
 
 ```bash
 SIGN=yield MANIFEST=data/runs/yield/train/real_manifest.jsonl \
-  ./traffic_bench/oracle/collect_trajectories/collect_trajectories.sh
+  ./traffic_bench/oracle/collect/collect.sh
 ```
 
 ## Eval id → group

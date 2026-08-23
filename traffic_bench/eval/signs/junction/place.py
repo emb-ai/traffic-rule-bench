@@ -20,7 +20,7 @@ from traffic_bench.eval.engine.map.junction_sign_placement import (
     sign_longitudinal_offset,
     sign_placement_long,
 )
-from traffic_bench.signs.priority_signs import (
+from traffic_bench.signs.junction import (
     MainRoadSign,
     RightHandYieldSign,
     SecondaryRoadLeftSign,

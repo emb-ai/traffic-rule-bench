@@ -171,7 +171,7 @@ class MetaDriveExtractor:
 
             SpeedLimitSignCls = None
             try:
-                from traffic_bench.signs.speed_limit_sign import SpeedLimitSign as SpeedLimitSignCls  # type: ignore
+                from traffic_bench.signs.speed.limit import SpeedLimitSign as SpeedLimitSignCls  # type: ignore
             except Exception:
                 SpeedLimitSignCls = None
 
@@ -521,7 +521,7 @@ class MetaDriveExtractor:
             
             StopSignCls = None
             try:
-                from traffic_bench.signs.stop_sign import StopSign as StopSignCls  # type: ignore
+                from traffic_bench.signs.junction.yield_sign import StopSign as StopSignCls  # type: ignore
             except Exception:
                 StopSignCls = None
 

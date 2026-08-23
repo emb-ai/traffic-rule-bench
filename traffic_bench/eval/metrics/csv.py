@@ -29,10 +29,7 @@ import re
 import sys
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-ORACLE_DIR = SCRIPT_DIR.parent.parent / "oracle"
-
-from traffic_bench.oracle.select_experts import (
+from traffic_bench.oracle.select.filter import (
     SIGN_CLASS_MAP,
     NO_ENTRY_SIGNS,
     HORIZON_DEFAULT,
@@ -65,11 +62,11 @@ POLICY_DISPLAY_NAME: dict[str, str] = {
 # already points those PDDs at RightHandYieldSign / YieldSign (the classes that
 # own the approach zone and emit violations).
 TARGET_CLASS_SUBCLASSES: dict[str, list[str]] = {
-    "SpeedLimitSign":         ["SpeedLimitSign15"],
-    "EndOfSpeedLimitSign":    ["EndOfSpeedLimitSign15"],
-    "ZoneSpeedLimitSign":     ["ZoneSpeedLimitSign15"],
-    "EndOfZoneSpeedLimitSign":["EndOfZoneSpeedLimitSign15"],
-    "MinimumSpeedLimitSign":  ["MinimumSpeedLimit20"],
+    "SpeedLimitSign":         ["SpeedLimitSign20", "SpeedLimitSign30", "SpeedLimitSign40", "SpeedLimitSign60"],
+    "EndOfSpeedLimitSign":    ["EndOfSpeedLimitSign20", "EndOfSpeedLimitSign30", "EndOfSpeedLimitSign40", "EndOfSpeedLimitSign60"],
+    "ZoneSpeedLimitSign":     ["ZoneSpeedLimitSign20", "ZoneSpeedLimitSign30", "ZoneSpeedLimitSign40", "ZoneSpeedLimitSign60"],
+    "EndOfZoneSpeedLimitSign":["EndOfZoneSpeedLimitSign20", "EndOfZoneSpeedLimitSign30", "EndOfZoneSpeedLimitSign40", "EndOfZoneSpeedLimitSign60"],
+    "MinimumSpeedLimitSign":  ["MinimumSpeedLimit30", "MinimumSpeedLimit40", "MinimumSpeedLimit50", "MinimumSpeedLimit60"],
 }
 
 
@@ -284,7 +281,7 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
     target_compliant_event = (target_violations_event == 0) if target_class else None
     target_compliant_step = (target_violations_step == 0) if target_class else None
 
-    # Build a candidate row in select_experts.passes_filter shape so we can
+    # Build a candidate row in select.filter.passes_filter shape so we can
     # reuse recompute_dest / passes_filter directly. Critically, set
     # `violations_by_class` to per-class counts (event-based, integer per
     # sign-class name) — this is what passes_filter.is_compliant() expects.

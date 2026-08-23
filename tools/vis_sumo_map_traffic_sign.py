@@ -31,9 +31,9 @@ from metadrive.envs.top_down_env import TopDownMetaDrive
 
 from metadrive.policy.idm_policy import ManualControlPolicy
 
-from traffic_bench.signs.stop_sign import StopSign
-from traffic_bench.signs.no_stopping_allowed_sign import NoStoppingAllowedSign
-from traffic_bench.signs.speed_limit_sign import SpeedLimitSign
+from traffic_bench.signs.junction.yield_sign import StopSign
+from traffic_bench.signs.extra.no_stopping import NoStoppingAllowedSign
+from traffic_bench.signs.speed.limit import SpeedLimitSign
 
 SIGN_TYPE_TO_CLASS = {
     "2.5": StopSign,
@@ -42,7 +42,7 @@ SIGN_TYPE_TO_CLASS = {
     
 }
 
-from traffic_bench.envs.sumo_env import TrafficSignSumoEnv
+from traffic_bench.envs.sumo import TrafficSignSumoEnv
         
 
 import re

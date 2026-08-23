@@ -1,7 +1,7 @@
 # finetune/
 
 Fine-tune PlanT2 on oracle/expert trajectories from
-`traffic_bench/oracle/collect_trajectories` (`replay.pkl` + sidecar).
+`traffic_bench/oracle/collect` (`replay.pkl` + sidecar).
 
 Not part of eval / manifest / oracle-selection.
 

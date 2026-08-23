@@ -15,7 +15,7 @@ from traffic_bench.eval.engine.expand.manifest_config import (
     DEFAULT_SIGN_DISTANCE_FROM_START,
 )
 from traffic_bench.eval.engine.map.lane_keys import lane_edge_id
-from traffic_bench.signs.no_traffic_sign import NoTrafficSign
+from traffic_bench.signs.blocked.no_traffic import NoTrafficSign
 
 
 def row_is_blocked_road(row: dict) -> bool:

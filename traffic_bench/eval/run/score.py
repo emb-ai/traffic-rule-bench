@@ -7,7 +7,7 @@ from collections import defaultdict
 import numpy as np
 
 from traffic_bench.eval.engine.sim.sign_eval import _ego_in_sign_zone
-from traffic_bench.signs.priority_signs import MainRoadSign, YieldSign
+from traffic_bench.signs.junction import MainRoadSign, YieldSign
 
 def _is_ego_in_yield_zone(sign_mgr, vehicle) -> bool:
     """True when ego is in a YieldSign / RightHandYieldSign approach zone."""
