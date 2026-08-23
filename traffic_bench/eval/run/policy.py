@@ -32,7 +32,7 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
     elif policy in PLAIN_PLANT2_POLICIES:
         if not model_path:
             raise ValueError(f"--model-path is required for --policy {policy}")
-        PLANT2_PATH = SDC_ROOT / "plant2"
+        PLANT2_PATH = SDC_ROOT / "third_party" / "plant2"
         from traffic_bench.agents.plant2 import PlainPlanT2Policy
         device = "cuda" if torch.cuda.is_available() else "cpu"
         PlainPlanT2Policy.set_checkpoint(
@@ -49,7 +49,7 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
     elif policy == "plant2_rule":
         if not model_path:
             raise ValueError("--model-path is required for --policy plant2_rule")
-        PLANT2_PATH = SDC_ROOT / "plant2"
+        PLANT2_PATH = SDC_ROOT / "third_party" / "plant2"
         from traffic_bench.agents.plant2_rule import PlanT2SignCompliantPolicy
         device = "cuda" if torch.cuda.is_available() else "cpu"
         PlanT2SignCompliantPolicy.set_checkpoint(

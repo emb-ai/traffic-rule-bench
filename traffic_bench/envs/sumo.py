@@ -493,7 +493,6 @@ class TrafficSignSumoEnv(AutoSpawnMixin, BaseEnv):
             f"TREAT_LIGHT_VEHICLE_AS_DRIVING = {LaneNode.TREAT_LIGHT_VEHICLE_AS_DRIVING}"
         )
 
-    @staticmethod
     def _refresh_navigation_after_spawn(self, spawn_lane):
         if spawn_lane is None:
             return

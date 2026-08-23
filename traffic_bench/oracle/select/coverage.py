@@ -21,6 +21,7 @@ import json
 import sys
 from pathlib import Path
 
+from traffic_bench.eval.sign_registry import resolve_repo_path
 from traffic_bench.oracle.select.filter import (
     SIGN_CLASS_MAP,
     MIN_FINAL_STEP,
@@ -41,8 +42,11 @@ def load_rows(roots: list[str]) -> tuple[list[dict], dict]:
     files: list[Path] = []
     for root in roots:
         root_p = Path(root)
-        # <policy>/all_runs.jsonl (current) and <policy>/<legacy-slug>/all_runs.jsonl
+        # <policy>/all_runs.jsonl, shards, and legacy <policy>/<slug>/all_runs.jsonl
         for ledger in root_p.glob("*/all_runs.jsonl"):
+            if not ledger.parent.name.startswith("_"):
+                files.append(ledger)
+        for ledger in root_p.glob("*/all_runs.w*.jsonl"):
             if not ledger.parent.name.startswith("_"):
                 files.append(ledger)
         files += sorted(root_p.glob("*/*/all_runs.jsonl"))
@@ -205,8 +209,12 @@ def main() -> None:
 
     if not args.root:
         sys.exit("ERROR: provide --root")
+    args.root = [str(resolve_repo_path(r)) for r in args.root]
+    if args.catalog:
+        args.catalog = str(resolve_repo_path(args.catalog))
+    if args.manifest:
+        args.manifest = str(resolve_repo_path(args.manifest))
     if not args.catalog and not args.manifest:
-        # try default catalog under first root
         cand = Path(args.root[0]) / "catalog.jsonl"
         if cand.is_file():
             args.catalog = str(cand)
@@ -214,13 +222,19 @@ def main() -> None:
             sys.exit("ERROR: provide --catalog or --manifest")
 
     sign_set = {normalize_sign(s) for s in args.signs}
-    out_dir = Path(args.out_dir)
+    out_dir = resolve_repo_path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     rows, lstats = load_rows(args.root)
     print(f"all_runs files: {lstats['files']}, rows: {lstats['rows']}, "
           f"dups removed: {lstats['dups_removed']}, "
           f"bad json: {lstats['bad_json']}, final: {lstats['rows_final']}")
+    if lstats["rows"] == 0:
+        sys.exit(
+            "ERROR: all_runs.jsonl files are empty under "
+            f"{args.root}. Use the collection OUT_BASE under the repo "
+            "(data/trajectories/<sign>/...), not a leftover path."
+        )
 
     if args.catalog:
         uid2map, uids_by_sign, maps_by_sign = load_catalog(args.catalog, sign_set)

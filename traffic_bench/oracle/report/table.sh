@@ -9,21 +9,46 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/../../.." && pwd)"
+export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+
+_resolve_dir() {
+    local raw="$1"
+    if [ -z "$raw" ]; then
+        echo ""
+        return 1
+    fi
+    if [[ "$raw" = /* ]] && [ -d "$raw" ]; then
+        (cd -- "$raw" && pwd)
+        return 0
+    fi
+    if [ -d "$REPO_ROOT/$raw" ]; then
+        (cd -- "$REPO_ROOT/$raw" && pwd)
+        return 0
+    fi
+    if [ -d "$raw" ]; then
+        (cd -- "$raw" && pwd)
+        return 0
+    fi
+    echo "[FAIL] directory not found: $raw (tried $REPO_ROOT/$raw)" >&2
+    return 1
+}
 
 OUT_BASE="${1:?usage: $0 <OUT_BASE> [experts_dir]}"
-# Resolve relative OUT_BASE against the caller's cwd *before* we cd elsewhere.
-OUT_BASE="$(cd -- "$OUT_BASE" && pwd)"
-EXPERTS_DIR="${2:-$OUT_BASE/experts}"
-if [ -d "$EXPERTS_DIR" ]; then
-    EXPERTS_DIR="$(cd -- "$EXPERTS_DIR" && pwd)"
+OUT_BASE="$(_resolve_dir "$OUT_BASE")"
+if [ -n "${2:-}" ]; then
+    EXPERTS_DIR="$(_resolve_dir "$2")"
+else
+    EXPERTS_DIR="$OUT_BASE/experts"
+    if [ -d "$EXPERTS_DIR" ]; then
+        EXPERTS_DIR="$(cd -- "$EXPERTS_DIR" && pwd)"
+    fi
 fi
 HORIZON="${HORIZON:-1500}"
 
 # Official plate code from SIGN, catalog, or all_runs.
 : "${SIGN:=}"
 : "${PDD_CODE:=}"
-SCRIPT_PARENT="$(cd -- "$SCRIPT_DIR/../../.." && pwd)"
-export PYTHONPATH="$SCRIPT_PARENT${PYTHONPATH:+:$PYTHONPATH}"
 if [ -z "$PDD_CODE" ] && [ -n "$SIGN" ]; then
     PDD_CODE="$("$PYTHON_BIN" - "$SIGN" <<'PY'
 import sys

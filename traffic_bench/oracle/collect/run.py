@@ -82,7 +82,6 @@ def _load_manifest(path: Path, count: Optional[int], start: int) -> list[dict]:
             row["_sign_code"] = SIGN_CODE
             row["pdd_code"] = SIGN_CODE
             row["sign_type"] = SIGN_TYPE
-            row["sign_id"] = PROFILE_ID
             rows.append(row)
     if start:
         rows = rows[start:]

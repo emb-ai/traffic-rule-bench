@@ -606,12 +606,8 @@ class CaRLMetaDriveAdapter:
         import torch
         import gymnasium as gym
 
-        # CaRL lives at <sdc>/CaRL/nuPlan; this file is at
-        # <sdc>/traffic-bench/agents/carl_in_metadrive/carl_adapter.py — three
-        # dirname()s up from THIS_DIR.
-        THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-        SDC_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(THIS_DIR)))
-        CARL_PATH = os.path.join(SDC_ROOT, "third_party", "CaRL", "nuPlan")
+        from traffic_bench.eval.sign_registry import repo_root
+        CARL_PATH = str(repo_root() / "third_party" / "CaRL" / "nuPlan")
 
         if CARL_PATH not in sys.path:
             sys.path.insert(0, CARL_PATH)

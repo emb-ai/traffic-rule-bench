@@ -319,7 +319,14 @@ def run_one_episode(
             from traffic_bench.eval.engine.sim.record_manager_patch import patch_record_manager_once
             patch_record_manager_once()
 
-        env_seed = (int(row.get("sign_id", 0)) + int(row.get("var_idx", 0))) % 100000
+        def _row_int(key: str, default: int = 0) -> int:
+            val = row.get(key, default)
+            try:
+                return int(val)
+            except (TypeError, ValueError):
+                return default
+
+        env_seed = (_row_int("sign_id") + _row_int("var_idx")) % 100000
         obs, info = env.reset(seed=env_seed)
         base_env = _unwrap_base_env(env)
         try:

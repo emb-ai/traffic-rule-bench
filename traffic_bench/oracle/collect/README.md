@@ -80,14 +80,14 @@ SIGN=all SMOKE=1 ./collect.sh
 SIGN=yield \
 PER_SIGN_COMPLIANT_NPC=1 EGO_SAMPLER=styles EGO_CURVE_AWARE=1 \
 EGO_HOLD_V0=1 CARL_LONGITUDINAL=tracking \
-MANIFEST=data/runs/yield/train/real_manifest.jsonl \
+MANIFEST=data/runs/yield/debug/2026-08-23_18-08-37/real_manifest.jsonl \
 POLICIES_CPU="comprehensive_rule_expert rule_compliant" \
 POLICIES_CARL="carl_rule" POLICIES_PLANT2="plant2_rule" \
 PLANT2_ACTION_MODE=pid \
-GPU_IDS=0,1,2,3 \
-GPUS_CARL=0,1 GPUS_PLANT2=2,3 \
+GPU_IDS=0,1,2,3,4,5,6,7 \
+GPUS_CARL=0,1,2,3 GPUS_PLANT2=4,5,6,7 \
 JOBS_PER_GPU=2 \
-N_WORKERS=16 IDM_CHUNKS=8 \
+N_WORKERS=32 IDM_CHUNKS=8 \
 EXTRA_SAMPLES_COMPREHENSIVE=4 IDM_SEED_BASE=42 \
 MAX_STEPS=1500 RESUME=1 \
 OUT_BASE=data/trajectories/yield/traj_full \
@@ -112,11 +112,12 @@ worker log. Detail: `tail -f $OUT_BASE/_logs/.../<policy>.wXX.log`.
 - `RESUME=1` skips episodes that already have non-empty `replay.pkl` + `replay.json`.
 - `EXTRA_SAMPLES_COMPREHENSIVE=4` → ego variants `default,s1,s2,s3,s4`.
 - Multi-sign with a custom `OUT_BASE` writes `OUT_BASE/<sign_id>/`.
-  A shared `MANIFEST=` path is ignored unless it contains `{sign}` or `{id}`.
+A shared `MANIFEST=` path is ignored unless it contains `{sign}` or `{id}`.
 
 ## 3. Oracle selection
 
 ```bash
+# from repo root (or any cwd — paths resolve against the repo)
 OUT=data/trajectories/yield/trajectories_<ts>
 
 python -m traffic_bench.oracle.select.coverage \
@@ -127,7 +128,7 @@ python -m traffic_bench.oracle.select.coverage \
     --out-dir "$OUT/experts"
 ```
 
-`--signs` accepts eval ids (`yield`) or official codes (`2.4`).
+`--signs` accepts eval ids (`yield`).
 
 ## 4. Metrics table
 
@@ -135,3 +136,4 @@ python -m traffic_bench.oracle.select.coverage \
 SIGN=yield ../report/table.sh data/trajectories/yield/trajectories_<ts>
 # → .../oracle_metrics/oracle_metrics_summary_top2.md
 ```
+

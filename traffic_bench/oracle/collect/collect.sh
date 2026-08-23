@@ -212,6 +212,9 @@ fi
 : "${NODE_ID:=$(hostname -s 2>/dev/null || echo local)}"
 # Per-sign storage: data/trajectories/<sign>/...
 : "${OUT_BASE:=$DATA_TRAJ/trajectories_$TS}"
+if [[ "$OUT_BASE" != /* ]]; then
+    OUT_BASE="$REPO_ROOT/$OUT_BASE"
+fi
 : "${LOG_DIR:=$OUT_BASE/_logs/run_node${NODE_ID}_${TS}}"
 MERGED_DIR="$OUT_BASE/_merged"
 MANIFESTS_DIR="$OUT_BASE/_manifests"
