@@ -264,6 +264,7 @@ def run_one_episode(
     aux_convoy_gap_m: float = DEFAULT_CONVOY_GAP_M,
     aux_lanes_occupied: int = DEFAULT_AUX_LANES_OCCUPIED_MAX,
     record_episode: bool = False,
+    replay_layout: str = "legacy",
 ) -> dict:
     seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
     set_path_conflict_overlay_enabled(bool(draw_path_conflict) and save_gif is not None)
@@ -883,8 +884,15 @@ def run_one_episode(
                 sign_slug = str(_sign_for_path).replace(".", "_")
                 expert_subdir = f"{policy_type}_{ego_variant}" if ego_variant else policy_type
 
-                out_replay = (Path(replay_root) / sign_slug / "by_sign" / sign_slug
-                              / "by_scene" / scene_uid / expert_subdir)
+                if replay_layout == "flat":
+                    out_replay = (
+                        Path(replay_root) / "by_scene" / scene_uid / expert_subdir
+                    )
+                else:
+                    out_replay = (
+                        Path(replay_root) / sign_slug / "by_sign" / sign_slug
+                        / "by_scene" / scene_uid / expert_subdir
+                    )
                 out_replay.mkdir(parents=True, exist_ok=True)
                 sidecar_path = out_replay / "replay.json"
                 output_pkl = out_replay / "replay.pkl"

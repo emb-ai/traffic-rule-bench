@@ -1,32 +1,17 @@
 #!/usr/bin/env bash
-# collect.sh — trajectory collector (2.1 / 2.3 / 2.4 / 2.5 / 4.3)
+# collect.sh — trajectory collector for every eval sign
 #
-# Profile-driven collector. Scenes go through eval run with aux agents.
+#   SIGN=yield
+#   SIGN=yield,stop,direction/right
+#   SIGN=all
 #
-#   SIGN=yield|main|stop|secondary|roundabout
-#   (aliases: 2.4|2_4|2.1|2_1|main_road|2.5|2_5|stop_sign|2.3|2_3|secondary_road|4.3|4_3)
-#
-# Colleague-equivalent (yield):
-#   SIGN=yield \
-#   PER_SIGN_COMPLIANT_NPC=1 EGO_SAMPLER=styles EGO_CURVE_AWARE=1 \
-#   EGO_HOLD_V0=1 CARL_LONGITUDINAL=tracking \
-#   MANIFEST=data/runs/yield/train/real_manifest.jsonl \
-#   POLICIES_CPU="comprehensive_rule_expert rule_compliant" \
-#   POLICIES_CARL="carl_rule" POLICIES_PLANT2="plant2_rule" \
-#   CARL_CKPT=../../../../checkpoints/carl/nuplan_51479_1B/model_best.pth \
-#   PLANT2_CKPT=../../../../checkpoints/plant2_pretrain/epoch=029_final_3.ckpt \
-#   PLANT2_ACTION_MODE=pid \
-#   GPU_IDS=0,1,2,3 GPUS_CARL=0,1 GPUS_PLANT2=2,3 \
-#   JOBS_PER_GPU=2 N_WORKERS=16 IDM_CHUNKS=8 \
-#   EXTRA_SAMPLES_COMPREHENSIVE=4 IDM_SEED_BASE=42 \
-#   MAX_STEPS=1500 RESUME=1 \
-#   OUT_BASE=/path/to/traj_yield_2_4 \
-#   bash collect.sh
-#
-# Live progress every PROGRESS_EVERY_S seconds (default 30).
 # Smoke / visual QA (3 scenes + GIFs):
-#   SIGN=yield SMOKE=1 MANIFEST=data/runs/yield/debug \
-#     bash collect.sh
+#   SIGN=yield SMOKE=1 ./collect.sh
+#
+# Full collection (auto-resolves data/runs/<sign>/train/real_manifest.jsonl):
+#   SIGN=yield PER_SIGN_COMPLIANT_NPC=1 EGO_SAMPLER=styles \
+#   POLICIES_CPU="comprehensive_rule_expert rule_compliant" \
+#   ./collect.sh
 
 set -uo pipefail
 
@@ -34,53 +19,110 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../../.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 RUNNER="${SCRIPT_DIR}/run.py"
+export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 # ---------------------------------------------------------------------------
-# Sign profile → data paths + PDD slug
+# Sign profile(s) from the eval registry
 # ---------------------------------------------------------------------------
 : "${SIGN:=yield}"
-case "$SIGN" in
-    yield|2.4|2_4)
-        SIGN=yield
-        SIGN_SLUG=2_4
-        PDD_CODE=2.4
-        DATA_SUBDIR=yield
-        ;;
-    main|main_road|2.1|2_1)
-        SIGN=main
-        SIGN_SLUG=2_1
-        PDD_CODE=2.1
-        DATA_SUBDIR=main_road
-        ;;
-    stop|stop_sign|2.5|2_5)
-        SIGN=stop
-        SIGN_SLUG=2_5
-        PDD_CODE=2.5
-        DATA_SUBDIR=stop
-        ;;
-    secondary|secondary_road|2.3|2_3|2.3.1|2.3.2|2.3.3)
-        SIGN=secondary
-        SIGN_SLUG=2_3
-        PDD_CODE=2.3
-        DATA_SUBDIR=secondary_road
-        ;;
-    roundabout|4.3|4_3)
-        SIGN=roundabout
-        SIGN_SLUG=4_3
-        PDD_CODE=4.3
-        DATA_SUBDIR=roundabout
-        ;;
-    *)
-        echo "[FAIL] unknown SIGN='$SIGN' (expected yield|main|stop|secondary|roundabout or 2.4|2.1|2.5|2.3|4.3)"
+: "${_COLLECT_INNER:=0}"
+: "${SPLIT:=train}"
+
+_list_sign_ids() {
+    "$PYTHON_BIN" - "$1" <<'PY'
+import sys
+from traffic_bench.eval.sign_registry import (
+    list_profiles,
+    profiles_from_sign_value,
+    resolve_sign_token,
+)
+
+raw = sys.argv[1].strip()
+try:
+    if raw.lower() == "all":
+        profiles = list(list_profiles())
+    else:
+        multi = profiles_from_sign_value(raw)
+        profiles = list(multi) if multi is not None else [resolve_sign_token(raw)]
+except KeyError as exc:
+    print(exc, file=sys.stderr)
+    sys.exit(2)
+for profile in profiles:
+    print(profile.id)
+PY
+}
+
+_load_sign_profile() {
+    "$PYTHON_BIN" - "$1" <<'PY'
+import sys
+from traffic_bench.eval.sign_registry import resolve_sign_token
+
+profile = resolve_sign_token(sys.argv[1])
+print(f"SIGN={profile.id}")
+print(f"DATA_SUBDIR={profile.data_subdir}")
+print(f"SIGN_CODE={profile.sign_code}")
+print(f"SIGN_TYPE={profile.sign_type}")
+PY
+}
+
+if [ "$_COLLECT_INNER" != "1" ]; then
+    if ! _SIGN_LIST="$(_list_sign_ids "$SIGN")"; then
+        echo "[FAIL] unknown SIGN='$SIGN'"
         exit 1
-        ;;
-esac
+    fi
+    mapfile -t _SIGN_IDS <<< "$_SIGN_LIST"
+    if [ "${#_SIGN_IDS[@]}" -eq 0 ] || [ -z "${_SIGN_IDS[0]:-}" ]; then
+        echo "[FAIL] unknown SIGN='$SIGN'"
+        exit 1
+    fi
+    if [ "${#_SIGN_IDS[@]}" -gt 1 ]; then
+        TS="${TS:-$(date +%Y%m%d_%H%M%S)}"
+        _user_out="${OUT_BASE-}"
+        _user_manifest="${MANIFEST-}"
+        fail=0
+        echo "=== collect ${_SIGN_IDS[*]}  ts=$TS ==="
+        for sid in "${_SIGN_IDS[@]}"; do
+            echo
+            echo "######## SIGN=$sid ########"
+            if ! (
+                export _COLLECT_INNER=1 SIGN="$sid" TS="$TS"
+                if [ -n "${_user_out}" ]; then
+                    export OUT_BASE="${_user_out}/${sid}"
+                else
+                    unset OUT_BASE
+                fi
+                if [ -n "${_user_manifest}" ]; then
+                    _m="$_user_manifest"
+                    _m="${_m//\{sign\}/$sid}"
+                    _m="${_m//\{id\}/$sid}"
+                    if [[ "$_user_manifest" == *"{sign}"* ]] || [[ "$_user_manifest" == *"{id}"* ]]; then
+                        export MANIFEST="$_m"
+                    else
+                        unset MANIFEST
+                    fi
+                fi
+                bash "$0"
+            ); then
+                fail=$((fail + 1))
+            fi
+        done
+        echo "=== multi-sign done. failures=$fail ==="
+        exit "$fail"
+    fi
+    SIGN="${_SIGN_IDS[0]}"
+fi
+
+if ! _PROFILE_ENV="$(_load_sign_profile "$SIGN")"; then
+    echo "[FAIL] unknown SIGN='$SIGN'"
+    exit 1
+fi
+eval "$_PROFILE_ENV"
 
 DATA_SCENES="$REPO_ROOT/data/scenes/$DATA_SUBDIR"
 DATA_RUNS="$REPO_ROOT/data/runs/$DATA_SUBDIR"
 DATA_TRAJ="$REPO_ROOT/data/trajectories/$DATA_SUBDIR"
 : "${SCENES_ROOT:=$DATA_SCENES}"
-: "${SIGNS_FILTER:=$SIGN_SLUG}"
+PDD_CODE="$SIGN_CODE"
 
 # ---------------------------------------------------------------------------
 # Policy / ego behaviour knobs (same env vars as the general collector).
@@ -166,13 +208,13 @@ fi
 : "${SAVE_GIFS:=0}"
 : "${COUNT:=}"
 
-TS="$(date +%Y%m%d_%H%M%S)"
+: "${TS:=$(date +%Y%m%d_%H%M%S)}"
 : "${NODE_ID:=$(hostname -s 2>/dev/null || echo local)}"
 # Per-sign storage: data/trajectories/<sign>/...
 : "${OUT_BASE:=$DATA_TRAJ/trajectories_$TS}"
 : "${LOG_DIR:=$OUT_BASE/_logs/run_node${NODE_ID}_${TS}}"
 MERGED_DIR="$OUT_BASE/_merged"
-MANIFESTS_DIR="$OUT_BASE/_manifests/$SIGN_SLUG"
+MANIFESTS_DIR="$OUT_BASE/_manifests"
 
 # Auto-split GPUs between carl / plant2 if not set.
 IFS=',' read -ra _GPU_LIST <<< "$GPU_IDS"
@@ -206,14 +248,19 @@ if [ "$SMOKE" = "1" ]; then
     : "${SMOKE_EXTRA_SAMPLES:=4}"
     EXTRA_SAMPLES_COMPREHENSIVE="$SMOKE_EXTRA_SAMPLES"
     echo "=== SMOKE mode: SIGN=$SIGN COUNT=$COUNT SAVE_GIFS=1 policies='$POLICIES_CPU' EXTRA_SAMPLES=$EXTRA_SAMPLES_COMPREHENSIVE ==="
+    SPLIT=debug
 fi
 
 mkdir -p "$OUT_BASE" "$LOG_DIR" "$MERGED_DIR" "$MANIFESTS_DIR"
 exec > >(tee -a "$LOG_DIR/progress.log") 2>&1
 
 if [ -z "$MANIFEST" ]; then
-    echo "[FAIL] MANIFEST= is required (example: MANIFEST=data/runs/${DATA_SUBDIR}/train/real_manifest.jsonl)"
-    exit 1
+    if [ "$SPLIT" = "debug" ]; then
+        MANIFEST="$DATA_RUNS/debug"
+    else
+        MANIFEST="$DATA_RUNS/$SPLIT/real_manifest.jsonl"
+    fi
+    echo "[manifests] auto SIGN=$SIGN → $MANIFEST"
 fi
 if [[ "$MANIFEST" != /* ]]; then
     if [ -e "$REPO_ROOT/$MANIFEST" ]; then
@@ -247,18 +294,13 @@ fi
 cp -f "$MANIFEST" "$MANIFESTS_DIR/real_manifest.jsonl"
 echo "[manifests] $MANIFESTS_DIR/real_manifest.jsonl"
 
-if [ -n "$SIGNS_FILTER" ] && [ "$SIGNS_FILTER" != "$SIGN_SLUG" ] && [ "$SIGNS_FILTER" != "$PDD_CODE" ]; then
-    echo "[warn] SIGNS_FILTER='$SIGNS_FILTER' ignored — this run is $SIGN ($PDD_CODE / $SIGN_SLUG)"
-fi
-
 CATALOG="$OUT_BASE/catalog.jsonl"
 
 echo "================================================================"
-echo "oracle collect  SIGN=$SIGN ($PDD_CODE)  [$TS]"
+echo "oracle collect  SIGN=$SIGN ($SIGN_CODE)  [$TS]"
 echo "  MANIFEST        = $MANIFEST"
 echo "  SCENES_ROOT     = $SCENES_ROOT"
 echo "  OUT_BASE        = $OUT_BASE"
-echo "  SIGNS_FILTER    = $SIGNS_FILTER → $SIGN_SLUG"
 echo "  COUNT/ROWS_LIMIT= ${COUNT:-—} / ${ROWS_LIMIT:-—}"
 echo "  SAVE_GIFS/SMOKE = $SAVE_GIFS / $SMOKE"
 echo "  EGO_SAMPLER     = $EGO_SAMPLER  CURVE_AWARE=$EGO_CURVE_AWARE  HOLD_V0=$EGO_HOLD_V0"
@@ -341,7 +383,7 @@ run_one() {
     local policy="$1"
     shift
     local extra=("$@")
-    local out_dir="$OUT_BASE/$policy/$SIGN_SLUG"
+    local out_dir="$OUT_BASE/$policy"
     mkdir -p "$out_dir"
 
     # Log name: policy.log or policy.w03.log for shards.
@@ -509,7 +551,7 @@ fi
 # Live dashboard while policies run in parallel (progress is otherwise only in
 # $LOG_DIR/<policy>.log — easy to miss from the main terminal).
 _print_collect_progress() {
-    "$PYTHON_BIN" - "$OUT_BASE" "$MANIFEST" "$EXTRA_SAMPLES_COMPREHENSIVE" "$LOG_DIR" "$SIGN_SLUG" <<'PY'
+    "$PYTHON_BIN" - "$OUT_BASE" "$MANIFEST" "$EXTRA_SAMPLES_COMPREHENSIVE" "$LOG_DIR" <<'PY'
 import os, re, sys, json
 from pathlib import Path
 
@@ -517,7 +559,6 @@ out_base = Path(sys.argv[1])
 manifest = Path(sys.argv[2])
 extra = int(sys.argv[3] or 0)
 log_dir = Path(sys.argv[4])
-sign_slug = sys.argv[5]
 
 n_rows = 0
 if manifest.is_file():
@@ -545,9 +586,9 @@ for pol_dir in sorted(p for p in out_base.iterdir() if p.is_dir() and not p.name
     target = n_rows * n_var if n_rows else 0
     done = 0
     seen = set()
-    ledgers = list(pol_dir.glob(f"{sign_slug}/all_runs.jsonl"))
-    ledgers += list(pol_dir.glob(f"{sign_slug}/all_runs.w*.jsonl"))
-    # fallback if layout differs
+    ledgers = list(pol_dir.glob("all_runs.jsonl"))
+    ledgers += list(pol_dir.glob("all_runs.w*.jsonl"))
+    # legacy <policy>/<slug>/all_runs.jsonl
     if not ledgers:
         ledgers = list(pol_dir.glob("*/all_runs.jsonl")) + list(pol_dir.glob("*/all_runs.w*.jsonl"))
     for ar in ledgers:
@@ -629,40 +670,47 @@ import json
 import sys
 from pathlib import Path
 
+def merge_dir(dir_path):
+    shards = sorted(dir_path.glob("all_runs.w*.jsonl"))
+    main = dir_path / "all_runs.jsonl"
+    if not shards:
+        return None
+    by_key = {}
+    order = []
+    for path in ([main] if main.is_file() else []) + shards:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as e:
+            print(f"  [warn] {path}: {e}")
+            continue
+        for ln in text.splitlines():
+            if not ln.strip():
+                continue
+            try:
+                row = json.loads(ln)
+            except json.JSONDecodeError:
+                continue
+            key = (row.get("scene_uid"), row.get("policy"), row.get("variant"))
+            if key not in by_key:
+                order.append(key)
+            by_key[key] = row
+    with open(main, "w", encoding="utf-8") as fh:
+        for key in order:
+            fh.write(json.dumps(by_key[key], default=str) + "\n")
+    label = dir_path.relative_to(Path(sys.argv[1]))
+    print(f"  {label}: {len(by_key)} rows (from {len(shards)} shards)")
+    return len(by_key)
+
 out_base = Path(sys.argv[1])
 n_merged = 0
 for pol_dir in sorted(p for p in out_base.iterdir() if p.is_dir() and not p.name.startswith("_")):
-    for sign_dir in sorted(p for p in pol_dir.iterdir() if p.is_dir()):
-        shards = sorted(sign_dir.glob("all_runs.w*.jsonl"))
-        main = sign_dir / "all_runs.jsonl"
-        if not shards:
-            continue
-        by_key = {}
-        order = []
-        for path in ([main] if main.is_file() else []) + shards:
-            try:
-                text = path.read_text(encoding="utf-8")
-            except OSError as e:
-                print(f"  [warn] {path}: {e}")
-                continue
-            for ln in text.splitlines():
-                if not ln.strip():
-                    continue
-                try:
-                    row = json.loads(ln)
-                except json.JSONDecodeError:
-                    continue
-                key = (row.get("scene_uid"), row.get("policy"), row.get("variant"))
-                if key not in by_key:
-                    order.append(key)
-                by_key[key] = row
-        with open(main, "w", encoding="utf-8") as fh:
-            for key in order:
-                fh.write(json.dumps(by_key[key], default=str) + "\n")
-        print(f"  {pol_dir.name}/{sign_dir.name}: {len(by_key)} rows "
-              f"(from {len(shards)} shards" + (f" + main" if main.is_file() else "") + ")")
+    if merge_dir(pol_dir) is not None:
         n_merged += 1
-print(f"shard merge: {n_merged} sign dirs")
+        continue
+    for child in sorted(p for p in pol_dir.iterdir() if p.is_dir()):
+        if merge_dir(child) is not None:
+            n_merged += 1
+print(f"shard merge: {n_merged} dirs")
 PY
 
 if [ "$SKIP_MERGE" = "1" ]; then
@@ -672,7 +720,9 @@ fi
 
 echo "=== Merge → $MERGED_DIR/all_runs.jsonl ==="
 : > "$MERGED_DIR/all_runs.jsonl"
-find "$OUT_BASE" -path "*/${SIGN_SLUG}/all_runs.jsonl" ! -path "$MERGED_DIR/*" | sort | while read -r f; do
+find "$OUT_BASE" -name all_runs.jsonl \
+    ! -path "$MERGED_DIR/*" ! -path "*/_logs/*" ! -path "*/_manifests/*" \
+    | sort | while read -r f; do
     n=$(wc -l < "$f")
     cat "$f" >> "$MERGED_DIR/all_runs.jsonl"
     echo "  + $f ($n)"
@@ -694,7 +744,10 @@ out_base, merged = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 var0 = merged / "var_0"
 var0.mkdir(parents=True, exist_ok=True)
 by_baseline = {}
-for sidecar in out_base.glob("*/*/by_sign/*/by_scene/*/*/replay.json"):
+sidecars = list(out_base.glob("*/by_scene/*/*/replay.json"))
+if not sidecars:
+    sidecars = list(out_base.glob("*/*/by_sign/*/by_scene/*/*/replay.json"))
+for sidecar in sidecars:
     parts = sidecar.parts
     if any(p in ("_merged", "_logs", "_manifests") for p in parts):
         continue
@@ -712,7 +765,7 @@ for baseline in sorted(by_baseline):
             fh.write(json.dumps(r, ensure_ascii=False, default=str) + "\n")
     print(f"  {baseline}: {len(by_baseline[baseline])} scenes -> {fp.name}")
 if not by_baseline:
-    print("  (no sidecars found under */*/by_sign/*/by_scene/*/*/replay.json)")
+    print("  (no sidecars found under */by_scene/*/*/replay.json)")
 PY
 fi
 
@@ -720,7 +773,7 @@ n_gif=$(find "$OUT_BASE" -path '*/gifs/*.gif' 2>/dev/null | wc -l || echo 0)
 echo
 echo "================================================================"
 echo "Done."
-echo "  SIGN       : $SIGN ($PDD_CODE / $SIGN_SLUG)"
+echo "  SIGN       : $SIGN ($SIGN_CODE)"
 echo "  OUT_BASE   : $OUT_BASE"
 echo "  Manifests  : $MANIFESTS_DIR/real_manifest.jsonl"
 echo "  Merged     : $MERGED_DIR/all_runs.jsonl  ($total rows)"
@@ -731,7 +784,7 @@ echo "  Logs       : $LOG_DIR/"
 echo
 echo "Next:"
 echo "  python -m traffic_bench.oracle.select.coverage --root $OUT_BASE --catalog $CATALOG \\"
-echo "      --signs $PDD_CODE --horizon $MAX_STEPS --out-dir $OUT_BASE/experts"
+echo "      --signs $SIGN_CODE --horizon $MAX_STEPS --out-dir $OUT_BASE/experts"
 echo "  SIGN=$SIGN ../report/table.sh $OUT_BASE"
 echo "================================================================"
 

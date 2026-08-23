@@ -2,9 +2,9 @@
 """Oracle expert selection for collected trajectories.
 
 Loads all_runs from the collect/ layout
-(<root>/*/2_4|2_1|2_5|2_3/all_runs.jsonl and <root>/_merged/all_runs.jsonl).
+(<root>/<policy>/all_runs.jsonl and <root>/_merged/all_runs.jsonl).
 Catalog may be the one written by collect/run.py, or built from --manifest.
-Default sign is 2.4; pass --signs 2.1 / 2.5 / 2.3 for other profiles.
+``--signs`` accepts official codes (2.4) or eval ids (yield, direction_right).
 
 Usage:
   python -m traffic_bench.oracle.select.coverage \\
@@ -41,11 +41,10 @@ def load_rows(roots: list[str]) -> tuple[list[dict], dict]:
     files: list[Path] = []
     for root in roots:
         root_p = Path(root)
-        # priority layout: <policy>/<slug>/all_runs.jsonl
-        files += sorted(root_p.glob("*/2_4/all_runs.jsonl"))
-        files += sorted(root_p.glob("*/2_1/all_runs.jsonl"))
-        files += sorted(root_p.glob("*/2_5/all_runs.jsonl"))
-        files += sorted(root_p.glob("*/2_3/all_runs.jsonl"))
+        # <policy>/all_runs.jsonl (current) and <policy>/<legacy-slug>/all_runs.jsonl
+        for ledger in root_p.glob("*/all_runs.jsonl"):
+            if not ledger.parent.name.startswith("_"):
+                files.append(ledger)
         files += sorted(root_p.glob("*/*/all_runs.jsonl"))
         merged = root_p / "_merged" / "all_runs.jsonl"
         if merged.is_file():

@@ -103,7 +103,17 @@ MIN_ROUTE_COMPLETION = 0.0
 def normalize_sign(s):
     if not isinstance(s, str):
         return s
-    return s.replace("_", ".") if ("_" in s and "." not in s) else s
+    if s in SIGN_CLASS_MAP:
+        return s
+    if "_" in s and "." not in s:
+        as_code = s.replace("_", ".")
+        if as_code in SIGN_CLASS_MAP:
+            return as_code
+    try:
+        from traffic_bench.eval.sign_registry import resolve_sign_token
+        return resolve_sign_token(s).sign_code
+    except KeyError:
+        return s.replace("_", ".") if ("_" in s and "." not in s) else s
 
 
 def load_jsonl(path):

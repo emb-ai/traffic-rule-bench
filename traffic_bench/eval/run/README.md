@@ -1,29 +1,21 @@
-# run/ — closed-loop episodes
+# `run/` — closed-loop episodes
 
-Hydra entry: [`main.py`](main.py) (`configs/run.yaml`).
+Runs evaluation scenarios from a manifest in a closed-loop environment.
+
+Hydra entry point: [`main.py`](main.py) (`configs/run.yaml`).
+
+## Usage
 
 ```bash
+# One policy
 python -m traffic_bench.eval run policy=idm sign=yield
-python -m traffic_bench.eval run policies=all sign=yield
-python -m traffic_bench.eval run policies=[idm,plant2] manifest=data/runs/yield/debug
-```
 
-`policy=` runs one policy (a name, not a list). `policies=[…]` or `policies=all` is the same runner
-in a loop ([`policies.py`](policies.py)), then `metrics`. Without `manifest=`,
-`sign=` reads `data/runs/<sign>/test/` if it exists, otherwise `debug/latest`.
-`manifest=…/debug` follows
-`debug/latest` (or the last timestamp). IDM-family policies in the list expand
-to ego variants `default,s1–s4` unless `ego_variants=default` (or a list).
+# Multiple policies
+python -m traffic_bench.eval run \
+    policies=[idm,plant2] \
+    sign=yield
 
-| File | Role |
-| --- | --- |
-| `main.py` | Hydra: load rows, call `run_episodes` |
-| `policies.py` | loop policies, then csv / aggregate / report |
-| `episode.py` | step loop, write episode JSON |
-| `env.py` | build env, apply spawn / dest |
-| `policy.py` | load IDM / PPO / CaRL / PlanT2 |
-| `gif.py` | top-down film size |
-| `score.py` | TTC, smoothness, `aggregate_results` |
-| `place.py` | plate dispatch → `signs/<group>/place.py` |
-
-Aux / horizon / spawn come from the saved manifest `config.yaml` + row.
+# Use a specific manifest
+python -m traffic_bench.eval run \
+    policies=[idm,plant2] \
+    manifest=data/runs/yield/debug

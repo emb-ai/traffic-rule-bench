@@ -1,4 +1,4 @@
-# metrics/ — episode JSONL → CSV / markdown
+# metrics/
 
 Used after `python -m traffic_bench.eval run policies=all sign=yield`, or on its own:
 
@@ -13,3 +13,4 @@ python -m traffic_bench.eval metrics combine sign=all
 2. `aggregate.py` — CSV → aggregations + `reports/cumulative.json`
 3. `report.py` — cumulative JSON → markdown table
 4. `combine.py` — per-sign CSVs → `data/runs/_all/…/reports/report_cumulative.md`
+

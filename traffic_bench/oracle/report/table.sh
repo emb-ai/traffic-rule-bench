@@ -19,27 +19,41 @@ if [ -d "$EXPERTS_DIR" ]; then
 fi
 HORIZON="${HORIZON:-1500}"
 
-# Infer PDD code from layout if SIGN unset.
+# Official plate code from SIGN, catalog, or all_runs.
 : "${SIGN:=}"
 : "${PDD_CODE:=}"
+SCRIPT_PARENT="$(cd -- "$SCRIPT_DIR/../../.." && pwd)"
+export PYTHONPATH="$SCRIPT_PARENT${PYTHONPATH:+:$PYTHONPATH}"
+if [ -z "$PDD_CODE" ] && [ -n "$SIGN" ]; then
+    PDD_CODE="$("$PYTHON_BIN" - "$SIGN" <<'PY'
+import sys
+from traffic_bench.eval.sign_registry import resolve_sign_token
+print(resolve_sign_token(sys.argv[1]).sign_code)
+PY
+)" || PDD_CODE=""
+fi
 if [ -z "$PDD_CODE" ]; then
-    case "${SIGN}" in
-        yield|2.4|2_4) PDD_CODE=2.4 ;;
-        main|main_road|2.1|2_1) PDD_CODE=2.1 ;;
-        stop|stop_sign|2.5|2_5) PDD_CODE=2.5 ;;
-        secondary|secondary_road|2.3|2_3|2.3.1|2.3.2|2.3.3) PDD_CODE=2.3 ;;
-        *)
-            if [ -d "$OUT_BASE/_manifests/2_1" ] || compgen -G "$OUT_BASE"'/*/2_1/all_runs.jsonl' > /dev/null; then
-                PDD_CODE=2.1
-            elif [ -d "$OUT_BASE/_manifests/2_5" ] || compgen -G "$OUT_BASE"'/*/2_5/all_runs.jsonl' > /dev/null; then
-                PDD_CODE=2.5
-            elif [ -d "$OUT_BASE/_manifests/2_3" ] || compgen -G "$OUT_BASE"'/*/2_3/all_runs.jsonl' > /dev/null; then
-                PDD_CODE=2.3
-            else
-                PDD_CODE=2.4
-            fi
-            ;;
-    esac
+    PDD_CODE="$("$PYTHON_BIN" - "$OUT_BASE" <<'PY'
+import json, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+for cand in (root / "catalog.jsonl", root / "_merged" / "all_runs.jsonl"):
+    if not cand.is_file():
+        continue
+    for ln in cand.read_text(encoding="utf-8").splitlines():
+        if not ln.strip():
+            continue
+        try:
+            row = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        code = row.get("sign_code") or row.get("pdd_code")
+        if code:
+            print(code)
+            raise SystemExit
+print("2.4")
+PY
+)"
 fi
 
 ALL_RUNS="$OUT_BASE/_merged/all_runs.jsonl"

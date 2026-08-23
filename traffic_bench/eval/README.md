@@ -1,181 +1,208 @@
-# eval — manifests, closed-loop runs, metrics
+# `eval/` — closed-loop evaluation
 
-Run from the **repository root** after `pip install -e .`.
+Evaluation pipeline for TrafficSignBench:
 
-Scenes come from `[scene_collection/](../scene_collection/README.md)` or
-Hugging Face `[emb-ai/traffic-sign-bench](https://huggingface.co/datasets/emb-ai/traffic-sign-bench)`
-into `<repo>/data/scenes/<sign>/`. Eval writes `<repo>/data/runs/<sign>/<split>/`
-(`debug` by default). `sign=main_road` writes under `data/{scenes,runs}/main_road/`.
+`scenes → manifest → closed-loop runs → metrics`
 
-Sign rules live under `[signs/](signs/README.md)`. Shared engine code is
-`[engine/](engine/README.md)`. The CLI has three commands: `manifest`, `run`,
-`metrics`.
+Scenes must be available under:
 
-## Folders
+```
+data/scenes/<sign>/
+```
 
+They can be generated with `scene_collection/` or downloaded from the official `emb-ai/traffic-sign-bench` dataset.
 
-| Path                                   | Role                                                                |
-| -------------------------------------- | ------------------------------------------------------------------- |
-| `[cli.py](cli.py)`                     | `python -m traffic_bench.eval {manifest,run,metrics}`               |
-| `[sign_registry.py](sign_registry.py)` | eval id → group, spawn, data folder                                 |
-| `[configs/](configs/)`                 | Hydra YAML; `sign/` ids and `shared/` knobs                         |
-| `[manifest/](manifest/)`               | discover scenes → `signs.<group>.expand.generate` → jsonl           |
-| `[run/](run/)`                         | closed-loop episodes; one policy, `policies=[…]`, or `policies=all` |
-| `[metrics/](metrics/README.md)`        | episode JSONL → CSV / markdown                                      |
-| `[engine/](engine/README.md)`          | map, traffic, spawn, expand types, MetaDrive glue                   |
-| `[signs/](signs/README.md)`            | per-group expand / spawn / place / spec                             |
+Outputs are written under:
 
+```
+data/runs/<sign>/<split>/
+```
 
-`**manifest/`** — scenes + Hydra → `real_manifest.jsonl`.
-`[manifest/run.py](manifest/run.py)` is the Hydra entry. Each group builds
-rows in `signs/<group>/expand.py` via `generate(cfg, scenes)`.
+The CLI has three commands:
 
-`**run/**` — wrap the env, load a policy, apply a row, place plates, step,
-optional GIF. One policy is `run policy=idm sign=yield` (`policy=` is a
-single name — not a list). Several policies:
-`run policies=[idm,plant2] sign=yield`. All registered policies:
-`run policies=all sign=yield` (or `sign=all`). Without `manifest=`, `run`
-reads `data/runs/<sign>/test/`.
+```
+manifest → run → metrics
+```
 
-`**engine/**` — no sign rules. SUMO parse, IDM profiles, MetaDrive patches,
-HUD/GIF overlays, T/X arm geometry.
+## Quick start
 
-`**signs/<group>/**` — only what is true for that group. Same file roles
-(skip if unused): `expand.py` (rows + `generate`), `spawn.py`, `place.py`,
-`spec.py`. Dual-path navigation is `signs/dual_path/nav.py`. Roundabout aux
-placement is `signs/roundabout/aux.py`.
+### 1. Build a manifest
 
-`**configs/**` — `sign=` ids only under `configs/sign/`. YAML used by more
-than one id lives in `configs/shared/` and is pulled via `defaults:`.
-Nested folders stay only where Hydra already needs them (`direction/`,
-`one_way/`, `no_turn/`, `detour/`). CLI is `sign=yield` or
-`sign=direction/right`, not `sign=junction/yield`.
+Debug manifest (test scenes):
 
-## Run folders
-
-`paths.split` is the only folder switch.
-
-
-| Folder | Command | Who reads it |
-| --- | --- | --- |
-| `data/runs/<sign>/debug/<timestamp>/` | `manifest sign=…` (default) | eyes / GIF; `manifest=data/runs/<sign>/debug` → `latest` |
-| `data/runs/<sign>/train/` | `manifest sign=… paths.split=train` | oracle (`MANIFEST=…/train/real_manifest.jsonl`) |
-| `data/runs/<sign>/test/` | `manifest sign=… paths.split=test` | `eval run` / metrics |
-
-
-Default `manifest` uses **test** scenes and writes a new `debug/<timestamp>/`,
-then points `debug/latest` at it. `train` / `test` are a single snapshot:
-a second `manifest` fails if `real_manifest.jsonl` is already there (`rm -rf`
-the folder to rebuild).
-
-## Commands
-
-```bash
-# debug folder (test scenes)
+```
 python -m traffic_bench.eval manifest sign=yield
-python -m traffic_bench.eval manifest sign=direction/right
-python -m traffic_bench.eval manifest sign=yield gif.enabled=true gif.max_scenes=8
-python -m traffic_bench.eval manifest sign=all scenario.max_total=10 # debugging: 10 x num(sugns) total scenes 
+```
 
-# stable train / test folders
-python -m traffic_bench.eval manifest sign=yield paths.split=train
-python -m traffic_bench.eval manifest sign=yield paths.split=test
-python -m traffic_bench.eval manifest sign=all paths.split=test
-python -m traffic_bench.eval manifest sign=yield,stop,main_road paths.split=train
-# after sign=all / a list: per-sign scenes + rows, then totals
+*or:*
 
-# closed-loop: test/ if present, else debug/latest
+```
+python -m traffic_bench.eval manifest sign=yield paths.split=test    # generate test
+python -m traffic_bench.eval manifest sign=yield paths.split=train   # generate train
+```
+
+### 2. Run closed-loop evaluation
+
+Single policy:
+
+```
 python -m traffic_bench.eval run policy=idm sign=yield
-python -m traffic_bench.eval run policy=idm sign=all gif.enabled=true
-# debug: both rule policies, default ego only, GIFs
-python -m traffic_bench.eval run \
-    policies=[idm,comprehensive_rule_expert] \
-    ego_variants=default \
-    sign=all gif.enabled=true
-python -m traffic_bench.eval run policies=all sign=yield
-python -m traffic_bench.eval run policies=all sign=all
-python -m traffic_bench.eval run policy=idm gif.enabled=true manifest=data/runs/yield/debug
-# latest debug timestamp; official eval still uses test/ via sign=yield
+```
 
-python -m traffic_bench.eval metrics csv --episodes-root <eval_out>/benchmark --out <eval_out>/metrics_per_episode.csv
-python -m traffic_bench.eval metrics aggregate --csv <eval_out>/metrics_per_episode.csv --out-dir <eval_out>
-python -m traffic_bench.eval metrics report --run-root <eval_out>
-# one overall report from per-sign CSVs (also runs at the end of sign=all)
+*or multiple policies:*
+
+```
+python -m traffic_bench.eval run \
+    policies=[idm,comprehensive_rule_expert,plant2_ft] \
+    sign=yield
+```
+
+*or all registered policies:*
+
+```
+python -m traffic_bench.eval run policies=all sign=yield
+```
+
+*or run all signs:*
+
+```
+python -m traffic_bench.eval run policies=all sign=all
+```
+
+### 4. Compute metrics
+
+```
 python -m traffic_bench.eval metrics combine sign=all
 ```
 
-Hydra overrides on `manifest`:
+## Evaluation workflow
 
-```bash
-python -m traffic_bench.eval manifest sign=stop gif.enabled=true gif.policy=idm
-python -m traffic_bench.eval manifest sign=stop auxiliary.lanes_occupied=2 auxiliary.convoy_size=2
-python -m traffic_bench.eval manifest sign=stop scenario.max_total=20
-python -m traffic_bench.eval manifest sign=stop augmentation.auxiliary=false
+### Manifest
+
+`manifest` discovers scenes and expands each scene into scenario rows.
+
+Output:
+
+```
+data/runs/<sign>/<split>/
+├── real_manifest.jsonl
+├── config.yaml
+├── repro/
+└── gifs/                    # optional
 ```
 
-## Workflow
+Each manifest row contains the information required to reproduce one scenario.
 
-### 1. Scene pool
+Scenario augmentation is controlled by:
 
-```bash
-python -m traffic_bench.scene_collection materialize --sign stop
-# or download official scenes:
-huggingface-cli download emb-ai/traffic-sign-bench --repo-type dataset --local-dir data
-```
+- `augmentation.layout` — ego/arm/lane/destination variants;
+- `augmentation.auxiliary` — convoy size × occupied lanes;
+- `scenario.max_scenarios` — final per-scene cap.
 
-### 2. Manifest
+`scenario.max_scenarios` is applied **after** augmentation, filtering, geometry deduplication, and shuffling.
 
-Output under `data/runs/<sign>/debug/<timestamp>/` by default (`sign=main_road` → `data/runs/main_road/`):
+### Run
 
-- `real_manifest.jsonl` — scenario rows (each has `split`)
-- `repro/` — pool snapshot + split filter + allocations ref
-- `config.yaml` — resolved Hydra config (`paths.split` = folder, `paths.scene_split` = train/test scenes)
-- `gifs/` — if `gif.enabled=true`
-
-Augmentation axes live in `configs/shared/` and per-sign yaml under `augmentation:`:
-
-
-| Axis        | Meaning                                                                                              |
-| ----------- | ---------------------------------------------------------------------------------------------------- |
-| `layout`    | Ego × aux arm / lane / destination (`engine/spawn/scene_augmentation.py` + `signs/<group>/spawn.py`) |
-| `auxiliary` | Cartesian product of convoy `1..N` and occupied lanes `1..M`                                         |
-
-
-### 3. Evaluate
+`run` loads a policy, applies a manifest row, places the required signs, and executes the scenario in closed loop.
 
 One policy:
 
-```bash
-python -m traffic_bench.eval run policy=idm sign=stop
+```
+python -m traffic_bench.eval run policy=idm sign=yield
 ```
 
-Many policies + report (`plant2_ft` loads the newest `*.ckpt` under
-`checkpoints/plant2_finetuned/`; override with `model_paths.plant2_ft=/path/to.ckpt`):
+Several policies:
 
-```bash
+```
 python -m traffic_bench.eval run \
-    policies=[idm,comprehensive_rule_expert,plant2_ft] \
-    sign=stop
-# only default ego (skip s1–s4):
-python -m traffic_bench.eval run \
-    policies=[idm,comprehensive_rule_expert] \
-    ego_variants=default \
-    sign=all gif.enabled=true
+    policies=[idm,plant2] \
+    sign=yield
 ```
 
-`policies=all` is the registered set: `idm` and `comprehensive_rule_expert` each
-× `default,s1–s4`, plus `carl`, `carl_rule`, `plant2`, `plant2_rule`,
-`plant2_ft`, `rule_compliant`, `ppo_lidar`.
+`policy=` accepts a single policy name; use `policies=[...]` for multiple policies.
 
-Oracle / trajectory collection is `[../oracle/](../oracle/README.md)`, not this package.
-Always pass an explicit train manifest:
+`policies=all` runs the complete registered policy set.
 
-```bash
-SIGN=yield MANIFEST=data/runs/yield/train/real_manifest.jsonl \
-  ./traffic_bench/oracle/collect/collect.sh
+If `manifest=` is not provided, `run` uses:
+
+```
+data/runs/<sign>/test/
 ```
 
-## Eval id → group
+when available, otherwise `debug/latest`.
+
+### Metrics
+
+Metrics operate on closed-loop episode outputs:
+
+```
+episode JSONL → per-episode CSV → aggregate/report
+```
+
+Use `metrics combine sign=all` for one overall report across signs.
+
+
+
+## Run folders
+
+`paths.split` controls the output folder:
+
+
+| Split   | Command                                 | Purpose                                        |
+| ------- | --------------------------------------- | ---------------------------------------------- |
+| `debug` | `manifest sign=yield`                   | Timestamped test-scene snapshot for inspection |
+| `train` | `manifest sign=yield paths.split=train` | Stable train manifest                          |
+| `test`  | `manifest sign=yield paths.split=test`  | Stable evaluation manifest                     |
+
+
+Debug manifests are written to:
+
+```
+data/runs/<sign>/debug/<timestamp>/
+```
+
+and `debug/latest` points to the newest snapshot.
+
+`train/` and `test/` are immutable snapshots: remove the directory before rebuilding an existing manifest.
+
+## Configuration
+
+Hydra configuration is split into:
+
+```
+configs/
+├── config.yaml          # manifest defaults
+├── run.yaml             # closed-loop defaults
+├── sign/                # sign-specific configuration
+└── shared/              # configuration shared by multiple signs
+```
+
+Common overrides:
+
+```
+# Limit scenarios
+python -m traffic_bench.eval manifest \
+    sign=yield scenario.max_scenarios=20
+
+# Disable auxiliary augmentation
+python -m traffic_bench.eval manifest \
+    sign=yield augmentation.auxiliary=false
+
+# GIFs during manifest generation
+python -m traffic_bench.eval manifest \
+    sign=yield gif.enabled=true gif.max_scenes=8
+```
+
+Nested Hydra groups use paths such as:
+
+```
+sign=direction/right
+sign=detour/right
+```
+
+## Signs
+
+Sign-specific logic lives under `signs/`.
 
 
 | `sign=`                            | Sign code       | Group                                    | On-disk folder     |
@@ -198,98 +225,5 @@ SIGN=yield MANIFEST=data/runs/yield/train/real_manifest.jsonl \
 | `zone_speed_limit`                 | 5.31            | [speed](signs/speed/README.md)           | `zone_speed_limit` |
 
 
-## Sign rules
 
-### 2.1 — main road / equal priority (`sign=main_road`)
-
-All incoming roads carry **MainRoadSign**. The plate itself is informational.
-
-Conflict resolution uses the **right-hand rule**: traffic from the right has
-priority. Violations are tracked by an invisible `RightHandYieldSign` on the
-ego approach (same zone logic as yield 2.4, but watching the **right**
-conflicting arm only).
-
-Auxiliary agents spawn **only on the right incoming arm** relative to ego.
-
-### 2.3 — secondary road (`sign=secondary`)
-
-Unified group for plates **2.3.1 / 2.3.2 / 2.3.3**. Same junction geometry /
-ego / aux axes as yield (2.4): ego on a **secondary** approach with
-**YieldSign**; aux on **main**. Allocation is one key `"2.3"` with balanced
-T/X (`x_share: 0.5`).
-
-Plate placement on **main** arms:
-
-
-| Shape | Plates                                                                                                                                              |
-| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **X** | **2.3.1** (`SecondaryRoadSign`) on every main approach                                                                                              |
-| **T** | **2.3.2** (`SecondaryRoadRightSign`) and **2.3.3** (`SecondaryRoadLeftSign`) on the two main approaches (stem on the right / left of that approach) |
-
-
-Secondary approaches always get **YieldSign** (2.4). Metrics / expert yield
-logic come from that YieldSign; 2.3 plates mark main-road priority.
-
-### 2.4 — yield (`sign=yield`)
-
-Ego is on a **secondary** approach with **YieldSign**; main-road arms get
-**MainRoadSign**. Ego must not leave the yield zone while main-road traffic is
-present. Rule-based experts stop / creep to a stop line about **5 m before**
-the junction end.
-
-Auxiliary agents spawn on **main-road** incoming lanes (gated IDM: released
-when ego is near its spawn-lane end so both meet at the junction).
-
-### 2.5 — stop (`sign=stop`)
-
-Same junction geometry / ego / aux axes as yield (2.4). Secondary **ego** arm
-gets **StopSign** (2.5). On **X** junctions the opposite secondary arm shows a
-**YieldSign** (2.4) plate — priority logic is unchanged (main vs secondary);
-only that plate differs. **T** junctions keep a single StopSign on the
-secondary stem. Main-road arms get **MainRoadSign**. Ego must yield to main
-traffic **and** make a mandatory full stop before the stop line.
-
-### 4.3 — roundabout (`sign=roundabout`)
-
-Ego spawns on a **spoke** (secondary). Ring edges are **main**. Visible
-**RoundaboutSign** on the ego spoke; invisible **RoundaboutYieldSign** tracks
-violations against the conflict-arc ring (20 m ENTRY_CONFLICT). Aux agents
-spawn on the **left** ring segment at ego's entry and share **ego's
-destination exit**.
-
-## Configuration
-
-See `configs/config.yaml` (manifest) and `configs/run.yaml` (closed-loop).
-Sign knobs: `configs/sign/{main_road,secondary,yield,stop,roundabout}.yaml`.
-Shared knobs: `configs/shared/`.
-
-
-| Group            | Key examples                                                                                  |
-| ---------------- | --------------------------------------------------------------------------------------------- |
-| `paths.`*        | `scenes_dir`, `output_base` (`data/runs/<sign>/`), `split` (`debug` / `train` / `test`)       |
-| `scenario.*`     | `max_scenarios` (cap **after** all axes)                                                      |
-| `augmentation.`* | `enabled`, `layout`, `auxiliary`                                                              |
-| `simulation.*`   | `spawn_velocity_ms`, `horizon`, `spawn_distance_before_end` (default **15 m**)                |
-| `auxiliary.`*    | `convoy_size`, `lanes_occupied`, `convoy_gap_m` (scalar or list), `release_when_ego_within_m` |
-| `gif.*`          | `enabled`, `policy`, `hide_signs`, `draw_path_conflict`                                       |
-
-
-Notes:
-
-- `simulation.spawn_distance_before_end` — where **ego** is placed on its
-approach (meters before lane end / junction). Default 15 m.
-- `auxiliary.release_when_ego_within_m` — when **gated aux** starts: ego's
-remaining distance to lane end ≤ this value. Keep ≥ spawn distance so aux
-is not held while a yielding ego waits outside the release radius.
-- `scenario.max_scenarios` — after layout × convoy × lanes × gaps, short-road
-skips, and geometry dedupe, **shuffle** then keep at most this many rows
-**per scene** (default 10).
-
-## Debug
-
-```bash
-python -m tools.run_simulation <scene_name>
-python -m tools.run_simulation <scene_name> --policy carl
-python tools/review_benchmark_gifs.py data/runs/stop/debug
-```
 

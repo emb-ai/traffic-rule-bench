@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Trajectory collector (2.1 / 2.3 / 2.4 / 2.5).
+"""Trajectory collector for every eval sign profile.
 
 Drives episodes through ``traffic_bench.eval.run.episode.run_one_episode`` so
 auxiliary agents and sign placement match the unified eval.
 
-Writes (output-dir = <OUT>/<policy>/<slug>, slug=2_4|2_1|2_5):
+Writes (output-dir = <OUT>/<policy>):
   <output-dir>/all_runs.jsonl
-  <output-dir>/by_sign/<slug>/by_scene/<uid>/<policy>_<variant>/replay.json
-  <output-dir>/by_sign/<slug>/by_scene/<uid>/<policy>_<variant>/replay.pkl
+  <output-dir>/by_scene/<uid>/<policy>_<variant>/replay.json
+  <output-dir>/by_scene/<uid>/<policy>_<variant>/replay.pkl
   <output-dir>/gifs/*.gif              optional (--save-gifs)
 
 Usage:
@@ -78,11 +78,11 @@ def _load_manifest(path: Path, count: Optional[int], start: int) -> list[dict]:
             if row.get("valid") is False:
                 continue
             row = enrich_manifest_row(row, cfg)
-            # Force PDD code so sidecar path uses slug 2_4 / 2_1 (not profile id).
             row["sign_code"] = SIGN_CODE
             row["_sign_code"] = SIGN_CODE
             row["pdd_code"] = SIGN_CODE
             row["sign_type"] = SIGN_TYPE
+            row["sign_id"] = PROFILE_ID
             rows.append(row)
     if start:
         rows = rows[start:]
@@ -158,6 +158,7 @@ def _flat_all_runs_row(
         "policy": policy,
         "variant": variant or "default",
         "sign_code": SIGN_CODE,
+        "sign_id": PROFILE_ID,
         "sign_slug": SIGN_SLUG,
         "sign_type": row.get("sign_type") or SIGN_TYPE,
         "scene_id": row.get("scene_id"),
@@ -189,13 +190,11 @@ def _flat_all_runs_row(
 def _expected_sidecar_path(
     replay_root: Path, row: dict, policy: str, variant: str
 ) -> Path:
-    """Colleague layout under <policy>/: <slug>/by_sign/<slug>/by_scene/.../replay.json."""
+    """Flat collect layout: <policy>/by_scene/<uid>/<policy>_<variant>/replay.json."""
     scene_uid = _scene_uid(row)
     expert_subdir = f"{policy}_{variant}" if variant else policy
-    # replay_root is <OUT>/<policy>; yield run_benchmark prefixes sign_slug.
     return (
-        replay_root / SIGN_SLUG / "by_sign" / SIGN_SLUG
-        / "by_scene" / scene_uid / expert_subdir / "replay.json"
+        replay_root / "by_scene" / scene_uid / expert_subdir / "replay.json"
     )
 
 
@@ -227,6 +226,7 @@ def write_catalog(manifest_rows: list[dict], out_path: Path) -> None:
         for row in manifest_rows:
             f.write(json.dumps({
                 "sign_code": SIGN_CODE,
+                "sign_id": PROFILE_ID,
                 "scene_id": row.get("scene_id"),
                 "scene_uid": _scene_uid(row),
                 "net_path": row.get("net_path"),
@@ -244,7 +244,6 @@ def run_collection(args: argparse.Namespace) -> int:
         return 2
 
     scenes_root = Path(args.scenes_root).resolve()
-    # Auto-fix: manifests use "sign_XXX/map.net.xml" under scenes/2_4/.
     if not scenes_root.is_dir():
         print(f"ERROR: scenes-root not a directory: {scenes_root}", file=sys.stderr)
         return 2
@@ -253,27 +252,35 @@ def run_collection(args: argparse.Namespace) -> int:
         net = probe_rows[0].get("net_path") or ""
         cand = scenes_root / net
         if not cand.exists():
-            alt = scenes_root / SIGN_SLUG
-            if (alt / net).exists():
-                print(f"[auto] scenes-root {scenes_root} → {alt} "
+            tried = [cand]
+            found = None
+            for alt_name in (
+                PROFILE_ID,
+                SIGN_CODE.replace(".", "_"),
+                SIGN_SLUG,
+            ):
+                alt = scenes_root / alt_name
+                tried.append(alt / net)
+                if (alt / net).exists():
+                    found = alt
+                    break
+            if found is not None:
+                print(f"[auto] scenes-root {scenes_root} → {found} "
                       f"(found {net} there)")
-                scenes_root = alt
+                scenes_root = found
             else:
+                extra = "\n".join(f"  Also tried: {p}" for p in tried[1:])
                 print(
-                    f"ERROR: map not found at {cand}\n"
-                    f"  Also tried: {alt / net}\n"
-                    f"  Pass --scenes-root pointing at data/<sign>/scenes "
+                    f"ERROR: map not found at {cand}\n{extra}\n"
+                    f"  Pass --scenes-root pointing at data/scenes/<sign> "
                     f"(or a folder that contains the net_path trees).",
                     file=sys.stderr,
                 )
                 return 2
     out_dir = Path(args.output_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Colleague: output-dir = <OUT>/<policy>/<sign>, sidecars at
-    #   <output-dir>/by_sign/<sign>/by_scene/...
-    # Yield run_benchmark writes <replay_root>/<sign>/by_sign/<sign>/...
-    # so replay_root must be the policy dir (parent of output-dir).
-    replay_root = out_dir.parent
+    # Sidecars: <output-dir>/by_scene/<uid>/<policy>_<variant>/replay.json
+    replay_root = out_dir
     gifs_dir = (out_dir / "gifs") if args.save_gifs else None
     if gifs_dir is not None:
         gifs_dir.mkdir(parents=True, exist_ok=True)
@@ -371,6 +378,7 @@ def run_collection(args: argparse.Namespace) -> int:
                     ego_variant=variant,
                     ego_sample_seed_base=args.ego_sample_seed_base,
                     replay_root=replay_root,
+                    replay_layout="flat",
                     save_gif=gif_path,
                     hide_signs=args.hide_signs,
                     auxiliary_agent=True,
@@ -445,13 +453,12 @@ def run_collection(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Collect priority-bench expert trajectories (with aux agents)"
+        description="Collect expert trajectories (with aux agents)"
     )
     p.add_argument(
         "--sign",
         default="yield",
-        help="Sign profile id: yield|main|stop|secondary "
-             "(aliases 2.4|2.1|2.5|2.3|main_road|secondary_road)",
+        help="Eval sign id (yield, direction/right, …) or official code (2.4)",
     )
     p.add_argument("--manifest", required=True,
                    help="real_manifest.jsonl from eval manifest (paths.split already applied)")
@@ -522,7 +529,7 @@ def main() -> None:
     SIGN_TYPE = profile.sign_type
     if not args.scenes_root:
         args.scenes_root = str(profile_scenes_dir(profile))
-    print(f"Sign profile: {profile.id} ({SIGN_CODE} / {SIGN_SLUG})")
+    print(f"Sign profile: {profile.id} ({SIGN_CODE})")
     if args.policy in {"carl", "carl_rule", "plant2", "plant2_rule", "plant2_ft"}:
         from traffic_bench.eval.engine.sim.checkpoints import resolve_nn_checkpoint
         args.model_path = resolve_nn_checkpoint(args.policy, args.model_path)
