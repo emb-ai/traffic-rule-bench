@@ -1,4 +1,6 @@
 <p align="center">
+  <img src="docs/static/images/signs/2.1.png" width="40" alt="Main road">
+  &nbsp;
   <img src="docs/static/images/signs/2.4.png" width="40" alt="Yield">
   &nbsp;
   <img src="docs/static/images/signs/2.5.png" width="40" alt="Stop">
