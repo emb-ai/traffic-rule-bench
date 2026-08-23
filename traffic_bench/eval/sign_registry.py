@@ -343,16 +343,58 @@ _PROFILES = (
 
 _BY_ID: dict[str, SignProfile] = {p.id: p for p in _PROFILES}
 _BY_SIGN_CODE: dict[str, SignProfile] = {p.sign_code: p for p in _PROFILES}
+_BY_DATA_SUBDIR: dict[str, SignProfile] = {p.data_subdir: p for p in _PROFILES}
+
+_NESTED_HYDRA = (
+    ("direction_", "direction/"),
+    ("one_way_", "one_way/"),
+    ("no_turn_", "no_turn/"),
+    ("detour_", "detour/"),
+)
 
 
 def get_profile(sign_id: str) -> SignProfile:
     """Look up by English eval id. Harvest yaml keys fall back to ``sign_code``."""
-    key = str(sign_id).strip()
-    profile = _BY_ID.get(key) or _BY_SIGN_CODE.get(key)
+    return resolve_sign_token(sign_id)
+
+
+def resolve_sign_token(raw: str) -> SignProfile:
+    """CLI / Hydra token → profile (``yield``, ``main_road``, ``direction/right``)."""
+    key = str(raw).strip()
+    if "/" in key:
+        key = key.replace("/", "_")
+    profile = _BY_ID.get(key) or _BY_SIGN_CODE.get(key) or _BY_DATA_SUBDIR.get(key)
     if profile is None:
         known = ", ".join(sorted(_BY_ID))
-        raise KeyError(f"Unknown sign {sign_id!r}. Expected one of: {known}")
+        raise KeyError(f"Unknown sign {raw!r}. Expected one of: {known}")
     return profile
+
+
+def hydra_sign_override(profile: SignProfile) -> str:
+    """Hydra ``sign=`` path for this profile (``main_road``, ``direction/right``)."""
+    if profile.id == "main":
+        return "main_road"
+    for prefix, folder in _NESTED_HYDRA:
+        if profile.id.startswith(prefix):
+            return f"{folder}{profile.id[len(prefix):]}"
+    return profile.id
+
+
+def profiles_from_sign_value(raw: str) -> list[SignProfile] | None:
+    """``all`` or ``yield,stop`` → profiles. A single token → ``None`` (leave to Hydra)."""
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if text.lower() == "all":
+        return list(_PROFILES)
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    if len(parts) <= 1:
+        return None
+    return [resolve_sign_token(p) for p in parts]
+
+
+def default_test_manifest(profile: SignProfile) -> Path:
+    return runs_dir(profile) / "test" / "real_manifest.jsonl"
 
 
 def list_profiles() -> list[SignProfile]:

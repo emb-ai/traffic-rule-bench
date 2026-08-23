@@ -42,9 +42,8 @@ apply_top_down_path_conflict_overlay_patch()
 from traffic_bench.envs.sumo_env import TrafficSignSumoEnv
 from traffic_bench.envs.sumo_traffic_manager import SumoTrafficManager
 from traffic_bench.agents.policies.comprehensive_rule_expert import ComprehensiveRuleExpertPolicy
-from traffic_bench.agents.policies.modified_idm_sign_compliant import ModifiedIDMSignCompliantPolicy
 from traffic_bench.agents.policies.rule_compliant_expert import RuleCompliantExpertPolicy
-from metadrive.policy.idm_policy import IDMPolicy, ModifiedIDMPolicy
+from metadrive.policy.idm_policy import ModifiedIDMPolicy
 from metadrive.policy.expert_policy import ExpertPolicy
 from traffic_bench.eval.engine.traffic.ego_defaults import (
     apply_ego_defaults,
@@ -148,6 +147,16 @@ from traffic_bench.eval.run.score import (
 EVAL_DIR = Path(__file__).resolve().parent.parent
 PDD_BENCH_DIR = EVAL_DIR.parent
 SDC_ROOT = PDD_BENCH_DIR.parent
+
+
+def _row_is_main_secondary(row: dict) -> bool:
+    """Yield / stop / secondary / roundabout already carry a yield-style tracker."""
+    return (
+        _row_is_yield(row)
+        or _row_is_stop(row)
+        or _row_is_secondary_road(row)
+        or _row_is_roundabout(row)
+    )
 
 
 def _slug_to_code(slug: str) -> str:
@@ -290,8 +299,6 @@ def run_one_episode(
     policy_cls = None
     if policy_type == "idm":
         policy_cls = ModifiedIDMPolicy  # Good driving, no sign compliance
-    elif policy_type == "modified_idm":
-        policy_cls = ModifiedIDMSignCompliantPolicy
     elif policy_type == "comprehensive_rule_expert":
         policy_cls = ComprehensiveRuleExpertPolicy
     elif policy_type == "rule_compliant":
@@ -414,7 +421,7 @@ def run_one_episode(
         sampled_ego_params = None
         if policy_cls is not None:
             policy_obj = policy_cls(base_env.vehicle, seed)
-            if policy_type in ("idm", "modified_idm", "comprehensive_rule_expert"):
+            if policy_type in ("idm", "comprehensive_rule_expert"):
                 if ego_variant == "default":
                     apply_ego_defaults(policy_obj)
                 elif ego_variant.startswith("s") and ego_variant[1:].isdigit():
@@ -450,7 +457,8 @@ def run_one_episode(
 
         aux_agent_mgr = None
         aux_spawn_lanes: list[str] = []
-        if auxiliary_agent and not _row_is_blocked_road(row) and not _row_uses_dual_path_nav(row):
+        want_aux = bool(row.get("auxiliary_agent", auxiliary_agent))
+        if want_aux and not _row_is_blocked_road(row) and not _row_uses_dual_path_nav(row):
             aux_distance_from_intersection = float(
                 row.get("aux_distance_from_intersection", aux_distance_from_intersection)
             )

@@ -84,7 +84,6 @@ def row_is_no_entry(row: dict) -> bool:
 
 
 COMPLIANT_NAV_POLICIES = frozenset({
-    "modified_idm",
     "comprehensive_rule_expert",
     "rule_compliant",
     "carl_rule",

@@ -1,6 +1,7 @@
 # Hydra root. Select a sign config, then overrides.
 #   python -m traffic_bench.eval manifest sign=yield
 #   python -m traffic_bench.eval manifest sign=direction/right
+#   python -m traffic_bench.eval manifest sign=yield paths.split=train
 
 defaults:
   - _self_
@@ -17,8 +18,8 @@ hydra:
 paths:
   scenes_dir: data/scenes/${sign}
   output_base: data/runs/${sign}
-  split: all  # all | train | test
-  experiment_name: ${now:%Y-%m-%d_%H-%M-%S}
+  split: debug
+  experiment_name: ${paths.split}
 
 scenario:
   max_scenarios: 10

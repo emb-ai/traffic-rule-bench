@@ -26,7 +26,7 @@ from traffic_bench.eval.run.main import (
     run_episodes,
 )
 
-IDM_FAMILY = {"idm", "modified_idm", "comprehensive_rule_expert"}
+IDM_FAMILY = {"idm", "comprehensive_rule_expert"}
 NN_NO_CHECKPOINT = {"rule_compliant", "ppo_lidar"}
 ALL_POLICIES = IDM_FAMILY | NN_NEED_CHECKPOINT | NN_NO_CHECKPOINT
 EGO_VARIANTS = ["default", "s1", "s2", "s3", "s4"]
@@ -129,7 +129,37 @@ def _run_metrics(out_dir: Path) -> None:
     )
 
 
+def _expand_policy_names(policies: list[str]) -> list[str]:
+    if len(policies) == 1 and policies[0] in {"all", "*"}:
+        return sorted(ALL_POLICIES)
+    return policies
+
+
+def print_run_plan(
+    *,
+    manifest_path: Path,
+    rows: list[dict],
+    policies: list[str],
+    out_dir: Path,
+    expand_idm: bool = True,
+) -> None:
+    baselines = plan_baselines(policies) if expand_idm else [(p, "default") for p in policies]
+    n_rows = len(rows)
+    n_ep = n_rows * len(baselines)
+    print("======== eval run ========")
+    print(f"  manifest:  {manifest_path}")
+    print(f"  rows:      {n_rows}")
+    print(
+        f"  policies:  {len(policies)} names → {len(baselines)} baselines "
+        f"({', '.join(f'{p}_{v}' for p, v in baselines)})"
+    )
+    print(f"  episodes:  {n_rows} × {len(baselines)} = {n_ep}")
+    print(f"  output:    {out_dir}")
+    print("==========================")
+
+
 def run_policy_list(cfg: DictConfig, policies: list[str]) -> None:
+    policies = _expand_policy_names(policies)
     bad = [p for p in policies if p not in ALL_POLICIES]
     if bad:
         raise ValueError(f"Unknown policies: {bad}. Supported: {sorted(ALL_POLICIES)}")
@@ -151,12 +181,15 @@ def run_policy_list(cfg: DictConfig, policies: list[str]) -> None:
     else:
         out_dir = Path("./eval_out").resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    print_run_plan(
+        manifest_path=manifest_path,
+        rows=rows,
+        policies=policies,
+        out_dir=out_dir,
+    )
 
     model_paths = _model_paths(cfg, policies)
     baselines = plan_baselines(policies)
-    print(f"Will run {len(baselines)} baseline(s):")
-    for policy, variant in baselines:
-        print(f"  - {policy}_{variant}")
 
     input_manifest = out_dir / "input_manifest.jsonl"
     input_manifest.write_text(

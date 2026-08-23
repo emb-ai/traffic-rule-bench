@@ -1,6 +1,7 @@
 # Hydra root for ``python -m traffic_bench.eval run``.
-#   policy=idm manifest=data/runs/yield/<ts>/real_manifest.jsonl
-#   policies=[idm,plant2] manifest=data/runs/yield/<ts>
+#   policy=idm sign=yield
+#   policies=all sign=all
+#   policy=idm manifest=data/runs/yield/debug
 
 defaults:
   - _self_

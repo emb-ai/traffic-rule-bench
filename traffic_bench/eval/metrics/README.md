@@ -1,6 +1,6 @@
 # metrics/ — episode JSONL → CSV / markdown
 
-Used after `python -m traffic_bench.eval run policies=[…]`, or on its own:
+Used after `python -m traffic_bench.eval run policies=all sign=yield`, or on its own:
 
 ```bash
 python -m traffic_bench.eval metrics csv --episodes-root <eval_out>/benchmark --out <eval_out>/metrics_per_episode.csv

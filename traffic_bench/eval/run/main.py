@@ -263,8 +263,15 @@ def run_one_policy(cfg: DictConfig) -> Path:
     else:
         out_dir = Path("eval_out").resolve() / run_name
     gif_cfg = cfg.get("gif") or {}
-    print(f"Policy: {policy}")
-    print(f"Selected scenes: {len(rows)}")
+    from traffic_bench.eval.run.policies import print_run_plan
+
+    print_run_plan(
+        manifest_path=manifest_path,
+        rows=rows,
+        policies=[policy],
+        out_dir=out_dir,
+        expand_idm=False,
+    )
     print(f"Scenes root: {scenes_root}")
     return run_episodes(
         policy=policy,

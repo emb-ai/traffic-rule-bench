@@ -3,13 +3,15 @@
 Hydra entry: [`main.py`](main.py) (`configs/run.yaml`).
 
 ```bash
-python -m traffic_bench.eval run policy=idm manifest=data/runs/yield/<ts>/real_manifest.jsonl
-python -m traffic_bench.eval run policies=[idm,plant2] manifest=data/runs/yield/<ts>
+python -m traffic_bench.eval run policy=idm sign=yield
+python -m traffic_bench.eval run policies=all sign=yield
+python -m traffic_bench.eval run policies=[idm,plant2] manifest=data/runs/yield/debug
 ```
 
-`policy=` runs one policy. `policies=[…]` is the same runner in a loop
-([`policies.py`](policies.py)), then `metrics`. IDM-family policies in the
-list expand to ego variants `default,s1–s4`.
+`policy=` runs one policy. `policies=[…]` or `policies=all` is the same runner
+in a loop ([`policies.py`](policies.py)), then `metrics`. Without `manifest=`,
+`sign=` reads `data/runs/<sign>/test/`. IDM-family policies in the list expand
+to ego variants `default,s1–s4`.
 
 | File | Role |
 | --- | --- |

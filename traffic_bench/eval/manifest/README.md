@@ -3,6 +3,8 @@
 ```bash
 python -m traffic_bench.eval manifest sign=yield
 python -m traffic_bench.eval manifest sign=direction/right
+python -m traffic_bench.eval manifest sign=yield paths.split=train
+python -m traffic_bench.eval manifest sign=all paths.split=test
 ```
 
 [`run.py`](run.py) is the Hydra entry (`configs/config.yaml`):

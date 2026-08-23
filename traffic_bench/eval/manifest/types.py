@@ -20,7 +20,7 @@ class PathsConfig:
     scenes_dir: Optional[str] = None
     output_base: Optional[str] = None
     experiment_name: Optional[str] = None
-    split: str = "all"
+    split: str = "debug"
 
 
 @dataclass

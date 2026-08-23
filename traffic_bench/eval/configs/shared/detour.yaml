@@ -2,7 +2,6 @@
 
 paths:
   scenes_dir: scenes
-  split: all
 
 augmentation:
   layout: false

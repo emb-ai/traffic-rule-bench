@@ -4,9 +4,8 @@ Run from the **repository root** after `pip install -e .`.
 
 Scenes come from [`scene_collection/`](../scene_collection/README.md) or
 Hugging Face [`emb-ai/traffic-sign-bench`](https://huggingface.co/datasets/emb-ai/traffic-sign-bench)
-into `<repo>/data/scenes/<sign>/`. Eval writes `<repo>/data/runs/<sign>/<timestamp>/`
-regardless of the current working directory.
-`sign=main_road` writes under `data/{scenes,runs}/main_road/`.
+into `<repo>/data/scenes/<sign>/`. Eval writes `<repo>/data/runs/<sign>/<split>/`
+(`debug` by default). `sign=main_road` writes under `data/{scenes,runs}/main_road/`.
 
 Sign rules live under [`signs/`](signs/README.md). Shared engine code is
 [`engine/`](engine/README.md). The CLI has three commands: `manifest`, `run`,
@@ -20,7 +19,7 @@ Sign rules live under [`signs/`](signs/README.md). Shared engine code is
 | [`sign_registry.py`](sign_registry.py) | eval id → group, spawn, data folder |
 | [`configs/`](configs/) | Hydra YAML; `sign/` ids and `shared/` knobs |
 | [`manifest/`](manifest/) | discover scenes → `signs.<group>.expand.generate` → jsonl |
-| [`run/`](run/) | closed-loop episodes; one policy or `policies=[…]` |
+| [`run/`](run/) | closed-loop episodes; one policy, `policies=[…]`, or `policies=all` |
 | [`metrics/`](metrics/README.md) | episode JSONL → CSV / markdown |
 | [`engine/`](engine/README.md) | map, traffic, spawn, expand types, MetaDrive glue |
 | [`signs/`](signs/README.md) | per-group expand / spawn / place / spec |
@@ -30,8 +29,10 @@ Sign rules live under [`signs/`](signs/README.md). Shared engine code is
 rows in `signs/<group>/expand.py` via `generate(cfg, scenes)`.
 
 **`run/`** — wrap the env, load a policy, apply a row, place plates, step,
-optional GIF. One policy is `run policy=idm`. Several policies is the same
-runner in a loop, then metrics: `run policies=[idm,plant2]`.
+optional GIF. One policy is `run policy=idm sign=yield`. Several policies:
+`run policies=[idm,plant2] sign=yield`. All registered policies:
+`run policies=all sign=yield` (or `sign=all`). Without `manifest=`, `run`
+reads `data/runs/<sign>/test/`.
 
 **`engine/`** — no sign rules. SUMO parse, IDM profiles, MetaDrive patches,
 HUD/GIF overlays, T/X arm geometry.
@@ -47,14 +48,41 @@ Nested folders stay only where Hydra already needs them (`direction/`,
 `one_way/`, `no_turn/`, `detour/`). CLI is `sign=yield` or
 `sign=direction/right`, not `sign=junction/yield`.
 
+## Run folders
+
+`paths.split` is the only folder switch. The directory name matches the flag.
+
+| Folder | Command | Who reads it |
+| --- | --- | --- |
+| `data/runs/<sign>/debug/` | `manifest sign=…` (default) | eyes / GIF (`gif.enabled=true`) |
+| `data/runs/<sign>/train/` | `manifest sign=… paths.split=train` | oracle (`MANIFEST=…/train/real_manifest.jsonl`) |
+| `data/runs/<sign>/test/` | `manifest sign=… paths.split=test` | `eval run` / metrics |
+
+Default `manifest` uses **test** scenes but writes to `debug/`. Re-running
+`manifest` into a folder that already has `eval_out/` or `gifs/` stops; remove
+those dirs first. A clean folder (only jsonl / `repro/`) is overwritten in place.
+
 ## Commands
 
 ```bash
+# debug folder (test scenes)
 python -m traffic_bench.eval manifest sign=yield
 python -m traffic_bench.eval manifest sign=direction/right
+python -m traffic_bench.eval manifest sign=yield gif.enabled=true gif.max_scenes=8
+
+# stable train / test folders
 python -m traffic_bench.eval manifest sign=yield paths.split=train
-python -m traffic_bench.eval run policy=idm manifest=data/runs/yield/<ts>/real_manifest.jsonl
-python -m traffic_bench.eval run policies=[idm,plant2] manifest=data/runs/yield/<ts>
+python -m traffic_bench.eval manifest sign=yield paths.split=test
+python -m traffic_bench.eval manifest sign=all paths.split=test
+python -m traffic_bench.eval manifest sign=yield,stop,main_road paths.split=train
+# after sign=all / a list: per-sign scenes + rows, then totals
+
+# closed-loop: default input is data/runs/<sign>/test/
+python -m traffic_bench.eval run policy=idm sign=yield
+python -m traffic_bench.eval run policies=all sign=yield
+python -m traffic_bench.eval run policies=all sign=all
+python -m traffic_bench.eval run policy=idm manifest=data/runs/yield/debug
+
 python -m traffic_bench.eval metrics csv --episodes-root <eval_out>/benchmark --out <eval_out>/metrics_per_episode.csv
 python -m traffic_bench.eval metrics aggregate --csv <eval_out>/metrics_per_episode.csv --out-dir <eval_out>
 python -m traffic_bench.eval metrics report --run-root <eval_out>
@@ -81,11 +109,11 @@ huggingface-cli download emb-ai/traffic-sign-bench --repo-type dataset --local-d
 
 ### 2. Manifest
 
-Output under `data/runs/<sign>/<timestamp>/` (`sign=main_road` → `data/runs/main_road/`):
+Output under `data/runs/<sign>/debug/` by default (`sign=main_road` → `data/runs/main_road/`):
 
 - `real_manifest.jsonl` — scenario rows (each has `split`)
 - `repro/` — pool snapshot + split filter + allocations ref
-- `config.yaml` — resolved Hydra config
+- `config.yaml` — resolved Hydra config (`paths.split` = folder, `paths.scene_split` = train/test scenes)
 - `gifs/` — if `gif.enabled=true`
 
 Augmentation axes live in `configs/shared/` and per-sign yaml under `augmentation:`:
@@ -100,7 +128,7 @@ Augmentation axes live in `configs/shared/` and per-sign yaml under `augmentatio
 One policy:
 
 ```bash
-python -m traffic_bench.eval run policy=idm manifest=data/runs/stop/<ts>/real_manifest.jsonl
+python -m traffic_bench.eval run policy=idm sign=stop
 ```
 
 Many policies + report (`plant2_ft` loads the newest `*.ckpt` under
@@ -109,10 +137,20 @@ Many policies + report (`plant2_ft` loads the newest `*.ckpt` under
 ```bash
 python -m traffic_bench.eval run \
     policies=[idm,comprehensive_rule_expert,plant2_ft] \
-    manifest=data/runs/stop/<ts>
+    sign=stop
 ```
 
+`policies=all` is the registered set: `idm` and `comprehensive_rule_expert` each
+× `default,s1–s4`, plus `carl`, `carl_rule`, `plant2`, `plant2_rule`,
+`plant2_ft`, `rule_compliant`, `ppo_lidar`.
+
 Oracle / trajectory collection is [`../oracle/`](../oracle/README.md), not this package.
+Always pass an explicit train manifest:
+
+```bash
+SIGN=yield MANIFEST=data/runs/yield/train/real_manifest.jsonl \
+  ./traffic_bench/oracle/collect_trajectories/collect_trajectories.sh
+```
 
 ## Eval id → group
 
@@ -200,7 +238,7 @@ Shared knobs: `configs/shared/`.
 
 | Group | Key examples |
 | --- | --- |
-| `paths.*` | `scenes_dir`, `output_base` (`data/runs/<sign>/`), `experiment_name` |
+| `paths.*` | `scenes_dir`, `output_base` (`data/runs/<sign>/`), `split` (`debug` / `train` / `test`) |
 | `scenario.*` | `max_scenarios` (cap **after** all axes) |
 | `augmentation.*` | `enabled`, `layout`, `auxiliary` |
 | `simulation.*` | `spawn_velocity_ms`, `horizon`, `spawn_distance_before_end` (default **15 m**) |
@@ -223,5 +261,5 @@ Notes:
 ```bash
 python -m tools.run_simulation <scene_name>
 python -m tools.run_simulation <scene_name> --policy carl
-python tools/review_benchmark_gifs.py data/runs/stop/<timestamp>
+python tools/review_benchmark_gifs.py data/runs/stop/debug
 ```

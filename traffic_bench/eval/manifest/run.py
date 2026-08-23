@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import List, Optional
 
@@ -14,7 +15,11 @@ EVAL_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = EVAL_DIR.parent.parent
 CHECKPOINTS_DIR = REPO_ROOT / "checkpoints"
 
-from traffic_bench.eval.engine.expand.manifest_config import DEFAULT_STOP_WAIT_STEPS
+from traffic_bench.eval.engine.expand.manifest_config import (
+    DEFAULT_STOP_WAIT_STEPS,
+    enrich_manifest_row,
+    load_manifest_config,
+)
 from traffic_bench.eval.engine.expand.manifest_expansion import (
     AuxiliaryParams,
     ExpansionConfig,
@@ -42,6 +47,66 @@ from traffic_bench.eval.sign_registry import (
 from traffic_bench.scene_collection.sign_scenes.materialize.pool_index import (
     normalize_split,
 )
+
+
+def eval_scene_split(raw) -> str:
+    """Map ``paths.split`` to a moscow-pool filter. ``debug`` uses the test pool."""
+    value = str(raw or "debug").strip().lower()
+    if value == "debug":
+        return normalize_split("test")
+    return normalize_split(value)
+
+
+def _nonempty_dir(path: Path) -> bool:
+    return path.is_dir() and any(path.iterdir())
+
+
+def _repo_rel(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path.resolve())
+
+
+def write_run_config(
+    cfg: DictConfig,
+    *,
+    path: Path,
+    scenes_dir: Path,
+    experiment_dir: Path,
+    scene_split: str,
+) -> None:
+    """Snapshot the resolved Hydra cfg plus the train/test scene filter actually used."""
+    payload = OmegaConf.to_container(cfg, resolve=True)
+    paths = payload.setdefault("paths", {})
+    paths["scenes_dir"] = _repo_rel(scenes_dir)
+    paths["output_base"] = _repo_rel(experiment_dir.parent)
+    paths["experiment_name"] = experiment_dir.name
+    paths["split"] = str(getattr(cfg.paths, "split", "debug"))
+    paths["scene_split"] = scene_split
+    path.write_text(OmegaConf.to_yaml(payload), encoding="utf-8")
+
+
+def assert_manifest_dir_clean(experiment_dir: Path) -> None:
+    leftover = [
+        name
+        for name in ("eval_out", "gifs")
+        if _nonempty_dir(experiment_dir / name)
+    ]
+    if not leftover:
+        return
+    try:
+        shown = experiment_dir.relative_to(REPO_ROOT)
+    except ValueError:
+        shown = experiment_dir
+    paths = " ".join(str(shown / name) for name in leftover)
+    print(
+        f"Refusing to overwrite {shown}: leftover {', '.join(leftover)}/.\n"
+        f"Remove them first:\n"
+        f"  rm -rf {paths}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 
 def _register_repo_resolver() -> None:
@@ -95,6 +160,7 @@ def render_gifs_from_manifest(
 
     rows = []
     seen = set()
+    manifest_defaults = load_manifest_config(manifest_path)
     for row in _iter_jsonl_rows(manifest_path):
         if not row.get("valid", True):
             continue
@@ -110,6 +176,7 @@ def render_gifs_from_manifest(
         seen.add(key)
         row["_backend"] = "sumo"
         row["_sign_code"] = row.get("sign_code") or row.get("pdd_code") or ""
+        row = enrich_manifest_row(row, manifest_defaults)
         rows.append(row)
         if gif_cfg.max_scenes is not None and len(rows) >= gif_cfg.max_scenes:
             break
@@ -281,7 +348,7 @@ def _job_from_hydra(cfg: DictConfig, profile, scenes_dir: Path, output_dir: Path
         profile=profile,
         scenes_dir=scenes_dir,
         output_dir=output_dir,
-        split=normalize_split(getattr(cfg.paths, "split", "all")),
+        split=eval_scene_split(getattr(cfg.paths, "split", "debug")),
         scenario=scenario_cfg,
         simulation=sim_cfg,
         expansion=expansion_cfg,
@@ -341,12 +408,17 @@ def main(cfg: DictConfig) -> None:
 
     experiment_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     experiment_dir.mkdir(parents=True, exist_ok=True)
-    config_path = experiment_dir / "config.yaml"
-    with open(config_path, "w", encoding="utf-8") as handle:
-        handle.write(OmegaConf.to_yaml(cfg))
-
+    assert_manifest_dir_clean(experiment_dir)
     job = _job_from_hydra(cfg, profile, scenes_dir, experiment_dir)
-    print(f"Using paths.split: {job.split}")
+    config_path = experiment_dir / "config.yaml"
+    write_run_config(
+        cfg,
+        path=config_path,
+        scenes_dir=scenes_dir,
+        experiment_dir=experiment_dir,
+        scene_split=job.split,
+    )
+    print(f"Using paths.split: {cfg.paths.split} (scene filter {job.split})")
     entries = _generate_for_family(job)
 
     gif_cfg = GifConfig(

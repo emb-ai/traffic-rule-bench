@@ -1,8 +1,5 @@
 # @package _global_
 
-paths:
-  split: all
-
 augmentation:
   layout: true
   auxiliary: false
