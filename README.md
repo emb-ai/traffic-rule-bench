@@ -1,11 +1,22 @@
 <p align="center">
-  <img src="docs/static/images/signs/2.4.png" width="44" alt="Yield">
-  &nbsp;
-  <img src="docs/static/images/signs/3.1.png" width="44" alt="No entry">
-  &nbsp;
-  <img src="docs/static/images/signs/5.15.1.png" width="44" alt="Lane directions">
-  &nbsp;
-  <img src="docs/static/images/signs/5.7.1.png" width="44" alt="One-way">
+  <img src="docs/static/images/signs/2.1.png" width="36" alt="Main road">
+  <img src="docs/static/images/signs/2.3.1.png" width="36" alt="Secondary">
+  <img src="docs/static/images/signs/2.4.png" width="36" alt="Yield">
+  <img src="docs/static/images/signs/2.5.png" width="36" alt="Stop">
+  <img src="docs/static/images/signs/3.1.png" width="36" alt="No entry">
+  <img src="docs/static/images/signs/3.2.png" width="36" alt="No traffic">
+  <img src="docs/static/images/signs/3.20.png" width="36" alt="No overtaking">
+  <img src="docs/static/images/signs/3.24.png" width="36" alt="Speed limit">
+  <img src="docs/static/images/signs/3.27.png" width="36" alt="No stopping">
+  <img src="docs/static/images/signs/4.2.1.png" width="36" alt="Pass right">
+  <img src="docs/static/images/signs/4.2.2.png" width="36" alt="Pass left">
+  <img src="docs/static/images/signs/4.2.3.png" width="36" alt="Pass either">
+  <img src="docs/static/images/signs/4.6.png" width="36" alt="Min speed">
+  <img src="docs/static/images/signs/5.7.1.png" width="36" alt="One-way">
+  <img src="docs/static/images/signs/5.11.1.png" width="36" alt="Bus lane">
+  <img src="docs/static/images/signs/5.15.1.png" width="36" alt="Lane directions">
+  <img src="docs/static/images/signs/5.19.png" width="36" alt="Crosswalk">
+  <img src="docs/static/images/signs/5.31_50.png" width="36" alt="Speed zone">
 </p>
 
 <h1 align="center">TrafficRuleBench</h1>
@@ -28,36 +39,36 @@ Same scene, two planners. The **base** policy often breaks the rule. The **rule 
 
 <table>
   <tr>
-    <th width="18%"></th>
-    <th width="41%">Base planner</th>
-    <th width="41%">Rule-compliant twin</th>
+    <th width="16%"></th>
+    <th width="42%">Base planner</th>
+    <th width="42%">Rule-compliant twin</th>
   </tr>
   <tr>
     <td align="center">
-      <img src="docs/static/images/signs/5.7.1.png" width="52" alt="5.7.1"><br>
+      <img src="docs/static/images/signs/5.7.1.png" width="36" alt="5.7.1"><br>
       <b>One-way</b><br>
       <sub>5.7.1 · CaRL</sub>
     </td>
-    <td><img src="docs/static/gifs/pairs/5.7.1/carl_base.gif" alt="CaRL violates one-way"></td>
-    <td><img src="docs/static/gifs/pairs/5.7.1/carl_expert.gif" alt="CaRL expert respects one-way"></td>
+    <td align="center"><img src="docs/static/gifs/pairs/5.7.1/carl_base.gif" width="240" alt="CaRL violates one-way"></td>
+    <td align="center"><img src="docs/static/gifs/pairs/5.7.1/carl_expert.gif" width="240" alt="CaRL expert respects one-way"></td>
   </tr>
   <tr>
     <td align="center">
-      <img src="docs/static/images/signs/3.1.png" width="52" alt="3.1"><br>
+      <img src="docs/static/images/signs/3.1.png" width="36" alt="3.1"><br>
       <b>No entry</b><br>
       <sub>3.1 · IDM</sub>
     </td>
-    <td><img src="docs/static/gifs/pairs/3.1/idm_base.gif" alt="IDM enters a no-entry road"></td>
-    <td><img src="docs/static/gifs/pairs/3.1/idm_expert.gif" alt="IDM expert avoids no-entry"></td>
+    <td align="center"><img src="docs/static/gifs/pairs/3.1/idm_base.gif" width="240" alt="IDM enters a no-entry road"></td>
+    <td align="center"><img src="docs/static/gifs/pairs/3.1/idm_expert.gif" width="240" alt="IDM expert avoids no-entry"></td>
   </tr>
   <tr>
     <td align="center">
-      <img src="docs/static/images/signs/5.15.1.png" width="52" alt="5.15.1"><br>
+      <img src="docs/static/images/signs/5.15.1.png" width="36" alt="5.15.1"><br>
       <b>Lane directions</b><br>
       <sub>5.15.1 · IDM</sub>
     </td>
-    <td><img src="docs/static/gifs/pairs/5.15.1/idm_base.gif" alt="IDM misses lane directions"></td>
-    <td><img src="docs/static/gifs/pairs/5.15.1/idm_expert.gif" alt="IDM expert follows lane arrows"></td>
+    <td align="center"><img src="docs/static/gifs/pairs/5.15.1/idm_base.gif" width="240" alt="IDM misses lane directions"></td>
+    <td align="center"><img src="docs/static/gifs/pairs/5.15.1/idm_expert.gif" width="240" alt="IDM expert follows lane arrows"></td>
   </tr>
 </table>
 
