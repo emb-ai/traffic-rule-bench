@@ -40,6 +40,42 @@ _SPEED_BINS = np.array(
 _WHEELBASE_M = 2.5
 _LOOKAHEAD_IDX = 1
 
+# Pure pursuit aims at a point on the predicted trajectory. Picking it by index
+# ties the aim distance to the waypoint spacing: at WPS_STRIDE=1 index 1 sits
+# ~1.8 m ahead, which is inside the wheelbase's turning scale and makes the
+# loop oscillate -- measured as steer_delta 0.032 against the expert's 0.047 at
+# a third of its smoothness, i.e. the car wobbles instead of changing lane.
+# Choosing the point by ARC LENGTH, growing with speed, is the textbook form and
+# is independent of how the model was trained.
+_LOOKAHEAD_K_V = float(os.environ.get("PLANT2_LOOKAHEAD_K_V", 0.8))    # seconds of travel
+_LOOKAHEAD_L0_M = float(os.environ.get("PLANT2_LOOKAHEAD_L0_M", 3.0))  # floor at standstill
+_LOOKAHEAD_MIN_M = float(os.environ.get("PLANT2_LOOKAHEAD_MIN_M", 4.0))
+_LOOKAHEAD_MAX_M = float(os.environ.get("PLANT2_LOOKAHEAD_MAX_M", 12.0))
+
+
+def _lookahead_point(wps_np: np.ndarray, speed_mps: float):
+    """Point at the speed-scaled lookahead distance along the predicted path.
+
+    Falls back to the far end when the path is shorter than the target distance
+    rather than extrapolating: a short trajectory is exactly where extrapolation
+    is least trustworthy.
+    """
+    if wps_np is None or wps_np.shape[0] == 0:
+        return None
+    pts = np.vstack([np.zeros((1, 2), dtype=wps_np.dtype), wps_np[:, :2]])
+    seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    arc = np.concatenate([[0.0], np.cumsum(seg)])
+    target = float(np.clip(_LOOKAHEAD_K_V * max(speed_mps, 0.0) + _LOOKAHEAD_L0_M,
+                           _LOOKAHEAD_MIN_M, _LOOKAHEAD_MAX_M))
+    if arc[-1] <= 1e-6:
+        return None
+    if target >= arc[-1]:
+        return pts[-1]
+    i = int(np.searchsorted(arc, target))
+    lo, hi = arc[i - 1], arc[i]
+    t = 0.0 if hi <= lo else (target - lo) / (hi - lo)
+    return pts[i - 1] + t * (pts[i] - pts[i - 1])
+
 
 def _env_float_or_none(name: str) -> Optional[float]:
     raw = os.environ.get(name)
@@ -114,8 +150,11 @@ def _wps_to_action(pred_plan, current_speed: float, target_speed_mps: float) -> 
         if wps_np.ndim > 2:
             wps_np = wps_np.squeeze(0)
         if wps_np.shape[0] > 0:
-            idx = min(_LOOKAHEAD_IDX, wps_np.shape[0] - 1)
-            tx, ty = float(wps_np[idx, 0]), float(wps_np[idx, 1])
+            aim = _lookahead_point(wps_np, current_speed)
+            if aim is None:
+                idx = min(_LOOKAHEAD_IDX, wps_np.shape[0] - 1)
+                aim = wps_np[idx, :2]
+            tx, ty = float(aim[0]), float(aim[1])
             dist = max(np.hypot(tx, ty), 1e-3)
             alpha = np.arctan2(ty, max(tx, 1e-3))
             delta = np.arctan2(2.0 * _WHEELBASE_M * np.sin(alpha), dist)
