@@ -459,7 +459,66 @@ class PlanT2MetaDriveAdapter:
         else:
             action = self._pid_action_persistent(pred_plan, ego_speed, target_speed_mps)
 
-        return np.clip(np.asarray(action, dtype=np.float32), -1.0, 1.0)
+        action = np.clip(np.asarray(action, dtype=np.float32), -1.0, 1.0)
+
+        trace_dir = _os.environ.get("PLANT2_TRACE_DIR")
+        if trace_dir:
+            self._append_trace(trace_dir, vehicle, engine, batch, pred_plan, action, ego_speed)
+
+        return action
+
+    def _append_trace(self, trace_dir, vehicle, engine, batch, pred_plan, action, ego_speed):
+        """Per-step JSONL trace: command, plan and visible objects.
+
+        Aggregate episode metrics cannot separate a plan that oscillates from a
+        controller that oscillates, nor tell an obstacle-driven offset from an
+        offset that happens to have the right average. Both need the step series.
+        """
+        import json as _json
+        import os as _os
+
+        try:
+            _os.makedirs(trace_dir, exist_ok=True)
+            pred_path, pred_wps, _ = pred_plan
+
+            def _xy(t):
+                if t is None:
+                    return []
+                a = t.detach().cpu().numpy()
+                if a.ndim > 2:
+                    a = a.squeeze(0)
+                return [[round(float(p[0]), 3), round(float(p[1]), 3)] for p in a[:, :2]]
+
+            objs = []
+            x_objs = batch.get("x_objs")
+            if x_objs is not None:
+                rows = x_objs[0] if x_objs.dim() == 3 else x_objs
+                for r in rows.tolist():
+                    if r[0] > 0:
+                        objs.append([round(r[0], 1), round(r[1], 2), round(r[2], 2),
+                                     round(r[4], 1)])
+
+            pos = getattr(vehicle, "position", (0.0, 0.0))
+            rec = {
+                "ep_step": int(getattr(engine, "episode_step", -1)),
+                "seed": getattr(engine, "current_seed", None),
+                "ego_x": round(float(pos[0]), 3),
+                "ego_y": round(float(pos[1]), 3),
+                "heading": round(float(getattr(vehicle, "heading_theta", 0.0)), 4),
+                "speed": round(ego_speed, 3),
+                "steer": round(float(action[0]), 4),
+                "throttle": round(float(action[1]), 4),
+                "wps": _xy(pred_wps),
+                "path": _xy(pred_path),
+                "objs": objs,
+            }
+            fname = _os.path.join(trace_dir, f"trace_{_os.getpid()}.jsonl")
+            with open(fname, "a") as fh:
+                fh.write(_json.dumps(rec) + "\n")
+        except Exception as exc:      # tracing must never break an eval run
+            if not getattr(self, "_trace_warned", False):
+                self._trace_warned = True
+                print(f"[trace] disabled after error: {exc}", flush=True)
 
     def _ensure_controllers(self) -> None:
         """Lazily create the persistent lateral/longitudinal controllers.
