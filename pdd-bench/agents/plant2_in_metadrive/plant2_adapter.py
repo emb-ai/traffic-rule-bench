@@ -463,11 +463,13 @@ class PlanT2MetaDriveAdapter:
 
         trace_dir = _os.environ.get("PLANT2_TRACE_DIR")
         if trace_dir:
-            self._append_trace(trace_dir, vehicle, engine, batch, pred_plan, action, ego_speed)
+            self._append_trace(trace_dir, vehicle, engine, batch, pred_plan, action,
+                               ego_speed, route_ego)
 
         return action
 
-    def _append_trace(self, trace_dir, vehicle, engine, batch, pred_plan, action, ego_speed):
+    def _append_trace(self, trace_dir, vehicle, engine, batch, pred_plan, action,
+                      ego_speed, route_ego=None):
         """Per-step JSONL trace: command, plan and visible objects.
 
         Aggregate episode metrics cannot separate a plan that oscillates from a
@@ -511,6 +513,10 @@ class PlanT2MetaDriveAdapter:
                 "wps": _xy(pred_wps),
                 "path": _xy(pred_path),
                 "objs": objs,
+                # The route the model is given here, to compare against the route
+                # stored in the training dumps for the same scene.
+                "route": ([[round(float(p[0]), 3), round(float(p[1]), 3)]
+                           for p in route_ego] if route_ego is not None else []),
             }
             fname = _os.path.join(trace_dir, f"trace_{_os.getpid()}.jsonl")
             with open(fname, "a") as fh:
