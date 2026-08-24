@@ -243,6 +243,23 @@ def _apply_manifest_npc_speed_cap(row: dict) -> None:
 RELOCATE_EGO_TO_SIGN_LANE = True
 
 
+def relocate_ego_flag() -> bool:
+    """Effective relocation setting, with an environment override.
+
+    Recording and evaluation reach this flag through different callers, so they
+    can disagree without anyone noticing: the expert records with relocation on
+    while an NN policy is evaluated with it off, and the two runs then see
+    different ego navigation -- and different routes -- on the same scene. The
+    override exists so both sides can be pinned to one value from outside.
+    """
+    import os
+
+    override = os.environ.get("PDD_RELOCATE_EGO_TO_SIGN_LANE")
+    if override is not None and override.strip() != "":
+        return override.strip().lower() in ("1", "true", "yes")
+    return RELOCATE_EGO_TO_SIGN_LANE
+
+
 def _sample_profile_for_catalog_row(row: dict, max_steps: int) -> None:
     """Catalog-direct mode (no materialization): the row has no profile_*.
 
@@ -315,7 +332,7 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         num_scenarios=100000,
         vehicle_config=vehicle_config,
         debug_one_way_sign_selection=bool(row.get("debug_one_way_sign_selection", False)),
-        relocate_ego_to_sign_lane=RELOCATE_EGO_TO_SIGN_LANE,
+        relocate_ego_to_sign_lane=relocate_ego_flag(),
     )
     # Control-rate test toggle. Default MetaDrive = 10 Hz (physics 0.02s *
     # decision_repeat 5); CARLA runs the controller at 20 Hz. These keys are
