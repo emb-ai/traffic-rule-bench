@@ -77,3 +77,18 @@ pdd-bench/scripts/per_sign_bench/report_cumulative.md
 pdd-bench/scripts/per_sign_bench/optim/
 
 pdd-bench/scripts/per_sign_bench/merge_and_report_2node.py
+
+### Pipeline work dirs (scripts + results only; dumps/eval artifacts stay local)
+plant2_stop_pipeline_*/plant2_l1_stop_*/
+plant2_stop_pipeline_*/trajectories_test/
+plant2_stop_pipeline_*/eval_test/
+plant2_stop_pipeline_*/eval/
+plant2_stop_pipeline_*/gifs_*/
+plant2_stop_pipeline_*/logs/
+plant2_stop_pipeline_*/gif_input/
+plant2_stop_pipeline_*/xobjs_probe/runs/
+plant2_stop_pipeline_*/xobjs_probe/logs/
+plant2_stop_pipeline_*/2_5/
+plant2_stop_pipeline_*/__pycache__/
+PlanT/checkpoints/
+scripts/plant2_ft_pipeline/tools/outputs_debug/

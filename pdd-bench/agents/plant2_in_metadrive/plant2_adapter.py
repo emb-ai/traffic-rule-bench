@@ -95,6 +95,95 @@ def _maybe_log_speed_pred(
         pass
 
 
+def _sign_class_num(code: str) -> float:
+    """class_emb index for a PDD code in ``x_objs[..., 0]`` (2.5 -> 12.0)."""
+    try:
+        from plant_variables import PlanTVariables
+        return float(PlanTVariables.class_nums[code])
+    except Exception:
+        # SIGN_CODES order after emergency=6; 2.5 is the 6th code.
+        return float(7 + ("2.1", "2.3.1", "2.3.2", "2.3.3", "2.4", "2.5").index(code))
+
+
+def _sign_manager_ego_frame(engine, vehicle) -> list:
+    """Ground-truth PDD signs from ``traffic_sign_manager``, ego frame (y=right).
+
+    Independent of ``collect_boxes`` so the log can distinguish "no sign in the
+    world" from "sign dropped by the collector" (allowlist / 30 m cutoff)."""
+    mgr = getattr(engine, "traffic_sign_manager", None)
+    out = []
+    for sign in list(getattr(mgr, "signs", None) or []):
+        if sign is None or not hasattr(sign, "position"):
+            continue
+        try:
+            from bench.plant2_frames import resolve_pdd_code_from_sign
+            pdd = resolve_pdd_code_from_sign(sign)
+        except Exception:
+            pdd = None
+        try:
+            rel = np.array([sign.position[0] - vehicle.position[0],
+                            sign.position[1] - vehicle.position[1]])
+            local = vehicle.convert_to_local_coordinates(rel, 0.0)
+            x, y = float(local[0]), -float(local[1])
+        except Exception:
+            continue
+        out.append({
+            "cls": type(sign).__name__,
+            "pdd": pdd,
+            "x": round(x, 2),
+            "y": round(y, 2),
+            "d": round(float(np.hypot(x, y)), 2),
+        })
+    return out
+
+
+def _maybe_log_xobjs(engine, vehicle, batch, action, frame_idx, desired_speed=None) -> None:
+    """Append one JSON line per frame when ``PLANT2_XOBJS_LOG_PATH`` is set.
+
+    Records whether the 2.5 stop-sign token reached ``x_objs`` (the model input),
+    where it sits in the ego frame, the ground-truth sign poses straight from
+    ``traffic_sign_manager``, ego speed and the commanded action. Off unless the
+    env var is set, so it cannot affect other runs."""
+    path = os.environ.get("PLANT2_XOBJS_LOG_PATH")
+    if not path:
+        return
+    try:
+        x_objs = batch["x_objs"].detach().cpu().numpy()
+        idxs = batch["idxs"].detach().cpu().numpy()[0]
+        valid = [int(i) for i in idxs if int(i) != 0]
+        stop_num = _sign_class_num("2.5")
+        types, tokens_25 = [], []
+        for i in valid:
+            if i >= x_objs.shape[0]:
+                continue
+            row = x_objs[i]
+            types.append(round(float(row[0]), 1))
+            if abs(float(row[0]) - stop_num) < 1e-6:
+                tokens_25.append({
+                    "x": round(float(row[1]), 2),
+                    "y": round(float(row[2]), 2),
+                    "d": round(float(np.hypot(row[1], row[2])), 2),
+                    "yaw": round(float(row[3]), 1),
+                })
+        rec = {
+            "f": int(frame_idx),
+            "v": round(float(getattr(vehicle, "speed", 0.0)), 3),
+            "n_objs": len(valid),
+            "types": types,
+            "n25": len(tokens_25),
+            "s25": tokens_25[0] if tokens_25 else None,
+            "mgr": _sign_manager_ego_frame(engine, vehicle),
+            "act": [round(float(action[0]), 4), round(float(action[1]), 4)],
+        }
+        if desired_speed is not None:
+            rec["desired_speed"] = round(float(desired_speed), 3)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as exc:  # never break a rollout for a diagnostic
+        if os.environ.get("PLANT2_XOBJS_LOG_STRICT"):
+            print(f"[xobjs-log] failed: {type(exc).__name__}: {exc}", flush=True)
+
+
 def _wps_to_action(pred_plan, current_speed: float, target_speed_mps: float) -> np.ndarray:
     """Compute MetaDrive [steer, throttle] directly from pred_wps via pure-pursuit.
 
@@ -194,6 +283,10 @@ class PlanT2MetaDriveAdapter:
         # canonical CARLA PlanT agent, which holds lat_pid/lon_pid as members.
         self._lat_pid = None
         self._lon_pid = None
+        # Per-episode frame counter + last desired speed, for the env-gated
+        # PLANT2_XOBJS_LOG_PATH trace only.
+        self._frame_idx = 0
+        self._last_desired_speed = None
 
     def _ensure_loaded(self) -> None:
         if self._model is not None:
@@ -232,15 +325,20 @@ class PlanT2MetaDriveAdapter:
         # speed_token → new-style HFLM that appends a dedicated speed token at end
         _has_speed_token: bool = "speed_token" in _sd
 
-        # sign_emb → checkpoint trained with explicit PDD sign_id token
-        _has_sign_emb: bool = any(k.startswith("sign_emb.") for k in _sd)
-        self._use_sign_id: bool = _has_sign_emb
+        # Sign info is carried only via x_objs class_id → class_emb (no sign_id token).
+        _has_legacy_sign_emb: bool = any(k.startswith("sign_emb.") for k in _sd)
+        _has_class_emb: bool = any(k.startswith("class_emb.") for k in _sd)
 
         print(
             f"[PlanT2Adapter] ckpt keys: speed_classifier={self._has_trained_speed_head}  "
             f"ego_speed_emb={_has_ego_speed_emb}  speed_token={_has_speed_token}  "
-            f"sign_emb={_has_sign_emb}"
+            f"class_emb={_has_class_emb}  legacy_sign_emb={_has_legacy_sign_emb}"
         )
+        if _has_legacy_sign_emb and not _has_class_emb:
+            print(
+                "[PlanT2Adapter] WARNING: ckpt has sign_emb but no class_emb — "
+                "object/sign embeddings will be randomly initialised; retrain required."
+            )
         if not self._has_trained_speed_head:
             print(
                 "[PlanT2Adapter] WARNING: no speed_classifier in ckpt — "
@@ -309,6 +407,8 @@ class PlanT2MetaDriveAdapter:
         errors. (_lon_pid is a stateless linear-regression controller — no reset.)"""
         if self._lat_pid is not None:
             self._lat_pid.error_history = []
+        self._frame_idx = 0
+        self._last_desired_speed = None
 
     def get_action(self, vehicle, engine) -> np.ndarray:
         """Run one PlanT2 inference step → MetaDrive `[steering, throttle]` in [-1, 1]."""
@@ -357,8 +457,6 @@ class PlanT2MetaDriveAdapter:
             bev_resolution=128,
             bev_size_meters=64.0,
             device=self.device,
-            include_sign_id=bool(getattr(self, "_use_sign_id", False)),
-            sign_code=getattr(self, "sign_code", None),
         )
 
         with torch.no_grad():
@@ -383,7 +481,12 @@ class PlanT2MetaDriveAdapter:
         else:
             action = self._pid_action_persistent(pred_plan, ego_speed, target_speed_mps)
 
-        return np.clip(np.asarray(action, dtype=np.float32), -1.0, 1.0)
+        action = np.clip(np.asarray(action, dtype=np.float32), -1.0, 1.0)
+        _maybe_log_xobjs(engine, vehicle, batch, action,
+                         getattr(self, "_frame_idx", 0),
+                         desired_speed=getattr(self, "_last_desired_speed", None))
+        self._frame_idx = getattr(self, "_frame_idx", 0) + 1
+        return action
 
     def _ensure_controllers(self) -> None:
         """Lazily create the persistent lateral/longitudinal controllers.
@@ -460,6 +563,7 @@ class PlanT2MetaDriveAdapter:
             else:
                 desired_speed = target_speed_mps
         desired_speed = min(desired_speed, target_speed_mps)
+        self._last_desired_speed = desired_speed
 
         # 2. Longitudinal control (persistent, stateless linear-regression controller)
         hazard_brake = desired_speed < 0.05

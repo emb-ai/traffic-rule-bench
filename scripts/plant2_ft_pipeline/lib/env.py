@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 _DEFAULT_SHEPELEV = "/home/jovyan/shares/SR006.nfs3/shepelev"
+_DEFAULT_TRB_ROOT = "/home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench"
 
 
 def shepelev() -> Path:
@@ -13,7 +14,7 @@ def shepelev() -> Path:
 
 
 def trb_root() -> Path:
-    return Path(os.environ.get("TRB_ROOT", shepelev() / "traffic-rule-bench"))
+    return Path(os.environ.get("TRB_ROOT", _DEFAULT_TRB_ROOT))
 
 
 def plan_t() -> Path:

@@ -80,10 +80,14 @@ def build_finetune_cmd(cfg: FinetuneConfig) -> list[str]:
     os.environ["WANDB_MODE"] = cfg.wandb_mode
     os.environ["CUDA_VISIBLE_DEVICES"] = cfg.cuda_device
 
+    # working_dir is the plant2 checkout (parent of PlanT); ckpts go to
+    # {working_dir}/PlanT/checkpoints_ft/{addon}. Always override Hydra user yaml.
+    plant2_root = pt.parent
     cmd = [
         str(cfg.python),
         "-u",
         str(cfg.shim),
+        f"user.working_dir={hydra_escape(plant2_root)}",
         "resume=True",
         f"resume_path={hydra_escape(cfg.resume_ckpt)}",
         "gpus=1",

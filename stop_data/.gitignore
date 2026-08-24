@@ -1,0 +1,5 @@
+# Vendored data, not source. Reproduce with
+# plant2_stop_pipeline_signfix/vendor_stop_data.py instead of committing it.
+*
+!.gitignore
+!README.md

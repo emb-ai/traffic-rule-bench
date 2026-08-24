@@ -1,0 +1,9 @@
+RUNNING 2026-08-19T22:16:12+03:00
+OK dump_train 2026-08-19T22:29:54+03:00
+OK collect_test 2026-08-19T22:51:52+03:00
+OK select_test 2026-08-19T22:51:53+03:00
+OK dump_test 2026-08-19T22:55:12+03:00
+OK split 2026-08-19T23:02:00+03:00
+OK prefill 2026-08-20T00:04:12+03:00
+OK train 2026-08-20T00:12:31+03:00
+FAIL eval 2026-08-20T00:13 ModuleNotFoundError traffic_signs.pedestrian_crossing_sign in all 50 scene subprocesses (recorded retroactively)

@@ -318,26 +318,21 @@ def spawn_auxiliary_from_row(env, row: dict, scenes_root: Path) -> None:
 
 
 def readd_signs(env, sidecar, backend) -> None:
-    if backend == "sumo":
-        return
-    from factorized_space.benchmark_runner import SIGN_CLASS_MAP
+    """Restore recorded sign placement, sharing the GIF renderer's logic.
 
-    sign_mgr = env.engine.traffic_sign_manager
+    ``backend`` is kept for call-site compatibility: every backend, sumo
+    included, needs the restore. The sumo env spawns its sign before ego is
+    relocated onto the recorded route, so without this the sign sits tens of
+    metres from the recorded episode and the 30 m cutoff in
+    ``collect_boxes`` drops it.
+    """
+    del backend
+    from factorized_space.benchmark_runner import SIGN_CLASS_MAP
+    from expert_replay_inenv import _restore_recorded_signs
+
+    sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
     rn = env.current_map.road_network
-    for sign_info in sidecar.get("signs", []):
-        cls_name = sign_info["sign_class"]
-        sign_cls = next(
-            (v for v in SIGN_CLASS_MAP.values() if v.__name__ == cls_name), None)
-        if sign_cls is None:
-            continue
-        lane_idx = sign_info.get("lane_index")
-        lane = rn.get_lane(tuple(lane_idx)) if lane_idx else env.vehicle.lane
-        sign_mgr.add_sign(
-            sign_cls, lane=lane,
-            longitudinal_offset=sign_info.get("longitudinal_offset", 0.0),
-            lateral_offset=sign_info.get("lateral_offset", 0.0),
-            use_random_lane=False,
-        )
+    _restore_recorded_signs(env, sidecar, sign_mgr, rn, SIGN_CLASS_MAP)
 
 
 def dump_plant2(

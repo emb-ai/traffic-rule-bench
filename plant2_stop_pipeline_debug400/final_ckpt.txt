@@ -1,0 +1,1 @@
+/home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2/PlanT/checkpoints_ft/stop_debug400_lr3e4_ep20/last_ft_stop_debug400_lr3e4_ep20_1.ckpt

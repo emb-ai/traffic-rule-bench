@@ -1,0 +1,3 @@
+SUCCESS 2026-08-20T06:44:02+03:00
+ckpt=/home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2/PlanT/checkpoints_ft/stop_signfix_lr3e4_ep20/last_ft_stop_signfix_lr3e4_ep20_1.ckpt
+gifs=/home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_stop_pipeline_signfix/gif_paths.txt

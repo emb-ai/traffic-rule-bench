@@ -1,0 +1,5 @@
+/home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_stop_pipeline_signfix/eval_test/gifs5/benchmark/full/policy_eval/plant2_default/gifs/junc_188469073_v8_s1514348650_plant2_default.gif
+/home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_stop_pipeline_signfix/eval_test/gifs5/benchmark/full/policy_eval/plant2_default/gifs/junc_335781195_v0_s2023149839_plant2_default.gif
+/home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_stop_pipeline_signfix/eval_test/gifs5/benchmark/full/policy_eval/plant2_default/gifs/junc_335781195_v0_s3379066212_plant2_default.gif
+/home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_stop_pipeline_signfix/eval_test/gifs5/benchmark/full/policy_eval/plant2_default/gifs/junc_cluster_307620151_59642360_v21_s3269034156_plant2_default.gif
+/home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_stop_pipeline_signfix/eval_test/gifs5/benchmark/full/policy_eval/plant2_default/gifs/junc_cluster_335952128_576374128_576374753_577060348_v2_s2114603426_plant2_default.gif

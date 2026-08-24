@@ -29,6 +29,17 @@ import numpy as np
 
 _DUMP_DEBUG = os.environ.get("PLANT2_DUMP_DEBUG", "").lower() in ("1", "true", "yes")
 
+# Only these PDD codes may become sign boxes (and therefore x_objs tokens).
+# Restoring the recorded signs puts MainRoadSign (2.1) and YieldSign (2.4) into
+# the env alongside the StopSign, but the stop benchmark must train on 2.5
+# alone. Set PLANT2_DUMP_SIGN_CLASSES to a comma-separated list of codes, or to
+# "all" to disable the filter.
+_DUMP_SIGN_CLASSES_ENV = os.environ.get("PLANT2_DUMP_SIGN_CLASSES", "2.5").strip()
+DUMP_SIGN_CLASS_ALLOWLIST = (
+    None if _DUMP_SIGN_CLASSES_ENV.lower() == "all"
+    else {c.strip() for c in _DUMP_SIGN_CLASSES_ENV.split(",") if c.strip()}
+)
+
 
 def _dbg(msg: str) -> None:
     if _DUMP_DEBUG:
@@ -183,7 +194,7 @@ def collect_boxes(engine, vehicle,
     except ImportError:  # pragma: no cover
         BaseTrafficSign = ()  # type: ignore
 
-    # Known PDD codes that have a dedicated tok_emb index.
+    # Known PDD codes that have a dedicated class_emb index.
     try:
         from util.sign_id import SIGN_CODES as _SIGN_CODES
         known_pdd = set(_SIGN_CODES)
@@ -338,6 +349,10 @@ def collect_boxes(engine, vehicle,
         sign_id = getattr(sign, "id", None) or getattr(sign, "name", None)
         if not pdd or pdd not in known_pdd:
             _dbg(f"sign skip: type={sign_type} id={sign_id} pdd={pdd!r} (unknown)")
+            continue
+        if DUMP_SIGN_CLASS_ALLOWLIST is not None and pdd not in DUMP_SIGN_CLASS_ALLOWLIST:
+            _dbg(f"sign skip: pdd={pdd} id={sign_id} "
+                 f"(not in DUMP_SIGN_CLASS_ALLOWLIST={sorted(DUMP_SIGN_CLASS_ALLOWLIST)})")
             continue
         x, y = _ego_xy(sign)
         if x * x + y * y > 900.0:  # 30m, same as stop_sign / TL in PlanTDataset

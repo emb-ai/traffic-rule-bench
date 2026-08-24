@@ -1,0 +1,2 @@
+SUCCESS 2026-08-21T15:52:13+03:00
+results=/home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_stop_pipeline_lrgrid_ep10_classemb/RESULTS.md
