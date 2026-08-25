@@ -43,9 +43,23 @@ GROUPS = [
 
 
 def compliance(rows, need_dest):
-    sel = [r for r in rows if tb(r.get("target_in_zone"))]
+    """Share of runs that obeyed the sign.
+
+    Without need_dest the denominator is the in-zone episodes -- the sheet's
+    established SC (in zone). With need_dest the denominator is EVERY episode,
+    and an episode counts only when it reached the destination, entered the
+    zone and stayed compliant: a run that crashes before the sign then scores
+    zero instead of leaving the denominator and inflating the rate.
+    """
+    if not rows:
+        return None
     if need_dest:
-        sel = [r for r in sel if tb(r.get("arrived_dest"))]
+        good = sum(1 for r in rows
+                   if tb(r.get("target_in_zone"))
+                   and tb(r.get("arrived_dest"))
+                   and tb(r.get("sign_compliant_high")))
+        return good / len(rows)
+    sel = [r for r in rows if tb(r.get("target_in_zone"))]
     if not sel:
         return None
     return sum(1 for r in sel if tb(r.get("sign_compliant_high"))) / len(sel)
@@ -63,7 +77,7 @@ def main(paths, tsv=False, md=False):
         data[str(r.get("pdd_code"))][str(r.get("baseline"))][str(r.get("scene_id"))].append(r)
 
     for need_dest, title in ((False, "Sign Compliance (in zone)"),
-                             (True, "Sign Compliance (arrived AND in zone)")):
+                             (True, "Sign Compliance (arrived AND in zone), over all episodes")):
         if md:
             print("\n**" + title + "** — old/new in each cell\n")
         else:
