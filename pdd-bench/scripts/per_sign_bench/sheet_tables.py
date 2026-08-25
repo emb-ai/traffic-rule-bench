@@ -36,7 +36,7 @@ def compliance(rows, need_dest):
     return sum(1 for r in sel if tb(r.get("sign_compliant_high"))) / len(sel)
 
 
-def main(paths):
+def main(paths, tsv=False):
     rows = []
     for p in paths:
         with open(p, newline="") as fh:
@@ -47,16 +47,26 @@ def main(paths):
     for r in rows:
         data[str(r.get("pdd_code"))][str(r.get("baseline"))][str(r.get("scene_id"))].append(r)
 
-    for need_dest, title in ((False, "TABLE 1 - Sign Compliance (in zone), mean over maps"),
-                             (True, "TABLE 2 - Sign Compliance (arrived AND in zone), mean over maps")):
-        print("\n" + title)
-        print("%-14s %6s %6s  %s" % ("sign", "maps", "eps",
-                                     " ".join(f"{l:>10s}" for l in LABELS)))
+    for need_dest, title in ((False, "Sign Compliance (in zone)"),
+                             (True, "Sign Compliance (arrived AND in zone)")):
+        print("\n" + title + ("  [old/new per cell]" if not tsv else ""))
+        if tsv:
+            # Two header rows so the group split survives a paste into a sheet.
+            groups = ([""] * 3 + ["Base planners"] * 8
+                      + ["Rule-compliant experts"] * 8 + ["Oracle"])
+            print("\t".join(groups))
+            print("\t".join(["sign", "maps", "scenes"] + LABELS))
+        else:
+            print("%-14s %6s %6s  %s" % ("sign", "maps", "eps",
+                                         " ".join(f"{l:>10s}" for l in LABELS)))
         for name, codes in GROUPS:
             present = [c for c in codes if c in data]
             if not present:
-                print("%-14s %6s %6s  %s" % (name, "-", "-",
-                                             " ".join(f"{chr(45):>10s}" for _ in LABELS)))
+                if tsv:
+                    print("\t".join([name, "", ""] + [""] * len(LABELS)))
+                else:
+                    print("%-14s %6s %6s  %s" % (name, "-", "-",
+                                                 " ".join(f"{chr(45):>10s}" for _ in LABELS)))
                 continue
             maps_total = sum(len(data[c][BASE[0]]) for c in present if BASE[0] in data[c])
             eps_total = sum(len(e) for c in present for e in data[c].get(BASE[0], {}).values())
@@ -72,11 +82,19 @@ def main(paths):
                 # old: every episode weighs the same; new: every map weighs the same
                 o = compliance(flat, need_dest)
                 n = sum(per_map) / len(per_map) if per_map else None
-                fo = "-" if o is None else f"{o:.2f}"
-                fn = "-" if n is None else f"{n:.2f}"
-                cells.append(f"{fo}/{fn}".rjust(10))
-            print("%-14s %6d %6d  %s" % (name, maps_total, eps_total, " ".join(cells)))
+                fo = "" if o is None else f"{o:.2f}"
+                fn = "" if n is None else f"{n:.2f}"
+                if tsv:
+                    cells.append(fn)
+                else:
+                    cells.append(f"{fo or chr(45)}/{fn or chr(45)}".rjust(10))
+            if tsv:
+                print("\t".join([name, str(maps_total), str(eps_total)] + cells))
+            else:
+                print("%-14s %6d %6d  %s" % (name, maps_total, eps_total, " ".join(cells)))
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    argv = sys.argv[1:]
+    as_tsv = "--tsv" in argv
+    main([a for a in argv if a != "--tsv"], tsv=as_tsv)
