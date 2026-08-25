@@ -80,8 +80,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--hydra-override",
         action="append",
-        default=[],
-        help="Extra Hydra overrides (repeatable)",
+        default=[o for o in os.environ.get("HYDRA_OVERRIDES", "").split(";") if o],
+        help="Extra Hydra overrides (repeatable); HYDRA_OVERRIDES seeds it, "
+             "semicolon-separated, so a campaign script can pass them like "
+             "every other setting",
     )
     p.add_argument("--hydra-run-dir", type=Path, default=None)
     return p.parse_args()
