@@ -51,7 +51,7 @@ def compliance(rows, need_dest):
     return sum(1 for r in sel if tb(r.get("sign_compliant_high"))) / len(sel)
 
 
-def main(paths, tsv=False):
+def main(paths, tsv=False, md=False):
     rows = []
     for p in paths:
         with open(p, newline="") as fh:
@@ -64,13 +64,22 @@ def main(paths, tsv=False):
 
     for need_dest, title in ((False, "Sign Compliance (in zone)"),
                              (True, "Sign Compliance (arrived AND in zone)")):
-        print("\n" + title + ("  [old/new per cell]" if not tsv else ""))
+        if md:
+            print("\n**" + title + "** — old/new in each cell\n")
+        else:
+            print("\n" + title + ("  [old/new per cell]" if not tsv else ""))
         if tsv:
             # Two header rows so the group split survives a paste into a sheet.
             groups = ([""] * 3 + ["Base planners"] * 8
                       + ["Rule-compliant experts"] * 8 + ["Oracle"])
             print("\t".join(groups))
             print("\t".join(["sign", "maps", "scenes"] + LABELS))
+        elif md:
+            head = ["sign", "maps", "scenes"] + [
+                l + (" (base)" if i < 8 else " (rule)" if i < 16 else "")
+                for i, l in enumerate(LABELS)]
+            print("| " + " | ".join(head) + " |")
+            print("|" + "|".join(["---"] * len(head)) + "|")
         else:
             print("%-14s %6s %6s  %s" % ("sign", "maps", "eps",
                                          " ".join(f"{l:>10s}" for l in LABELS)))
@@ -79,6 +88,9 @@ def main(paths, tsv=False):
             if not present:
                 if tsv:
                     print("\t".join([name, "", ""] + [""] * len(LABELS)))
+                elif md:
+                    print("| " + " | ".join([name, "—", "—"]
+                                            + ["—"] * len(LABELS)) + " |")
                 else:
                     print("%-14s %6s %6s  %s" % (name, "-", "-",
                                                  " ".join(f"{chr(45):>10s}" for _ in LABELS)))
@@ -101,10 +113,15 @@ def main(paths, tsv=False):
                 fn = "" if n is None else f"{n:.2f}"
                 if tsv:
                     cells.append(fn)
+                elif md:
+                    cells.append(f"{fo}/{fn}" if fo or fn else "—")
                 else:
                     cells.append(f"{fo or chr(45)}/{fn or chr(45)}".rjust(10))
             if tsv:
                 print("\t".join([name, str(maps_total), str(eps_total)] + cells))
+            elif md:
+                print("| " + " | ".join([name, str(maps_total), str(eps_total)]
+                                        + cells) + " |")
             else:
                 print("%-14s %6d %6d  %s" % (name, maps_total, eps_total, " ".join(cells)))
 
@@ -112,4 +129,5 @@ def main(paths, tsv=False):
 if __name__ == "__main__":
     argv = sys.argv[1:]
     as_tsv = "--tsv" in argv
-    main([a for a in argv if a != "--tsv"], tsv=as_tsv)
+    as_md = "--md" in argv
+    main([a for a in argv if a not in ("--tsv", "--md")], tsv=as_tsv, md=as_md)
