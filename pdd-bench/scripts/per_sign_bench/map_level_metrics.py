@@ -69,6 +69,15 @@ def collapse(rows: list[dict]) -> dict:
                        if rs else None)
     lane = [fnum(r.get("mean_abs_lane_offset")) for r in rows]
     lane = [v for v in lane if v is not None]
+    # Leaving the carriageway suppresses the detour violation (detour_sign.py:
+    # `if not self.is_in_drivable_area(vehicle): return False`) while the episode
+    # still counts toward the in-zone denominator, which starts 50 m before the
+    # zone. A run that drives off the road early is therefore scored compliant.
+    # Reported so the artifact is visible instead of silently inflating the rate.
+    escaped = [r for r in in_zone
+               if tb(r.get("sign_compliant_high"))
+               and not tb(r.get("arrived_dest"))
+               and tb(r.get("out_of_road"))]
     return {
         "n_ep": n,
         "n_in_zone": len(in_zone),
@@ -82,6 +91,7 @@ def collapse(rows: list[dict]) -> dict:
                                if tb(r.get("arrived_dest")) and tb(r.get("sign_compliant_high")))
                            / n) if n else None,
         "lane_off": (sum(lane) / len(lane)) if lane else None,
+        "escaped": (len(escaped) / n) if n else None,
     }
 
 
@@ -126,8 +136,11 @@ def main() -> int:
     for r in rows:
         grouped[(str(r.get("pdd_code")), str(r.get("baseline")))][map_key(r)].append(r)
 
-    FIELDS = ["dest_rate", "comp_x", "comp_dest_inzone", "dest_x_comp_sr",
-              "crash_rate", "lane_off"]
+    # comp_dest_inzone leads: compliance among runs that actually finished the
+    # drive through the zone. comp_x is kept for continuity with the old sheet,
+    # but it cannot be read without `escaped` beside it.
+    FIELDS = ["dest_rate", "comp_dest_inzone", "dest_x_comp_sr", "comp_x",
+              "escaped", "crash_rate", "lane_off"]
     header = ["pdd_code", "baseline", "n_maps", "n_ep"] + FIELDS + ["maps_with_dest_in_zone"]
     table = []
     for (code, baseline), maps in sorted(grouped.items()):
