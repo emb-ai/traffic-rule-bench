@@ -392,8 +392,12 @@ class PlanT2MetaDriveAdapter:
             # Training filtered objects with range 50 / front factor 2
             # (PlanT.yaml model.training). These eval defaults are wider; the env
             # vars exist to A/B whether that train/eval gap costs anything.
-            max_distance=float(_os.environ.get("PLANT2_OBJ_MAX_DIST", 75.0)),
-            range_factor_front=float(_os.environ.get("PLANT2_OBJ_FRONT_FACTOR", 16.0)),
+            # Training filters at range 50 with front factor 2 (PlanT.yaml
+            # model.training). The eval defaults used to be 75 and 16, a forward
+            # ellipse an order of magnitude longer than anything the model was
+            # trained on; the env vars keep that available for an A/B.
+            max_distance=float(_os.environ.get("PLANT2_OBJ_MAX_DIST", 50.0)),
+            range_factor_front=float(_os.environ.get("PLANT2_OBJ_FRONT_FACTOR", 2.0)),
             input_bev=True,
             input_ego_speed=input_ego_speed,
             bev_resolution=128,
@@ -409,7 +413,13 @@ class PlanT2MetaDriveAdapter:
             # separate it from the per-object PDD classes (PLANT2_SIGN_OBJS).
             include_sign_id=bool(getattr(self, "_use_sign_id", False))
             and _os.environ.get("PLANT2_SIGN_TOKEN", "1") not in ("0", "false", "False"),
-            sign_code=getattr(self, "sign_code", None),
+            # PLANT2_FORCE_SIGN_CODE rewrites the sign token without touching
+            # the geometry: the counterfactual that proved the speed channel is
+            # read, never yet run for detour. 4.2.1 and 4.2.2 prescribe opposite
+            # sides, so swapping them must flip the predicted manoeuvre if the
+            # model uses the sign at all.
+            sign_code=(_os.environ.get("PLANT2_FORCE_SIGN_CODE")
+                       or getattr(self, "sign_code", None)),
         )
 
         # Object pool as the model sees it — to compare the eval-side convention
