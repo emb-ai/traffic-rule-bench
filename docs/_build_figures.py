@@ -177,12 +177,12 @@ def twin_gap():
     # Overall compliance column in the CSV is named `rcr`; the page labels it SCR
     # to match the OpenReview response wording.
     twins = [
-        ("IDM", "idm_default", "comprehensive_rule_expert_default"),
-        ("IDM-s1", "idm_s1", "comprehensive_rule_expert_s1"),
-        ("IDM-s2", "idm_s2", "comprehensive_rule_expert_s2"),
-        ("IDM-s3", "idm_s3", "comprehensive_rule_expert_s3"),
-        ("IDM-s4", "idm_s4", "comprehensive_rule_expert_s4"),
-        ("PPO", "ppo_lidar_default", "rule_compliant_default"),
+        ("IDM", "idm_default", "idm_rule_default"),
+        ("IDM-s1", "idm_s1", "idm_rule_s1"),
+        ("IDM-s2", "idm_s2", "idm_rule_s2"),
+        ("IDM-s3", "idm_s3", "idm_rule_s3"),
+        ("IDM-s4", "idm_s4", "idm_rule_s4"),
+        ("PPO", "ppo_lidar_default", "ppo_rule_default"),
         ("CaRL", "carl_default", "carl_rule_default"),
         ("PlanT-2", "plant2_default", "plant2_rule_default"),
     ]

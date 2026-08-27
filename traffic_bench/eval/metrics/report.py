@@ -36,6 +36,7 @@ def _cell(m_ep: dict, m_map: dict | None, key: str) -> str:
 
 
 # Display-only renames for the markdown report. cumulative.json keeps raw names.
+# Legacy spellings come from cumulative.json files written before the rename.
 POLICY_DISPLAY_NAME: dict[str, str] = {
     "comprehensive_rule_expert_default": "idm_rule_default",
     "comprehensive_rule_expert_s1": "idm_rule_s1",

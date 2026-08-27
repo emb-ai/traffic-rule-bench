@@ -53,7 +53,7 @@ python -m traffic_bench.eval run policy=idm sign=yield
 
 ```
 python -m traffic_bench.eval run \
-    policies=[idm,comprehensive_rule_expert,plant2_ft] \
+    policies=[idm,idm_rule,plant2_ft] \
     sign=yield
 ```
 

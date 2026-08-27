@@ -269,13 +269,15 @@ def _scalar_policy_name(cfg: DictConfig) -> str:
         raise SystemExit(
             f"ERROR: policy={name!r} looks like a list. Use policies={hint}"
         )
+    from traffic_bench.agents.policy_names import canonical_policy_name
     from traffic_bench.eval.run.policies import ALL_POLICIES
 
+    name = canonical_policy_name(name)  # legacy spellings → canonical ids
     if name not in ALL_POLICIES:
         known = ", ".join(sorted(ALL_POLICIES))
         raise SystemExit(
             f"ERROR: unknown policy {name!r}. Supported: {known}. "
-            "Several policies: policies=[idm,comprehensive_rule_expert]"
+            "Several policies: policies=[idm,idm_rule]"
         )
     return name
 

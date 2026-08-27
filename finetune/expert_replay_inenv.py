@@ -286,7 +286,7 @@ def replay_in_our_env(
     # left on the manifest road (RELOCATE_EGO_TO_SIGN_LANE=False); IDM-family
     # with True. The module default (True) would rebuild a DIFFERENT scene for
     # NN recordings — ego spawn/route mismatch, instant termination in replay.
-    _idm_family = {"idm", "comprehensive_rule_expert", "rule_compliant"}
+    _idm_family = {"idm", "idm_rule", "ppo_rule"}
     _rec_policy = str(sidecar.get("policy") or "")
     _env_flags.RELOCATE_EGO_TO_SIGN_LANE = (
         (_rec_policy in _idm_family) if _rec_policy else True)

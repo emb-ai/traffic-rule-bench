@@ -45,6 +45,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
+from traffic_bench.agents.policy_names import canonical_policy_name
 from traffic_bench.oracle.select.filter import (
     BETA_DEFAULT,
     HORIZON_DEFAULT,
@@ -73,12 +74,12 @@ BASELINE_ORDER: list[str] = [
     "carl",
     "plant2", "plant2_artem",
     # === Rule-augmented versions ===
-    "comprehensive_rule_expert_default",
-    "comprehensive_rule_expert_s1",
-    "comprehensive_rule_expert_s2",
-    "comprehensive_rule_expert_s3",
-    "comprehensive_rule_expert_s4",
-    "rule_compliant",
+    "idm_rule_default",
+    "idm_rule_s1",
+    "idm_rule_s2",
+    "idm_rule_s3",
+    "idm_rule_s4",
+    "ppo_rule",
     "carl_rule",
     "plant2_rule",
 ]
@@ -178,10 +179,11 @@ def load_episode_csv(path: Path) -> list[dict]:
             row = {
                 "var_name": r["var_name"],
                 "var_idx": _to_int(r["var_idx"]),
-                "baseline": r["baseline"],
-                "policy": r["policy"],
+                # CSVs written before the rename carry legacy policy spellings.
+                "baseline": canonical_policy_name(r["baseline"]),
+                "policy": canonical_policy_name(r["policy"]),
                 "variant": r["variant"],
-                "display_policy": r["display_policy"],
+                "display_policy": canonical_policy_name(r["display_policy"]),
                 "backend": r["backend"],
                 "pdd_code": r["pdd_code"],
                 "sign_slug": r["sign_slug"],

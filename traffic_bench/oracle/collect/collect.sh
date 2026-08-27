@@ -10,7 +10,7 @@
 #
 # Full collection (auto-resolves data/runs/<sign>/train/real_manifest.jsonl):
 #   SIGN=yield PER_SIGN_COMPLIANT_NPC=1 EGO_SAMPLER=styles \
-#   POLICIES_CPU="comprehensive_rule_expert rule_compliant" \
+#   POLICIES_CPU="idm_rule ppo_rule" \
 #   ./collect.sh
 
 set -uo pipefail
@@ -144,7 +144,7 @@ export PER_SIGN_COMPLIANT_NPC EGO_SAMPLER EGO_CURVE_AWARE EGO_HOLD_V0 CARL_LONGI
 : "${EXTRA_SAMPLES_COMPREHENSIVE:=4}"  # default + s1..s4
 : "${IDM_SEED_BASE:=42}"
 
-: "${POLICIES_CPU:=comprehensive_rule_expert rule_compliant}"
+: "${POLICIES_CPU:=idm_rule ppo_rule}"
 : "${POLICIES_CARL:=carl_rule}"
 : "${POLICIES_PLANT2:=plant2_rule}"
 
@@ -244,7 +244,7 @@ if [ "$SMOKE" = "1" ]; then
     SKIP_CARL=1
     SKIP_PLANT2=1
     if [ -z "${SMOKE_POLICIES:-}" ]; then
-        POLICIES_CPU="comprehensive_rule_expert"
+        POLICIES_CPU="idm_rule"
     else
         POLICIES_CPU="$SMOKE_POLICIES"
     fi
@@ -253,6 +253,12 @@ if [ "$SMOKE" = "1" ]; then
     echo "=== SMOKE mode: SIGN=$SIGN COUNT=$COUNT SAVE_GIFS=1 policies='$POLICIES_CPU' EXTRA_SAMPLES=$EXTRA_SAMPLES_COMPREHENSIVE ==="
     SPLIT=debug
 fi
+
+# Legacy spellings in POLICIES_CPU / SMOKE_POLICIES → canonical ids
+# (comprehensive_rule_expert → idm_rule, rule_compliant → ppo_rule; see
+# agents/policy_names.py). Applied after SMOKE so SMOKE_POLICIES is covered too.
+POLICIES_CPU="${POLICIES_CPU//comprehensive_rule_expert/idm_rule}"
+POLICIES_CPU="${POLICIES_CPU//rule_compliant/ppo_rule}"
 
 mkdir -p "$OUT_BASE" "$LOG_DIR" "$MERGED_DIR" "$MANIFESTS_DIR"
 exec > >(tee -a "$LOG_DIR/progress.log") 2>&1
@@ -319,7 +325,7 @@ echo "================================================================"
 
 _is_idm_family() {
     case "$1" in
-        idm|comprehensive_rule_expert) return 0 ;;
+        idm|idm_rule) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -579,7 +585,7 @@ if manifest.is_file():
                 continue
             n_rows += 1
 
-idm = {"idm", "comprehensive_rule_expert"}
+idm = {"idm", "idm_rule"}
 print("----- progress -----", flush=True)
 any_pol = False
 for pol_dir in sorted(p for p in out_base.iterdir() if p.is_dir() and not p.name.startswith("_")):

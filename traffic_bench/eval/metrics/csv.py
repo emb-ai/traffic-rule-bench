@@ -39,8 +39,12 @@ from traffic_bench.oracle.select.filter import (
     recompute_dest,
     passes_filter,
 )
+from traffic_bench.agents.policy_names import canonical_policy_name
 
 
+# Display names for baselines recorded under legacy spellings. Baselines are
+# canonicalised on load (canonical_policy_name), so this only matters for
+# ``ppo_expert`` and any name that slipped past normalisation.
 POLICY_DISPLAY_NAME: dict[str, str] = {
     "comprehensive_rule_expert_default": "idm_rule_default",
     "comprehensive_rule_expert_s1": "idm_rule_s1",
@@ -303,7 +307,9 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
         passes = False
 
     # Variant / display_policy mapping: derive from baseline name and replay.policy/variant.
-    policy = replay.get("policy") or ""
+    # Legacy spellings (comprehensive_rule_expert / rule_compliant) → canonical ids.
+    baseline = canonical_policy_name(baseline)
+    policy = canonical_policy_name(replay.get("policy") or "")
     variant = replay.get("variant")
     display_policy = POLICY_DISPLAY_NAME.get(baseline, baseline)
 

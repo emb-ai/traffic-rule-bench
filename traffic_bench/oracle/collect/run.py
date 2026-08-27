@@ -14,7 +14,7 @@ Usage:
   python -m traffic_bench.oracle.collect.run \\
       --sign yield \\
       --manifest data/runs/yield/train/real_manifest.jsonl \\
-      --policy comprehensive_rule_expert --ego-extra-samples 4 \\
+      --policy idm_rule --ego-extra-samples 4 \\
       --count 3 --save-gifs --output-dir ./out/cre
 """
 from __future__ import annotations
@@ -48,10 +48,12 @@ SIGN_SLUG = "2_4"
 SIGN_TYPE = "yield"
 PROFILE_ID = "yield"
 
-IDM_VARIANT_POLICIES = {"idm", "comprehensive_rule_expert"}
+from traffic_bench.agents.policy_names import canonical_policy_name
+
+IDM_VARIANT_POLICIES = {"idm", "idm_rule"}
 POLICY_CHOICES = [
-    "idm", "comprehensive_rule_expert",
-    "rule_compliant", "ppo_lidar",
+    "idm", "idm_rule",
+    "ppo_rule", "ppo_lidar",
     "carl", "carl_rule", "plant2", "plant2_rule", "plant2_ft",
 ]
 
@@ -466,7 +468,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Scenes root (default: data/scenes/<sign>)",
     )
-    p.add_argument("--policy", required=True, choices=POLICY_CHOICES)
+    p.add_argument("--policy", required=True, type=canonical_policy_name,
+                   choices=POLICY_CHOICES,
+                   help="policy id (legacy comprehensive_rule_expert / "
+                        "rule_compliant are mapped to idm_rule / ppo_rule)")
     p.add_argument("--model-path", default=None,
                    help="Required for carl/plant2 and *_rule variants")
     p.add_argument("--plant2-action-mode", default="pid",

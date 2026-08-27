@@ -302,9 +302,9 @@ def run_one_episode(
     policy_cls = None
     if policy_type == "idm":
         policy_cls = ModifiedIDMPolicy  # Good driving, no sign compliance
-    elif policy_type == "comprehensive_rule_expert":
+    elif policy_type == "idm_rule":
         policy_cls = ComprehensiveRuleExpertPolicy
-    elif policy_type == "rule_compliant":
+    elif policy_type == "ppo_rule":
         policy_cls = RuleCompliantExpertPolicy
     elif policy_type == "ppo_lidar":
         policy_cls = ExpertPolicy
@@ -431,7 +431,7 @@ def run_one_episode(
         sampled_ego_params = None
         if policy_cls is not None:
             policy_obj = policy_cls(base_env.vehicle, seed)
-            if policy_type in ("idm", "comprehensive_rule_expert"):
+            if policy_type in ("idm", "idm_rule"):
                 if ego_variant == "default":
                     apply_ego_defaults(policy_obj)
                 elif ego_variant.startswith("s") and ego_variant[1:].isdigit():
