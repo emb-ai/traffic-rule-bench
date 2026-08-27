@@ -21,6 +21,8 @@ from __future__ import annotations
 import gzip
 import json
 import math
+import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +45,89 @@ def build_ego_matrix(position, heading: float) -> list:
         [0.0, 0.0, 1.0, 0.0],
         [0.0, 0.0, 0.0, 1.0],
     ]
+
+
+# MetaDrive sign class → PDD code (fallback when icon_path / attrs missing).
+_CLASS_TO_PDD = {
+    "MainRoadSign": "2.1",
+    "SecondaryRoadSign": "2.3.1",
+    "SecondaryRoadRightSign": "2.3.2",
+    "SecondaryRoadLeftSign": "2.3.3",
+    "YieldSign": "2.4",
+    "RightHandYieldSign": "2.4",
+    "StopSign": "2.5",
+    "NoEntrySign": "3.1",
+    "SpeedLimitSign": "3.24",
+    "SpeedLimitSign20": "3.24",
+    "SpeedLimitSign30": "3.24",
+    "SpeedLimitSign40": "3.24",
+    "SpeedLimitSign60": "3.24",
+    "DetourRightSign": "4.2.1",
+    "DetourLeftSign": "4.2.2",
+    "DetourEitherSign": "4.2.3",
+    "RoundaboutSign": "4.3",
+    "RoundaboutYieldSign": "4.3",
+    "MinimumSpeedLimitSign": "4.6",
+    "OneWayEntrySign": "5.7.1",
+    "OneWayEntrySignR": "5.7.1",
+    "OneWayEntrySignL": "5.7.2",
+    "LaneDirectionsSign": "5.15.1",
+    "DirectionSign": "5.15.2",
+    "ResidentialZoneSign": "5.21",
+    "ZoneSpeedLimitSign": "5.31",
+    "ZoneSpeedLimitSign20": "5.31",
+    "ZoneSpeedLimitSign30": "5.31",
+    "ZoneSpeedLimitSign40": "5.31",
+    "ZoneSpeedLimitSign60": "5.31",
+}
+
+_PDD_ICON_RE = re.compile(r"^(\d+(?:\.\d+)*)")
+
+# How far a traffic sign stays in the ego-centric object list. Deliberately
+# wider than max_distance: a sign kept only inside the generic object range
+# reaches the model in a small share of frames and its token cannot be learnt
+# (measured: 2% of frames at the narrow radius against 33% at 120 m). The zone
+# is also symmetric, so a sign behind the ego is still the reason it is slowing.
+_SIGN_RADIUS_M = float(os.environ.get("PLANT2_SIGN_RADIUS_M", 120.0))
+
+# Codes whose plate carries a number, and the attribute holding it (km/h).
+# Restricted by code on purpose: reading any `speed_limit` attribute that
+# happened to exist would put a road speed on plates that prescribe nothing.
+_SIGN_VALUE_ATTR = {
+    "3.24": "speed_limit",   # maximum speed
+    "5.31": "speed_limit",   # zone maximum speed
+    "4.6": "min_speed",      # minimum speed
+}
+
+
+def _sign_value_kmh(sign, pdd):
+    """The number written on the plate, in km/h, or None if it carries none."""
+    attr = _SIGN_VALUE_ATTR.get(str(pdd))
+    if attr is None:
+        return None
+    raw = getattr(sign, attr, None)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def resolve_pdd_code_from_sign(sign):
+    """Best-effort PDD code for a BaseTrafficSign instance."""
+    if sign is None:
+        return None
+    for attr in ("pdd_code", "sign_code", "sign_type", "code"):
+        val = getattr(sign, attr, None)
+        if val:
+            return str(val).strip()
+    icon = getattr(sign, "icon_path", None)
+    if icon:
+        m = _PDD_ICON_RE.match(Path(str(icon)).name)
+        if m:
+            return m.group(1)
+    return _CLASS_TO_PDD.get(type(sign).__name__)
 
 
 def collect_boxes(engine, vehicle,
@@ -156,6 +241,62 @@ def collect_boxes(engine, vehicle,
     if obj_mgr is not None:
         for obj in getattr(obj_mgr, "spawned_objects", {}).values():
             _add(obj)
+
+    # Explicit PDD signs, written as their own object class rather than as the
+    # generic `static` the loop above would give them. Without this the sign is
+    # indistinguishable from a traffic cone in the dump, and no later fix
+    # recovers it: the box was never written.
+    try:
+        from PlanT.util.sign_id import SIGN_CODES as _known
+        known_pdd = set(_known)
+    except Exception:
+        known_pdd = set(_CLASS_TO_PDD.values())
+
+    sign_mgr = getattr(engine, "traffic_sign_manager", None)
+    for sign in list(getattr(sign_mgr, "signs", []) or []):
+        if sign is None or not hasattr(sign, "position"):
+            continue
+        oid = id(sign)
+        if oid in seen:
+            continue
+        seen.add(oid)
+        pdd = resolve_pdd_code_from_sign(sign)
+        if not pdd or pdd not in known_pdd:
+            continue
+        rel = np.array([sign.position[0] - ego_pos[0],
+                        sign.position[1] - ego_pos[1]])
+        local = vehicle.convert_to_local_coordinates(rel, 0.0)
+        x = float(local[0])
+        y = -float(local[1])  # y=right (CARLA), as for every other box
+        if x * x + y * y > _SIGN_RADIUS_M ** 2:
+            continue
+        if hasattr(sign, "_fallback_heading"):
+            heading = float(sign._fallback_heading())
+        else:
+            heading = float(getattr(sign, "heading_theta", ego_heading))
+        # The code alone cannot say WHICH limit a speed plate prescribes:
+        # SpeedLimitSign20 and SpeedLimitSign60 are both "3.24", and the
+        # sequence's speed_limit token carries the road's raw speed, not the
+        # sign's. Carry the number in the box's own speed slot, as for vehicles.
+        value_kmh = _sign_value_kmh(sign, pdd)
+        w = float(getattr(sign, "WIDTH", 0.6) or 0.6)
+        l = float(getattr(sign, "DEPTH", 0.1) or 0.1)
+        entry = {
+            "class": pdd,
+            "position": [x, y, 0.0],
+            "yaw": float(wrap_to_pi(heading - ego_heading)),
+            "speed": (value_kmh or 0.0) / 3.6,
+            "extent": [max(l, 0.2) / 2.0, max(w, 0.2) / 2.0, 0.75],
+            "id": obj_id,
+            "type_id": f"traffic.sign.{pdd}",
+            "pdd_code": pdd,
+            "affects_ego": True,
+        }
+        if value_kmh is not None:
+            # Readable in the dump and immune to the m/s convention above.
+            entry["sign_value_kmh"] = float(value_kmh)
+        boxes.append(entry)
+        obj_id += 1
 
     return boxes
 
@@ -289,8 +430,15 @@ class Plant2FrameCollector:
             sem_map = render_bev_semantics(engine, vehicle)
         self.step_records.append((boxes, measurements, sem_map))
 
-    def flush(self, route_dir: Path, success: bool) -> int:
-        """Write boxes/measurements/BEV/results under ``route_dir``. Returns frame count."""
+    def flush(self, route_dir: Path, success: bool, reason: dict | None = None) -> int:
+        """Write boxes/measurements/BEV/results under ``route_dir``. Returns frame count.
+
+        ``reason`` carries the flags behind ``success`` (arrived_dest, crashed,
+        out_of_road). Without them the dataset can only see status=Failed and
+        drops the whole route: measured on the previous corpus, 142 of 146
+        dropped routes were "left the road near the end" with zero sign
+        violations and the entire sign zone recorded, which is usable data.
+        """
         route_dir = Path(route_dir)
         n_bev = 0
         for idx, (bxs, meas, sem) in enumerate(self.step_records):
@@ -314,6 +462,8 @@ class Plant2FrameCollector:
             "status": "Completed" if success else "Failed",
             "timestamp": _TIMESTAMP,
         }
+        if reason:
+            results["failure_reason"] = {k: bool(v) for k, v in reason.items()}
         write_gz_json(route_dir / "results.json.gz", results)
         if self.save_bev and n_bev == 0 and self.step_records:
             print("[plant2] WARNING: save_bev=True but no BEV frames written "

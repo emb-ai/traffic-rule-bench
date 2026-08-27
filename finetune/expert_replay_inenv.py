@@ -552,7 +552,14 @@ def replay_in_our_env(
                 success = bool(metrics["success"])
             else:
                 success = bool(arrived and not crashed and not out_of_road)
-            n_frames = plant2_collector.flush(route_dir, success=success)
+            # Carry the flags, not just their conjunction: "left the road at the
+            # end" and "crashed into the obstacle" are both Failed here, and only
+            # the second is unusable for imitation.
+            n_frames = plant2_collector.flush(
+                route_dir, success=success,
+                reason={"arrived_dest": arrived,
+                        "crashed": crashed,
+                        "out_of_road": out_of_road})
             plant2_path = str(route_dir)
             print(f"[plant2] flushed {n_frames} frames → {route_dir}")
 
