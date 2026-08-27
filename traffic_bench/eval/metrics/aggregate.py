@@ -436,8 +436,16 @@ MAP_DICT_SUM_FIELDS: set[str] = {
 
 
 def map_key(row: dict) -> str:
-    """A map is one net; scene_id names it, variations differ by lane/seed/var."""
-    return str(row.get("scene_id") or row.get("scene_uid") or "?")
+    """A map is one net under one sign.
+
+    scene_id names the net; variations differ by lane/seed/var. The pool is
+    shared between signs (the same junction crop can serve yield and stop), and
+    the same net under another sign is another scenario, so the sign code is
+    part of the key. Within a per-sign slice this reduces to scene_id.
+    """
+    scene = str(row.get("scene_id") or row.get("scene_uid") or "?")
+    pdd = str(row.get("pdd_code") or "")
+    return f"{pdd}|{scene}" if pdd else scene
 
 
 def mean_over_maps(per_map: list[dict], field: str) -> float | None:
