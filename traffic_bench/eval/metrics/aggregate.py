@@ -8,10 +8,23 @@ Slices produced:
   3. agg_per_baseline.csv           — one row per baseline (cumulative across vars)
   4. agg_per_sign_baseline.csv      — one row per (sign, baseline) cumulative
 
+Every slice is produced under two aggregations (both are always written):
+  * per-episode  — agg_per_*.csv           every episode weighs the same
+                                          (the original aggregation);
+  * per-map      — agg_per_*_map.csv       each map's episodes are collapsed
+                                          first, then the mean is taken over
+                                          maps (see aggregate_by_map).
+
+`sr_and_dest` (SR&Dest) = target sign obeyed AND destination reached, over
+every scored episode.
+
 Plus, for backward compatibility with the existing MD-report scripts:
   5. cumulative.json                — {chunks, per_baseline, per_sign} schema for
                                        generate_cumulative_markdown_report.py and
-                                       generate_category_aggregation_report.py
+                                       generate_category_aggregation_report.py,
+                                       plus per_baseline_map / per_sign_map with
+                                       the map-level aggregation (report.py shows
+                                       both as `episode / map` in each cell)
   6. cumulative_2node.json          — {vars_processed, cumulative_through_latest,
                                        per_var} schema for merge_and_report_2node.py
 
@@ -223,6 +236,15 @@ def load_episode_csv(path: Path) -> list[dict]:
                 "target_in_zone": _to_bool(r["target_in_zone"]),
                 "target_compliant_event": _to_bool(r["target_compliant_event"]) if r["target_compliant_event"] != "" else None,
                 "target_compliant_step": _to_bool(r["target_compliant_step"]) if r["target_compliant_step"] != "" else None,
+                # SR&Dest per episode. CSVs written before the column existed
+                # lack it → derive from target_compliant_event AND arrived_dest.
+                "sr_and_dest": (
+                    _to_bool(r["sr_and_dest"]) if r.get("sr_and_dest") not in (None, "")
+                    else (
+                        (_to_bool(r["target_compliant_event"]) and _to_bool(r["arrived_dest"]))
+                        if r["target_compliant_event"] != "" else None
+                    )
+                ),
                 "sign_compliant_high": _to_bool(r["sign_compliant_high"]),
                 "tl_compliant": _to_bool(r["tl_compliant"]),
                 "cw_compliant": _to_bool(r["cw_compliant"]),
@@ -275,6 +297,10 @@ def aggregate(rows: list[dict], beta: float = BETA_DEFAULT,
                                     if r["target_compliant_event"])
     n_target_compliant_step = sum(1 for r in rows_with_class
                                    if r["target_compliant_step"])
+    # --- SR&Dest: target sign obeyed AND destination reached. Denominator is
+    #     every scored episode, so a run that crashes before the sign scores 0
+    #     instead of passing as "compliant" (no violation, no arrival).
+    n_sr_and_dest = sum(1 for r in rows_with_class if r["sr_and_dest"])
 
     # --- Total compliance (no violations of any kind)
     n_clean_total = sum(1 for r in rows if r["total_violations"] == 0)
@@ -338,6 +364,7 @@ def aggregate(rows: list[dict], beta: float = BETA_DEFAULT,
         "crosswalk_sr": _rate(n_cw_clean, n),
         "target_compliance_rate_event": _rate(n_target_compliant_event, n_with_class),
         "target_compliance_rate_step": _rate(n_target_compliant_step, n_with_class),
+        "sr_and_dest": _rate(n_sr_and_dest, n_with_class),
         "compliance_rate_total": _rate(n_clean_total, n),
         # Driving quality (avg)
         "avg_total_reward": _mean([r["total_reward"] for r in rows]),
@@ -389,15 +416,85 @@ def aggregate(rows: list[dict], beta: float = BETA_DEFAULT,
 
 
 # ---------------------------------------------------------------------------
+# Map-level aggregation: collapse each map first, then average over maps
+# ---------------------------------------------------------------------------
+# Episode-level averages let a map with many variations outweigh a map with
+# few, so a policy can win by doing well where the catalog happens to be
+# dense. Here every map (scene_id) contributes exactly one number: aggregate()
+# runs on each map's episodes and the per-map values are averaged. Counts and
+# totals are summed instead, so both aggregations share one schema and can be
+# written side by side. Ported from the old map_level_metrics.py.
+MAP_SUM_FIELDS: set[str] = {
+    "n", "n_in_zone", "n_passing", "n_with_class",
+    "total_violation_steps", "total_violation_events", "total_in_zone_steps",
+}
+MAP_DICT_SUM_FIELDS: set[str] = {
+    "violations_by_class_step_total",
+    "violations_by_class_event_total",
+    "in_zone_by_class_step_total",
+}
+
+
+def map_key(row: dict) -> str:
+    """A map is one net; scene_id names it, variations differ by lane/seed/var."""
+    return str(row.get("scene_id") or row.get("scene_uid") or "?")
+
+
+def mean_over_maps(per_map: list[dict], field: str) -> float | None:
+    """Mean of a per-map value, skipping maps where it is undefined."""
+    vals = [m.get(field) for m in per_map]
+    vals = [v for v in vals if v is not None]
+    return (sum(vals) / len(vals)) if vals else None
+
+
+def aggregate_by_map(rows: list[dict], beta: float = BETA_DEFAULT,
+                     horizon: int = HORIZON_DEFAULT) -> dict:
+    """Same keys as aggregate(), but averaged over maps (plus ``n_maps``)."""
+    if not rows:
+        return {"n": 0, "n_maps": 0}
+    by_map: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        by_map[map_key(r)].append(r)
+    per_map = [aggregate(rs, beta, horizon) for rs in by_map.values()]
+    keys: list[str] = []
+    for m in per_map:
+        for k in m:
+            if k not in keys:
+                keys.append(k)
+    out: dict = {}
+    for k in keys:
+        if k in MAP_SUM_FIELDS:
+            out[k] = sum(int(m.get(k) or 0) for m in per_map)
+        elif k in MAP_DICT_SUM_FIELDS:
+            total: Counter = Counter()
+            for m in per_map:
+                total.update({cls: int(v or 0) for cls, v in (m.get(k) or {}).items()})
+            out[k] = dict(total)
+        elif k == "in_zone_violation_rate_by_class":
+            continue  # recomputed from the summed dicts below
+        else:
+            out[k] = mean_over_maps(per_map, k)
+    by_class_step = out.get("violations_by_class_step_total") or {}
+    in_zone = out.get("in_zone_by_class_step_total") or {}
+    out["in_zone_violation_rate_by_class"] = {
+        cls: round(by_class_step.get(cls, 0) / cnt, 4)
+        for cls, cnt in in_zone.items() if cnt > 0
+    }
+    out["n_maps"] = len(per_map)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # CSV writers (flat tables)
 # ---------------------------------------------------------------------------
 FLAT_METRIC_COLUMNS = [
-    "n", "n_in_zone", "n_passing", "n_with_class",
+    "n", "n_maps", "n_in_zone", "n_passing", "n_with_class",
     "success_rate", "dest_rate", "dest_rate_recomputed",
     "crash_rate", "out_of_road_rate", "pass_rate",
     "sign_compliance_sr", "sign_compliance_x",
     "traffic_light_sr", "crosswalk_sr",
     "target_compliance_rate_event", "target_compliance_rate_step",
+    "sr_and_dest",
     "compliance_rate_total",
     "avg_total_reward", "avg_steps", "avg_route_completion",
     "avg_route_completion_pct", "avg_route_length_m",
@@ -558,7 +655,8 @@ def write_grouped_csv(path: Path, group_keys: list[str],
 # Legacy JSON emitters
 # ---------------------------------------------------------------------------
 LEGACY_CUMULATIVE_FIELDS = [
-    "n", "n_in_zone", "success_rate", "dest_rate",
+    "n", "n_maps", "n_in_zone", "success_rate", "dest_rate",
+    "target_compliance_rate_event", "sr_and_dest",
     "sign_compliance_sr", "sign_compliance_x",
     "traffic_light_sr", "crosswalk_sr",
     "avg_driving_score", "avg_smoothness",
@@ -579,6 +677,11 @@ def _emit_legacy_per_baseline_block(metrics: dict) -> dict:
     out = {}
     for f in LEGACY_CUMULATIVE_FIELDS:
         v = metrics.get(f)
+        if f == "n_maps":
+            # Only map-level blocks carry it; leave it out of episode blocks.
+            if v is not None:
+                out[f] = int(v)
+            continue
         if f in int_fields:
             out[f] = int(v or 0)
         else:
@@ -631,8 +734,18 @@ def write_legacy_cumulative_json(out_path: Path,
                                    per_signgroup_baseline: dict[tuple[str, str], dict]
                                        | None = None,
                                    members_pgb: dict[tuple[str, str], set[str]]
+                                       | None = None,
+                                   per_baseline_map: dict[str, dict] | None = None,
+                                   per_sign_baseline_map: dict[tuple[str, str], dict]
+                                       | None = None,
+                                   per_signgroup_baseline_map: dict[tuple[str, str], dict]
                                        | None = None) -> None:
     """Schema for generate_cumulative_markdown_report.py + category report.
+
+    ``per_baseline`` / ``per_sign`` keep the per-episode aggregation. When the
+    map-level dicts are given, ``per_baseline_map`` / ``per_sign_map`` are
+    added with the same block schema (plus ``n_maps``) and ``aggregations``
+    lists both kinds; report.py renders them as ``episode / map``.
 
     Per-sign tables get individual pdd_codes for ALL signs plus group keys
     (e.g. "2.1+2.2", "5.12.x") for paired groups — paired-zone scenes from
@@ -653,11 +766,26 @@ def write_legacy_cumulative_json(out_path: Path,
 
     out = {
         "chunks": chunks,
+        "aggregations": ["episode"] + (["map"] if per_baseline_map else []),
         "per_baseline": {b: _emit_legacy_per_baseline_block(m)
                           for b, m in sorted(per_baseline.items())},
         "per_sign": {b: dict(sorted(s.items()))
                       for b, s in sorted(per_sign.items())},
     }
+    if per_baseline_map:
+        per_sign_map: dict[str, dict[str, dict]] = defaultdict(dict)
+        for (sign, baseline), m in (per_sign_baseline_map or {}).items():
+            per_sign_map[baseline][sign] = _emit_legacy_per_baseline_block(m)
+        if per_signgroup_baseline_map and members_pgb is not None:
+            for (group, baseline), m in per_signgroup_baseline_map.items():
+                members = members_pgb.get((group, baseline), set())
+                if not (_is_paired_group(group) or len(members) > 1):
+                    continue
+                per_sign_map[baseline][group] = _emit_legacy_per_baseline_block(m)
+        out["per_baseline_map"] = {b: _emit_legacy_per_baseline_block(m)
+                                   for b, m in sorted(per_baseline_map.items())}
+        out["per_sign_map"] = {b: dict(sorted(s.items()))
+                               for b, s in sorted(per_sign_map.items())}
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(out, indent=2, ensure_ascii=False),
                          encoding="utf-8")
@@ -752,6 +880,16 @@ def main() -> None:
     agg_pgpb = {k: aggregate(rs, args.beta, args.horizon) for k, rs in by_sg_sign_baseline.items()}
     agg_pgpbv = {k: aggregate(rs, args.beta, args.horizon) for k, rs in by_sg_sign_baseline_var.items()}
 
+    # Map-level aggregation of the same slices (collapse each map, then mean
+    # over maps). Written next to the per-episode files as *_map.csv.
+    print("[aggregate] map-level: collapse each map, then mean over maps...")
+    mag_pbv = {k: aggregate_by_map(rs, args.beta, args.horizon) for k, rs in by_baseline_var.items()}
+    mag_psbv = {k: aggregate_by_map(rs, args.beta, args.horizon) for k, rs in by_sign_baseline_var.items()}
+    mag_pb = {k: aggregate_by_map(rs, args.beta, args.horizon) for k, rs in by_baseline.items()}
+    mag_psb = {k: aggregate_by_map(rs, args.beta, args.horizon) for k, rs in by_sign_baseline.items()}
+    mag_pgb = {k: aggregate_by_map(rs, args.beta, args.horizon) for k, rs in by_signgroup_baseline.items()}
+    mag_pgbv = {k: aggregate_by_map(rs, args.beta, args.horizon) for k, rs in by_signgroup_baseline_var.items()}
+
     # Write flat CSVs
     aggregations_dir = out_dir / "aggregations"
     write_grouped_csv(aggregations_dir / "agg_per_baseline_var.csv",
@@ -773,6 +911,20 @@ def main() -> None:
     print(f"[write] {aggregations_dir}/agg_per_signgroup_baseline.csv  ({len(agg_pgb)} rows)")
     print(f"[write] {aggregations_dir}/agg_per_signgroup_baseline_var.csv  ({len(agg_pgbv)} rows)")
 
+    write_grouped_csv(aggregations_dir / "agg_per_baseline_var_map.csv",
+                       ["baseline", "var_name"], mag_pbv)
+    write_grouped_csv(aggregations_dir / "agg_per_sign_baseline_var_map.csv",
+                       ["pdd_code", "baseline", "var_name"], mag_psbv)
+    write_grouped_csv(aggregations_dir / "agg_per_baseline_map.csv",
+                       ["baseline"], {(b,): m for b, m in mag_pb.items()})
+    write_grouped_csv(aggregations_dir / "agg_per_sign_baseline_map.csv",
+                       ["pdd_code", "baseline"], mag_psb)
+    write_grouped_csv(aggregations_dir / "agg_per_signgroup_baseline_map.csv",
+                       ["sign_group", "baseline"], mag_pgb)
+    write_grouped_csv(aggregations_dir / "agg_per_signgroup_baseline_var_map.csv",
+                       ["sign_group", "baseline", "var_name"], mag_pgbv)
+    print(f"[write] {aggregations_dir}/agg_per_*_map.csv  (map-level: 6 files)")
+
     # Paired view: interleave group totals + member-sign breakdowns. Member
     # SIGN rows use within-group aggregations (agg_pgpb) so paired-zone metrics
     # don't mix with non-paired same-pdd_code rows.
@@ -790,9 +942,13 @@ def main() -> None:
     write_legacy_cumulative_json(cumulative_json, agg_pb, agg_psb,
                                    chunks=vars_processed,
                                    per_signgroup_baseline=agg_pgb,
-                                   members_pgb=members_pgb)
+                                   members_pgb=members_pgb,
+                                   per_baseline_map=mag_pb,
+                                   per_sign_baseline_map=mag_psb,
+                                   per_signgroup_baseline_map=mag_pgb)
     print(f"[write] {cumulative_json}  (per_baseline={len(agg_pb)}, "
-          f"per_sign baselines={len({b for _, b in agg_psb})})")
+          f"per_sign baselines={len({b for _, b in agg_psb})}, "
+          f"aggregations=episode+map)")
 
     cumulative_2node = reports_dir / "cumulative_2node.json"
     write_2node_cumulative_json(cumulative_2node, agg_pb, agg_pbv, vars_processed)
@@ -800,7 +956,7 @@ def main() -> None:
 
     print()
     print("Next steps:")
-    print(f"  python3 {SCRIPT_DIR}/generate_cumulative_markdown_report.py \\")
+    print(f"  python -m traffic_bench.eval metrics report \\")
     print(f"      --run-root {out_dir} --cumulative {cumulative_json}")
 
 

@@ -377,6 +377,13 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
         "target_in_zone": target_in_zone,
         "target_compliant_event": target_compliant_event if target_compliant_event is not None else "",
         "target_compliant_step": target_compliant_step if target_compliant_step is not None else "",
+        # SR&Dest: obeyed the target sign AND reached the destination. A run
+        # that crashes before the sign has no violation but no arrival either,
+        # so it scores 0 instead of passing as "compliant".
+        "sr_and_dest": (
+            (bool(target_compliant_event) and bool(pf_row["arrived_dest"]))
+            if target_compliant_event is not None else ""
+        ),
         # High-level compliance
         "sign_compliant_high": (
             bool(target_compliant_event)
@@ -417,6 +424,7 @@ CSV_COLUMNS = [
     "target_violations_step", "target_violations_event",
     "target_in_zone_steps", "target_in_zone",
     "target_compliant_event", "target_compliant_step",
+    "sr_and_dest",
     "sign_compliant_high", "tl_compliant", "cw_compliant",
     "dest_recomputed", "passes_filter",
     "comfort",
