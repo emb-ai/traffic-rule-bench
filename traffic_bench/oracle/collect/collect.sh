@@ -476,8 +476,16 @@ _run_cpu_policy() {
         return 0
     fi
 
+    # Shard over the rows that will actually be used. ROWS_LIMIT is already
+    # folded into N_USE above; sharding over the whole manifest collected every
+    # row while the banner still printed the limit -- measured as 240 of 240
+    # scenes under ROWS_LIMIT=192. A limit that prints but does not bind is
+    # worse than no limit at all.
     local n_rows
-    n_rows=$(_manifest_nrows "$MANIFEST")
+    n_rows="${N_USE:-}"
+    if [ -z "$n_rows" ] || [ "$n_rows" -le 0 ]; then
+        n_rows=$(_manifest_nrows "$MANIFEST")
+    fi
     if [ -z "$n_rows" ] || [ "$n_rows" -le 0 ]; then
         echo "[FAIL] empty manifest for sharding: $MANIFEST"
         fail=$((fail + 1))
