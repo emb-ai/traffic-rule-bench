@@ -25,6 +25,15 @@ class DetourSimParams:
     spawn_offset_from_start: float = 10.0
     max_path_length_m: float = 100.0
     sign_distance_before_end: float = 12.0
+    # Room kept between the plate and the edge end. The manoeuvre lives AFTER
+    # the plate: cones at +1.25..+5.75 m, the verdict at +5.5 m, the zone
+    # closing at +18.5 m. A plate 12 m from the end leaves none of it on the
+    # edge, so the episode cannot contain the thing it is meant to measure.
+    tail_after_sign_m: float = 30.0
+    # How far back the ego starts from the plate. The travel budget is measured
+    # from the spawn, so anchoring the spawn to the plate (rather than to the
+    # edge start) makes episode length independent of how long the edge is.
+    approach_before_sign_m: float = 100.0
     spawn_velocity_ms: float = 5.0
     horizon: int = 400
     traffic_density: float = 0.0
@@ -142,8 +151,19 @@ def build_detour_manifest_entry(
     else:
         sign_s = max(20.0, edge_length - float(sim.sign_distance_before_end))
 
+    # Keep the manoeuvre on the edge, whether sign_s came from the scene meta
+    # or from the formula above.
+    sign_s = min(sign_s, max(20.0, edge_length - float(sim.tail_after_sign_m)))
+
     spawn_lane_id = f"{road_id}_{sign_lane_index}"
+    # Anchor the spawn to the plate. With the spawn pinned to the edge start and
+    # the plate near its end, the finish line landed before the sign on every
+    # detour row in the repository -- 900 of 900, by as much as 1470 m -- so no
+    # episode ever reached the obstacle it was built around.
     spawn_offset = float(sim.spawn_offset_from_start)
+    approach = float(sim.approach_before_sign_m)
+    if sign_s - approach > spawn_offset:
+        spawn_offset = sign_s - approach
     spawn_before_end = max(20.0, edge_length - spawn_offset)
     dest_along = min(
         spawn_offset + float(sim.max_path_length_m),
