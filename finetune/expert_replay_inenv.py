@@ -589,9 +589,21 @@ def replay_in_our_env(
             except Exception:
                 pass
 
-        arrived = bool(arrived_any or info.get("arrive_dest", False))
-        crashed = bool(info.get("crash", False)) or bool(info.get("crash_vehicle", False))
-        out_of_road = bool(info.get("out_of_road", False))
+        # Under recorded replay the ego is teleported onto the recorded track, so
+        # MetaDrive's own arrival flag never fires however complete the run is:
+        # every pilot route came back `arrived_dest: False` while the recording
+        # that produced it reported True over the very same 167 steps. The
+        # recording judged the trajectory now being dumped, so carry its verdict
+        # and keep the live flags for a replay that drives itself. `success`
+        # already preferred the sidecar, which is how a route could be both
+        # Completed and not-arrived.
+        rec = (sidecar.get("metrics") or {}) if ego_mode == "recorded" else {}
+        arrived = (bool(rec["arrived_dest"]) if "arrived_dest" in rec
+                   else bool(arrived_any or info.get("arrive_dest", False)))
+        crashed = (bool(rec["crashed"]) if "crashed" in rec
+                   else bool(info.get("crash", False)) or bool(info.get("crash_vehicle", False)))
+        out_of_road = (bool(rec["out_of_road"]) if "out_of_road" in rec
+                       else bool(info.get("out_of_road", False)))
 
         if plant2_collector is not None and save_plant2_dir is not None:
             from plant2_frames import plant2_route_dir
