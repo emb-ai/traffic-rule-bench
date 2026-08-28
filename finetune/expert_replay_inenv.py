@@ -218,13 +218,27 @@ def _match_recorded_to_live(
 
 
 def _park_unmatched_live(live_objs: dict, obj_map: dict, ego_live) -> None:
-    """Move live objects not used for replay far away so they don't pollute sensors."""
+    """Move unmatched live traffic participants away so they don't pollute sensors.
+
+    Only participants -- vehicles and pedestrians -- are parked. The scene's
+    furniture (the plate, its detour cones, barriers) is placed after reset and
+    is therefore in no recorded track, so parking everything unmatched emptied
+    the world: the dump came out holding the ego and nothing else, and the sign
+    the episode was built around sat 14 km away without a word in any log.
+    """
+    from metadrive.component.traffic_participants.base_traffic_participant import (
+        BaseTrafficParticipant,
+    )
+    from metadrive.component.vehicle.base_vehicle import BaseVehicle
+
     used = {id(o) for o in obj_map.values()}
     if ego_live is not None:
         used.add(id(ego_live))
     park = np.array([-10000.0, -10000.0, 1.0])
     for lid, lobj in live_objs.items():
         if id(lobj) in used:
+            continue
+        if not isinstance(lobj, (BaseVehicle, BaseTrafficParticipant)):
             continue
         try:
             lobj.set_position(park)

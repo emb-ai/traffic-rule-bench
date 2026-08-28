@@ -57,13 +57,24 @@ def lateral_offset_beside_lane(
 
 
 def resolve_layout_lane(env, lane_key: str):
+    """Look up a lane, accepting the key with or without the `lane_` prefix.
+
+    The placers build the key from a manifest road id (`<edge>_<n>`) while the
+    network stores `lane_<edge>_<n>`. The mismatch returned None and every
+    caller's fallback then put the plate on the ego's own lane -- correct only
+    when the manifest happened to name that same lane.
+    """
     road_network = env.engine.current_map.road_network
-    try:
-        return road_network.get_lane(lane_key)
-    except Exception:
-        lane_info = getattr(road_network, "graph", {}).get(lane_key)
-        if lane_info is not None and hasattr(lane_info, "lane"):
-            return lane_info.lane
+    keys = [str(lane_key)]
+    if not str(lane_key).startswith("lane_"):
+        keys.append("lane_" + str(lane_key))
+    for key in keys:
+        try:
+            return road_network.get_lane(key)
+        except Exception:
+            lane_info = getattr(road_network, "graph", {}).get(key)
+            if lane_info is not None and hasattr(lane_info, "lane"):
+                return lane_info.lane
     return None
 
 
