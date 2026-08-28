@@ -172,10 +172,22 @@ def collect_boxes(engine, vehicle,
     obj_id = 1
     seen: set = set()
 
+    # The plates are claimed before the generic sweep runs. `engine.get_objects`
+    # hands them over like any other prop, and the sweep would file them as
+    # `static` / constructioncone -- indistinguishable from the detour obstacle,
+    # with the PDD code and the plate value lost. They are written below, each
+    # under its own class.
+    _sign_mgr = getattr(engine, "traffic_sign_manager", None)
+    _sign_objs = [s for s in list(getattr(_sign_mgr, "signs", []) or [])
+                  if s is not None and hasattr(s, "position")]
+    _sign_ids = {id(s) for s in _sign_objs}
+
     def _add(obj):
         nonlocal obj_id
         oid = id(obj)
         if oid in seen or obj is vehicle:
+            return
+        if oid in _sign_ids:
             return
         seen.add(oid)
         if not hasattr(obj, "position"):
@@ -252,10 +264,7 @@ def collect_boxes(engine, vehicle,
     except Exception:
         known_pdd = set(_CLASS_TO_PDD.values())
 
-    sign_mgr = getattr(engine, "traffic_sign_manager", None)
-    for sign in list(getattr(sign_mgr, "signs", []) or []):
-        if sign is None or not hasattr(sign, "position"):
-            continue
+    for sign in _sign_objs:
         oid = id(sign)
         if oid in seen:
             continue
