@@ -59,6 +59,30 @@ for _p in (METADRIVE_DIR,):
         sys.path.insert(0, _ps)
 
 
+def _build_env(row: dict, backend: str, max_steps: int,
+               record_episode: bool = False, ego_policy_cls=None,
+               render: bool = False, scenes_root=None):
+    """Build an UNRESET env for one scene.
+
+    The eval builder is the only one this repository ships and it is SUMO-only.
+    It resets with ``skip_auto_signs``, so after ``env.reset()`` the world holds
+    NO plates -- placing them is the caller's job (``place_signs_for_row``).
+    """
+    if backend != "sumo":
+        raise NotImplementedError(
+            f"backend {backend!r}: this repository builds SUMO scenes only")
+    from traffic_bench.eval.run.env import _build_sumo_env
+
+    env = _build_sumo_env(row, scenes_root=Path(scenes_root or "."),
+                          max_steps=max_steps)
+    env.config["record_episode"] = bool(record_episode)
+    if render:
+        env.config["use_render"] = True
+    if ego_policy_cls is not None:
+        env.config["agent_policy"] = ego_policy_cls
+    return env
+
+
 def _resolve_sign_class(cls_name: str):
     """Resolve a traffic-sign class by ``__name__`` (sidecar stores class names)."""
     import importlib
@@ -275,7 +299,6 @@ def replay_in_our_env(
     sidecar = json.load(open(sidecar_path))
     scenario = pickle.load(open(pkl_path, "rb"))
 
-    from expert_replay import _build_env    # re-use env-builder
     import env_flags as _env_flags
     from traffic_bench.eval.engine.traffic.ego_defaults import apply_ego_defaults
 
@@ -327,6 +350,27 @@ def replay_in_our_env(
 
         sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
         rn = env.current_map.road_network
+
+        # The SUMO builder resets with `skip_auto_signs`, so nothing has put the
+        # plates in the world yet. Skipping this leaves the scene sign-less: the
+        # episode still records, the route count still looks right, and the dump
+        # simply carries no sign box -- unrecoverable after the fact. The
+        # sidecar re-add path below stays for the non-SUMO backends.
+        if backend == "sumo":
+            from traffic_bench.eval.run.place import place_signs_for_row
+
+            placed = place_signs_for_row(
+                env, row, scenes_root=Path(scenes_root or "."),
+                distance_before_end=float(row.get("sign_distance_before_end", 20.0)),
+                show_model=True,
+            )
+            n_signs = len(getattr(sign_mgr, "signs", []) or [])
+            print(f"[replay] place_signs_for_row -> {placed}, "
+                  f"{n_signs} sign(s) in the world")
+            if not placed or n_signs == 0:
+                print("[warn] no sign placed for this row: the dump will carry no "
+                      "sign box. Check road_id / sign_s / sign_lane_index in the row")
+
         re_add_signs = (backend != "sumo")
         for sign_info in (sidecar.get("signs", []) if re_add_signs else []):
             cls_name = sign_info["sign_class"]
