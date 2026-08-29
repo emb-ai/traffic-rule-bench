@@ -370,40 +370,51 @@ def run_collection(args: argparse.Namespace) -> int:
                     f"scene={row.get('scene_id')} uid={uid}"
                 )
                 t0 = time.time()
-                episode = rb.run_one_episode(
-                    row=row,
-                    policy_type=args.policy,
-                    models=models,
-                    scenes_root=scenes_root,
-                    max_steps=args.max_steps,
-                    ego_variant=variant,
-                    ego_sample_seed_base=args.ego_sample_seed_base,
-                    replay_root=replay_root,
-                    replay_layout="flat",
-                    save_gif=gif_path,
-                    hide_signs=args.hide_signs,
-                    auxiliary_agent=True,
-                    record_episode=True,
-                    aux_distance_from_intersection=float(
-                        row.get("aux_distance_from_intersection")
-                        or args.aux_distance_from_intersection
-                    ),
-                    aux_policy=args.aux_policy,
-                    aux_spawn_velocity_ms=float(
-                        row.get("aux_spawn_velocity_ms")
-                        or args.aux_spawn_velocity_ms
-                    ),
-                    aux_release_when_ego_within_m=args.aux_release_when_ego_within_m,
-                    aux_convoy_size=int(
-                        row.get("aux_convoy_size") or args.aux_convoy_size
-                    ),
-                    aux_convoy_gap_m=float(
-                        row.get("aux_convoy_gap_m") or args.aux_convoy_gap_m
-                    ),
-                    aux_lanes_occupied=int(
-                        row.get("aux_lanes_occupied") or args.aux_lanes_occupied
-                    ),
-                )
+                try:
+                    episode = rb.run_one_episode(
+                        row=row,
+                        policy_type=args.policy,
+                        models=models,
+                        scenes_root=scenes_root,
+                        max_steps=args.max_steps,
+                        ego_variant=variant,
+                        ego_sample_seed_base=args.ego_sample_seed_base,
+                        replay_root=replay_root,
+                        replay_layout="flat",
+                        save_gif=gif_path,
+                        hide_signs=args.hide_signs,
+                        auxiliary_agent=True,
+                        record_episode=True,
+                        aux_distance_from_intersection=float(
+                            row.get("aux_distance_from_intersection")
+                            or args.aux_distance_from_intersection
+                        ),
+                        aux_policy=args.aux_policy,
+                        aux_spawn_velocity_ms=float(
+                            row.get("aux_spawn_velocity_ms")
+                            or args.aux_spawn_velocity_ms
+                        ),
+                        aux_release_when_ego_within_m=args.aux_release_when_ego_within_m,
+                        aux_convoy_size=int(
+                            row.get("aux_convoy_size") or args.aux_convoy_size
+                        ),
+                        aux_convoy_gap_m=float(
+                            row.get("aux_convoy_gap_m") or args.aux_convoy_gap_m
+                        ),
+                        aux_lanes_occupied=int(
+                            row.get("aux_lanes_occupied") or args.aux_lanes_occupied
+                        ),
+                    )
+                except Exception as exc:
+                    # One unbuildable scene must not cost the rest of the shard.
+                    # The ego-placement guard raises when a manifest road_id
+                    # names no lane in that scene's map -- a real data fault,
+                    # but a per-row one, and killing the worker silently loses
+                    # every row it had left. Count it and carry on.
+                    n_fail += 1
+                    print(f"[skip] {uid} {args.policy}/{variant}: "
+                          f"{type(exc).__name__}: {exc}", flush=True)
+                    continue
                 dt = time.time() - t0
                 # Refresh paths after write
                 if not sidecar.is_file():
