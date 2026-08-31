@@ -47,6 +47,10 @@ def main() -> int:
     ap.add_argument("--pool", default=None, metavar="DIR",
                     help="also summarise every candidate run from "
                          "<family>/DIR/all_runs_dedup.jsonl (e.g. --pool experts), "
+                         "each IDM ego-style sample counted as its own expert")
+    ap.add_argument("--pool", default=None, metavar="DIR",
+                    help="also summarise every candidate run from "
+                         "<family>/DIR/all_runs_dedup.jsonl (e.g. --pool experts), "
                          "counting each IDM ego-style sample as its own expert")
     args = ap.parse_args()
 
