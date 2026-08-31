@@ -44,6 +44,10 @@ def main() -> int:
     ap.add_argument("root")
     ap.add_argument("--experts", default="experts_idm",
                     help="per-family selection directory (default: experts_idm)")
+    ap.add_argument("--pool", default=None, metavar="DIR",
+                    help="also summarise every candidate run from "
+                         "<family>/DIR/all_runs_dedup.jsonl (e.g. --pool experts), "
+                         "counting each IDM ego-style sample as its own expert")
     args = ap.parse_args()
 
     root = Path(args.root)
@@ -104,7 +108,53 @@ def main() -> int:
     if len(policies) > 1 or "idm_rule" not in policies:
         print()
         print("winner_policy mix:", dict(policies.most_common()))
+
+    if args.pool:
+        _print_pool(root, args.pool)
     return 0
+
+
+def _print_pool(root: Path, pool_dir: str) -> None:
+    """Summarise the candidate pool the pick chose from.
+
+    Every recorded run, not just the winner, so the four sampled ego styles
+    are visible as their own experts rather than folded into `idm_rule`.
+    """
+    agg: dict[str, dict] = collections.defaultdict(
+        lambda: {"n": 0, "arrived": 0, "clean": 0, "ok": 0, "steps": []})
+    for fam in sorted(os.listdir(root)):
+        f = root / fam / pool_dir / "all_runs_dedup.jsonl"
+        if not f.is_file():
+            continue
+        for line in f.open():
+            line = line.strip()
+            if not line:
+                continue
+            r = json.loads(line)
+            key = "%s/%s" % (r.get("policy") or "?", r.get("variant") or "?")
+            a = agg[key]
+            a["n"] += 1
+            a["arrived"] += bool(r.get("arrived_dest"))
+            a["clean"] += int(r.get("total_violations") or 0) == 0
+            a["ok"] += bool(r.get("success"))
+            if r.get("final_step"):
+                a["steps"].append(int(r["final_step"]))
+    if not agg:
+        print()
+        print("no candidate pool under %s/*/%s/" % (root, pool_dir))
+        return
+    print()
+    print("Candidate pool (every recorded run, before the pick):")
+    hdr = "  %-22s %7s %8s %8s %8s %9s" % (
+        "expert", "n", "arrived", "no_viol", "success", "med_steps")
+    print(hdr)
+    print("  " + "-" * (len(hdr) - 2))
+    for key in sorted(agg, key=lambda k: -agg[k]["n"]):
+        a = agg[key]
+        n = a["n"]
+        print("  %-22s %7d %8.2f %8.2f %8.2f %9s" % (
+            key, n, a["arrived"] / n, a["clean"] / n, a["ok"] / n,
+            int(statistics.median(a["steps"])) if a["steps"] else "-"))
 
 
 if __name__ == "__main__":
