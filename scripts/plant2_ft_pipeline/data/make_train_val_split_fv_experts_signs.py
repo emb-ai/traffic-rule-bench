@@ -183,6 +183,34 @@ def hardlink_one(pair: tuple[str, str]) -> str:
     return "copied"
 
 
+def _readable(path: Path) -> bool:
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            json.load(f)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def verify_route(route_dir: Path) -> str | None:
+    """Read every frame of a route back; return the first unreadable path.
+
+    A dump worker killed mid-write leaves a .json.gz of the right name and size
+    whose contents are not gzip. Every cheaper check passes it -- the directory
+    listing, results.json.gz, the split itself -- and the run dies with
+    BadGzipFile inside a DataLoader worker minutes into epoch 0, taking the
+    whole training with it. The only check that sees it is reading the files.
+    """
+    for sub in ("measurements", "boxes"):
+        d = route_dir / sub
+        if not d.is_dir():
+            continue
+        for f in sorted(d.iterdir()):
+            if f.suffix == ".gz" and not _readable(f):
+                return str(f)
+    return None
+
+
 def route_is_ok(route_dir: Path) -> bool:
     for d in REQUIRED_DIRS:
         if not (route_dir / d).is_dir():
@@ -287,6 +315,22 @@ def main() -> None:
                     out_name = f"{tag}__{out_name}"
                 new_by[sign].append((p, out_name, tag))
         by = new_by
+
+    if os.environ.get("VERIFY_GZ", "1").strip() not in ("0", "false"):
+        routes = [(sign, item) for sign, items in by.items() for item in items]
+        print(f"verifying {len(routes)} routes are readable …", flush=True)
+        with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+            bad_first = list(ex.map(lambda r: verify_route(r[1][0]), routes))
+        broken = {id(item) for (_s, item), b in zip(routes, bad_first) if b}
+        if broken:
+            for (_s, item), b in zip(routes, bad_first):
+                if b:
+                    print(f"  unreadable, dropping route: {b}", flush=True)
+            by = {
+                sign: [it for it in items if id(it) not in broken]
+                for sign, items in by.items()
+            }
+        print(f"verified: {len(routes) - len(broken)} ok, {len(broken)} dropped", flush=True)
 
     print("signs:", {k: len(v) for k, v in sorted(by.items())}, flush=True)
     print(
