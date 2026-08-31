@@ -44,6 +44,9 @@ def main() -> int:
     ap.add_argument("root")
     ap.add_argument("--experts", default="experts_idm",
                     help="per-family selection directory (default: experts_idm)")
+    ap.add_argument("--funnel", action="store_true",
+                    help="show how many recorded scenes survived into the oracle, "
+                         "and where the rest were lost")
     ap.add_argument("--pool", default=None, metavar="DIR",
                     help="also summarise every candidate run from "
                          "<family>/DIR/all_runs_dedup.jsonl (e.g. --pool experts), "
@@ -109,9 +112,44 @@ def main() -> int:
         print()
         print("winner_policy mix:", dict(policies.most_common()))
 
+    if args.funnel:
+        _print_funnel(root, args.experts)
     if args.pool:
         _print_pool(root, args.pool)
     return 0
+
+
+def _print_funnel(root: Path, experts_dir: str) -> None:
+    """Recorded scenes -> candidate runs -> scenes that got an expert.
+
+    The percentage that matters is against what was RECORDED, not against the
+    catalogue: collection deliberately took a share of each manifest, so a
+    coverage figure quoted against the full catalogue understates the pick.
+    """
+    hdr = "  %-24s %8s %9s %8s %8s %7s" % (
+        "family", "recorded", "candidates", "experts", "no_pick", "kept")
+    print()
+    print("Selection funnel (per family):")
+    print(hdr)
+    print("  " + "-" * (len(hdr) - 2))
+    t_rec = t_cand = t_exp = 0
+    for fam in sorted(os.listdir(root)):
+        rep = root / fam / experts_dir / "coverage_report.json"
+        if not rep.is_file():
+            continue
+        d = json.loads(rep.read_text())
+        scenes_dir = root / fam / "idm_rule" / "by_scene"
+        recorded = len(os.listdir(scenes_dir)) if scenes_dir.is_dir() else 0
+        cand = int((d.get("load") or {}).get("rows_final") or 0)
+        exp = int(d.get("n_top1") or 0)
+        t_rec += recorded; t_cand += cand; t_exp += exp
+        print("  %-24s %8d %9d %8d %8d %6.0f%%" % (
+            fam, recorded, cand, exp, max(recorded - exp, 0),
+            100 * exp / recorded if recorded else 0))
+    print("  " + "-" * (len(hdr) - 2))
+    print("  %-24s %8d %9d %8d %8d %6.0f%%" % (
+        "TOTAL", t_rec, t_cand, t_exp, max(t_rec - t_exp, 0),
+        100 * t_exp / t_rec if t_rec else 0))
 
 
 def _print_pool(root: Path, pool_dir: str) -> None:
