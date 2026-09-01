@@ -11,7 +11,9 @@ from typing import Any
 DEFAULT_SPAWN_DISTANCE_BEFORE_END = 12.0
 DEFAULT_AUX_DISTANCE_FROM_INTERSECTION = 20.0
 DEFAULT_AUX_LANES_OCCUPIED_MAX = 4
-# Cap ego travel / visual finish mark along the destination lane (4.3 / 3.2).
+# Shared total-route budget (all sign families).
+DEFAULT_MAX_PATH_LENGTH_M = 150.0
+# Cap ego travel / visual finish mark along the destination lane (legacy fallback).
 DEFAULT_DESTINATION_MAX_ALONG_M = 100.0
 # Expert mandatory dwell at stop line after speed≈0 (sim steps; ×0.1 s ≈ seconds).
 # Was 30 (~3.0 s); halved to 15 (~1.5 s).
@@ -37,8 +39,8 @@ EXPERIMENT_DEFAULT_KEYS = (
     "aux_convoy_gap_m",
     "aux_lanes_occupied_max",
     "stop_wait_steps",
-    # Roundabout / blocked_road; only copied when present in experiment config.
-    "destination_max_along_m",
+    # Per-row route cap; do not copy from experiment summary.
+    "max_path_length_m",
     # Blocked road (3.2)
     "sign_distance_from_start",
     "compliant_stop_success_seconds",
@@ -74,9 +76,8 @@ def enrich_manifest_row(row: dict[str, Any], config: dict[str, Any] | None = Non
         raw = config.get("spawn_distance_before_end", DEFAULT_SPAWN_DISTANCE_BEFORE_END)
         out["spawn_distance_before_end"] = float(raw)
 
-    # Roundabout-only: never invent a default for yield/main/stop rows.
-    if out.get("destination_max_along_m") is None and "destination_max_along_m" in config:
-        out["destination_max_along_m"] = float(config["destination_max_along_m"])
+    if out.get("max_path_length_m") is None and "max_path_length_m" in config:
+        out["max_path_length_m"] = float(config["max_path_length_m"])
 
     if out.get("aux_distance_from_intersection") is None:
         raw = config.get(
@@ -91,7 +92,7 @@ def enrich_manifest_row(row: dict[str, Any], config: dict[str, Any] | None = Non
     for key in EXPERIMENT_DEFAULT_KEYS:
         if key in (
             "spawn_distance_before_end",
-            "destination_max_along_m",
+            "max_path_length_m",
             "aux_distance_from_intersection",
             "stop_wait_steps",
         ):

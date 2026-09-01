@@ -45,6 +45,8 @@ simulation:
   horizon: 800
   sign_distance_before_end: 0.0
   spawn_distance_before_end: 15.0
+  # Total ego route length cap (m) for all sign families at manifest expand.
+  max_path_length_m: 150.0
 
 gif:
   enabled: false

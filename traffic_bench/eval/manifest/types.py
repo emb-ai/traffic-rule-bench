@@ -28,7 +28,6 @@ class ScenarioConfig:
     max_scenarios: Optional[int] = None
     max_total: Optional[int] = None
     min_dual_path_gain_m: float = 20.0
-    dual_path_route_budget_m: Optional[float] = None
 
 
 @dataclass
@@ -54,7 +53,7 @@ class SimulationConfig:
     compliant_stop_speed_mps: float = 0.5
     min_hops_after_depart: int = 0
     spawn_offset_from_start: float = 10.0
-    max_path_length_m: float = 100.0
+    max_path_length_m: float = 150.0
     max_ego_lanes: int = 8
     zone_tail_m: float = 8.0
     zone_min_m: float = 20.0

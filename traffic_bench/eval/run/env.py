@@ -28,6 +28,7 @@ from traffic_bench.eval.signs.dual_path.place import (
     row_is_one_way as _row_is_one_way,
     row_uses_dual_path_nav as _row_uses_dual_path_nav,
 )
+from traffic_bench.eval.signs.junction.place import row_is_junction as _row_is_junction
 from traffic_bench.eval.signs.roundabout.place import row_is_roundabout as _row_is_roundabout
 from traffic_bench.eval.signs.speed.place import row_is_speed as _row_is_speed
 
@@ -384,15 +385,12 @@ def _apply_destination_along_cap(env, row: dict) -> None:
         _row_is_roundabout(row)
         or _row_is_blocked_road(row)
         or _row_uses_dual_path_nav(row)
-        or _row_is_crosswalk(row)
         or _row_is_detour(row)
         or _row_is_speed(row)
     ):
         return
     if raw is None and _row_uses_dual_path_nav(row):
         return
-    if raw is None and _row_is_crosswalk(row):
-        raw = 40.0
     try:
         cap = float(DEFAULT_DESTINATION_MAX_ALONG_M if raw is None else raw)
     except (TypeError, ValueError):
@@ -446,6 +444,8 @@ def _apply_destination_along_cap(env, row: dict) -> None:
             label = "Detour"
         elif _row_is_speed(row):
             label = "Speed"
+        elif _row_is_junction(row):
+            label = "Junction"
         else:
             label = "Roundabout"
         print(

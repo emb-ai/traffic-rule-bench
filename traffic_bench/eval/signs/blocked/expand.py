@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
+from traffic_bench.eval.engine.spawn.route_budget import apply_route_budget
 from traffic_bench.eval.engine.traffic.agent_profile_bank import sample_one_profile
 from traffic_bench.eval.engine.traffic.stable_hash import stable_hash
 from traffic_bench.eval.engine.spawn.scene_augmentation import (
@@ -33,7 +34,7 @@ class BlockedRoadSimParams:
     compliant_stop_speed_mps: float
     n_variations: int = 3
     profile_density_cap: float = 1.0
-    destination_max_along_m: Optional[float] = 50.0
+    max_path_length_m: float = 150.0
 
 
 @dataclass(frozen=True)
@@ -109,7 +110,6 @@ def expand_blocked_road_scene_entries(
                 net_path,
                 scenario.ego_destination_edge_id,
                 sign_distance_from_start=sim.sign_distance_from_start,
-                destination_max_along_m=float(sim.destination_max_along_m or 50.0),
             )
             if not geom_ok:
                 skipped_geometry += 1
@@ -259,8 +259,6 @@ def build_blocked_road_manifest_entry(
         "source_osm": meta.get("source_osm"),
         "osm_file": meta.get("osm_file"),
     }
-    if sim.destination_max_along_m is not None:
-        entry["destination_max_along_m"] = float(sim.destination_max_along_m)
 
     # Same profile_* embedding as sumo_runner.materialize_sumo_scene.
     for key, value in npc_profile.items():
@@ -275,6 +273,15 @@ def build_blocked_road_manifest_entry(
 
     if junction_layout_cache is not None:
         entry["junction_layout"] = junction_layout_cache
+
+    max_path_m = float(sim.max_path_length_m)
+    if max_path_m > 0.0 and entry.get("destination_edge_id"):
+        entry = apply_route_budget(
+            entry,
+            net_path=scene_dir / net_file,
+            max_path_length_m=max_path_m,
+            spawn_distance_before_end=float(sim.spawn_distance_before_end),
+        )
 
     return {k: v for k, v in entry.items() if v is not None}
 
@@ -342,7 +349,7 @@ def generate(cfg, scenes=None):
         compliant_stop_speed_mps=sim_cfg.compliant_stop_speed_mps,
         n_variations=n_variations,
         profile_density_cap=float(sim_cfg.profile_density_cap),
-        destination_max_along_m=sim_cfg.destination_max_along_m,
+        max_path_length_m=float(sim_cfg.max_path_length_m),
     )
 
     print(
@@ -448,7 +455,7 @@ def generate(cfg, scenes=None):
             "horizon": sim_cfg.horizon,
             "sign_distance_from_start": sim_cfg.sign_distance_from_start,
             "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
-            "destination_max_along_m": sim_cfg.destination_max_along_m,
+            "max_path_length_m": float(sim_cfg.max_path_length_m),
             "compliant_stop_success_seconds": sim_cfg.compliant_stop_success_seconds,
             "compliant_stop_max_dist_m": sim_cfg.compliant_stop_max_dist_m,
             "compliant_stop_speed_mps": sim_cfg.compliant_stop_speed_mps,

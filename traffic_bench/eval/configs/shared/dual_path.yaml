@@ -10,7 +10,6 @@ auxiliary:
 
 scenario:
   min_dual_path_gain_m: 20.0
-  dual_path_route_budget_m: 150
 
 simulation:
   horizon: 800

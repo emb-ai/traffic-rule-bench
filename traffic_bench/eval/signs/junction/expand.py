@@ -30,6 +30,7 @@ from traffic_bench.eval.engine.spawn.auxiliary_agent import (
     viable_aux_lane_keys,
     viable_right_aux_lane_keys,
 )
+from traffic_bench.eval.engine.spawn.route_budget import apply_route_budget
 from traffic_bench.eval.engine.spawn.scene_augmentation import (
     SpawnScenario,
     SpawnStrategy,
@@ -463,11 +464,6 @@ def build_manifest_entry(
             if expert_cfg is not None
             else DEFAULT_STOP_WAIT_STEPS
         )
-    if (
-        profile.layout_mode == "roundabout"
-        and sim_cfg.destination_max_along_m is not None
-    ):
-        entry["destination_max_along_m"] = float(sim_cfg.destination_max_along_m)
 
     if spawn_scenario is not None:
         entry.update(spawn_scenario.to_manifest_fields())
@@ -642,6 +638,16 @@ def build_manifest_entry(
                 entry["aux_occupied_lane_keys"] = select_occupied_main_lanes(
                     available_right, aux_lanes_occupied, prefer_lane_key=prefer_aux
                 )
+
+    if entry.get("destination_edge_id") and entry.get("spawn_lane_num") is not None:
+        max_path_m = float(getattr(sim_cfg, "max_path_length_m", 0.0) or 0.0)
+        if max_path_m > 0.0:
+            entry = apply_route_budget(
+                entry,
+                net_path=net_full_path,
+                max_path_length_m=max_path_m,
+                spawn_distance_before_end=float(sim_cfg.spawn_distance_before_end),
+            )
 
     return {k: v for k, v in entry.items() if v is not None}
 
@@ -828,6 +834,7 @@ def generate(cfg, scenes=None):
         "horizon": sim_cfg.horizon,
         "sign_distance_before_end": sim_cfg.sign_distance_before_end,
         "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
+        "max_path_length_m": float(sim_cfg.max_path_length_m),
         "auxiliary_agent": aux_for_entry.enabled,
         "aux_distance_from_intersection": aux_cfg.distance_from_intersection,
         "aux_convoy_size_max": aux_cfg.convoy_size,
@@ -838,11 +845,6 @@ def generate(cfg, scenes=None):
     }
     if profile.id == STOP.id:
         summary["stop_wait_steps"] = int(expert_cfg.stop_wait_steps)
-    if (
-        profile.layout_mode == "roundabout"
-        and sim_cfg.destination_max_along_m is not None
-    ):
-        summary["destination_max_along_m"] = float(sim_cfg.destination_max_along_m)
     write_real_manifest(
         output_dir=output_dir,
         scenes_dir=scenes_dir,

@@ -34,7 +34,7 @@ class DualPathSimParams:
     profile_density_cap: float = 1.0
     min_dual_path_gain_m: float = 20.0
     min_ego_lane_m: float = 8.0
-    dual_path_route_budget_m: Optional[float] = None
+    max_path_length_m: float = 150.0
 
 
 @dataclass(frozen=True)
@@ -324,7 +324,7 @@ def build_dual_path_manifest_entry(
             entry["forbidden_dir"] = spec.forbidden_dir
             dual_meta["forbidden_dir"] = spec.forbidden_dir
 
-        budget = sim.dual_path_route_budget_m
+        budget = sim.max_path_length_m
         if budget is not None and float(budget) > 0.0:
             net_full = scene_dir / str(meta.get("net_file", "map.net.xml"))
             edge_lengths = load_sumo_edge_lengths(net_full)
@@ -480,7 +480,7 @@ def generate(cfg, scenes=None):
         profile_density_cap=float(sim_cfg.profile_density_cap),
         min_dual_path_gain_m=float(scenario_cfg.min_dual_path_gain_m),
         min_ego_lane_m=min(float(sim_cfg.spawn_distance_before_end), 8.0),
-        dual_path_route_budget_m=scenario_cfg.dual_path_route_budget_m,
+        max_path_length_m=float(sim_cfg.max_path_length_m),
     )
 
     family = profile.sign_type
@@ -489,7 +489,7 @@ def generate(cfg, scenes=None):
         f"dual-path (n_variations={n_variations}, "
         f"density_cap={sim_cfg.profile_density_cap}, "
         f"min_gain={scenario_cfg.min_dual_path_gain_m}m, "
-        f"route_budget_m={scenario_cfg.dual_path_route_budget_m}, "
+        f"max_path_length_m={sim_cfg.max_path_length_m}, "
         f"horizon={sim_cfg.horizon})"
     )
 
@@ -588,6 +588,7 @@ def generate(cfg, scenes=None):
             "horizon": sim_cfg.horizon,
             "sign_distance_before_end": sim_cfg.sign_distance_before_end,
             "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
+            "max_path_length_m": float(sim_cfg.max_path_length_m),
             "auxiliary_agent": False,
         },
     )

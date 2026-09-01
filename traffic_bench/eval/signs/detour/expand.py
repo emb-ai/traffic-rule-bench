@@ -23,7 +23,7 @@ MAX_AXIS = 3
 @dataclass(frozen=True)
 class DetourSimParams:
     spawn_offset_from_start: float = 10.0
-    max_path_length_m: float = 100.0
+    max_path_length_m: float = 150.0
     sign_distance_before_end: float = 12.0
     spawn_velocity_ms: float = 5.0
     horizon: int = 400

@@ -33,6 +33,7 @@ from traffic_bench.eval.engine.map.lane_keys import lane_edge_id, make_lane_key
 from traffic_bench.scene_collection.sign_scenes.filter.selection import is_reserved_scene_dir
 
 from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
+from traffic_bench.eval.engine.spawn.route_budget import apply_route_budget
 from traffic_bench.eval.engine.traffic.traffic_density_levels import TrafficDensityLevel, list_traffic_density_levels
 
 MAX_AXIS = 3
@@ -48,7 +49,7 @@ class CrosswalkSimParams:
     traffic_density: float = 0.0
     traffic_density_augment: bool = True
     min_hops_after_depart: int = 0
-    destination_max_along_m: float = 40.0
+    max_path_length_m: float = 150.0
     max_ego_lanes: int = MAX_AXIS
     max_density_levels: int = MAX_AXIS
     max_pedestrian_presets: int = MAX_AXIS
@@ -230,7 +231,7 @@ def build_crosswalk_manifest_entry(
         float(sim.ped_ego_spawn_distance_m),
     )
 
-    return {
+    entry: Dict[str, Any] = {
         "valid": True,
         "scene_id": scene_id,
         "scene_name": scene_name,
@@ -265,7 +266,6 @@ def build_crosswalk_manifest_entry(
         "min_hops_after_depart": sim.min_hops_after_depart,
         "spawn_distance_before_end": spawn_before_end,
         "sign_distance_before_end": sim.sign_distance_before_end,
-        "destination_max_along_m": float(sim.destination_max_along_m),
         "spawn_velocity_ms": sim.spawn_velocity_ms,
         "traffic_density": traffic_density,
         "horizon": int(sim.horizon),
@@ -283,6 +283,15 @@ def build_crosswalk_manifest_entry(
         "osm_way_id": meta.get("osm_way_id"),
         "crosswalk_width_m": meta.get("crosswalk_width_m", 4.0),
     }
+    max_path_m = float(sim.max_path_length_m)
+    if max_path_m > 0.0 and entry.get("destination_edge_id"):
+        entry = apply_route_budget(
+            entry,
+            net_path=scene_dir / net_file,
+            max_path_length_m=max_path_m,
+            spawn_distance_before_end=float(spawn_before_end),
+        )
+    return entry
 
 
 def expand_crosswalk_scene_entries(
@@ -440,11 +449,7 @@ def generate(cfg, scenes=None):
         traffic_density=float(sim_cfg.traffic_density),
         traffic_density_augment=bool(traffic_density_augment),
         min_hops_after_depart=int(getattr(sim_cfg, "min_hops_after_depart", 0) or 0),
-        destination_max_along_m=float(
-            sim_cfg.destination_max_along_m
-            if sim_cfg.destination_max_along_m is not None
-            else 40.0
-        ),
+        max_path_length_m=float(sim_cfg.max_path_length_m),
         max_ego_lanes=int(max_ego_lanes),
         max_density_levels=int(max_density_levels),
         max_pedestrian_presets=int(max_pedestrian_presets),
@@ -526,6 +531,7 @@ def generate(cfg, scenes=None):
             "horizon": sim_cfg.horizon,
             "sign_distance_before_end": sim_cfg.sign_distance_before_end,
             "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
+            "max_path_length_m": float(sim_cfg.max_path_length_m),
             "auxiliary_agent": False,
         },
     )

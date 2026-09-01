@@ -6,7 +6,7 @@ import json
 import xml.etree.ElementTree as ET
 from collections import defaultdict, deque
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 DEFAULT_NET_FILE = "map.net.xml"
 CORE_SCENES_SUBDIR = "core"
@@ -130,6 +130,62 @@ class VehicleRouteIndex:
         return [edge for edge, _hops in self.reachable_real_edges_with_hops(
             from_edge, from_lane, max_hops=max_hops
         )]
+
+    def find_real_edge_path(
+        self,
+        from_edge: str,
+        from_lane: int,
+        to_edge: str,
+        *,
+        max_hops: int = 16,
+    ) -> Optional[List[str]]:
+        """Shortest real-edge path ``from_edge → to_edge`` (both included)."""
+        if not is_real_sumo_edge_id(to_edge):
+            return None
+        if from_edge == to_edge:
+            return [str(from_edge)]
+
+        start = (str(from_edge), int(from_lane))
+        queue: deque[tuple[tuple[str, int], int]] = deque([(start, 0)])
+        visited = {start}
+        parent: dict[tuple[str, int], tuple[str, int] | None] = {start: None}
+        goal: tuple[str, int] | None = None
+
+        while queue:
+            state, depth = queue.popleft()
+            edge, _lane = state
+            if depth > max_hops:
+                continue
+            if is_real_sumo_edge_id(edge) and edge == to_edge:
+                goal = state
+                break
+            for next_edge, next_lane in self._adj.get(state, []):
+                if self._edge_fn.get(next_edge) == "walkingarea":
+                    continue
+                nxt = (next_edge, int(next_lane))
+                if nxt in visited:
+                    continue
+                visited.add(nxt)
+                parent[nxt] = state
+                queue.append((nxt, depth + 1))
+
+        if goal is None:
+            return None
+
+        states: list[tuple[str, int]] = []
+        cur: tuple[str, int] | None = goal
+        while cur is not None:
+            states.append(cur)
+            cur = parent.get(cur)
+
+        states.reverse()
+        path: list[str] = []
+        for edge, _lane in states:
+            if not is_real_sumo_edge_id(edge):
+                continue
+            if not path or path[-1] != edge:
+                path.append(edge)
+        return path or None
 
     def reachable_real_edges_with_hops(
         self,

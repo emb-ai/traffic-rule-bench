@@ -776,7 +776,8 @@ def run_one_episode(
                     compliant_stop_steps = 0
 
             if (
-                is_blocked_road_row
+                row.get("destination_max_along_m") is not None
+                or is_blocked_road_row
                 or _row_is_roundabout(row)
                 or _row_uses_dual_path_nav(row)
                 or _row_is_crosswalk(row)

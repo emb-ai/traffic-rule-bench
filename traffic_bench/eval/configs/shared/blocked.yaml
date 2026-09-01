@@ -13,7 +13,6 @@ simulation:
   profile_density_cap: 1.0
   sign_distance_from_start: 10.0
   spawn_distance_before_end: 25.0
-  destination_max_along_m: 50.0
   compliant_stop_success_seconds: 3.0
   compliant_stop_max_dist_m: 10.0
   compliant_stop_speed_mps: 0.5

@@ -19,7 +19,6 @@ simulation:
   traffic_density: 0.0
   traffic_density_augment: true
   spawn_offset_from_start: 5.0
-  max_path_length_m: 150.0
   spawn_distance_before_end: 80.0
   sign_distance_before_end: 12.0
   max_ego_lanes: 8
