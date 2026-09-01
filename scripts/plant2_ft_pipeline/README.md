@@ -1,350 +1,72 @@
 # plant2_ft_pipeline
 
-PlanT2 fine-tune pipeline: dumps → split → diskcache → FT → eval.
+Дообучение PlanT2 на дампах кадров: сплит → обучение → отчёт по кривым.
 
-Данные, чекпоинты и метрики лежат в `$SHEPELEV` (вне репо).  
-Код пайплайна — в `scripts/plant2_ft_pipeline/`.
+Замкнутый эвал живёт не здесь, а в `traffic_bench/eval` и запускается своей
+командой (`python -m traffic_bench.eval run …`).
 
-> **Состояние переноса в этот репозиторий.** Обучающая половина
-> (`train/`, `lib/finetune.py`, `lib/env.py`, `shims/`, `data/`) работает с
-> раскладкой `third_party/plant2/PlanT` — `lib/env.py` распознаёт обе.
-> Эвал-половина (`eval/`, `lib/eval_core.py`) и разовые запускалки в `shell/`
-> всё ещё обращаются к `pdd-bench/scripts/per_sign_bench` из старого дерева;
-> здесь эвал живёт в `traffic_bench/eval` и запускается своим `run_benchmark`.
-> Пути к чужой шаре в `shell/*.sh` — значения по умолчанию, перекрываются
-> через `SHEPELEV`/`TRB_ROOT`.
+## Что где
 
----
+| файл | назначение |
+| --- | --- |
+| `data/make_train_val_split_fv_experts_signs.py` | дампы → сплит train/val (жёсткие ссылки) |
+| `train/run_plant2_finetune.py` | запуск дообучения |
+| `lib/env.py` | пути и интерпретатор |
+| `lib/finetune.py` | сборка команды и запуск через `shims/run_lit_finetune.py` |
+| `tools/report_ft_metrics.py` | кривые обучения из CSVLogger |
 
-## Быстрый старт
+## Переменные окружения
 
-```bash
-export TRB_ROOT=/path/to/traffic-rule-bench
-export SHEPELEV=/path/to/workspace          # родитель TRB
-export PIPELINE_DIR=$TRB_ROOT/scripts/plant2_ft_pipeline
+Ни одна не имеет значения по умолчанию, указывающего вовне репозитория.
 
-source $PIPELINE_DIR/shell/env.sh         # PY, CKPT0, SHIM, PLAN_T, …
-export CKPT0=$SHEPELEV/plant2_checkpoints/epoch=029_final_1.ckpt
+| переменная | что задаёт | по умолчанию |
+| --- | --- | --- |
+| `SPLIT_SRCS` | источники сплита, `тег=/абс/путь` через `;` | **обязательна** |
+| `SPLIT_OUT` | куда собрать сплит | **обязательна** |
+| `ORACLE_ROOT` | прогон сбора: `<корень>/<семейство>/experts/` | не задана — знак определяется по кадрам |
+| `VERIFY_GZ` | `0` отключает проверку читаемости кадров | `1` |
+| `TRB_ROOT` | корень репозитория | сам чекаут |
+| `CKPT0` | стартовый чекпойнт | `<репо>/checkpoints/plant2_pretrain/epoch=029_final_3.ckpt` |
+| `METRICS_ROOT` | куда писать метрики | `<репо>/data/plant2_ft_metrics` |
+| `PYTHON` | интерпретатор для обучения | текущий |
 
-cd $PIPELINE_DIR
-```
-
-Все команды ниже предполагают, что `env.sh` уже sourced и `$PY` указывает на conda с PlanT2.
-
----
-
-## Структура каталогов
-
-```text
-plant2_ft_pipeline/
-├── lib/          # общие Python-модули (не запускать напрямую)
-├── data/         # dumps, split, diskcache
-├── train/        # fine-tune
-├── eval/         # Sign SR + FV-fast eval
-├── tools/        # debug, viz, overfit 1 traj
-├── shims/        # Hydra entry (flash_attn off)
-├── shell/        # bash env + оркестраторы
-├── wrappers/     # локальные обёртки (в .gitignore)
-├── README.md
-└── README_MODEL_INPUTS.md
-```
-
----
-
-## `lib/` — shared library
-
-
-| Модуль         | Назначение                                                              |
-| -------------- | ----------------------------------------------------------------------- |
-| `env.py`       | `$SHEPELEV`, `$TRB_ROOT`, `plan_t()`, `shim_path()`, `resolve_python()` |
-| `finetune.py`  | `FinetuneConfig`, `run_finetune()`, Hydra cmd builder                   |
-| `eval_core.py` | Sign SR, FV-fast, tag/ckpt resolution                                   |
-| `utils.py`     | parallel workers, sample counts, FV expert prep                         |
-| `paths.py`     | re-export path helpers                                                  |
-| `bootstrap.py` | `sys.path` для `python subdir/script.py`                                |
-
-
-Импорт из скриптов подпапок:
-
-```python
-from lib.env import shepelev, plan_t
-from lib.finetune import FinetuneConfig, run_finetune
-```
-
----
-
-## `data/` — данные и cache
-
-
-| Скрипт                                     | Назначение                                     |
-| ------------------------------------------ | ---------------------------------------------- |
-| `dump_plant2_l1.py`                        | L1 dumps (experts / fv / lane / rebuild-signs) |
-| `make_train_val_split_fv_experts_signs.py` | hardlink split `*_signs` → full split          |
-| `make_split_signs_2.5_subset.py`           | symlink subset только sign 2.5                 |
-| `extract_patch_2p5_cache.py`               | extract+patch ключей 2.5 из большого cache     |
-| `prefill_diskcache.py`                     | prefill / parallel / 2p5 subcommands           |
-| `make_balanced_split.py`                   | сплит с потолком на перепредставленные знаки   |
-| `make_sign_pair_splits.py`                 | парные сплиты new/old для одного знака         |
-| `make_old_half_from_new.py`                | синтез старой половины пары из новых дампов    |
-| `assemble_fix_dump.py`                     | сборка дампа из нескольких источников          |
-
-
-### Примеры
+## Сборка сплита
 
 ```bash
-# Полный rebuild dumps с PDD-знаками в boxes
-$PY data/dump_plant2_l1.py rebuild-signs
-$PY data/dump_plant2_l1.py rebuild-signs --dry-run
-$PY data/dump_plant2_l1.py rebuild-signs --jobs exp:stop fv:3.24 --max-workers 32
-
-# Train/val split
-$PY data/make_train_val_split_fv_experts_signs.py
-$PY data/make_split_signs_2.5_subset.py
-
-# Prefill full spatial cache (~1.7T с augment)
-$PY data/prefill_diskcache.py parallel \
-  --ds $SHEPELEV/plant2_l1_fv_experts_split_signs/train \
-  --ds-val $SHEPELEV/plant2_l1_fv_experts_split_signs/val \
-  --ds-local /tmp/plant2_ds_cache_spatial_aug \
-  --cache-size-gb 1800
-
-# Быстрый 2.5 cache из full cache
-$PY data/prefill_diskcache.py 2p5 \
-  --src /tmp/plant2_ds_cache_spatial_aug \
-  --dst /tmp/plant2_ds_cache_2p5_tsfix \
-  --split $SHEPELEV/plant2_l1_fv_experts_split_signs_2.5 \
-  --cache-size-gb 400 --reset-dst --materialize-missing
+cd scripts/plant2_ft_pipeline
+SPLIT_SRCS="speed_limit=$DUMP/speed_limit;min_speed=$DUMP/min_speed" \
+SPLIT_OUT=$WORK/plant2_splits/speed \
+ORACLE_ROOT=$WORK/traj_full/<прогон> \
+PYTHONPATH=.:$TRB_ROOT python data/make_train_val_split_fv_experts_signs.py
 ```
 
----
+Сборщик читает каждый кадр насквозь и отбрасывает маршруты, которые не
+читаются: прерванная запись оставляет `.json.gz` нужного имени и размера с
+не-gzip содержимым, и без этой проверки прогон падает с `BadGzipFile` внутри
+рабочего процесса загрузчика посреди эпохи.
 
-## `train/` — fine-tune
-
-
-| Скрипт                   | Назначение                                                |
-| ------------------------ | --------------------------------------------------------- |
-| `launch_ft.py`           | sweeps: `spatial-lr`, `2p5-tsfix`, `2p5-stopw`, `2p5-hyp` |
-| `launch_ft.sh`           | thin wrapper → `launch_ft.py`                             |
-| `run_plant2_finetune.py` | один FT job (argparse; те же имена читаются из окружения) |
-
-Базовый чекпоинт несёт только `tok_emb.0-6`: эмбеддинги знаков ПДД, `sign_emb`,
-`speed_token` и голова скорости создаются заново на каждом дообучении. Ручки для
-них — флаги либо одноимённые переменные окружения:
-
-| Ручка                    | Что делает                                                       |
-| ------------------------ | ---------------------------------------------------------------- |
-| `--gpus` / `GPUS`        | число GPU; при >1 сам заполняет `CUDA_VISIBLE_DEVICES`           |
-| `--ddp-strategy`         | по умолчанию `ddp_find_unused_parameters_true` (иначе DDP падает на неиспользованных `tok_emb`) |
-| `--init-sign-from-stop`  | инициализировать знаки ПДД из обученного слоя `stop_sign`         |
-| `--new-param-lr-mult`    | множитель LR для параметров, которых нет в чекпоинте              |
-| `--trunk-lr-mult`        | множитель LR для предобученного транкера; `0` замораживает его    |
-
-
-Чекпоинты: `$TRB_ROOT/plant2/PlanT/checkpoints_ft/<CHECKPOINT_ADDON>/`  
-Логи: `$TRB_ROOT/plant2/PlanT/log/ft_<ADDON>_1/`
-
-### Примеры
+## Дообучение
 
 ```bash
-# Sweep 7× LR на GPU 0–6 (full spatial)
-$PY train/launch_ft.py spatial-lr
-
-# 2.5 tsfix: 2 job в background (LR 1e-4 / 1e-5)
-$PY train/launch_ft.py 2p5-tsfix
-$PY train/launch_ft.py 2p5-tsfix --wait
-
-# Stop-weight / hypothesis sweeps
-$PY train/launch_ft.py 2p5-stopw --wait
-$PY train/launch_ft.py 2p5-hyp --wait
-
-# Один job вручную
-$PY train/run_plant2_finetune.py \
-  --split $SHEPELEV/plant2_l1_fv_experts_split_signs_2.5 \
-  --learning-rate 1e-5 \
-  --checkpoint-addon fvexp30_spatial_2p5_tsfix_lr1e5 \
-  --cuda-device 0 \
-  --ds-local /tmp/plant2_ds_cache_2p5_tsfix \
-  --cache-size-gb 400 \
-  --batch-size 1344 \
-  --max-epochs 30 \
-  --augment --no-filter-routes \
-  --resume-ckpt $CKPT0
+SPLIT=$WORK/plant2_splits/speed DS=$SPLIT/train DS_VAL=$SPLIT/val \
+CHECKPOINT_ADDON=speed CKPT_EVERY_N_EPOCHS=2 \
+LEARNING_RATE=1e-4 MAX_EPOCHS=20 BATCH_SIZE=128 \
+PATH_TARGET=future PATH_HORIZON_FRAMES=40 TS_LOOKAHEAD=1 \
+PYTHONPATH=.:$TRB_ROOT python train/run_plant2_finetune.py
 ```
 
----
+`TS_LOOKAHEAD=1` меняет метку целевой скорости с номинала знака на скорость,
+которую вёл эксперт. Разница существенная: с номиналом модель держит табличку
+как уставку и превышает её примерно на половине шагов в зоне (соблюдение 0.000),
+с меткой эксперта соблюдение 0.95–0.99 у знаков-потолков.
 
-## `eval/` — evaluation
+Отбор чекпойнта по валидационной ошибке ненадёжен: в измеренном прогоне она
+монотонно падала все 20 эпох, тогда как доездимость в замкнутом прогоне была
+выше на седьмой (0.743 против 0.661 на девятнадцатой). Поэтому чекпойнты стоит
+сохранять часто и выбирать по эвалу, а не по `best_*`.
 
-
-| Скрипт           | Назначение                            |
-| ---------------- | ------------------------------------- |
-| `eval_sign25.py` | Sign SR (по умолчанию `--only 2.5`)   |
-| `eval_full.py`   | subcommands: `fv`, `queue`, `spatial` |
-| `eval_full.sh`   | wrapper → `eval_full.py`              |
-
-
-Метрики: `$SHEPELEV/plant2_ft_metrics/<root>/<tag>/`
-
-### Примеры
+## Кривые
 
 ```bash
-# Sign SR одного ckpt
-$PY eval/eval_sign25.py \
-  --ckpt $TRB_ROOT/plant2/PlanT/checkpoints_ft/fvexp30_spatial_2p5_tsfix_lr1e5/best_023_….ckpt \
-  --tag my_run_sign25 \
-  --gpu 0 --only 2.5 --jobs 8 --scenes-per-job 20
-
-# По addon + slot
-$PY eval/eval_sign25.py \
-  --addon fvexp30_spatial_2p5_tsfix_lr1e5 --slot best --gpu 1
-
-# Eval одной train-траектории + GIF + predictions
-$PY eval/eval_sign25.py \
-  --ckpt /path/to.ckpt --tag traj_eval --gpu 0 \
-  --trajectory sign_100062_j0_lane0_seed1974118946_v0_default \
-  --save-gifs --save-predictions
-
-# FV-fast один ckpt
-$PY eval/eval_full.py fv \
-  --ckpt /path/to.ckpt \
-  --out $SHEPELEV/plant2_ft_metrics/my_tag/fv_fast
-
-# Parallel queue (signs + fv_fast + fv_detour)
-$PY eval/eval_full.py queue \
-  --metrics-root $SHEPELEV/plant2_ft_metrics
-
-# Spatial 7-GPU eval waves
-$PY eval/eval_full.py spatial \
-  --metrics-root $SHEPELEV/plant2_ft_metrics/spatial_signs_eval
+PYTHONPATH=.:$TRB_ROOT python tools/report_ft_metrics.py $PLANT/log/ft_<addon>_1 --every 4
 ```
-
----
-
-## `tools/` — debug и эксперименты
-
-
-| Скрипт                       | Назначение                                   |
-| ---------------------------- | -------------------------------------------- |
-| `inspect_boxes.py`           | pretty-print `boxes/NNNN.json.gz`            |
-| `print_random_xobjs.py`      | random x_objs из dump                        |
-| `viz_train_global_gif.py`    | GIF из train route                           |
-| `overfit_1traj_sweep.py`     | train+eval на 1 traj, гиперпараметры из YAML |
-| `configs/overfit_1traj.yaml` | конфиг overfit (редактировать здесь)         |
-| `check_token_alignment.py`   | срез логитов форкастинга против позиций токенов |
-| `compare_train_eval_objects.py` | список объектов в обучении против эвала на одном кадре |
-
-
-### Примеры
-
-```bash
-ROUTE="$SHEPELEV/plant2_l1_fv_experts_split_signs_2.5/train/data/sign_100062_j0_lane0_seed1974118946_v0_default"
-
-# Inspect boxes
-$PY tools/inspect_boxes.py --route "$ROUTE" --frame 21 --class 2.5 --verbose
-$PY tools/inspect_boxes.py --route "$ROUTE" --summary --class 2.5
-
-# Overfit 1 trajectory (гиперпараметры в YAML, не в .py)
-$PY tools/overfit_1traj_sweep.py --config tools/configs/overfit_1traj.yaml --gpu 0
-$PY tools/overfit_1traj_sweep.py --dry-run
-$PY tools/overfit_1traj_sweep.py --force-train
-$PY tools/overfit_1traj_sweep.py --eval-only
-
-# Viz GIF
-$PY tools/viz_train_global_gif.py --route "$ROUTE" --fps 10
-```
-
----
-
-## `shims/` — Hydra bootstrap
-
-
-| Файл                    | Назначение                                                   |
-| ----------------------- | ------------------------------------------------------------ |
-| `run_lit_finetune.py`   | entry для `lit_finetune.py` (отключает сломанный flash_attn) |
-| `disable_flash_attn.py` | patch transformers import checks                             |
-
-
-Используется автоматически через `$SHIM` из `shell/env.sh`.  
-Ручной запуск (из `$PLAN_T`):
-
-```bash
-cd $PLAN_T
-$PY $SHIM resume=True resume_path=$CKPT0 gpus=1 use_caching=True \
-  model.training.learning_rate=1e-5 model.training.max_epochs=30 \
-  expname=ft_my_addon
-```
-
----
-
-## `shell/` — оркестраторы
-
-| Файл                        | Назначение                                                     |
-| --------------------------- | -------------------------------------------------------------- |
-| `env.sh`                    | `PY`, `CKPT0`, `SHIM`, `PLAN_T`, `TRB_ROOT`                     |
-| `run_fix_pipeline.sh`       | очередь dump → assemble → split → cache → train → eval          |
-| `run_sign_pair_experiment.sh` | парные дообучения на одном знаке: те же сцены, разные кадры   |
-| `run_all_checks.sh`         | вся кампания одной очередью, одна таблица в конце               |
-| `run_2p5_tsfix_pipeline.sh` | 2.5 tsfix: extract cache → FT → eval                            |
-| `launch_overfit_sweep_tmux.sh` | overfit sweep в tmux                                         |
-
-Пути внутри очередей считаются от `$SM`, а вызываемые скрипты — от корня
-пайплайна (`$PIPE`), на уровень выше `shell/`.
-
----
-
-## Типовые пайплайны
-
-### 2.5 tsfix (cache уже есть)
-
-```bash
-source $PIPELINE_DIR/shell/env.sh
-
-$PY train/launch_ft.py 2p5-tsfix --wait
-
-$PY eval/eval_sign25.py \
-  --addon fvexp30_spatial_2p5_tsfix_lr1e5 --slot best --gpu 0
-```
-
-### Full spatial E2E
-
-```bash
-source $PIPELINE_DIR/shell/env.sh
-
-$PY data/dump_plant2_l1.py rebuild-signs
-$PY data/make_train_val_split_fv_experts_signs.py
-$PY data/make_split_signs_2.5_subset.py
-
-$PY data/prefill_diskcache.py parallel \
-  --ds $SHEPELEV/plant2_l1_fv_experts_split_signs/train \
-  --ds-val $SHEPELEV/plant2_l1_fv_experts_split_signs/val \
-  --ds-local /tmp/plant2_ds_cache_spatial_aug \
-  --cache-size-gb 1800
-
-$PY train/launch_ft.py spatial-lr
-$PY eval/eval_full.py spatial
-```
-
-### Overfit одной траектории 2.5
-
-```bash
-# 1. Отредактировать tools/configs/overfit_1traj.yaml
-# 2. Запустить
-$PY tools/overfit_1traj_sweep.py --config tools/configs/overfit_1traj.yaml --gpu 0
-```
-
----
-
-## Где что лежит (вне репо)
-
-
-| Что        | Путь                                                  |
-| ---------- | ----------------------------------------------------- |
-| Dumps      | `$SHEPELEV/plant2_l1_*_signs/`                        |
-| Splits     | `$SHEPELEV/plant2_l1_fv_experts_split_signs/`         |
-| Base ckpt  | `$SHEPELEV/plant2_checkpoints/epoch=029_final_1.ckpt` |
-| FT ckpt    | `$TRB_ROOT/plant2/PlanT/checkpoints_ft/<ADDON>/`      |
-| Metrics    | `$SHEPELEV/plant2_ft_metrics/`                        |
-| Full cache | `/tmp/plant2_ds_cache_spatial_aug`                    |
-| 2.5 cache  | `/tmp/plant2_ds_cache_2p5_tsfix`                      |
-
-
