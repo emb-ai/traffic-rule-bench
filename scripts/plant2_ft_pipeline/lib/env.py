@@ -3,14 +3,8 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
-
-_DEFAULT_SHEPELEV = "/home/jovyan/shares/SR006.nfs3/shepelev"
-
-
-def shepelev() -> Path:
-    return Path(os.environ.get("SHEPELEV", _DEFAULT_SHEPELEV))
-
 
 def _checkout_root() -> Path:
     """Repo root of the checkout this file belongs to: <root>/scripts/plant2_ft_pipeline/lib/env.py."""
@@ -33,10 +27,10 @@ def trb_root() -> Path:
     env_root = os.environ.get("TRB_ROOT")
     if env_root:
         return Path(env_root)
-    local = _checkout_root()
-    if _plant_root_in(local) is not None:
-        return local
-    return shepelev() / "traffic-rule-bench"
+    # This checkout is the repository; the legacy pipeline resolved it from a
+    # personal cluster share instead, which made every default unusable to
+    # anyone else and silently pointed at someone else's data when it existed.
+    return _checkout_root()
 
 
 def plan_t() -> Path:
@@ -79,7 +73,8 @@ def signs_dir() -> Path:
 
 def default_ckpt0() -> Path:
     return Path(
-        os.environ.get("CKPT0", shepelev() / "plant2_checkpoints" / "epoch=029_final_1.ckpt")
+        os.environ.get("CKPT0")
+        or (trb_root() / "checkpoints" / "plant2_pretrain" / "epoch=029_final_3.ckpt")
     )
 
 
@@ -97,28 +92,25 @@ def shim_path() -> Path:
 
 
 def metrics_root() -> Path:
-    return Path(os.environ.get("METRICS_ROOT", shepelev() / "plant2_ft_metrics"))
+    return Path(os.environ.get("METRICS_ROOT") or (trb_root() / "data" / "plant2_ft_metrics"))
 
 
 def resolve_python(explicit: str | None = None) -> Path:
-    """Pick python executable (arbelyaev-sdc preferred)."""
+    """The interpreter to launch training with: explicit, PYTHON/PY, or this one.
+
+    The legacy list named conda environments on one cluster's shares, so on any
+    other machine it fell through to whatever `python3` was first on PATH --
+    which is rarely the environment the caller meant.
+    """
     if explicit:
         return Path(explicit)
     env_py = os.environ.get("PYTHON") or os.environ.get("PY")
     if env_py:
         return Path(env_py)
-    candidates = [
-        shepelev() / "conda_envs" / "arbelyaev-sdc" / "bin" / "python",
-        Path("/home/user/conda/envs/zinkovich-sdc/bin/python"),
-        Path("/home/user/conda/bin/python"),
-    ]
-    for c in candidates:
-        if c.is_file() and os.access(c, os.X_OK):
-            return c
+    if sys.executable:
+        return Path(sys.executable)
     found = shutil.which("python3") or shutil.which("python")
-    if found:
-        return Path(found)
-    return Path("python3")
+    return Path(found) if found else Path("python3")
 
 
 def hydra_escape(value: str | Path) -> str:

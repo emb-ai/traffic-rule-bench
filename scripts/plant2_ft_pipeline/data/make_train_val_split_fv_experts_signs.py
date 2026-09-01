@@ -28,9 +28,6 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from lib.paths import shepelev
-
-SHEPELEV = shepelev()
 # Nodes without the uid->sign jsonls resolve priority-sign routes from the
 # dumped boxes instead (the PDD sign is stored there with its code).
 _PDD_RE = re.compile(r"^\d\.\d+(\.\d+)?$")
@@ -54,24 +51,23 @@ def sniff_sign(route_dir: Path) -> str | None:
             if _PDD_RE.match(str(code)):
                 return str(code)
     return None
-_DEFAULT_SRCS = [
-    ("fv", SHEPELEV / "plant2_l1_traj_fv_nodeA_signs"),
-    ("exp", SHEPELEV / "plant2_l1_from_experts_signs"),
-    ("lane", SHEPELEV / "plant2_l1_lane_signs"),
-]
+
 
 
 def _srcs_from_env():
     """SPLIT_SRCS overrides the source list: `tag=/abs/path` items, ';'-separated.
 
-    The defaults are a fixed trio under SHEPELEV, which cannot express "these
-    dumps and not those". That matters when a re-dump supersedes part of an
+    Naming the dumps explicitly is what lets a re-dump supersede part of an
     older one: mixing both would put two different conventions for the same
     sign into one training set, and nothing downstream would notice.
     """
     raw = os.environ.get("SPLIT_SRCS", "").strip()
     if not raw:
-        return _DEFAULT_SRCS
+        raise SystemExit(
+            "SPLIT_SRCS is required: ';'-separated `tag=/abs/path` items naming the "
+            "dumps to split. It used to default to a fixed trio under one person's "
+            "share, which silently split someone else's data or nothing at all."
+        )
     out = []
     for item in raw.split(";"):
         item = item.strip()
@@ -85,7 +81,10 @@ def _srcs_from_env():
 
 
 SRCS = _srcs_from_env()
-OUT = Path(os.environ.get("SPLIT_OUT") or (SHEPELEV / "plant2_l1_fv_experts_split_signs"))
+_OUT_RAW = os.environ.get("SPLIT_OUT", "").strip()
+if not _OUT_RAW:
+    raise SystemExit("SPLIT_OUT is required: the directory to build the split in.")
+OUT = Path(_OUT_RAW)
 SEED = 42
 # Hardlinking is I/O, not CPU: threads keep the external `cp` calls busy
 # without the fork-time deadlock a process pool hits on a few thousand
@@ -130,17 +129,8 @@ def _oracle_jsonls() -> list[Path]:
 
 
 def load_priority_uid_sign() -> dict[str, str]:
-    root = SHEPELEV / "collected_trajectories"
     mapping: dict[str, str] = {}
-    files = _oracle_jsonls() + [
-        root / "traj-priority-signs/traj_yield_2_4_train80/experts/experts_scene_uid_top1.jsonl",
-        root / "traj-priority-signs/traj_stop_2_5_train80/experts/experts_scene_uid_top1.jsonl",
-        root / "traj-priority-signs/traj_main_2_1_train80/experts/experts_scene_uid_top1.jsonl",
-        root / "traj-priority-signs/traj_secondary_2_3_train80/experts/experts_scene_uid_top1.jsonl",
-        root / "traj-priority-signs/traj_roundabout_4_3_train80/experts/experts_scene_uid_top1.jsonl",
-        root / "traffic-rule-bench-traj/experts_detour_train80/experts_scene_uid_top1.jsonl",
-        root / "traj-priority-signs/traj_lane_5_15_train80/experts/experts_scene_uid_top1.jsonl",
-    ]
+    files = _oracle_jsonls()
     for path in files:
         if not path.exists():
             continue

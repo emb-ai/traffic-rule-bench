@@ -13,7 +13,7 @@ import argparse
 import os
 from pathlib import Path
 
-from lib.env import plan_t, resolve_python, shepelev
+from lib.env import plan_t, resolve_python
 from lib.finetune import FinetuneConfig, run_finetune
 
 
@@ -93,7 +93,7 @@ def main() -> None:
     args = parse_args()
     if not args.split:
         raise SystemExit(
-            f"ERROR: --split required (e.g. {shepelev() / 'plant2_l1_fv_experts_split'})"
+            "ERROR: --split required (a split directory with train/ and val/)"
         )
     cfg = FinetuneConfig(
         split=args.split,
