@@ -112,12 +112,8 @@ def crop_tx_row(
         incoming_edge_ids=tuple(row.get("incoming_edge_ids") or ()),
         arm_count=int(row["arm_count"]),
     )
-    crop_net_to_junction_only(
-        source_net,
-        pick.junction_id,
-        out_net,
-        arm_length_m=radius_m,
-    )
+    # Keep full arm edge lengths (no meter trim). radius_m is unused for T/X.
+    crop_net_to_junction_only(source_net, pick.junction_id, out_net)
     meta = {
         "scene_name": scene_id,
         "scene_kind": "junction",
@@ -129,7 +125,7 @@ def crop_tx_row(
         "incoming_edge_ids": list(pick.incoming_edge_ids),
         "latitude": row["latitude"],
         "longitude": row["longitude"],
-        "crop_radius_m": radius_m,
+        "crop_radius_m": None,
         "net_file": "map.net.xml",
         "source_net": source_net.name,
         "source_project": "scene_collection",

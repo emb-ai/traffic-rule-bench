@@ -483,11 +483,15 @@ def crop_net_to_junction_only(
     junction_id: str,
     out_path: Path,
     *,
-    arm_length_m: float,
+    arm_length_m: Optional[float] = None,
     corner_detail: int = 5,
     internal_link_detail: int = 20,
 ) -> None:
-    """Keep only the picked junction, its internal links, and incoming/outgoing arms."""
+    """Keep only the picked junction, its internal links, and incoming/outgoing arms.
+
+    Arms keep their full SUMO edge length by default. Pass ``arm_length_m`` > 0 to
+    optionally trim each arm to that many meters from the junction.
+    """
     import tempfile
 
     edge_ids = collect_junction_arm_edge_ids(net_path, junction_id)
@@ -519,9 +523,8 @@ def crop_net_to_junction_only(
     if not out_path.is_file():
         raise JunctionLayoutError(f"netconvert did not write {out_path}")
 
-    # Densify turn polylines first (expands junction slightly), then trim arms
-    # to ``arm_length_m``. Trimming after rebuild keeps far-end cuts without
-    # undoing connector detail; a second rebuild would re-lengthen arms.
+    # Densify turn polylines (expands junction slightly). Optional arm trim runs
+    # after rebuild so far-end cuts are not undone by a second rebuild.
     _rebuild_junction_geometry(
         out_path,
         corner_detail=corner_detail,
@@ -529,7 +532,8 @@ def crop_net_to_junction_only(
     )
     tree = ET.parse(out_path)
     root = tree.getroot()
-    _trim_arms_in_net(root, junction_id, arm_length_m)
+    if arm_length_m is not None and float(arm_length_m) > 0:
+        _trim_arms_in_net(root, junction_id, float(arm_length_m))
     _update_net_bounds(root)
     ET.indent(tree, space="  ")
     tree.write(out_path, encoding="unicode", xml_declaration=True)
@@ -631,12 +635,8 @@ def crop_scene_to_junction_pick(
             shutil.copy2(source_net, backup_path)
 
     out_net = output_dir / output_net_name
-    crop_net_to_junction_only(
-        source_net,
-        pick.junction_id,
-        out_net,
-        arm_length_m=radius_m,
-    )
+    # Keep full arm edges; radius_m is retained in meta only for legacy callers.
+    crop_net_to_junction_only(source_net, pick.junction_id, out_net)
 
     scene_name = output_scene_name or meta.get("scene_name", scene_dir.name)
     if output_scene_name is None and output_dir != scene_dir:
@@ -650,7 +650,7 @@ def crop_scene_to_junction_pick(
             "net_file": output_net_name,
             "latitude": center_lat,
             "longitude": center_lon,
-            "crop_radius_m": radius_m,
+            "crop_radius_m": None,
             "junction_id": pick.junction_id,
             "junction_arm_count": pick.arm_count,
             "junction_center_xy": [pick.center_xy[0], pick.center_xy[1]],
