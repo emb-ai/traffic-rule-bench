@@ -1,51 +1,51 @@
 # plant2_ft_pipeline
 
-Дообучение PlanT2 на дампах кадров: сплит → обучение → отчёт по кривым.
+PlanT2 finetuning on dumped frames: split → train → training-curve report.
 
-Замкнутый эвал живёт не здесь, а в `traffic_bench/eval` и запускается своей
-командой (`python -m traffic_bench.eval run …`).
+Closed-loop eval does not live here. It is `traffic_bench/eval`, run as
+`python -m traffic_bench.eval run …`.
 
-## Что где
+## What is here
 
-| файл | назначение |
+| file | purpose |
 | --- | --- |
-| `data/make_train_val_split_fv_experts_signs.py` | дампы → сплит train/val (жёсткие ссылки) |
-| `train/run_plant2_finetune.py` | запуск дообучения |
-| `lib/env.py` | пути и интерпретатор |
-| `lib/finetune.py` | сборка команды и запуск через `shims/run_lit_finetune.py` |
-| `tools/report_ft_metrics.py` | кривые обучения из CSVLogger |
+| `data/make_train_val_split_fv_experts_signs.py` | dumps → a train/val split of hardlinks |
+| `train/run_plant2_finetune.py` | launches the finetune |
+| `lib/env.py` | paths and interpreter |
+| `lib/finetune.py` | builds the command and runs it through `shims/run_lit_finetune.py` |
+| `tools/report_ft_metrics.py` | training curves out of the CSVLogger |
 
-## Переменные окружения
+## Environment
 
-Ни одна не имеет значения по умолчанию, указывающего вовне репозитория.
+No default points outside the checkout.
 
-| переменная | что задаёт | по умолчанию |
+| variable | what it sets | default |
 | --- | --- | --- |
-| `SPLIT_SRCS` | источники сплита, `тег=/абс/путь` через `;` | **обязательна** |
-| `SPLIT_OUT` | куда собрать сплит | **обязательна** |
-| `ORACLE_ROOT` | прогон сбора: `<корень>/<семейство>/experts/` | не задана — знак определяется по кадрам |
-| `VERIFY_GZ` | `0` отключает проверку читаемости кадров | `1` |
-| `TRB_ROOT` | корень репозитория | сам чекаут |
-| `CKPT0` | стартовый чекпойнт | `<репо>/checkpoints/plant2_pretrain/epoch=029_final_3.ckpt` |
-| `METRICS_ROOT` | куда писать метрики | `<репо>/data/plant2_ft_metrics` |
-| `PYTHON` | интерпретатор для обучения | текущий |
+| `SPLIT_SRCS` | split sources, `tag=/abs/path` separated by `;` | **required** |
+| `SPLIT_OUT` | where to build the split | **required** |
+| `ORACLE_ROOT` | a collection run: `<root>/<family>/experts/` | unset — the sign is read from the frames |
+| `VERIFY_GZ` | `0` skips the readability check | `1` |
+| `TRB_ROOT` | repository root | this checkout |
+| `CKPT0` | checkpoint to start from | `<repo>/checkpoints/plant2_pretrain/epoch=029_final_3.ckpt` |
+| `METRICS_ROOT` | where metrics are written | `<repo>/data/plant2_ft_metrics` |
+| `PYTHON` | interpreter for training | the running one |
 
-## Сборка сплита
+## Building a split
 
 ```bash
 cd scripts/plant2_ft_pipeline
 SPLIT_SRCS="speed_limit=$DUMP/speed_limit;min_speed=$DUMP/min_speed" \
 SPLIT_OUT=$WORK/plant2_splits/speed \
-ORACLE_ROOT=$WORK/traj_full/<прогон> \
+ORACLE_ROOT=$WORK/traj_full/<run> \
 PYTHONPATH=.:$TRB_ROOT python data/make_train_val_split_fv_experts_signs.py
 ```
 
-Сборщик читает каждый кадр насквозь и отбрасывает маршруты, которые не
-читаются: прерванная запись оставляет `.json.gz` нужного имени и размера с
-не-gzip содержимым, и без этой проверки прогон падает с `BadGzipFile` внутри
-рабочего процесса загрузчика посреди эпохи.
+The builder reads every frame back and drops routes that fail: a dump worker
+killed mid-write leaves a `.json.gz` of the right name and size whose contents
+are not gzip, and without this check the run dies with `BadGzipFile` inside a
+DataLoader worker minutes into an epoch.
 
-## Дообучение
+## Finetuning
 
 ```bash
 SPLIT=$WORK/plant2_splits/speed DS=$SPLIT/train DS_VAL=$SPLIT/val \
@@ -55,17 +55,18 @@ PATH_TARGET=future PATH_HORIZON_FRAMES=40 TS_LOOKAHEAD=1 \
 PYTHONPATH=.:$TRB_ROOT python train/run_plant2_finetune.py
 ```
 
-`TS_LOOKAHEAD=1` меняет метку целевой скорости с номинала знака на скорость,
-которую вёл эксперт. Разница существенная: с номиналом модель держит табличку
-как уставку и превышает её примерно на половине шагов в зоне (соблюдение 0.000),
-с меткой эксперта соблюдение 0.95–0.99 у знаков-потолков.
+`TS_LOOKAHEAD=1` changes the target-speed label from the posted number to the
+speed the expert actually drove. The difference is not small: labelled with the
+plate, the model holds it as a setpoint and is over it on about half the in-zone
+steps (compliance 0.000); labelled with the expert's speed, compliance is
+0.95–0.99 on the ceiling plates.
 
-Отбор чекпойнта по валидационной ошибке ненадёжен: в измеренном прогоне она
-монотонно падала все 20 эпох, тогда как доездимость в замкнутом прогоне была
-выше на седьмой (0.743 против 0.661 на девятнадцатой). Поэтому чекпойнты стоит
-сохранять часто и выбирать по эвалу, а не по `best_*`.
+Selecting a checkpoint by validation loss is unreliable here: in a measured run
+it fell monotonically for all 20 epochs while closed-loop destination rate was
+higher at epoch 7 than at epoch 19 (0.743 vs 0.661). Save checkpoints often and
+pick by eval, not by `best_*`.
 
-## Кривые
+## Curves
 
 ```bash
 PYTHONPATH=.:$TRB_ROOT python tools/report_ft_metrics.py $PLANT/log/ft_<addon>_1 --every 4
