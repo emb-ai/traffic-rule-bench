@@ -84,17 +84,17 @@ def train_order(boxes, type_nums, sign_like, car_types) -> list:
 
 def sign_index(rows, sign_like) -> str:
     hits = [i for i, r in enumerate(rows) if r[0] in sign_like]
-    return ", ".join(str(i) for i in hits) if hits else "нет"
+    return ", ".join(str(i) for i in hits) if hits else "none"
 
 
 def show(title: str, rows, sign_like, n_front: int, seq_objects: int) -> None:
     print(f"\n{title}")
     for i, (cls, x, y) in enumerate(rows):
-        mark = "  <== знак" if cls in sign_like else ""
+        mark = "  <== sign" if cls in sign_like else ""
         print(f"  [{i:2d}] pos={n_front + i:<3d} {cls:<12} x={x:+7.1f} y={y:+7.1f}{mark}")
-    print(f"  объектов: {len(rows)}   индекс знака: {sign_index(rows, sign_like)}")
-    print(f"  длина последовательности: {n_front} + {seq_objects} + 1 = "
-          f"{n_front + seq_objects + 1}, speed_token на позиции {n_front + seq_objects}")
+    print(f"  objects: {len(rows)}   sign index: {sign_index(rows, sign_like)}")
+    print(f"  sequence length: {n_front} + {seq_objects} + 1 = "
+          f"{n_front + seq_objects + 1}, speed_token at position {n_front + seq_objects}")
 
 
 def main() -> None:
@@ -112,8 +112,8 @@ def main() -> None:
     type_nums, sign_like, car_types = enc._get_type_nums_and_sign_like()
 
     boxes, path = load_boxes(Path(args.route), args.frame)
-    print(f"кадр: {path}")
-    print(f"боксов в кадре: {len(boxes)} (первый — эго)")
+    print(f"frame: {path}")
+    print(f"boxes in the frame: {len(boxes)} (the first one is the ego)")
 
     # "car" and "static_car" share class id 1.0 — keep the first name, not the last.
     id2name: dict[float, str] = {}
@@ -123,23 +123,23 @@ def main() -> None:
     ev = [(id2name.get(float(o[0]), f"class{o[0]:.0f}"), o[1], o[2])
           for o in enc.boxes_to_objects_list(boxes, max_objects=args.max_objects)]
 
-    show("ОБУЧЕНИЕ (dataset.py: машины, затем статика и знаки; без сортировки)",
+    show("TRAIN (dataset.py: cars, then statics and signs; unsorted)",
          tr, sign_like, args.n_front, len(tr))
     import os
 
     order = (os.environ.get("PLANT2_OBJ_ORDER") or "dist").strip().lower()
     seq_fit = (os.environ.get("PLANT2_SEQ_FIT") or "").strip() in ("1", "true", "True")
-    show(f"ЭВАЛ (metadrive_obs_to_plant2.py: PLANT2_OBJ_ORDER={order}, "
+    show(f"EVAL (metadrive_obs_to_plant2.py: PLANT2_OBJ_ORDER={order}, "
          f"PLANT2_SEQ_FIT={'1' if seq_fit else '0'})",
          ev, sign_like, args.n_front, len(ev) if seq_fit else args.max_objects)
 
-    print("\nитог:")
-    print(f"  порядок знака:      обучение {sign_index(tr, sign_like)}  "
-          f"vs эвал {sign_index(ev, sign_like)}")
-    print(f"  позиция speed_token: обучение {args.n_front + len(tr)}  "
-          f"vs эвал {args.n_front + (len(ev) if seq_fit else args.max_objects)}")
-    print("  (в обучении maxseq — максимум по батчу, не по сэмплу: "
-          "число выше — нижняя граница)")
+    print("\nsummary:")
+    print(f"  sign order:          train {sign_index(tr, sign_like)}  "
+          f"vs eval {sign_index(ev, sign_like)}")
+    print(f"  speed_token position: train {args.n_front + len(tr)}  "
+          f"vs eval {args.n_front + (len(ev) if seq_fit else args.max_objects)}")
+    print("  (in training maxseq is the batch maximum, not the sample's: "
+          "the number above is a lower bound)")
 
 
 if __name__ == "__main__":
