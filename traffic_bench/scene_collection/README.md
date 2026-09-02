@@ -27,6 +27,8 @@ python -m traffic_bench.scene_collection materialize --all
 # 4. Review and reject scenes
 python -m traffic_bench.scene_collection review --scenes-dir data/scenes/yield
 python -m traffic_bench.scene_collection reject --sign yield --apply --refill --loop
+# or every sign that has data/scenes/<id>/:
+python -m traffic_bench.scene_collection reject --all --apply --refill --loop
 
 # 5. Pack scenes and optional upload Hugging Face
 python -m traffic_bench.scene_collection pack --all
