@@ -180,6 +180,18 @@ def _run_one_sign(
         elif apply and not rows:
             print("[reject-unusable] nothing to apply")
 
+        if apply and not dry_run:
+            from traffic_bench.scene_collection.paths import SIGN_ALLOCATIONS
+            from traffic_bench.scene_collection.sign_scenes.materialize.run import (
+                sync_allocations_with_live,
+            )
+
+            sync_allocations_with_live(
+                pdd_code=str(profile.pdd_code),
+                dest_scenes=scenes_root,
+                allocations_path=SIGN_ALLOCATIONS,
+            )
+
         if not refill:
             break
 

@@ -546,6 +546,102 @@ def _kept_by_split(dest_scenes: Path) -> Dict[str, Set[str]]:
     return kept
 
 
+def sync_allocations_with_live(
+    *,
+    pdd_code: str,
+    dest_scenes: Path,
+    allocations_path: Path,
+) -> Dict[str, int]:
+    """Drop rejected/missing IDs from ``sign_allocations.json`` for one sign.
+
+    After ``reject --apply`` / ``--refill``, allocation ``n`` can drift above the
+    live kept counts. Verify reads allocations, so prune to live train/test.
+    Returns ``{train, test}`` kept sizes written back.
+    """
+    alloc_doc = _load_json(allocations_path)
+    if pdd_code not in alloc_doc.get("signs", {}):
+        raise KeyError(f"Sign {pdd_code!r} not in {allocations_path}")
+    block = alloc_doc["signs"][pdd_code]
+    kept = _kept_by_split(dest_scenes)
+    pool = load_moscow_pool(dest_scenes) or {}
+    shape_of: Dict[str, str] = {}
+    seg_type_of: Dict[str, str] = {}
+    for rec in pool.get("scenes") or []:
+        sid = str(rec.get("scene_id") or "")
+        if not sid:
+            continue
+        if rec.get("shape"):
+            shape_of[sid] = str(rec["shape"])
+        if rec.get("segment_type"):
+            seg_type_of[sid] = str(rec["segment_type"])
+
+    out_counts: Dict[str, int] = {}
+    for half in ("train", "test"):
+        ids = sorted(kept[half])
+        half_block = block.setdefault(half, {})
+        before = list(half_block.get("scene_ids") or [])
+        half_block["scene_ids"] = ids
+        half_block["n"] = len(ids)
+        # Refresh topo counters from pool meta when possible.
+        by_shape: Dict[str, int] = {}
+        by_seg: Dict[str, int] = {}
+        for sid in ids:
+            sh = shape_of.get(sid)
+            if sh:
+                by_shape[sh] = by_shape.get(sh, 0) + 1
+            st = seg_type_of.get(sid)
+            if st:
+                by_seg[st] = by_seg.get(st, 0) + 1
+        if by_shape:
+            half_block["by_shape"] = by_shape
+        if by_seg:
+            half_block["by_segment_type"] = by_seg
+        dropped = sorted(set(before) - set(ids))
+        if dropped:
+            print(
+                f"  [sync-alloc] {pdd_code}/{half}: "
+                f"{len(before)} → {len(ids)} (dropped {len(dropped)})"
+            )
+        out_counts[half] = len(ids)
+
+    alloc_doc["signs"][pdd_code] = block
+    allocations_path.write_text(
+        json.dumps(alloc_doc, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    # Keep moscow_pool aligned with live dirs too.
+    if pool.get("scenes"):
+        live = _live_scene_ids(dest_scenes) - _rejected_history_ids(dest_scenes)
+        pool["scenes"] = [
+            r for r in pool["scenes"] if str(r.get("scene_id") or "") in live
+        ]
+        pool["n_ok"] = len(pool["scenes"])
+        save_moscow_pool(dest_scenes, pool)
+    return out_counts
+
+
+def sync_all_allocations_with_live(
+    *,
+    allocations_path: Path = SIGN_ALLOCATIONS,
+) -> None:
+    """Prune every sign block in allocations to live kept scenes."""
+    for profile in list_profiles():
+        dest = profile_scenes_dir(profile)
+        if not dest.is_dir():
+            continue
+        if profile.pdd_code not in _load_json(allocations_path).get("signs", {}):
+            continue
+        counts = sync_allocations_with_live(
+            pdd_code=str(profile.pdd_code),
+            dest_scenes=dest,
+            allocations_path=allocations_path,
+        )
+        print(
+            f"[sync-alloc] {profile.id} ({profile.pdd_code}): "
+            f"train={counts['train']} test={counts['test']}"
+        )
+
+
 def _excluded_ids(dest_scenes: Path, alloc_block: dict) -> Set[str]:
     """Never re-draw these for refill."""
     excluded = set(_rejected_history_ids(dest_scenes))
@@ -717,6 +813,12 @@ def refill(
     alloc_doc["signs"][sign] = block
     allocations_path.write_text(
         json.dumps(alloc_doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    # Drop any rejected/stale IDs that refill left behind in the JSON.
+    sync_allocations_with_live(
+        pdd_code=str(sign),
+        dest_scenes=dest_scenes,
+        allocations_path=allocations_path,
     )
 
     kept_after = _kept_by_split(dest_scenes)
