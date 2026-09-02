@@ -32,6 +32,7 @@ from traffic_bench.eval.engine.spawn.auxiliary_agent import (
 )
 from traffic_bench.eval.engine.spawn.route_budget import (
     apply_route_budget,
+    ensure_reachable_ego_destination,
     measure_spawn_to_dest_length_m,
 )
 from traffic_bench.eval.engine.spawn.route_length_levels import (
@@ -305,6 +306,7 @@ def expand_scene_entries(
     skipped_short_aux = 0
     skipped_dup_geometry = 0
     skipped_short_route_levels = 0
+    skipped_invalid_route = 0
     seen_geometries: set = set()
 
     for variant, scenario in enumerate(scenarios):
@@ -400,6 +402,9 @@ def expand_scene_entries(
                                 npc_var_idx=npc_var,
                                 seed_override=int(seed),
                             )
+                            if entry.get("valid") is False:
+                                skipped_invalid_route += 1
+                                continue
                             geom_key = entry_geometry_key(entry)
                             if geom_key in seen_geometries:
                                 skipped_dup_geometry += 1
@@ -416,6 +421,11 @@ def expand_scene_entries(
         print(
             f"  [route] Collapsed {skipped_short_route_levels} route-length "
             f"level(s) (natural path shorter than configured budgets)"
+        )
+    if skipped_invalid_route:
+        print(
+            f"  [route] Skipped {skipped_invalid_route} combo(s) "
+            f"(dest lane unreachable from ego spawn lane)"
         )
     if skipped_dup_geometry:
         print(
@@ -737,6 +747,8 @@ def build_manifest_entry(
                 max_path_length_m=path_budget_m,
                 spawn_distance_before_end=float(entry.get("spawn_distance_before_end") or sim_cfg.spawn_distance_before_end),
             )
+        else:
+            entry = ensure_reachable_ego_destination(entry, net_path=net_full_path)
     entry = tag_entry_route_length(
         entry,
         path_budget_m,

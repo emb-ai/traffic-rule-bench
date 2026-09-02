@@ -5,7 +5,7 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Literal, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple
 
 from traffic_bench.eval.engine.map.junction_priority_layout import (
     INTERSECTION_JUNCTION_TYPES,
@@ -90,8 +90,47 @@ def _pick_outgoing_lane_key(
     edge_id: str,
     lane_num: int,
     lane_keys_by_edge: Dict[str, List[str]],
-) -> str:
-    return pick_lane_key_on_edge(edge_id, lane_num, lane_keys_by_edge)
+    *,
+    allowed_lane_nums: Optional[Sequence[int]] = None,
+) -> Optional[str]:
+    """Pick a lane on ``edge_id``, optionally restricted to SUMO-reachable lanes."""
+    return pick_lane_key_on_edge(
+        edge_id,
+        lane_num,
+        lane_keys_by_edge,
+        allowed_lane_nums=allowed_lane_nums,
+    )
+
+
+def _pick_reachable_dest_lane_key(
+    dest_edge: str,
+    preferred_lane_num: int,
+    lane_keys_by_edge: Dict[str, List[str]],
+    *,
+    route_index: Optional[Any],
+    from_edge: str,
+    from_lane: int,
+) -> Optional[str]:
+    """Dest lane that a vehicle can actually reach from ``from_edge``/``from_lane``.
+
+    Prefer ``preferred_lane_num`` when it is reachable; otherwise the nearest
+    reachable lane. Returns None when the dest edge is unreachable.
+    """
+    allowed = None
+    if route_index is not None:
+        allowed = sorted(
+            route_index.reachable_lanes_on_edge(
+                str(from_edge), int(from_lane), str(dest_edge)
+            )
+        )
+        if not allowed:
+            return None
+    return _pick_outgoing_lane_key(
+        dest_edge,
+        preferred_lane_num,
+        lane_keys_by_edge,
+        allowed_lane_nums=allowed,
+    )
 
 
 def _lane_keys_lookup(layout: JunctionPriorityLayout) -> Dict[str, List[str]]:

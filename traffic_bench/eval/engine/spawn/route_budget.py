@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
-from traffic_bench.eval.engine.map.lane_keys import lane_num_from_key
+from traffic_bench.eval.engine.map.lane_keys import lane_num_from_key, make_lane_key
 from traffic_bench.eval.engine.map.sumo_utils import load_vehicle_route_index
 from traffic_bench.eval.signs.dual_path.budget import (
     load_sumo_edge_lengths,
@@ -128,6 +128,42 @@ def measure_available_route_length_m(
     )
 
 
+def ensure_reachable_ego_destination(
+    entry: Dict[str, Any],
+    *,
+    net_path: Path,
+) -> Dict[str, Any]:
+    """Rewrite ``destination_lane_id`` to a SUMO-reachable lane, or mark invalid."""
+    ego_edge = entry.get("road_id") or entry.get("ego_edge_id")
+    ego_lane = entry.get("spawn_lane_num")
+    dest_edge = entry.get("destination_edge_id")
+    dest_lane_key = entry.get("destination_lane_id")
+    if not ego_edge or ego_lane is None or not dest_edge:
+        return entry
+
+    route_index = load_vehicle_route_index(net_path)
+    reachable = sorted(
+        route_index.reachable_lanes_on_edge(
+            str(ego_edge), int(ego_lane), str(dest_edge)
+        )
+    )
+    out = dict(entry)
+    if not reachable:
+        out["valid"] = False
+        out["invalid_route_reason"] = "dest_edge_unreachable_from_spawn_lane"
+        return out
+
+    pref = None
+    if dest_lane_key:
+        try:
+            pref = int(lane_num_from_key(str(dest_lane_key)))
+        except (TypeError, ValueError):
+            pref = None
+    lane_num = pref if pref in reachable else int(reachable[0])
+    out["destination_lane_id"] = make_lane_key(str(dest_edge), lane_num)
+    return out
+
+
 def apply_route_budget(
     entry: Dict[str, Any],
     *,
@@ -190,9 +226,28 @@ def apply_route_budget(
     if trimmed is None:
         return entry
 
+    # Snap dest lane to one SUMO can actually reach from spawn. Truncation /
+    # preferred lane often keep spawn's lane index (0) even when connections
+    # only enter dest lanes 1/2 — MetaDrive then builds a degenerate route.
+    reachable = sorted(
+        route_index.reachable_lanes_on_edge(
+            str(ego_edge), int(ego_lane), str(trimmed.dest_edge_id)
+        )
+    )
+    if not reachable:
+        out = dict(entry)
+        out["valid"] = False
+        out["invalid_route_reason"] = "dest_edge_unreachable_from_spawn_lane"
+        return out
+    if int(dest_lane_num) in reachable:
+        final_lane_num = int(dest_lane_num)
+    else:
+        final_lane_num = int(reachable[0])
+    final_dest_lane_id = make_lane_key(trimmed.dest_edge_id, final_lane_num)
+
     out = dict(entry)
     out["destination_edge_id"] = trimmed.dest_edge_id
-    out["destination_lane_id"] = trimmed.dest_lane_id
+    out["destination_lane_id"] = final_dest_lane_id
     out["destination_max_along_m"] = trimmed.destination_max_along_m
     out["max_path_length_m"] = budget
     out["route_length_m"] = float(ego_rem + trimmed.length_m)
