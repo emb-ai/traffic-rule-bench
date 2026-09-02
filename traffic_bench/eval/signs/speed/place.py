@@ -70,6 +70,12 @@ def place_speed_signs(env, row: dict, show_model: bool = True) -> bool:
             if v_target > 0:
                 start_kwargs["speed_limit_override"] = v_target
         elif start_cls is MinimumSpeedLimitSign:
+            # 4.6 is the one speed class that never opted into
+            # `longitudinal_from_start` (see signs/base.py): its base reads the
+            # offset from the lane END. Feeding it `sign_s` unconverted put the
+            # plate at `lane.length + sign_s`, i.e. off the far end of the lane,
+            # where it is invisible and its zone is empty.
+            start_kwargs["longitudinal_offset"] = placement_long - float(lane.length)
             if v_target > 0:
                 start_kwargs["min_speed_override"] = v_target
 

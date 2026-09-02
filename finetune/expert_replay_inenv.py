@@ -59,6 +59,30 @@ for _p in (METADRIVE_DIR,):
         sys.path.insert(0, _ps)
 
 
+def _build_env(row: dict, backend: str, max_steps: int,
+               record_episode: bool = False, ego_policy_cls=None,
+               render: bool = False, scenes_root=None):
+    """Build an UNRESET env for one scene.
+
+    The eval builder is the only one this repository ships and it is SUMO-only.
+    It resets with ``skip_auto_signs``, so after ``env.reset()`` the world holds
+    NO plates -- placing them is the caller's job (``place_signs_for_row``).
+    """
+    if backend != "sumo":
+        raise NotImplementedError(
+            f"backend {backend!r}: this repository builds SUMO scenes only")
+    from traffic_bench.eval.run.env import _build_sumo_env
+
+    env = _build_sumo_env(row, scenes_root=Path(scenes_root or "."),
+                          max_steps=max_steps)
+    env.config["record_episode"] = bool(record_episode)
+    if render:
+        env.config["use_render"] = True
+    if ego_policy_cls is not None:
+        env.config["agent_policy"] = ego_policy_cls
+    return env
+
+
 def _resolve_sign_class(cls_name: str):
     """Resolve a traffic-sign class by ``__name__`` (sidecar stores class names)."""
     import importlib
@@ -194,13 +218,27 @@ def _match_recorded_to_live(
 
 
 def _park_unmatched_live(live_objs: dict, obj_map: dict, ego_live) -> None:
-    """Move live objects not used for replay far away so they don't pollute sensors."""
+    """Move unmatched live traffic participants away so they don't pollute sensors.
+
+    Only participants -- vehicles and pedestrians -- are parked. The scene's
+    furniture (the plate, its detour cones, barriers) is placed after reset and
+    is therefore in no recorded track, so parking everything unmatched emptied
+    the world: the dump came out holding the ego and nothing else, and the sign
+    the episode was built around sat 14 km away without a word in any log.
+    """
+    from metadrive.component.traffic_participants.base_traffic_participant import (
+        BaseTrafficParticipant,
+    )
+    from metadrive.component.vehicle.base_vehicle import BaseVehicle
+
     used = {id(o) for o in obj_map.values()}
     if ego_live is not None:
         used.add(id(ego_live))
     park = np.array([-10000.0, -10000.0, 1.0])
     for lid, lobj in live_objs.items():
         if id(lobj) in used:
+            continue
+        if not isinstance(lobj, (BaseVehicle, BaseTrafficParticipant)):
             continue
         try:
             lobj.set_position(park)
@@ -275,7 +313,6 @@ def replay_in_our_env(
     sidecar = json.load(open(sidecar_path))
     scenario = pickle.load(open(pkl_path, "rb"))
 
-    from expert_replay import _build_env    # re-use env-builder
     import env_flags as _env_flags
     from traffic_bench.eval.engine.traffic.ego_defaults import apply_ego_defaults
 
@@ -286,7 +323,7 @@ def replay_in_our_env(
     # left on the manifest road (RELOCATE_EGO_TO_SIGN_LANE=False); IDM-family
     # with True. The module default (True) would rebuild a DIFFERENT scene for
     # NN recordings — ego spawn/route mismatch, instant termination in replay.
-    _idm_family = {"idm", "comprehensive_rule_expert", "rule_compliant"}
+    _idm_family = {"idm", "idm_rule", "ppo_rule"}
     _rec_policy = str(sidecar.get("policy") or "")
     _env_flags.RELOCATE_EGO_TO_SIGN_LANE = (
         (_rec_policy in _idm_family) if _rec_policy else True)
@@ -327,6 +364,27 @@ def replay_in_our_env(
 
         sign_mgr = getattr(env.engine, "traffic_sign_manager", None)
         rn = env.current_map.road_network
+
+        # The SUMO builder resets with `skip_auto_signs`, so nothing has put the
+        # plates in the world yet. Skipping this leaves the scene sign-less: the
+        # episode still records, the route count still looks right, and the dump
+        # simply carries no sign box -- unrecoverable after the fact. The
+        # sidecar re-add path below stays for the non-SUMO backends.
+        if backend == "sumo":
+            from traffic_bench.eval.run.place import place_signs_for_row
+
+            placed = place_signs_for_row(
+                env, row, scenes_root=Path(scenes_root or "."),
+                distance_before_end=float(row.get("sign_distance_before_end", 20.0)),
+                show_model=True,
+            )
+            n_signs = len(getattr(sign_mgr, "signs", []) or [])
+            print(f"[replay] place_signs_for_row -> {placed}, "
+                  f"{n_signs} sign(s) in the world")
+            if not placed or n_signs == 0:
+                print("[warn] no sign placed for this row: the dump will carry no "
+                      "sign box. Check road_id / sign_s / sign_lane_index in the row")
+
         re_add_signs = (backend != "sumo")
         for sign_info in (sidecar.get("signs", []) if re_add_signs else []):
             cls_name = sign_info["sign_class"]
@@ -531,9 +589,21 @@ def replay_in_our_env(
             except Exception:
                 pass
 
-        arrived = bool(arrived_any or info.get("arrive_dest", False))
-        crashed = bool(info.get("crash", False)) or bool(info.get("crash_vehicle", False))
-        out_of_road = bool(info.get("out_of_road", False))
+        # Under recorded replay the ego is teleported onto the recorded track, so
+        # MetaDrive's own arrival flag never fires however complete the run is:
+        # every pilot route came back `arrived_dest: False` while the recording
+        # that produced it reported True over the very same 167 steps. The
+        # recording judged the trajectory now being dumped, so carry its verdict
+        # and keep the live flags for a replay that drives itself. `success`
+        # already preferred the sidecar, which is how a route could be both
+        # Completed and not-arrived.
+        rec = (sidecar.get("metrics") or {}) if ego_mode == "recorded" else {}
+        arrived = (bool(rec["arrived_dest"]) if "arrived_dest" in rec
+                   else bool(arrived_any or info.get("arrive_dest", False)))
+        crashed = (bool(rec["crashed"]) if "crashed" in rec
+                   else bool(info.get("crash", False)) or bool(info.get("crash_vehicle", False)))
+        out_of_road = (bool(rec["out_of_road"]) if "out_of_road" in rec
+                       else bool(info.get("out_of_road", False)))
 
         if plant2_collector is not None and save_plant2_dir is not None:
             from plant2_frames import plant2_route_dir
@@ -552,7 +622,14 @@ def replay_in_our_env(
                 success = bool(metrics["success"])
             else:
                 success = bool(arrived and not crashed and not out_of_road)
-            n_frames = plant2_collector.flush(route_dir, success=success)
+            # Carry the flags, not just their conjunction: "left the road at the
+            # end" and "crashed into the obstacle" are both Failed here, and only
+            # the second is unusable for imitation.
+            n_frames = plant2_collector.flush(
+                route_dir, success=success,
+                reason={"arrived_dest": arrived,
+                        "crashed": crashed,
+                        "out_of_road": out_of_road})
             plant2_path = str(route_dir)
             print(f"[plant2] flushed {n_frames} frames → {route_dir}")
 

@@ -61,6 +61,15 @@ def place_detour_signs(env, row: dict, show_model: bool = True) -> bool:
         )
         if sign is not None:
             sign.is_priority_sign = False
+            # Without the cones there is nothing to detour around: the plate
+            # prescribes a lane change past an obstacle that does not exist.
+            # `spawn_detour_obstacle` used to run only from the env's own sign
+            # placement, which this path disables via `skip_auto_signs`, so
+            # every recorded and evaluated detour scene was obstacle-free.
+            if bool(getattr(env, "config", {}).get("spawn_detour_cones", True)):
+                from traffic_bench.signs.detour.obstacle import spawn_detour_obstacle
+
+                spawn_detour_obstacle(env.engine, lane, sign)
             print(
                 f"[DetourSign] Placed {pdd_code} on lane "
                 f"{getattr(lane, 'index', lane_key)} "

@@ -23,8 +23,8 @@ This way:
 
 Rule experts (default list — override with --rule-experts):
   • carl_rule, plant2_rule, plant2_smirnova_rule, plant2_artem_rule
-  • comprehensive_rule_expert_default / s1 / s2 / s3 / s4
-  • rule_compliant  (a.k.a. ppo_rule)
+  • idm_rule_default / s1 / s2 / s3 / s4
+  • ppo_rule  (a.k.a. ppo_rule)
 
 Usage:
   python -m traffic_bench.oracle.report.baseline --csv path/to/metrics_per_episode.csv
@@ -45,12 +45,12 @@ DEFAULT_RULE_EXPERTS = [
     "plant2_rule",
     "plant2_smirnova_rule",
     "plant2_artem_rule",
-    "comprehensive_rule_expert_default",
-    "comprehensive_rule_expert_s1",
-    "comprehensive_rule_expert_s2",
-    "comprehensive_rule_expert_s3",
-    "comprehensive_rule_expert_s4",
-    "rule_compliant",
+    "idm_rule_default",
+    "idm_rule_s1",
+    "idm_rule_s2",
+    "idm_rule_s3",
+    "idm_rule_s4",
+    "ppo_rule",
 ]
 
 

@@ -1,0 +1,9 @@
+logs_*/
+logs/
+*.log
+__pycache__/
+viz_outputs/
+README_MODEL_INPUTS.md
+
+# Local backward-compat wrappers (thin delegates to lib/, train/, data/, …)
+wrappers/

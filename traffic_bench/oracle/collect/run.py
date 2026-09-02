@@ -14,7 +14,7 @@ Usage:
   python -m traffic_bench.oracle.collect.run \\
       --sign yield \\
       --manifest data/runs/yield/train/real_manifest.jsonl \\
-      --policy comprehensive_rule_expert --ego-extra-samples 4 \\
+      --policy idm_rule --ego-extra-samples 4 \\
       --count 3 --save-gifs --output-dir ./out/cre
 """
 from __future__ import annotations
@@ -48,10 +48,12 @@ SIGN_SLUG = "2_4"
 SIGN_TYPE = "yield"
 PROFILE_ID = "yield"
 
-IDM_VARIANT_POLICIES = {"idm", "comprehensive_rule_expert"}
+from traffic_bench.agents.policy_names import canonical_policy_name
+
+IDM_VARIANT_POLICIES = {"idm", "idm_rule"}
 POLICY_CHOICES = [
-    "idm", "comprehensive_rule_expert",
-    "rule_compliant", "ppo_lidar",
+    "idm", "idm_rule",
+    "ppo_rule", "ppo_lidar",
     "carl", "carl_rule", "plant2", "plant2_rule", "plant2_ft",
 ]
 
@@ -368,40 +370,51 @@ def run_collection(args: argparse.Namespace) -> int:
                     f"scene={row.get('scene_id')} uid={uid}"
                 )
                 t0 = time.time()
-                episode = rb.run_one_episode(
-                    row=row,
-                    policy_type=args.policy,
-                    models=models,
-                    scenes_root=scenes_root,
-                    max_steps=args.max_steps,
-                    ego_variant=variant,
-                    ego_sample_seed_base=args.ego_sample_seed_base,
-                    replay_root=replay_root,
-                    replay_layout="flat",
-                    save_gif=gif_path,
-                    hide_signs=args.hide_signs,
-                    auxiliary_agent=True,
-                    record_episode=True,
-                    aux_distance_from_intersection=float(
-                        row.get("aux_distance_from_intersection")
-                        or args.aux_distance_from_intersection
-                    ),
-                    aux_policy=args.aux_policy,
-                    aux_spawn_velocity_ms=float(
-                        row.get("aux_spawn_velocity_ms")
-                        or args.aux_spawn_velocity_ms
-                    ),
-                    aux_release_when_ego_within_m=args.aux_release_when_ego_within_m,
-                    aux_convoy_size=int(
-                        row.get("aux_convoy_size") or args.aux_convoy_size
-                    ),
-                    aux_convoy_gap_m=float(
-                        row.get("aux_convoy_gap_m") or args.aux_convoy_gap_m
-                    ),
-                    aux_lanes_occupied=int(
-                        row.get("aux_lanes_occupied") or args.aux_lanes_occupied
-                    ),
-                )
+                try:
+                    episode = rb.run_one_episode(
+                        row=row,
+                        policy_type=args.policy,
+                        models=models,
+                        scenes_root=scenes_root,
+                        max_steps=args.max_steps,
+                        ego_variant=variant,
+                        ego_sample_seed_base=args.ego_sample_seed_base,
+                        replay_root=replay_root,
+                        replay_layout="flat",
+                        save_gif=gif_path,
+                        hide_signs=args.hide_signs,
+                        auxiliary_agent=True,
+                        record_episode=True,
+                        aux_distance_from_intersection=float(
+                            row.get("aux_distance_from_intersection")
+                            or args.aux_distance_from_intersection
+                        ),
+                        aux_policy=args.aux_policy,
+                        aux_spawn_velocity_ms=float(
+                            row.get("aux_spawn_velocity_ms")
+                            or args.aux_spawn_velocity_ms
+                        ),
+                        aux_release_when_ego_within_m=args.aux_release_when_ego_within_m,
+                        aux_convoy_size=int(
+                            row.get("aux_convoy_size") or args.aux_convoy_size
+                        ),
+                        aux_convoy_gap_m=float(
+                            row.get("aux_convoy_gap_m") or args.aux_convoy_gap_m
+                        ),
+                        aux_lanes_occupied=int(
+                            row.get("aux_lanes_occupied") or args.aux_lanes_occupied
+                        ),
+                    )
+                except Exception as exc:
+                    # One unbuildable scene must not cost the rest of the shard.
+                    # The ego-placement guard raises when a manifest road_id
+                    # names no lane in that scene's map -- a real data fault,
+                    # but a per-row one, and killing the worker silently loses
+                    # every row it had left. Count it and carry on.
+                    n_fail += 1
+                    print(f"[skip] {uid} {args.policy}/{variant}: "
+                          f"{type(exc).__name__}: {exc}", flush=True)
+                    continue
                 dt = time.time() - t0
                 # Refresh paths after write
                 if not sidecar.is_file():
@@ -466,7 +479,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Scenes root (default: data/scenes/<sign>)",
     )
-    p.add_argument("--policy", required=True, choices=POLICY_CHOICES)
+    p.add_argument("--policy", required=True, type=canonical_policy_name,
+                   choices=POLICY_CHOICES,
+                   help="policy id (legacy comprehensive_rule_expert / "
+                        "rule_compliant are mapped to idm_rule / ppo_rule)")
     p.add_argument("--model-path", default=None,
                    help="Required for carl/plant2 and *_rule variants")
     p.add_argument("--plant2-action-mode", default="pid",

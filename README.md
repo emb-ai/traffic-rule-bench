@@ -145,7 +145,7 @@ Locked splits: `paths.split=train` or `test`. Several policies / signs:
 
 ```bash
 python -m traffic_bench.eval run \
-    policies=[idm,comprehensive_rule_expert,plant2_ft] \
+    policies=[idm,idm_rule,plant2_ft] \
     sign=yield
 
 python -m traffic_bench.eval run policies=all sign=all
@@ -176,8 +176,8 @@ Full contract: [`traffic_bench/eval/README.md`](traffic_bench/eval/README.md).
 | Family | Hydra id | Needs checkpoint |
 |---|---|---|
 | IDM | `idm` | — |
-| IDM + rules | `comprehensive_rule_expert` | — |
-| PPO + rules | `rule_compliant` | — |
+| IDM + rules | `idm_rule` | — |
+| PPO + rules | `ppo_rule` | — |
 | CaRL | `carl` / `carl_rule` | yes |
 | PlanT2 | `plant2` / `plant2_rule` / `plant2_ft` | yes |
 

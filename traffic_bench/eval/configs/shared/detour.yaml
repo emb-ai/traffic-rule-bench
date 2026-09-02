@@ -16,3 +16,5 @@ simulation:
   spawn_offset_from_start: 10.0
   spawn_distance_before_end: 80.0
   sign_distance_before_end: 12.0
+  approach_before_sign_m: 50.0
+  tail_after_sign_m: 30.0

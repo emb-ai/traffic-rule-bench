@@ -805,6 +805,27 @@ class TrafficSignSumoEnv(AutoSpawnMixin, BaseEnv):
                 lateral_offset=sign_lane.width_at(0) / 2 + 0.8,
                 **speed_kwargs,
             )
+        elif issubclass(sign_class, MinimumSpeedLimitSign):
+            # 4.6 opens a minimum-speed zone, so it belongs `sign_spawn_distance`
+            # into the edge like the other speed plates. Its base still reads the
+            # offset from the lane END (it never opted into
+            # `longitudinal_from_start`), so convert here. The generic branch
+            # below placed it at the lane END whenever the sign lane was not the
+            # ego's initial lane -- off-screen, with an empty zone.
+            spawn_dist = min(max(0.1, float(self.sign_spawn_distance)),
+                             max(0.1, sign_lane.length - 1.0))
+            accel_kwargs = dict(sign_kwargs)
+            # Enforce the catalog's achievable-capped minimum (20/40) so the
+            # verifier checks the value the acceleration scene targets.
+            if float(self.config.get("ego_v_target_kmh", 0) or 0) > 0:
+                accel_kwargs["min_speed_override"] = float(self.config.get("ego_v_target_kmh"))
+            sign_obj = sign_mgr.add_sign(
+                sign_class,
+                lane=sign_lane,
+                longitudinal_offset=spawn_dist - sign_lane.length,
+                lateral_offset=sign_lane.width_at(0) / 2 + 0.8,
+                **accel_kwargs,
+            )
         else:
             # For approach-style signs (Stop, NoEntry, NoTraffic, TL, etc.)
             # the stop-line is at the intersection entrance, which in SUMO
@@ -823,10 +844,6 @@ class TrafficSignSumoEnv(AutoSpawnMixin, BaseEnv):
                 else 0.0
             )
             approach_kwargs = dict(sign_kwargs)
-            # 4.6: enforce the catalog's achievable-capped minimum (20/40) so the
-            # verifier checks the same value the acceleration scene targets.
-            if self.sign_type == "4.6" and float(self.config.get("ego_v_target_kmh", 0) or 0) > 0:
-                approach_kwargs["min_speed_override"] = float(self.config.get("ego_v_target_kmh"))
             sign_obj = sign_mgr.add_sign(
                 sign_class,
                 lane=sign_lane,

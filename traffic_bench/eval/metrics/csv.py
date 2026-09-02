@@ -39,8 +39,12 @@ from traffic_bench.oracle.select.filter import (
     recompute_dest,
     passes_filter,
 )
+from traffic_bench.agents.policy_names import canonical_policy_name
 
 
+# Display names for baselines recorded under legacy spellings. Baselines are
+# canonicalised on load (canonical_policy_name), so this only matters for
+# ``ppo_expert`` and any name that slipped past normalisation.
 POLICY_DISPLAY_NAME: dict[str, str] = {
     "comprehensive_rule_expert_default": "idm_rule_default",
     "comprehensive_rule_expert_s1": "idm_rule_s1",
@@ -303,7 +307,9 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
         passes = False
 
     # Variant / display_policy mapping: derive from baseline name and replay.policy/variant.
-    policy = replay.get("policy") or ""
+    # Legacy spellings (comprehensive_rule_expert / rule_compliant) → canonical ids.
+    baseline = canonical_policy_name(baseline)
+    policy = canonical_policy_name(replay.get("policy") or "")
     variant = replay.get("variant")
     display_policy = POLICY_DISPLAY_NAME.get(baseline, baseline)
 
@@ -377,6 +383,13 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
         "target_in_zone": target_in_zone,
         "target_compliant_event": target_compliant_event if target_compliant_event is not None else "",
         "target_compliant_step": target_compliant_step if target_compliant_step is not None else "",
+        # SR&Dest: obeyed the target sign AND reached the destination. A run
+        # that crashes before the sign has no violation but no arrival either,
+        # so it scores 0 instead of passing as "compliant".
+        "sr_and_dest": (
+            (bool(target_compliant_event) and bool(pf_row["arrived_dest"]))
+            if target_compliant_event is not None else ""
+        ),
         # High-level compliance
         "sign_compliant_high": (
             bool(target_compliant_event)
@@ -417,6 +430,7 @@ CSV_COLUMNS = [
     "target_violations_step", "target_violations_event",
     "target_in_zone_steps", "target_in_zone",
     "target_compliant_event", "target_compliant_step",
+    "sr_and_dest",
     "sign_compliant_high", "tl_compliant", "cw_compliant",
     "dest_recomputed", "passes_filter",
     "comfort",

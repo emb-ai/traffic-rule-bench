@@ -51,6 +51,10 @@ simulation:
   # Ego route budgets (m). One value → fixed length; several → expand axis.
   max_path_length_m: 100.0
   max_path_length_levels: [90, 100, 110]
+  # Detour: meters before the plate where ego spawns (keep < shortest path level).
+  approach_before_sign_m: 50.0
+  # Detour: meters kept after the plate for cones / zone on the edge.
+  tail_after_sign_m: 30.0
 
 gif:
   enabled: false

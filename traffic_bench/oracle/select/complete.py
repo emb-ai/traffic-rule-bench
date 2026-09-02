@@ -9,7 +9,7 @@ Default required agents:
   comp_default, comp_s1, comp_s2, comp_s3, comp_s4,
   ppo_signs, carl_signs, plant2_signs
 
-Here ppo_signs is the stored policy="rule_compliant" expert.
+Here ppo_signs is the stored policy="ppo_rule" expert.
 """
 from __future__ import annotations
 
@@ -56,7 +56,9 @@ def normalize_agent_label(label: str) -> str:
     label = label.strip()
     aliases = {
         "comprehensive_default": "comp_default",
-        "rule_compliant": "ppo_signs",
+        "ppo_rule": "ppo_signs",
+        "ppo_rule_default": "ppo_signs",
+        "rule_compliant": "ppo_signs",          # legacy spelling of ppo_rule
         "rule_compliant_default": "ppo_signs",
         "ppo": "ppo_signs",
         "ppo_signs_default": "ppo_signs",

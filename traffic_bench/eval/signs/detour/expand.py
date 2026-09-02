@@ -34,6 +34,17 @@ class DetourSimParams:
     max_path_length_m: float = 150.0
     max_path_length_levels: Tuple[float, ...] = (130.0, 150.0, 170.0)
     sign_distance_before_end: float = 12.0
+    # Room kept between the plate and the edge end. The manoeuvre lives AFTER
+    # the plate: cones at +1.25..+5.75 m, the verdict at +5.5 m, the zone
+    # closing at +18.5 m. A plate 12 m from the end leaves none of it on the
+    # edge, so the episode cannot contain the thing it is meant to measure.
+    tail_after_sign_m: float = 30.0
+    # How far back the ego starts from the plate. The travel budget is measured
+    # from the spawn, so anchoring the spawn to the plate (rather than to the
+    # edge start) makes episode length independent of how long the edge is.
+    # Keep this below the shortest max_path_length level (90/100/110) so dest
+    # still lands past the sign zone (~+18.5 m after the plate).
+    approach_before_sign_m: float = 50.0
     spawn_velocity_ms: float = 5.0
     horizon: int = 400
     traffic_density: float = 0.0
@@ -153,8 +164,19 @@ def build_detour_manifest_entry(
     else:
         sign_s = max(20.0, edge_length - float(sim.sign_distance_before_end))
 
+    # Keep the manoeuvre on the edge, whether sign_s came from the scene meta
+    # or from the formula above.
+    sign_s = min(sign_s, max(20.0, edge_length - float(sim.tail_after_sign_m)))
+
     spawn_lane_id = f"{road_id}_{sign_lane_index}"
+    # Anchor the spawn to the plate. With the spawn pinned to the edge start and
+    # the plate near its end, the finish line landed before the sign on every
+    # detour row in the repository -- 900 of 900, by as much as 1470 m -- so no
+    # episode ever reached the obstacle it was built around.
     spawn_offset = float(sim.spawn_offset_from_start)
+    approach = float(sim.approach_before_sign_m)
+    if sign_s - approach > spawn_offset:
+        spawn_offset = sign_s - approach
     path_budget_m = float(
         max_path_length_m if max_path_length_m is not None else sim.max_path_length_m
     )
@@ -351,6 +373,12 @@ def generate(cfg, scenes=None):
             float(x) for x in getattr(sim_cfg, "max_path_length_levels", (130.0, 150.0, 170.0))
         ),
         sign_distance_before_end=float(sim_cfg.sign_distance_before_end),
+        approach_before_sign_m=float(
+            getattr(sim_cfg, "approach_before_sign_m", 50.0) or 50.0
+        ),
+        tail_after_sign_m=float(
+            getattr(sim_cfg, "tail_after_sign_m", 30.0) or 30.0
+        ),
         spawn_velocity_ms=float(sim_cfg.spawn_velocity_ms),
         horizon=int(sim_cfg.horizon),
         traffic_density=float(sim_cfg.traffic_density),
@@ -428,6 +456,12 @@ def generate(cfg, scenes=None):
             "max_path_length_m": sim_cfg.max_path_length_m,
             "max_path_length_levels": list(
                 getattr(sim_cfg, "max_path_length_levels", (130.0, 150.0, 170.0))
+            ),
+            "approach_before_sign_m": float(
+                getattr(sim_cfg, "approach_before_sign_m", 50.0) or 50.0
+            ),
+            "tail_after_sign_m": float(
+                getattr(sim_cfg, "tail_after_sign_m", 30.0) or 30.0
             ),
             "auxiliary_agent": False,
         },

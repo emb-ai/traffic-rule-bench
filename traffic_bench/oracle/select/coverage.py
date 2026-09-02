@@ -38,7 +38,15 @@ def _row_uid(r: dict) -> str:
             f"_seed{seed}_v{int(r.get('var_idx', 0) or 0)}")
 
 
-def load_rows(roots: list[str]) -> tuple[list[dict], dict]:
+def load_rows(roots: list[str],
+              policies: list[str] | None = None) -> tuple[list[dict], dict]:
+    """Load the collect-layout ledgers, optionally keeping only some policies.
+
+    `policies` exists because the winner of a scene and the trajectory worth
+    imitating are not the same question. Training PlanT2 on `plant2_rule` picks
+    would have it imitate itself plus a rule overlay that eval deliberately
+    removes; restricting to the IDM family keeps the expert an expert.
+    """
     files: list[Path] = []
     for root in roots:
         root_p = Path(root)
@@ -63,7 +71,7 @@ def load_rows(roots: list[str]) -> tuple[list[dict], dict]:
         sys.exit(f"ERROR: no all_runs.jsonl found under {roots}")
 
     last: dict[tuple, dict] = {}
-    n_rows = n_dup = n_bad = 0
+    n_rows = n_dup = n_bad = n_filtered = 0
     for f in files:
         for line in open(f, encoding="utf-8"):
             line = line.strip()
@@ -78,6 +86,9 @@ def load_rows(roots: list[str]) -> tuple[list[dict], dict]:
             # Ensure scene_uid
             if not r.get("scene_uid"):
                 r["scene_uid"] = _row_uid(r)
+            if policies is not None and r.get("policy") not in policies:
+                n_filtered += 1
+                continue
             key = (r.get("policy"), r.get("variant"),
                    normalize_sign(r.get("sign_code") or r.get("sign_slug")),
                    r.get("scene_uid"))
@@ -90,6 +101,7 @@ def load_rows(roots: list[str]) -> tuple[list[dict], dict]:
         "dups_removed": n_dup,
         "dups_cross_node": 0,
         "bad_json": n_bad,
+        "policies_filtered_out": n_filtered,
         "rows_final": len(last),
     }
     return list(last.values()), stats
@@ -195,6 +207,8 @@ def main() -> None:
                     help="catalog.jsonl from oracle.collect.run")
     ap.add_argument("--manifest", default=None,
                     help="If no --catalog, build catalog from this manifest")
+    ap.add_argument("--policies", nargs="*", default=None,
+                    help="keep only these policies (e.g. idm_rule) before picking")
     ap.add_argument("--signs", nargs="*", default=["2.4"])
     ap.add_argument("--beta", type=float, default=BETA_DEFAULT)
     ap.add_argument("--horizon", type=int, default=1500)
@@ -225,7 +239,7 @@ def main() -> None:
     out_dir = resolve_repo_path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    rows, lstats = load_rows(args.root)
+    rows, lstats = load_rows(args.root, policies=args.policies)
     print(f"all_runs files: {lstats['files']}, rows: {lstats['rows']}, "
           f"dups removed: {lstats['dups_removed']}, "
           f"bad json: {lstats['bad_json']}, final: {lstats['rows_final']}")

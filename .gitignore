@@ -75,3 +75,8 @@ traffic_bench/scene_collection/map_pool/raw/
 traffic_bench/scene_collection/map_pool/nets/
 
 ### Benchmark working data lives at repo-root data/ (see "Data & checkpoints" above)
+
+# The bare `data/` pattern above is meant for the repo-root working data, but
+# it matches every directory of that name -- including the pipeline's own
+# sources, which then never reach a node and fail there as "no such file".
+!scripts/plant2_ft_pipeline/data/

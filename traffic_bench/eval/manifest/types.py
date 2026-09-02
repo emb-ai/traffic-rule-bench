@@ -55,6 +55,11 @@ class SimulationConfig:
     spawn_offset_from_start: float = 10.0
     max_path_length_m: float = 150.0
     max_path_length_levels: Tuple[float, ...] = (130.0, 150.0, 170.0)
+    # Detour: ego spawn distance before the plate (m). Keep below shortest
+    # max_path_length level so destination still lands past the sign zone.
+    approach_before_sign_m: float = 50.0
+    # Detour: minimum room kept between plate and edge end for cones/zone.
+    tail_after_sign_m: float = 30.0
     max_ego_lanes: int = 8
     zone_tail_m: float = 8.0
     zone_min_m: float = 20.0

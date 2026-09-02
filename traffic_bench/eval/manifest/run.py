@@ -290,6 +290,12 @@ def _job_from_hydra(cfg: DictConfig, profile, scenes_dir: Path, output_dir: Path
                 or (130.0, 150.0, 170.0)
             )
         ),
+        approach_before_sign_m=float(
+            getattr(cfg.simulation, "approach_before_sign_m", 50.0) or 50.0
+        ),
+        tail_after_sign_m=float(
+            getattr(cfg.simulation, "tail_after_sign_m", 30.0) or 30.0
+        ),
         max_ego_lanes=int(getattr(cfg.simulation, "max_ego_lanes", 8) or 8),
         zone_tail_m=float(getattr(cfg.simulation, "zone_tail_m", 8.0) or 8.0),
         zone_min_m=float(getattr(cfg.simulation, "zone_min_m", 20.0) or 20.0),
