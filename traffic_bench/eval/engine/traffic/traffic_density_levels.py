@@ -1,4 +1,9 @@
-"""Fixed traffic-density tiers derived from nuPlan frame-level vehicle counts."""
+"""Fixed traffic-density tier helpers (legacy constants for profile scale).
+
+Manifest density now comes from ``sample_one_profile`` for every sign family.
+This module keeps the MetaDrive scale/cap constants and optional percentile
+helpers for analysis.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -72,6 +77,9 @@ def list_traffic_density_levels(
     *,
     density_cap: float = META_DENSITY_CAP,
 ) -> List[TrafficDensityLevel]:
-    count = min(MAX_TRAFFIC_DENSITY_LEVELS, max(1, int(num_levels)))
+    """Return the first ``num_levels`` nuPlan density tiers (empty if ``num_levels <= 0``)."""
+    count = min(MAX_TRAFFIC_DENSITY_LEVELS, max(0, int(num_levels)))
+    if count <= 0:
+        return []
     levels = build_traffic_density_levels(density_cap=density_cap)
     return [levels[i] for i in range(1, count + 1)]

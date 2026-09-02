@@ -28,6 +28,10 @@ from traffic_bench.eval.signs.dual_path.place import (
     row_is_one_way as _row_is_one_way,
     row_uses_dual_path_nav as _row_uses_dual_path_nav,
 )
+from traffic_bench.eval.signs.junction.nav import (
+    JunctionOutgoingTrafficManager,
+    resolve_row_background_spawn_edges,
+)
 from traffic_bench.eval.signs.junction.place import row_is_junction as _row_is_junction
 from traffic_bench.eval.signs.roundabout.place import row_is_roundabout as _row_is_roundabout
 from traffic_bench.eval.signs.speed.place import row_is_speed as _row_is_speed
@@ -57,9 +61,11 @@ def _manifest_profile(row: dict) -> dict:
 
 
 def _manifest_traffic_density(row: dict, default: float) -> float:
-    profile = _manifest_profile(row)
-    val = profile.get("traffic_density", default)
-    return float(val)
+    # Spawn density only. Never use profile_traffic_density here: that field is
+    # the raw nuPlan sample (stats); traffic_density is background after aux.
+    if row.get("traffic_density") is not None:
+        return float(row["traffic_density"])
+    return float(default)
 
 
 def _manifest_horizon(row: dict, fallback: int) -> int:
@@ -89,6 +95,15 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
     background_excluded_edges = (
         resolve_row_background_excluded_edges(row, net_path)
         if _row_is_one_way(row)
+        else []
+    )
+    use_junction_outgoing_traffic = (
+        (_row_is_junction(row) or _row_is_roundabout(row))
+        and traffic_density > 0.0
+    )
+    background_spawn_edges = (
+        resolve_row_background_spawn_edges(row, net_path)
+        if use_junction_outgoing_traffic
         else []
     )
 
@@ -122,6 +137,7 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         show_traffic_lights=row.get("show_traffic_lights", False),
         show_npc_vehicles=row.get("show_npc_vehicles", False),
         background_excluded_edges=list(background_excluded_edges),
+        background_spawn_edges=list(background_spawn_edges),
         skip_auto_signs=True,
         use_pedestrian_manager=use_ped,
         use_pedestrian_yield_rule=use_yield,
@@ -148,6 +164,7 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
             cfg["show_npc_vehicles"] = True
             cfg["skip_auto_signs"] = False
             cfg["background_excluded_edges"] = []
+            cfg["background_spawn_edges"] = []
             return cfg
 
         def setup_engine(self):
@@ -155,7 +172,15 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
             # Only add SumoTrafficManager if traffic_density > 0
             # Otherwise keep the default SimpleTrafficManager (no NPC spawning)
             if self.config.get("traffic_density", 0.0) > 0:
-                mgr = OneWaySumoTrafficManager() if is_one_way else SumoTrafficManager()
+                if is_one_way:
+                    mgr = OneWaySumoTrafficManager()
+                elif (
+                    (_row_is_junction(row) or _row_is_roundabout(row))
+                    and self.config.get("background_spawn_edges")
+                ):
+                    mgr = JunctionOutgoingTrafficManager()
+                else:
+                    mgr = SumoTrafficManager()
                 self.engine.update_manager("traffic_manager", mgr)
 
         def reset(self, *, seed=None):

@@ -11,13 +11,9 @@ augmentation:
 scenario:
   max_scenarios: 10
   max_total: null
-  max_density_levels: 3
 
 simulation:
-  horizon: 400
   spawn_velocity_ms: 5.0
-  traffic_density: 0.0
-  traffic_density_augment: true
   spawn_offset_from_start: 5.0
   spawn_distance_before_end: 80.0
   sign_distance_before_end: 12.0

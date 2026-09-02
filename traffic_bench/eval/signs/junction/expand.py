@@ -1,4 +1,4 @@
-"""Expand junction / roundabout scenes into manifest rows (layout × aux).
+"""Expand junction / roundabout scenes into manifest rows (layout × aux × density).
 
 Roundabout (4.3) still uses this cartesian product; its plates live in
 ``signs/roundabout/place.py``. Spawn combinatorics: ``signs/junction/spawn.py``
@@ -30,7 +30,19 @@ from traffic_bench.eval.engine.spawn.auxiliary_agent import (
     viable_aux_lane_keys,
     viable_right_aux_lane_keys,
 )
-from traffic_bench.eval.engine.spawn.route_budget import apply_route_budget
+from traffic_bench.eval.engine.spawn.route_budget import (
+    apply_route_budget,
+    measure_spawn_to_dest_length_m,
+)
+from traffic_bench.eval.engine.spawn.route_length_levels import (
+    list_route_length_levels,
+    select_route_length_levels,
+    tag_entry_route_length,
+)
+from traffic_bench.eval.engine.traffic.agent_profile_bank import sample_one_profile
+from traffic_bench.eval.engine.traffic.npc_profile import embed_npc_profile
+from traffic_bench.eval.engine.traffic.stable_hash import stable_hash
+from traffic_bench.eval.signs.junction.nav import outgoing_edges_from_junction_layout
 from traffic_bench.eval.engine.spawn.scene_augmentation import (
     SpawnScenario,
     SpawnStrategy,
@@ -64,6 +76,8 @@ def _stable_seed(
     convoy_size: int = 0,
     lanes_occupied: int = 0,
     convoy_gap_m: float = 0.0,
+    path_length_m: float = 0.0,
+    npc_var_idx: int = 0,
 ) -> int:
     """Deterministic 32-bit seed from scene name, variant, scenario, and aux dims."""
     h = hashlib.sha256()
@@ -82,6 +96,12 @@ def _stable_seed(
     if convoy_size > 1 and convoy_gap_m > 0:
         h.update(b"|gap")
         h.update(f"{float(convoy_gap_m):.3f}".encode("utf-8"))
+    if path_length_m > 0:
+        h.update(b"|rl")
+        h.update(f"{float(path_length_m):.1f}".encode("utf-8"))
+    if npc_var_idx > 0:
+        h.update(b"|npc")
+        h.update(str(npc_var_idx).encode("utf-8"))
     return int.from_bytes(h.digest()[:4], "big")
 
 
@@ -205,7 +225,7 @@ def expand_scene_entries(
     build_entry: BuildEntryFn,
     aux_cfg_for_entry: Any,
 ) -> List[Dict]:
-    """Expand one scene into manifest rows (layout × aux axes + filters).
+    """Expand one scene into manifest rows (layout × aux × route × NPC profile).
 
     ``aux_cfg_for_entry`` is the dataclass passed through to ``build_entry``
     (typically ``AuxiliaryConfig``); when the auxiliary axis is off the caller
@@ -276,9 +296,15 @@ def expand_scene_entries(
     else:
         gap_values = [10.0]
 
+    configured_route_levels = list_route_length_levels(sim_cfg)
+    n_variations = max(1, int(getattr(sim_cfg, "n_variations", 3) or 3))
+    density_cap = float(getattr(sim_cfg, "profile_density_cap", 1.0) or 1.0)
+    spawn_before_end = float(getattr(sim_cfg, "spawn_distance_before_end", 15.0) or 15.0)
+
     scene_entries: List[Dict] = []
     skipped_short_aux = 0
     skipped_dup_geometry = 0
+    skipped_short_route_levels = 0
     seen_geometries: set = set()
 
     for variant, scenario in enumerate(scenarios):
@@ -288,6 +314,24 @@ def expand_scene_entries(
             if scenario is not None
             else None
         )
+        available_route_m = None
+        if scenario is not None:
+            available_route_m = measure_spawn_to_dest_length_m(
+                net_path=net_path,
+                spawn_edge=str(scenario.ego_edge_id),
+                spawn_lane=int(scenario.ego_lane_num),
+                dest_edge=str(scenario.ego_destination_edge_id),
+                spawn_distance_before_end=spawn_before_end,
+            )
+        route_levels, route_augment = select_route_length_levels(
+            configured_route_levels, available_route_m
+        )
+        if (
+            available_route_m is not None
+            and len(configured_route_levels) > 1
+            and not route_augment
+        ):
+            skipped_short_route_levels += len(configured_route_levels) - 1
         scene_aux_lanes = _scene_aux_lane_keys_for_lane_axis(
             junction_layout=junction_layout,
             spawn_strategy=spawn_strategy,
@@ -304,46 +348,74 @@ def expand_scene_entries(
             for convoy_n in convoy_sizes:
                 gaps_for_n = gap_values if convoy_n > 1 else gap_values[:1]
                 for gap_m in gaps_for_n:
-                    if auxiliary_on and aux is not None:
-                        fit_lanes = _fit_aux_lane_keys(
-                            junction_layout=junction_layout,
-                            spawn_strategy=spawn_strategy,
-                            aux=aux,
-                            ego_edge=ego_edge,
-                            convoy_size=convoy_n,
-                            convoy_gap_m=gap_m,
-                        )
-                        if prefer_aux is not None and prefer_aux not in fit_lanes:
-                            skipped_short_aux += 1
-                            continue
-                        if len(fit_lanes) < lanes_n:
-                            skipped_short_aux += 1
-                            continue
-                    aux_cfg_gap = replace(aux_cfg_for_entry, convoy_gap_m=gap_m)
-                    entry = build_entry(
-                        scene_dir=scene_dir,
-                        scenes_root=scenes_root,
-                        meta=meta,
-                        variant=variant,
-                        sim_cfg=sim_cfg,
-                        aux_cfg=aux_cfg_gap,
-                        aux_convoy_size=convoy_n,
-                        aux_lanes_occupied=lanes_n,
-                        spawn_lanes_cache=list(spawn_lanes),
-                        junction_layout_cache=junction_layout,
-                        spawn_scenario=scenario,
-                    )
-                    geom_key = entry_geometry_key(entry)
-                    if geom_key in seen_geometries:
-                        skipped_dup_geometry += 1
-                        continue
-                    seen_geometries.add(geom_key)
-                    scene_entries.append(entry)
+                    for path_len_m in route_levels:
+                        for npc_var in range(n_variations):
+                            if auxiliary_on and aux is not None:
+                                fit_lanes = _fit_aux_lane_keys(
+                                    junction_layout=junction_layout,
+                                    spawn_strategy=spawn_strategy,
+                                    aux=aux,
+                                    ego_edge=ego_edge,
+                                    convoy_size=convoy_n,
+                                    convoy_gap_m=gap_m,
+                                )
+                                if prefer_aux is not None and prefer_aux not in fit_lanes:
+                                    skipped_short_aux += 1
+                                    continue
+                                if len(fit_lanes) < lanes_n:
+                                    skipped_short_aux += 1
+                                    continue
+                            aux_cfg_gap = replace(aux_cfg_for_entry, convoy_gap_m=gap_m)
+                            scenario_id = scenario.scenario_id if scenario else ""
+                            seed = stable_hash(
+                                scene_name,
+                                scenario_id,
+                                variant,
+                                convoy_n,
+                                lanes_n,
+                                round(float(gap_m), 3),
+                                int(round(float(path_len_m))),
+                                npc_var,
+                            )
+                            npc_profile = sample_one_profile(
+                                int(seed),
+                                density_cap=density_cap,
+                                horizon_steps=int(sim_cfg.horizon),
+                            )
+                            entry = build_entry(
+                                scene_dir=scene_dir,
+                                scenes_root=scenes_root,
+                                meta=meta,
+                                variant=variant,
+                                sim_cfg=sim_cfg,
+                                aux_cfg=aux_cfg_gap,
+                                aux_convoy_size=convoy_n,
+                                aux_lanes_occupied=lanes_n,
+                                spawn_lanes_cache=list(spawn_lanes),
+                                junction_layout_cache=junction_layout,
+                                spawn_scenario=scenario,
+                                max_path_length_m=float(path_len_m),
+                                route_length_augment=route_augment,
+                                npc_profile=npc_profile,
+                                npc_var_idx=npc_var,
+                                seed_override=int(seed),
+                            )
+                            geom_key = entry_geometry_key(entry)
+                            if geom_key in seen_geometries:
+                                skipped_dup_geometry += 1
+                                continue
+                            seen_geometries.add(geom_key)
+                            scene_entries.append(entry)
 
     if skipped_short_aux:
         print(
             f"  [aux] Skipped {skipped_short_aux} convoy×lanes×gap combo(s) "
             f"(aux approach too short for full convoy)"
+        )
+    if skipped_short_route_levels:
+        print(
+            f"  [route] Collapsed {skipped_short_route_levels} route-length "
+            f"level(s) (natural path shorter than configured budgets)"
         )
     if skipped_dup_geometry:
         print(
@@ -387,6 +459,11 @@ def build_manifest_entry(
     junction_layout_cache: Optional[dict] = None,
     spawn_scenario: Optional[SpawnScenario] = None,
     expert_cfg: Optional[Any] = None,
+    max_path_length_m: Optional[float] = None,
+    route_length_augment: bool = False,
+    npc_profile: Optional[Dict] = None,
+    npc_var_idx: int = 0,
+    seed_override: Optional[int] = None,
     *,
     profile: SignProfile,
 ) -> Dict:
@@ -398,13 +475,24 @@ def build_manifest_entry(
     net_full_path = scene_dir / net_file
 
     scenario_id = spawn_scenario.scenario_id if spawn_scenario else ""
-    seed = _stable_seed(
-        scene_name,
-        variant,
-        scenario_id,
-        convoy_size=aux_convoy_size,
-        lanes_occupied=aux_lanes_occupied if aux_cfg.enabled else 0,
-        convoy_gap_m=float(aux_cfg.convoy_gap_m) if aux_cfg.enabled else 0.0,
+    path_budget_m = float(
+        max_path_length_m
+        if max_path_length_m is not None
+        else getattr(sim_cfg, "max_path_length_m", 150.0)
+    )
+    seed = (
+        int(seed_override)
+        if seed_override is not None
+        else _stable_seed(
+            scene_name,
+            variant,
+            scenario_id,
+            convoy_size=aux_convoy_size,
+            lanes_occupied=aux_lanes_occupied if aux_cfg.enabled else 0,
+            convoy_gap_m=float(aux_cfg.convoy_gap_m) if aux_cfg.enabled else 0.0,
+            path_length_m=path_budget_m if route_length_augment else 0.0,
+            npc_var_idx=npc_var_idx,
+        )
     )
 
     if spawn_lanes_cache is None:
@@ -437,12 +525,11 @@ def build_manifest_entry(
         "scene_id": scene_name,
         "net_path": str(net_path),
         "seed": seed,
-        "var_idx": variant,
+        "var_idx": int(npc_var_idx),
         "pdd_code": pdd_code,
         "sign_code": pdd_code,
         "sign_type": profile.sign_type,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
-        "traffic_density": sim_cfg.traffic_density,
         "horizon": sim_cfg.horizon,
         "sign_distance_before_end": sim_cfg.sign_distance_before_end,
         "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
@@ -556,6 +643,9 @@ def build_manifest_entry(
 
     if junction_layout_cache is not None:
         entry["junction_layout"] = junction_layout_cache
+        spawn_edges = outgoing_edges_from_junction_layout(junction_layout_cache)
+        if spawn_edges:
+            entry["background_spawn_edges"] = spawn_edges
         if profile.spawn_strategy in ("yield", "roundabout"):
             entry["main_lane_keys"] = [
                 lane_key
@@ -640,14 +730,25 @@ def build_manifest_entry(
                 )
 
     if entry.get("destination_edge_id") and entry.get("spawn_lane_num") is not None:
-        max_path_m = float(getattr(sim_cfg, "max_path_length_m", 0.0) or 0.0)
-        if max_path_m > 0.0:
+        if path_budget_m > 0.0:
             entry = apply_route_budget(
                 entry,
                 net_path=net_full_path,
-                max_path_length_m=max_path_m,
-                spawn_distance_before_end=float(sim_cfg.spawn_distance_before_end),
+                max_path_length_m=path_budget_m,
+                spawn_distance_before_end=float(entry.get("spawn_distance_before_end") or sim_cfg.spawn_distance_before_end),
             )
+    entry = tag_entry_route_length(
+        entry,
+        path_budget_m,
+        augment=route_length_augment,
+    )
+    if npc_profile is not None:
+        entry = embed_npc_profile(
+            entry,
+            npc_profile,
+            apply_aux_credit=bool(aux_cfg.enabled),
+            density_cap=float(getattr(sim_cfg, "profile_density_cap", 1.0) or 1.0),
+        )
 
     return {k: v for k, v in entry.items() if v is not None}
 
@@ -727,7 +828,6 @@ def generate(cfg, scenes=None):
 
     expert_cfg = expert_cfg or ExpertConfig()
     split = normalize_split(split)
-    expert_cfg = expert_cfg or ExpertConfig()
     assert_rejected_scenes_applied(scenes_dir)
     all_scenes = discover_scenes(scenes_dir)
     print(f"Scenes root: {scenes_dir.resolve()}")
@@ -735,9 +835,11 @@ def generate(cfg, scenes=None):
     scenes, split_by_id = apply_split_filter(
         all_scenes, scenes_dir=scenes_dir, split=split
     )
+    n_variations = max(1, int(getattr(sim_cfg, "n_variations", 3) or 3))
     print(
         f"Augmentation axes: layout={expansion_cfg.layout_on}, "
-        f"auxiliary={expansion_cfg.auxiliary_on}"
+        f"auxiliary={expansion_cfg.auxiliary_on}, "
+        f"n_variations={n_variations}"
     )
     if not scenes:
         print(
@@ -830,11 +932,13 @@ def generate(cfg, scenes=None):
         "max_scenarios": scenario_cfg.max_scenarios,
         "max_total": scenario_cfg.max_total,
         "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
-        "traffic_density": sim_cfg.traffic_density,
         "horizon": sim_cfg.horizon,
         "sign_distance_before_end": sim_cfg.sign_distance_before_end,
         "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
         "max_path_length_m": float(sim_cfg.max_path_length_m),
+        "max_path_length_levels": list(
+            getattr(sim_cfg, "max_path_length_levels", (130.0, 150.0, 170.0))
+        ),
         "auxiliary_agent": aux_for_entry.enabled,
         "aux_distance_from_intersection": aux_cfg.distance_from_intersection,
         "aux_convoy_size_max": aux_cfg.convoy_size,
@@ -842,6 +946,9 @@ def generate(cfg, scenes=None):
         if expansion_cfg.aux is not None
         else [aux_cfg.convoy_gap_m],
         "aux_lanes_occupied_max": aux_cfg.lanes_occupied,
+        "n_variations": n_variations,
+        "profile_density_cap": float(getattr(sim_cfg, "profile_density_cap", 1.0) or 1.0),
+        "npc_world": "engine.traffic.agent_profile_bank.sample_one_profile",
     }
     if profile.id == STOP.id:
         summary["stop_wait_steps"] = int(expert_cfg.stop_wait_steps)

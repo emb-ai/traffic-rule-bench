@@ -36,17 +36,21 @@ auxiliary:
   distance_from_intersection: 20.0
   convoy_size: 3
   lanes_occupied: 4
-  convoy_gap_m: [5.0, 10.0]
+  convoy_gap_m: [5.0, 8.0]
   release_when_ego_within_m: 15.0
 
 simulation:
   spawn_velocity_ms: 2.5
   traffic_density: 0.0
-  horizon: 800
+  horizon: 600
   sign_distance_before_end: 0.0
   spawn_distance_before_end: 15.0
-  # Total ego route length cap (m) for all sign families at manifest expand.
-  max_path_length_m: 150.0
+  # NPC world: sample_one_profile this many times per geometry (all signs).
+  n_variations: 3
+  profile_density_cap: 1.0
+  # Ego route budgets (m). One value → fixed length; several → expand axis.
+  max_path_length_m: 100.0
+  max_path_length_levels: [90, 100, 110]
 
 gif:
   enabled: false

@@ -125,6 +125,8 @@ def sample_one_profile(seed: int, density_cap: float = 1.0, horizon_steps: int =
         "DISTANCE_WANTED": round(distance_wanted, 4),
         "TIME_WANTED": round(min(time_wanted, 10.0), 4),
         "LANE_CHANGE_FREQ": round(lane_change_freq, 4),
+        # Raw nuPlan vehicles/frame before MetaDrive scale / aux credit.
+        "nuplan_vehicles_per_frame": round(raw_density, 4),
         "traffic_density": round(traffic_density, 4),
         "horizon_steps": horizon_steps,
     }

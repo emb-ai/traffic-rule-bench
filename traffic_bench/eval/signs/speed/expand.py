@@ -14,7 +14,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from traffic_bench.eval.signs.speed.spec import (
     BRAKE_DECEL_MPS2_DEFAULT,
@@ -30,7 +30,16 @@ from traffic_bench.eval.signs.speed.spec import (
     spawn_mode_for,
 )
 from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
-from traffic_bench.eval.engine.traffic.traffic_density_levels import TrafficDensityLevel, list_traffic_density_levels
+from traffic_bench.eval.engine.spawn.route_length_levels import (
+    list_route_length_levels,
+    select_route_length_levels,
+    tag_entry_route_length,
+)
+from traffic_bench.eval.engine.spawn.route_budget import measure_spawn_to_dest_length_m
+
+from traffic_bench.eval.engine.traffic.agent_profile_bank import sample_one_profile
+from traffic_bench.eval.engine.traffic.npc_profile import embed_npc_profile
+from traffic_bench.eval.engine.traffic.stable_hash import stable_hash
 
 MAX_AXIS = 3
 
@@ -51,10 +60,11 @@ END_SIGN_CLASS = {
 class SpeedSimParams:
     spawn_offset_from_start: float = 5.0
     max_path_length_m: float = 150.0
+    max_path_length_levels: Tuple[float, ...] = (130.0, 150.0, 170.0)
     horizon: int = 400
     traffic_density: float = 0.0
-    traffic_density_augment: bool = True
-    max_density_levels: int = MAX_AXIS
+    n_variations: int = MAX_AXIS
+    profile_density_cap: float = 1.0
     max_ego_lanes: int = 8
     zone_tail_m: float = ZONE_TAIL_M
     zone_min_m: float = ZONE_MIN_M
@@ -126,7 +136,9 @@ def build_speed_manifest_entry(
     v_target_kmh: float,
     spawn_lane_num: int,
     variant: int = 0,
-    density_level: Optional[TrafficDensityLevel] = None,
+    npc_profile: Optional[Dict[str, Any]] = None,
+    max_path_length_m: Optional[float] = None,
+    route_length_augment: bool = False,
 ) -> Optional[Dict[str, Any]]:
     scene_name = str(meta.get("scene_name") or scene_dir.name)
     net_file = str(meta.get("net_file") or "map.net.xml")
@@ -138,19 +150,21 @@ def build_speed_manifest_entry(
         return None
 
     spawn_offset = float(sim.spawn_offset_from_start)
+    path_budget_m = float(
+        max_path_length_m if max_path_length_m is not None else sim.max_path_length_m
+    )
     dest_along = min(
-        float(sim.max_path_length_m),
+        path_budget_m,
         max(spawn_offset + 1.0, edge_length - 5.0),
     )
     spawn_before_end = max(20.0, edge_length - spawn_offset)
 
     spawn_mode = spawn_mode_for(pdd_code)
-    seed_key = f"l{spawn_lane_num}"
-    if density_level is not None:
-        seed_key += f"_td{density_level.id}"
-        scene_id = f"{scene_name}_l{spawn_lane_num}_td{density_level.id}_v{variant}"
-    else:
-        scene_id = f"{scene_name}_l{spawn_lane_num}_v{variant}"
+    seed_key = f"l{spawn_lane_num}_npc{variant}"
+    scene_id = f"{scene_name}_l{spawn_lane_num}_v{variant}"
+    if route_length_augment:
+        seed_key += f"_rl{int(round(path_budget_m))}"
+        scene_id = f"{scene_id}_rl{int(round(path_budget_m))}"
     seed = _stable_seed(scene_name, variant, seed_key)
 
     if spawn_mode == "accel":
@@ -174,11 +188,6 @@ def build_speed_manifest_entry(
         return None
 
     spawn_lane_id = f"{road_id}_{spawn_lane_num}"
-    traffic_density = (
-        float(density_level.traffic_density)
-        if density_level is not None
-        else float(sim.traffic_density)
-    )
 
     row: Dict[str, Any] = {
         "valid": True,
@@ -202,7 +211,8 @@ def build_speed_manifest_entry(
         "sign_s": round(float(sign_s), 3),
         "spawn_distance_before_end": spawn_before_end,
         "destination_max_along_m": dest_along,
-        "max_path_length_m": float(sim.max_path_length_m),
+        "max_path_length_m": path_budget_m,
+        "route_length_level_m": path_budget_m,
         "spawn_offset_from_start": spawn_offset,
         "spawn_velocity_ms": round(float(v0), 4),
         "v_target_kmh": float(v_target_kmh),
@@ -212,12 +222,7 @@ def build_speed_manifest_entry(
         "brake_decel_mps2": BRAKE_DECEL_MPS2_DEFAULT,
         "brake_delay_s": BRAKE_DELAY_S_DEFAULT,
         "brake_margin_m": BRAKE_MARGIN_M_DEFAULT,
-        "traffic_density": traffic_density,
-        "traffic_density_level_id": density_level.id if density_level is not None else None,
-        "traffic_density_level_name": density_level.name if density_level is not None else None,
-        "nuplan_vehicles_per_frame": (
-            density_level.nuplan_vehicles_per_frame if density_level is not None else None
-        ),
+        "traffic_density": float(sim.traffic_density),
         "horizon": int(sim.horizon),
         "horizon_steps": int(sim.horizon),
         "auxiliary_agent": False,
@@ -239,6 +244,10 @@ def build_speed_manifest_entry(
         row["is_paired"] = False
         row["s_end"] = round(float(s_end), 3)
         row["zone_length_m"] = round(max(0.0, float(s_end) - float(sign_s)), 3)
+    if npc_profile is not None:
+        row = embed_npc_profile(
+            row, npc_profile, density_cap=float(sim.profile_density_cap)
+        )
     return row
 
 
@@ -252,28 +261,53 @@ def expand_speed_scene_entries(
     pdd_code: str,
     v_target_kmh: float,
 ) -> List[Dict[str, Any]]:
-    density_levels: List[Optional[TrafficDensityLevel]]
-    if sim.traffic_density_augment:
-        density_levels = list(list_traffic_density_levels(int(sim.max_density_levels)))
-    else:
-        density_levels = [None]
-
+    n_variations = max(1, int(sim.n_variations))
     entries: List[Dict[str, Any]] = []
+    configured_route_levels = list_route_length_levels(sim)
+    road_id = str(meta.get("road_id") or "")
+    spawn_offset = float(sim.spawn_offset_from_start)
+    net_full = scene_dir / str(meta.get("net_file") or "map.net.xml")
+    available_route_m = None
+    if road_id:
+        available_route_m = measure_spawn_to_dest_length_m(
+            net_path=net_full,
+            spawn_edge=road_id,
+            spawn_lane=0,
+            dest_edge=road_id,
+            spawn_along_m=spawn_offset,
+        )
+    route_levels, route_augment = select_route_length_levels(
+        configured_route_levels, available_route_m
+    )
     for lane_num in _lane_range(meta, sim.max_ego_lanes):
-        for density in density_levels:
-            row = build_speed_manifest_entry(
-                scene_dir=scene_dir,
-                scenes_root=scenes_root,
-                meta=meta,
-                sim=sim,
-                pdd_code=pdd_code,
-                v_target_kmh=v_target_kmh,
-                spawn_lane_num=lane_num,
-                variant=0,
-                density_level=density,
-            )
-            if row is not None:
-                entries.append(row)
+        for npc_var in range(n_variations):
+            for path_len_m in route_levels:
+                seed = stable_hash(
+                    str(meta.get("scene_name") or scene_dir.name),
+                    lane_num,
+                    npc_var,
+                    int(round(float(path_len_m))),
+                )
+                npc_profile = sample_one_profile(
+                    int(seed),
+                    density_cap=float(sim.profile_density_cap),
+                    horizon_steps=int(sim.horizon),
+                )
+                row = build_speed_manifest_entry(
+                    scene_dir=scene_dir,
+                    scenes_root=scenes_root,
+                    meta=meta,
+                    sim=sim,
+                    pdd_code=pdd_code,
+                    v_target_kmh=v_target_kmh,
+                    spawn_lane_num=lane_num,
+                    variant=npc_var,
+                    npc_profile=npc_profile,
+                    max_path_length_m=float(path_len_m),
+                    route_length_augment=route_augment,
+                )
+                if row is not None:
+                    entries.append(row)
 
     max_sc = expansion.max_scenarios
     pre_cap = len(entries)
@@ -288,7 +322,7 @@ def expand_speed_scene_entries(
     )
     if max_sc is not None and pre_cap > max_sc:
         print(
-            f"  Retained {len(entries)} of {pre_cap} lane×density variants "
+            f"  Retained {len(entries)} of {pre_cap} lane×NPC variants "
             f"(shuffled, cap={max_sc})"
         )
     return entries
@@ -322,8 +356,7 @@ def generate(cfg, scenes=None):
     split = cfg.split
 
     split = normalize_split(split)
-    max_density_levels = int(cfg.max_density_levels)
-    traffic_density_augment = bool(cfg.traffic_density_augment)
+    n_variations = max(1, int(getattr(sim_cfg, "n_variations", 3) or 3))
     pdd_code = PDD_CODE
     all_scenes = discover_segment_speed_scenes(scenes_dir)
     print(f"Scenes root: {scenes_dir.resolve()}")
@@ -332,17 +365,20 @@ def generate(cfg, scenes=None):
         all_scenes, scenes_dir=scenes_dir, split=split
     )
     print(
-        f"Augmentation axes: spawn_lane × density={max_density_levels} "
-        f"(traffic_density_augment={bool(traffic_density_augment)})"
+        f"Augmentation axes: spawn_lane × n_variations={n_variations} "
+        f"× route_length={list(getattr(sim_cfg, 'max_path_length_levels', (130, 150, 170)))}"
     )
 
     sim_params = SpeedSimParams(
         spawn_offset_from_start=float(sim_cfg.spawn_offset_from_start),
         max_path_length_m=float(sim_cfg.max_path_length_m),
+        max_path_length_levels=tuple(
+            float(x) for x in getattr(sim_cfg, "max_path_length_levels", (130.0, 150.0, 170.0))
+        ),
         horizon=int(sim_cfg.horizon),
         traffic_density=float(sim_cfg.traffic_density),
-        traffic_density_augment=bool(traffic_density_augment),
-        max_density_levels=int(max_density_levels),
+        n_variations=n_variations,
+        profile_density_cap=float(getattr(sim_cfg, "profile_density_cap", 1.0) or 1.0),
         max_ego_lanes=int(sim_cfg.max_ego_lanes),
         zone_tail_m=float(sim_cfg.zone_tail_m),
         zone_min_m=float(sim_cfg.zone_min_m),
@@ -412,10 +448,14 @@ def generate(cfg, scenes=None):
             "skipped_short_scenes": skipped_short,
             "max_scenarios": scenario_cfg.max_scenarios,
             "max_total": scenario_cfg.max_total,
-            "max_density_levels": max_density_levels,
-            "traffic_density_augment": bool(traffic_density_augment),
+            "n_variations": n_variations,
+            "profile_density_cap": float(getattr(sim_cfg, "profile_density_cap", 1.0) or 1.0),
+            "npc_world": "engine.traffic.agent_profile_bank.sample_one_profile",
             "spawn_offset_from_start": sim_cfg.spawn_offset_from_start,
             "max_path_length_m": sim_cfg.max_path_length_m,
+            "max_path_length_levels": list(
+                getattr(sim_cfg, "max_path_length_levels", (130.0, 150.0, 170.0))
+            ),
             "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
             "horizon": sim_cfg.horizon,
             "auxiliary_agent": False,

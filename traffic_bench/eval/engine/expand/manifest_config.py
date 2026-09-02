@@ -13,6 +13,7 @@ DEFAULT_AUX_DISTANCE_FROM_INTERSECTION = 20.0
 DEFAULT_AUX_LANES_OCCUPIED_MAX = 4
 # Shared total-route budget (all sign families).
 DEFAULT_MAX_PATH_LENGTH_M = 150.0
+DEFAULT_MAX_PATH_LENGTH_LEVELS = (130.0, 150.0, 170.0)
 # Cap ego travel / visual finish mark along the destination lane (legacy fallback).
 DEFAULT_DESTINATION_MAX_ALONG_M = 100.0
 # Expert mandatory dwell at stop line after speed≈0 (sim steps; ×0.1 s ≈ seconds).
@@ -39,8 +40,9 @@ EXPERIMENT_DEFAULT_KEYS = (
     "aux_convoy_gap_m",
     "aux_lanes_occupied_max",
     "stop_wait_steps",
-    # Per-row route cap; do not copy from experiment summary.
+    # Per-row route cap; experiment summary may list levels / default.
     "max_path_length_m",
+    "max_path_length_levels",
     # Blocked road (3.2)
     "sign_distance_from_start",
     "compliant_stop_success_seconds",

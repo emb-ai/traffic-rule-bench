@@ -11,15 +11,11 @@ scenario:
   max_scenarios: 10
   max_total: null
   max_ego_lanes: 3
-  max_density_levels: 3
   max_pedestrian_presets: 3
   crosswalk_positions: [middle]
 
 simulation:
-  horizon: 600
   spawn_velocity_ms: 2.5
-  traffic_density: 0.0
-  traffic_density_augment: true
   sign_distance_before_end: 12.0
   spawn_distance_before_end: 55.0
   min_hops_after_depart: 0

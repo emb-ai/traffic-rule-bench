@@ -283,6 +283,13 @@ def _job_from_hydra(cfg: DictConfig, profile, scenes_dir: Path, output_dir: Path
         max_path_length_m=float(
             getattr(cfg.simulation, "max_path_length_m", 150.0) or 150.0
         ),
+        max_path_length_levels=tuple(
+            float(x)
+            for x in (
+                getattr(cfg.simulation, "max_path_length_levels", None)
+                or (130.0, 150.0, 170.0)
+            )
+        ),
         max_ego_lanes=int(getattr(cfg.simulation, "max_ego_lanes", 8) or 8),
         zone_tail_m=float(getattr(cfg.simulation, "zone_tail_m", 8.0) or 8.0),
         zone_min_m=float(getattr(cfg.simulation, "zone_min_m", 20.0) or 20.0),
@@ -347,14 +354,10 @@ def _job_from_hydra(cfg: DictConfig, profile, scenes_dir: Path, output_dir: Path
         auxiliary=aux_cfg,
         expert=expert_cfg,
         max_ego_lanes=int(getattr(cfg.scenario, "max_ego_lanes", 3) or 3),
-        max_density_levels=int(getattr(cfg.scenario, "max_density_levels", 3) or 3),
         max_pedestrian_presets=int(
             getattr(cfg.scenario, "max_pedestrian_presets", 3) or 3
         ),
         crosswalk_positions=positions_list,
-        traffic_density_augment=bool(
-            getattr(cfg.simulation, "traffic_density_augment", True)
-        ),
         ped_cfg=ped_cfg,
     )
 

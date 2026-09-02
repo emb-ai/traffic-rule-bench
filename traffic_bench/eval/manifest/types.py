@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from traffic_bench.eval.engine.expand.manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
@@ -54,6 +54,7 @@ class SimulationConfig:
     min_hops_after_depart: int = 0
     spawn_offset_from_start: float = 10.0
     max_path_length_m: float = 150.0
+    max_path_length_levels: Tuple[float, ...] = (130.0, 150.0, 170.0)
     max_ego_lanes: int = 8
     zone_tail_m: float = 8.0
     zone_min_m: float = 20.0
@@ -113,8 +114,6 @@ class GenerateCfg:
     auxiliary: AuxiliaryConfig
     expert: ExpertConfig
     max_ego_lanes: int = 3
-    max_density_levels: int = 3
     max_pedestrian_presets: int = 3
     crosswalk_positions: Optional[List[str]] = None
-    traffic_density_augment: bool = True
     ped_cfg: Optional[Dict[str, Any]] = None
