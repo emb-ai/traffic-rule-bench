@@ -1,4 +1,4 @@
-"""Figures for the harvest inventory (written to analysis/figures/)."""
+"""Figures for the harvest inventory (written to ``inventory/figures/``)."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import numpy as np
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.image import imread
 
-from traffic_bench.scene_collection.analysis.inventory import (
+from traffic_bench.scene_collection.analysis.inventory.harvest import (
     DUAL_PATH_SHAPES,
     JUNCTION_SHAPES,
     HarvestSnapshot,

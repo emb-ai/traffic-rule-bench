@@ -1,9 +1,22 @@
 # assign/
 
-Reads `maps/splits/signs.yaml` plus the global train/test ids and writes `maps/splits/sign_allocations.json`.
+Reads `maps/splits/signs.yaml` plus global train/test place splits and writes
+`maps/splits/sign_allocations.json` using **tiered place reuse within each split**.
 
 ```bash
+python -m traffic_bench.scene_collection collect   # includes make_split
 python -m traffic_bench.scene_collection assign
 ```
 
-`crop_kind` is `junction` (default), `dual_path`, or `segment`. Signs sample independently; the same map may appear under several signs. Place identity (`junction_id` / `osm_way_id`) is stamped **before** this step.
+## Policy
+
+1. **Train/test** — place-disjoint (`junction_id` / `osm_way_id`), stratified by
+   topology (T/X/O for junctions; straight/curved for segments).
+2. **Sign order** — taxonomy order (roundabout → priority → speed → obstacle → reroute).
+3. **Per pick** (within train or test):
+   - tier 1 — unused physical place in this split
+   - tier 2 — same behavioral family
+   - tier 3 — same semantic group, different behavioral family
+   - cross-semantic reuse → shortfall error
+
+Behavioral families and compatible topologies live in `taxonomy.py`.

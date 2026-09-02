@@ -261,7 +261,8 @@ Split is stamped on **place identity** before allocation:
 - junctions and dual-path: `junction_id`
 - segments: `osm_way_id` (one street does not appear in both halves)
 
-Signs share the pool: the same map may be assigned to more than one sign.
+Signs may reuse the same physical place within a split when allowed by the tiered
+assign policy (same behavioral family, or same semantic group).
 
 ## Limitations
 
