@@ -37,16 +37,35 @@ class NuPlanSampler:
         self._load_data()
         self._prepare_distributions()
 
+    def _stat_path(self, name):
+        """Path to one statistic, plain or gzipped.
+
+        The shipped set is gzipped (46 MB against 113), which pandas reads by
+        extension; a locally recomputed plain .csv still wins so a working copy
+        can be pointed at fresh output without renaming anything.
+        """
+        plain = os.path.join(self.stats_dir, name + '.csv')
+        if os.path.exists(plain):
+            return plain
+        gz = plain + '.gz'
+        return gz if os.path.exists(gz) else plain
+
     def _load_data(self):
         """Загрузка CSV-файлов"""
-        self.speeds = pd.read_csv(os.path.join(self.stats_dir, 'speeds.csv'))['speed'].dropna().values
-        self.acc_pos = pd.read_csv(os.path.join(self.stats_dir, 'acc_pos.csv'))['acceleration'].dropna().values
-        self.acc_neg = pd.read_csv(os.path.join(self.stats_dir, 'acc_neg.csv'))['deceleration'].dropna().values
-        self.following = pd.read_csv(os.path.join(self.stats_dir, 'following.csv'))['following_distance'].dropna().values
-        self.routes = pd.read_csv(os.path.join(self.stats_dir, 'routes.csv'))
-        self.densities = pd.read_csv(os.path.join(self.stats_dir, 'densities.csv'))['count'].dropna().values
+        self.speeds = pd.read_csv(self._stat_path('speeds'))['speed'].dropna().values
+        self.acc_pos = pd.read_csv(self._stat_path('acc_pos'))['acceleration'].dropna().values
+        self.acc_neg = pd.read_csv(self._stat_path('acc_neg'))['deceleration'].dropna().values
+        self.following = pd.read_csv(self._stat_path('following'))['following_distance'].dropna().values
+        self.routes = pd.read_csv(self._stat_path('routes'))
+        # The density column was renamed when the statistic was recomputed per
+        # lane within 150 m. count_r150 is the same set the old `count` held --
+        # nuPlan never annotates past that radius -- so this reads the same
+        # quantity from either vintage rather than dropping to the 5.0 default.
+        dens = pd.read_csv(self._stat_path('densities'))
+        dens_col = 'count' if 'count' in dens.columns else 'count_r150'
+        self.densities = dens[dens_col].dropna().values
         # lane_changes – опционально, для частоты смены полос
-        lc_path = os.path.join(self.stats_dir, 'lane_changes.csv')
+        lc_path = self._stat_path('lane_changes')
         if os.path.exists(lc_path):
             self.lane_changes = pd.read_csv(lc_path)
         else:

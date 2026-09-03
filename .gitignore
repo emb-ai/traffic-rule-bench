@@ -80,3 +80,14 @@ traffic_bench/scene_collection/map_pool/nets/
 # it matches every directory of that name -- including the pipeline's own
 # sources, which then never reach a node and fail there as "no such file".
 !scripts/plant2_ft_pipeline/data/
+
+### nuPlan statistics that ship with the benchmark
+# `*.json` (line 25) and `*.csv` (line 65) above are blanket rules for working
+# output. They also swallowed the statistics the benchmark itself depends on:
+# density_calibration_sumo.json is read at run time by
+# traffic_bench/eval/engine/traffic/traffic_density_levels.py, so an ignored copy
+# means a fresh clone raises FileNotFoundError on the first expanded scene.
+# The csv are stored gzipped (46 MB instead of 113 MB); pandas reads .csv.gz
+# directly, so nothing downstream has to be told about it.
+!traffic_bench/eval/engine/traffic/nuplan_statistics/*.json
+!tools/nuplan_resample/stats_r150/*.json
