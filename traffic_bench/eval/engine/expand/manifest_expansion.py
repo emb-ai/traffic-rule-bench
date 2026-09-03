@@ -119,6 +119,8 @@ def entry_geometry_key(entry: Dict) -> Tuple:
         dest_key,
         convoy_n,
         gap_key,
+        round(float(entry.get("route_length_level_m") or entry.get("max_path_length_m") or 0.0), 1),
+        int(entry.get("var_idx") or 0),
     )
 
 

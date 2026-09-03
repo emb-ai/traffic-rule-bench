@@ -1,1 +1,4 @@
+# Generated artifacts (do not hand-edit)
 figures/_examples/
+**/__pycache__/
+*.pyc

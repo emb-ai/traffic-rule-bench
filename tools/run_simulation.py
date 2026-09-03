@@ -29,8 +29,8 @@ from traffic_bench.eval.engine.sim.checkpoints import (
 )
 
 # Policy categories
-IDM_FAMILY = {"idm", "comprehensive_rule_expert"}
-NN_NO_CHECKPOINT = {"rule_compliant", "ppo_lidar"}
+IDM_FAMILY = {"idm", "idm_rule"}
+NN_NO_CHECKPOINT = {"ppo_rule", "ppo_lidar"}
 ALL_POLICIES = IDM_FAMILY | NN_NEED_CHECKPOINT | NN_NO_CHECKPOINT
 
 
@@ -171,11 +171,11 @@ def make_policy(policy_type: str, vehicle, seed: int, models: dict | None = None
     if policy_type == "idm":
         return IDMPolicy(vehicle, seed)
 
-    if policy_type == "comprehensive_rule_expert":
+    if policy_type == "idm_rule":
         from traffic_bench.agents.idm_rule import ComprehensiveRuleExpertPolicy
         return ComprehensiveRuleExpertPolicy(vehicle, seed)
     
-    if policy_type == "rule_compliant":
+    if policy_type == "ppo_rule":
         from traffic_bench.agents.ppo_rule import RuleCompliantExpertPolicy
         return RuleCompliantExpertPolicy(vehicle, seed)
     

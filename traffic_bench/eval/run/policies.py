@@ -26,8 +26,10 @@ from traffic_bench.eval.run.main import (
     run_episodes,
 )
 
-IDM_FAMILY = {"idm", "comprehensive_rule_expert"}
-NN_NO_CHECKPOINT = {"rule_compliant", "ppo_lidar"}
+from traffic_bench.agents.policy_names import canonical_policy_name
+
+IDM_FAMILY = {"idm", "idm_rule"}
+NN_NO_CHECKPOINT = {"ppo_rule", "ppo_lidar"}
 ALL_POLICIES = IDM_FAMILY | NN_NEED_CHECKPOINT | NN_NO_CHECKPOINT
 EGO_VARIANTS = ["default", "s1", "s2", "s3", "s4"]
 RUN_EVAL_OUT = "eval_out"
@@ -162,7 +164,8 @@ def _run_metrics(out_dir: Path) -> None:
 def _expand_policy_names(policies: list[str]) -> list[str]:
     if len(policies) == 1 and policies[0] in {"all", "*"}:
         return sorted(ALL_POLICIES)
-    return policies
+    # Legacy spellings (comprehensive_rule_expert / rule_compliant) → canonical.
+    return [canonical_policy_name(p) for p in policies]
 
 
 def print_run_plan(

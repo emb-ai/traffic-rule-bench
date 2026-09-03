@@ -37,6 +37,12 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         PlainPlanT2Policy.set_checkpoint(
             model_path, PLANT2_PATH, device=device, action_mode=plant2_action_mode,
+            # No governor. The adapter default (50 km/h) clipped desired_speed for
+            # every PlanT2 policy, which makes a 4.6 plate above 50 km/h impossible to
+            # satisfy by construction and pins the pretrained model at a flat 50 under
+            # every plate. The longitudinal target stays bounded by the model's own
+            # speed_limit token (80 km/h), the value training saw.
+            max_speed_kmh=None,
         )
         policy_cls = PlainPlanT2Policy
     elif policy == "carl_rule":
@@ -54,6 +60,12 @@ def _load_policy_models(policy: str, model_path: str | None, plant2_action_mode:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         PlanT2SignCompliantPolicy.set_checkpoint(
             model_path, PLANT2_PATH, device=device, action_mode=plant2_action_mode,
+            # No governor. The adapter default (50 km/h) clipped desired_speed for
+            # every PlanT2 policy, which makes a 4.6 plate above 50 km/h impossible to
+            # satisfy by construction and pins the pretrained model at a flat 50 under
+            # every plate. The longitudinal target stays bounded by the model's own
+            # speed_limit token (80 km/h), the value training saw.
+            max_speed_kmh=None,
         )
         policy_cls = PlanT2SignCompliantPolicy
 

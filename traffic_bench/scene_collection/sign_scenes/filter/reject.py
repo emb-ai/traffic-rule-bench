@@ -11,6 +11,7 @@ Examples:
     python -m traffic_bench.scene_collection reject --sign roundabout --dry-run
     python -m traffic_bench.scene_collection reject --sign roundabout --apply --refill
     python -m traffic_bench.scene_collection reject --sign roundabout --apply --refill --loop
+    python -m traffic_bench.scene_collection reject --all --apply --refill --loop
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from traffic_bench.scene_collection.sign_scenes.filter.selection import (
     set_scene_reject,
 )
 from traffic_bench.eval.sign_registry import (
+    SignProfile,
     get_profile,
     list_profiles,
     scenes_dir as profile_scenes_dir,
@@ -119,11 +121,90 @@ def _run_refill(sign: str, scenes_dir: Optional[Path]) -> int:
     return int(subprocess.call(cmd, cwd=str(REPO_ROOT)))
 
 
+def _run_one_sign(
+    *,
+    profile: SignProfile,
+    scenes_root: Path,
+    dry_run: bool,
+    apply: bool,
+    refill: bool,
+    loop: bool,
+    max_loops: int,
+    min_ego_lane_m: float,
+    aux_distance_m: float,
+    no_auxiliary: bool,
+    scenes_dir_override: Optional[Path],
+) -> list[dict]:
+    """Reject→apply→refill for one sign. Returns audit rows."""
+    strategy = profile.spawn_strategy
+    auxiliary_enabled = (not no_auxiliary) and strategy in (
+        "yield",
+        "roundabout",
+    )
+    all_audit: list[dict] = []
+    n_loops = max(1, int(max_loops)) if loop else 1
+
+    for loop_i in range(1, n_loops + 1):
+        print(
+            f"[reject-unusable] sign={profile.id} ({profile.pdd_code}) strategy={strategy} "
+            f"scenes={scenes_root} (loop {loop_i}/{n_loops})"
+        )
+        live_before = len(_live_scene_dirs(scenes_root))
+        rows = reject_unusable(
+            scenes_root=scenes_root,
+            strategy=strategy,
+            min_ego_lane_m=float(min_ego_lane_m),
+            aux_distance_from_intersection=float(aux_distance_m),
+            auxiliary_enabled=auxiliary_enabled,
+            dry_run=bool(dry_run),
+            pdd_code=profile.pdd_code,
+        )
+        all_audit.extend(rows)
+        print(
+            f"[reject-unusable] live={live_before} newly_rejected={len(rows)} "
+            f"reasons={dict(Counter(r['reason'] for r in rows))}"
+        )
+
+        if dry_run:
+            break
+
+        if apply and rows:
+            only = [r["scene_id"] for r in rows]
+            moved, total = apply_rejected_scenes(
+                scenes_root, dry_run=False, only=only
+            )
+            print(
+                f"[reject-unusable] applied {moved}/{total} → "
+                f"{scenes_root / REJECTED_SUBDIR}"
+            )
+        elif apply and not rows:
+            print("[reject-unusable] nothing to apply")
+
+        if not refill:
+            break
+
+        rc = _run_refill(profile.id, scenes_dir_override)
+        if rc != 0:
+            sys.exit(rc)
+
+        if not loop or not rows:
+            if not rows:
+                print("[reject-unusable] stable: all live scenes are viable")
+            break
+    else:
+        if loop:
+            print(
+                f"[reject-unusable] stopped after {n_loops} loops "
+                f"for {profile.id} (still seeing rejects; pool may be exhausted)"
+            )
+    return all_audit
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument(
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument(
         "--sign",
-        default="roundabout",
         metavar="ID",
         help=(
             "Eval sign id, same as `python -m traffic_bench.eval manifest sign=...` "
@@ -131,11 +212,16 @@ def main() -> None:
             f"Known: {', '.join(sorted(p.id for p in list_profiles()))}"
         ),
     )
+    g.add_argument(
+        "--all",
+        action="store_true",
+        help="Run every eval sign profile that has a data/scenes/<id>/ folder",
+    )
     ap.add_argument(
         "--scenes-dir",
         type=Path,
         default=None,
-        help="Scenes root (default: data/scenes/<profile>)",
+        help="Scenes root for --sign (default: data/scenes/<profile>); invalid with --all",
     )
     ap.add_argument(
         "--min-ego-lane-m",
@@ -188,18 +274,10 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    profile = get_profile(args.sign)
-    scenes_root = (
-        args.scenes_dir.expanduser().resolve()
-        if args.scenes_dir is not None
-        else profile_scenes_dir(profile)
-    )
-    strategy = profile.spawn_strategy
-    auxiliary_enabled = (not args.no_auxiliary) and strategy in (
-        "yield",
-        "roundabout",
-    )
-
+    if not args.all and not args.sign:
+        args.sign = "roundabout"
+    if args.all and args.scenes_dir is not None:
+        sys.exit("ERROR: --scenes-dir cannot be used with --all")
     if args.loop and not (args.apply and args.refill):
         sys.exit("ERROR: --loop requires both --apply and --refill")
     if args.refill and not args.apply and not args.dry_run:
@@ -208,63 +286,48 @@ def main() -> None:
             "will not see a shortfall from them"
         )
 
-    max_loops = max(1, int(args.max_loops)) if args.loop else 1
-    all_audit: list[dict] = []
-
-    for loop_i in range(1, max_loops + 1):
+    if args.all:
+        profiles = []
+        for profile in list_profiles():
+            root = profile_scenes_dir(profile)
+            if root.is_dir():
+                profiles.append(profile)
+            else:
+                print(f"[reject-unusable] skip {profile.id}: no scenes dir {root}")
+        if not profiles:
+            sys.exit("ERROR: --all found no data/scenes/<sign>/ directories")
         print(
-            f"[reject-unusable] sign={profile.id} ({profile.pdd_code}) strategy={strategy} "
-            f"scenes={scenes_root} (loop {loop_i}/{max_loops})"
+            f"[reject-unusable] --all: {len(profiles)} sign(s): "
+            f"{', '.join(p.id for p in profiles)}"
         )
-        live_before = len(_live_scene_dirs(scenes_root))
-        rows = reject_unusable(
-            scenes_root=scenes_root,
-            strategy=strategy,
-            min_ego_lane_m=float(args.min_ego_lane_m),
-            aux_distance_from_intersection=float(args.aux_distance_m),
-            auxiliary_enabled=auxiliary_enabled,
-            dry_run=bool(args.dry_run),
-            pdd_code=profile.pdd_code,
-        )
-        all_audit.extend(rows)
-        print(
-            f"[reject-unusable] live={live_before} newly_rejected={len(rows)} "
-            f"reasons={dict(Counter(r['reason'] for r in rows))}"
-        )
-
-        if args.dry_run:
-            break
-
-        if args.apply and rows:
-            only = [r["scene_id"] for r in rows]
-            moved, total = apply_rejected_scenes(
-                scenes_root, dry_run=False, only=only
-            )
-            print(
-                f"[reject-unusable] applied {moved}/{total} → "
-                f"{scenes_root / REJECTED_SUBDIR}"
-            )
-        elif args.apply and not rows:
-            print("[reject-unusable] nothing to apply")
-
-        if not args.refill:
-            break
-
-        rc = _run_refill(str(args.sign), args.scenes_dir)
-        if rc != 0:
-            sys.exit(rc)
-
-        if not args.loop or not rows:
-            # Stable when this pass found nothing to reject.
-            if not rows:
-                print("[reject-unusable] stable: all live scenes are viable")
-            break
     else:
-        if args.loop:
-            print(
-                f"[reject-unusable] stopped after {max_loops} loops "
-                "(still seeing rejects; pool may be exhausted of viable maps)"
-            )
+        profiles = [get_profile(args.sign)]
+
+    all_audit: list[dict] = []
+    for i, profile in enumerate(profiles, 1):
+        if args.all:
+            print(f"\n======== [{i}/{len(profiles)}] {profile.id} ========")
+        scenes_root = (
+            args.scenes_dir.expanduser().resolve()
+            if args.scenes_dir is not None
+            else profile_scenes_dir(profile)
+        )
+        rows = _run_one_sign(
+            profile=profile,
+            scenes_root=scenes_root,
+            dry_run=bool(args.dry_run),
+            apply=bool(args.apply),
+            refill=bool(args.refill),
+            loop=bool(args.loop),
+            max_loops=int(args.max_loops),
+            min_ego_lane_m=float(args.min_ego_lane_m),
+            aux_distance_m=float(args.aux_distance_m),
+            no_auxiliary=bool(args.no_auxiliary),
+            scenes_dir_override=args.scenes_dir,
+        )
+        all_audit.extend(
+            {**row, "sign": profile.id} for row in rows
+        )
 
     if args.audit is not None:
         args.audit.parent.mkdir(parents=True, exist_ok=True)
@@ -274,10 +337,11 @@ def main() -> None:
         print(f"[reject-unusable] wrote audit → {args.audit}")
 
     if all_audit and not args.apply and not args.dry_run:
+        target = "--all" if args.all else f"--sign {profiles[0].id}"
         print(
             "[reject-unusable] Next:\n"
             f"  python -m traffic_bench.scene_collection reject "
-            f"--sign {profile.id} --apply --refill"
+            f"{target} --apply --refill"
         )
 
 

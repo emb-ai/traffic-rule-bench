@@ -11,6 +11,8 @@ first `get_action()` call.
 
 from __future__ import annotations
 
+import json
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -30,13 +32,117 @@ def _ensure_plant2_paths(plant_repo_dir: Path) -> None:
             sys.path.insert(0, ps)
 
 
-# --- pure-pursuit constants (match eval_plant2_wps_steer.py) ---
+# --- pure-pursuit constants (match PlanTVariables.target_speeds / bins_speed=8) ---
 _SPEED_BINS = np.array(
-    [0.0, 0.025, 0.05472609, 1.0, 1.5, 2.0, 4.0, 8.0, 10.0, 20.0],
+    [0.0, 4.0, 8.0, 10.0, 13.88888888, 16.0, 17.77777777, 20.0],
     dtype=np.float32,
 )
 _WHEELBASE_M = 2.5
+
+# Axis convention. The dumps store the route AND the path target in MetaDrive
+# convention (y=left); `get_route_points_ego_frame` hands back CARLA (y=right)
+# and the controllers below read the prediction as CARLA as well. Feeding the
+# route in one convention and reading the plan in the other executes the
+# manoeuvre mirrored -- measured on the detour scenes as arrival 0.41 against
+# 0.67 and off-road 0.36 against 0.07. Both halves move together on purpose:
+# flipping only one is the mirrored case, so this is a single switch, not two.
+_AXIS_ALIGN = str(os.environ.get("PLANT2_AXIS_ALIGN", "1")).strip().lower() \
+    not in ("0", "false", "no", "off")
+for _legacy in ("PLANT2_ROUTE_YFLIP", "PLANT2_PRED_YFLIP"):
+    if os.environ.get(_legacy):
+        print(f"[plant2] {_legacy} is superseded by PLANT2_AXIS_ALIGN "
+              f"(currently {'on' if _AXIS_ALIGN else 'off'}); it has no effect")
 _LOOKAHEAD_IDX = 1
+
+# Pure pursuit aims at a point on the predicted trajectory. Picking it by index
+# ties the aim distance to the waypoint spacing: at WPS_STRIDE=1 index 1 sits
+# ~1.8 m ahead, which is inside the wheelbase's turning scale and makes the
+# loop oscillate -- measured as steer_delta 0.032 against the expert's 0.047 at
+# a third of its smoothness, i.e. the car wobbles instead of changing lane.
+# Choosing the point by ARC LENGTH, growing with speed, is the textbook form and
+# is independent of how the model was trained.
+_LOOKAHEAD_K_V = float(os.environ.get("PLANT2_LOOKAHEAD_K_V", 0.8))    # seconds of travel
+_LOOKAHEAD_L0_M = float(os.environ.get("PLANT2_LOOKAHEAD_L0_M", 3.0))  # floor at standstill
+_LOOKAHEAD_MIN_M = float(os.environ.get("PLANT2_LOOKAHEAD_MIN_M", 4.0))
+_LOOKAHEAD_MAX_M = float(os.environ.get("PLANT2_LOOKAHEAD_MAX_M", 12.0))
+
+
+def _lookahead_point(wps_np: np.ndarray, speed_mps: float):
+    """Point at the speed-scaled lookahead distance along the predicted path.
+
+    Falls back to the far end when the path is shorter than the target distance
+    rather than extrapolating: a short trajectory is exactly where extrapolation
+    is least trustworthy.
+    """
+    if wps_np is None or wps_np.shape[0] == 0:
+        return None
+    pts = np.vstack([np.zeros((1, 2), dtype=wps_np.dtype), wps_np[:, :2]])
+    seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    arc = np.concatenate([[0.0], np.cumsum(seg)])
+    target = float(np.clip(_LOOKAHEAD_K_V * max(speed_mps, 0.0) + _LOOKAHEAD_L0_M,
+                           _LOOKAHEAD_MIN_M, _LOOKAHEAD_MAX_M))
+    if arc[-1] <= 1e-6:
+        return None
+    if target >= arc[-1]:
+        return pts[-1]
+    i = int(np.searchsorted(arc, target))
+    lo, hi = arc[i - 1], arc[i]
+    t = 0.0 if hi <= lo else (target - lo) / (hi - lo)
+    return pts[i - 1] + t * (pts[i] - pts[i - 1])
+
+
+def _env_float_or_none(name: str) -> Optional[float]:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return None
+    return float(raw)
+
+
+def _apply_stop_prob_threshold(probs: np.ndarray, desired_speed: float) -> float:
+    """Force desired_speed=0 when stop-bin mass is high / other-bin mass is low.
+
+    Env (default off / None):
+      PLANT2_STOP_PROB_THR      — if probs[0] >= thr → stop
+      PLANT2_STOP_OTHER_MASS_THR — if sum(probs[1:]) <= thr → stop
+    """
+    stop_thr = _env_float_or_none("PLANT2_STOP_PROB_THR")
+    other_thr = _env_float_or_none("PLANT2_STOP_OTHER_MASS_THR")
+    if stop_thr is None and other_thr is None:
+        return desired_speed
+    p0 = float(probs[0]) if probs is not None and len(probs) else 0.0
+    other = float(probs[1:].sum()) if probs is not None and len(probs) > 1 else 1.0
+    force = False
+    if stop_thr is not None and p0 >= stop_thr:
+        force = True
+    if other_thr is not None and other <= other_thr:
+        force = True
+    return 0.0 if force else desired_speed
+
+
+def _maybe_log_speed_pred(
+    probs: np.ndarray,
+    desired_speed: float,
+    ego_speed: float,
+    extra: Optional[dict] = None,
+) -> None:
+    """Append one JSON line when PLANT2_SPEED_LOG_PATH is set."""
+    path = os.environ.get("PLANT2_SPEED_LOG_PATH")
+    if not path:
+        return
+    rec = {
+        "probs": [float(x) for x in probs.tolist()],
+        "p0": float(probs[0]),
+        "other_mass": float(probs[1:].sum()) if len(probs) > 1 else 0.0,
+        "desired_speed": float(desired_speed),
+        "ego_speed": float(ego_speed),
+    }
+    if extra:
+        rec.update(extra)
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
 
 
 def _wps_to_action(pred_plan, current_speed: float, target_speed_mps: float) -> np.ndarray:
@@ -58,8 +164,11 @@ def _wps_to_action(pred_plan, current_speed: float, target_speed_mps: float) -> 
         if wps_np.ndim > 2:
             wps_np = wps_np.squeeze(0)
         if wps_np.shape[0] > 0:
-            idx = min(_LOOKAHEAD_IDX, wps_np.shape[0] - 1)
-            tx, ty = float(wps_np[idx, 0]), float(wps_np[idx, 1])
+            aim = _lookahead_point(wps_np, current_speed)
+            if aim is None:
+                idx = min(_LOOKAHEAD_IDX, wps_np.shape[0] - 1)
+                aim = wps_np[idx, :2]
+            tx, ty = float(aim[0]), float(aim[1])
             dist = max(np.hypot(tx, ty), 1e-3)
             alpha = np.arctan2(ty, max(tx, 1e-3))
             delta = np.arctan2(2.0 * _WHEELBASE_M * np.sin(alpha), dist)
@@ -67,12 +176,15 @@ def _wps_to_action(pred_plan, current_speed: float, target_speed_mps: float) -> 
             # pred_wps use CARLA y=right; MetaDrive steer +1=left (mirrors plant2_control.py:198)
             steer = -steer
 
+    probs = None
     if pred_speed is not None:
         logits = pred_speed.detach().float()
         if logits.dim() > 1:
             logits = logits.squeeze(0)
         probs = torch.softmax(logits, dim=0).cpu().numpy()
         desired_speed = float((probs * _SPEED_BINS).sum())
+        desired_speed = _apply_stop_prob_threshold(probs, desired_speed)
+        _maybe_log_speed_pred(probs, desired_speed, current_speed)
     elif wps_np is not None and wps_np.shape[0] >= 4:
         desired_speed = float(np.linalg.norm(wps_np[2] - wps_np[3]) * 4.0)
         if current_speed < 0.01:
@@ -100,7 +212,10 @@ class PlanT2MetaDriveAdapter:
         checkpoint_path: str,
         plant_repo_dir,
         device: str = "cpu",
-        action_mode: str = "wps_pure_pursuit",
+        # `pid` steers off pred_path, the head that was retrained to carry the
+        # manoeuvre; `wps_pure_pursuit` steers off the waypoint head, which
+        # upstream PlanT uses only as a fallback (PlanT_agent.py:320).
+        action_mode: str = "pid",
         max_speed_kmh: Optional[int] = 50,
         route_step_m: float = 1.0,
         lateral_lookahead_scale: float = 2.0,
@@ -173,9 +288,14 @@ class PlanT2MetaDriveAdapter:
         # speed_token → new-style HFLM that appends a dedicated speed token at end
         _has_speed_token: bool = "speed_token" in _sd
 
+        # sign_emb → checkpoint trained with explicit PDD sign_id token
+        _has_sign_emb: bool = any(k.startswith("sign_emb.") for k in _sd)
+        self._use_sign_id: bool = _has_sign_emb
+
         print(
             f"[PlanT2Adapter] ckpt keys: speed_classifier={self._has_trained_speed_head}  "
-            f"ego_speed_emb={_has_ego_speed_emb}  speed_token={_has_speed_token}"
+            f"ego_speed_emb={_has_ego_speed_emb}  speed_token={_has_speed_token}  "
+            f"sign_emb={_has_sign_emb}"
         )
         if not self._has_trained_speed_head:
             print(
@@ -265,11 +385,8 @@ class PlanT2MetaDriveAdapter:
         route_ego, _ = get_route_points_ego_frame(vehicle, num_points=20, step_m=self.route_step_m)
 
         import os as _os
-        if _os.environ.get("PLANT2_ROUTE_YFLIP"):
-            # A/B test: re-apply the pre-1300c1e route y-flip (route -> MetaDrive
-            # y=left). If this stops the pred_path oscillation, the checkpoint was
-            # trained expecting the route in y=left, and 1300c1e's route change is
-            # wrong for it. Temporary diagnostic toggle.
+        if _AXIS_ALIGN:
+            # Route into the model in the convention the dumps were written in.
             route_ego = route_ego.copy()
             route_ego[:, 1] = -route_ego[:, 1]
         if _os.environ.get("PLANT2_DEBUG_STEER"):
@@ -286,14 +403,50 @@ class PlanT2MetaDriveAdapter:
             route_ego_20x2=route_ego,
             speed_limit_kmh=None,     # keep model input unchanged (80 km/h default token)
             max_objects=30,
-            max_distance=75.0,
-            range_factor_front=16.0,
+            # Training filtered objects with range 50 / front factor 2
+            # (PlanT.yaml model.training). These eval defaults are wider; the env
+            # vars exist to A/B whether that train/eval gap costs anything.
+            # Training filters at range 50 with front factor 2 (PlanT.yaml
+            # model.training). The eval defaults used to be 75 and 16, a forward
+            # ellipse an order of magnitude longer than anything the model was
+            # trained on; the env vars keep that available for an A/B.
+            max_distance=float(_os.environ.get("PLANT2_OBJ_MAX_DIST", 50.0)),
+            range_factor_front=float(_os.environ.get("PLANT2_OBJ_FRONT_FACTOR", 2.0)),
             input_bev=True,
             input_ego_speed=input_ego_speed,
             bev_resolution=128,
-            bev_size_meters=64.0,
+            # The dump writes 256 px over 64 m and PlanTDataset keeps the central
+            # 128 px (dataset.py: bev[0, 64:-64, 64:-64]), so training sees 32 m
+            # at 0.25 m/px. Rendering 128 px over 64 m here gives the same tensor
+            # shape at half the zoom — twice the area, silently. PLANT2_BEV_METERS=32
+            # reproduces the training geometry; the default keeps the old behaviour
+            # so the difference can be A/B'd.
+            bev_size_meters=float(_os.environ.get("PLANT2_BEV_METERS", 64.0)),
             device=self.device,
+            # PLANT2_SIGN_TOKEN=0 drops the global sign token, so the A/B can
+            # separate it from the per-object PDD classes (PLANT2_SIGN_OBJS).
+            include_sign_id=bool(getattr(self, "_use_sign_id", False))
+            and _os.environ.get("PLANT2_SIGN_TOKEN", "1") not in ("0", "false", "False"),
+            # PLANT2_FORCE_SIGN_CODE rewrites the sign token without touching
+            # the geometry: the counterfactual that proved the speed channel is
+            # read, never yet run for detour. 4.2.1 and 4.2.2 prescribe opposite
+            # sides, so swapping them must flip the predicted manoeuvre if the
+            # model uses the sign at all.
+            sign_code=(_os.environ.get("PLANT2_FORCE_SIGN_CODE")
+                       or getattr(self, "sign_code", None)),
         )
+
+        # Object pool as the model sees it — to compare the eval-side convention
+        # against the training dumps (boxes/NNNN.json.gz) row by row.
+        if _os.environ.get("PLANT2_DEBUG_OBJS"):
+            _x = batch.get("x_objs")
+            if _x is not None:
+                _rows = _x[0] if _x.dim() == 3 else _x
+                for _r in _rows.tolist():
+                    if _r[0] > 0:
+                        print(f"[objdbg] type={_r[0]:.0f} x={_r[1]:+.1f} y={_r[2]:+.1f} "
+                              f"yaw={_r[3]:+.0f} spd={_r[4]:.1f}", flush=True)
+                print("[objdbg] ---", flush=True)
 
         with torch.no_grad():
             _, _, pred_plan, _ = self._model(batch)
@@ -303,6 +456,16 @@ class PlanT2MetaDriveAdapter:
         if not getattr(self, "_has_trained_speed_head", True):
             pred_path, pred_wps, _ = pred_plan
             pred_plan = (pred_path, pred_wps, None)
+
+        # ... and the plan back out of it, so the controllers below steer in the
+        # convention they expect. See _AXIS_ALIGN.
+        if _AXIS_ALIGN:
+            _pp, _pw, _ps = pred_plan
+            if _pp is not None:
+                _pp = _pp.clone(); _pp[..., 1] = -_pp[..., 1]
+            if _pw is not None:
+                _pw = _pw.clone(); _pw[..., 1] = -_pw[..., 1]
+            pred_plan = (_pp, _pw, _ps)
 
         ego_speed = float(getattr(vehicle, "speed", 0.0))
         speed_limit_idx = int(batch["speed_limit"][0].item())
@@ -317,7 +480,72 @@ class PlanT2MetaDriveAdapter:
         else:
             action = self._pid_action_persistent(pred_plan, ego_speed, target_speed_mps)
 
-        return np.clip(np.asarray(action, dtype=np.float32), -1.0, 1.0)
+        action = np.clip(np.asarray(action, dtype=np.float32), -1.0, 1.0)
+
+        trace_dir = _os.environ.get("PLANT2_TRACE_DIR")
+        if trace_dir:
+            self._append_trace(trace_dir, vehicle, engine, batch, pred_plan, action,
+                               ego_speed, route_ego)
+
+        return action
+
+    def _append_trace(self, trace_dir, vehicle, engine, batch, pred_plan, action,
+                      ego_speed, route_ego=None):
+        """Per-step JSONL trace: command, plan and visible objects.
+
+        Aggregate episode metrics cannot separate a plan that oscillates from a
+        controller that oscillates, nor tell an obstacle-driven offset from an
+        offset that happens to have the right average. Both need the step series.
+        """
+        import json as _json
+        import os as _os
+
+        try:
+            _os.makedirs(trace_dir, exist_ok=True)
+            pred_path, pred_wps, _ = pred_plan
+
+            def _xy(t):
+                if t is None:
+                    return []
+                a = t.detach().cpu().numpy()
+                if a.ndim > 2:
+                    a = a.squeeze(0)
+                return [[round(float(p[0]), 3), round(float(p[1]), 3)] for p in a[:, :2]]
+
+            objs = []
+            x_objs = batch.get("x_objs")
+            if x_objs is not None:
+                rows = x_objs[0] if x_objs.dim() == 3 else x_objs
+                for r in rows.tolist():
+                    if r[0] > 0:
+                        objs.append([round(r[0], 1), round(r[1], 2), round(r[2], 2),
+                                     round(r[4], 1)])
+
+            pos = getattr(vehicle, "position", (0.0, 0.0))
+            rec = {
+                "ep_step": int(getattr(engine, "episode_step", -1)),
+                "seed": getattr(engine, "current_seed", None),
+                "ego_x": round(float(pos[0]), 3),
+                "ego_y": round(float(pos[1]), 3),
+                "heading": round(float(getattr(vehicle, "heading_theta", 0.0)), 4),
+                "speed": round(ego_speed, 3),
+                "steer": round(float(action[0]), 4),
+                "throttle": round(float(action[1]), 4),
+                "wps": _xy(pred_wps),
+                "path": _xy(pred_path),
+                "objs": objs,
+                # The route the model is given here, to compare against the route
+                # stored in the training dumps for the same scene.
+                "route": ([[round(float(p[0]), 3), round(float(p[1]), 3)]
+                           for p in route_ego] if route_ego is not None else []),
+            }
+            fname = _os.path.join(trace_dir, f"trace_{_os.getpid()}.jsonl")
+            with open(fname, "a") as fh:
+                fh.write(_json.dumps(rec) + "\n")
+        except Exception as exc:      # tracing must never break an eval run
+            if not getattr(self, "_trace_warned", False):
+                self._trace_warned = True
+                print(f"[trace] disabled after error: {exc}", flush=True)
 
     def _ensure_controllers(self) -> None:
         """Lazily create the persistent lateral/longitudinal controllers.
@@ -370,6 +598,14 @@ class PlanT2MetaDriveAdapter:
                 logits = logits.squeeze(0)
             probs = torch.softmax(logits, dim=0).cpu().numpy()
             desired_speed = float((probs * SPEED_BINS).sum())
+            soft_desired = desired_speed
+            desired_speed = _apply_stop_prob_threshold(probs, desired_speed)
+            _maybe_log_speed_pred(
+                probs,
+                desired_speed,
+                current_speed,
+                extra={"soft_desired_speed": soft_desired, "ctrl": "pid"},
+            )
         else:
             _wp = pred_wps if pred_wps is not None else pred_path
             if _wp is not None:

@@ -69,8 +69,18 @@ class BaseTrafficSign(TrafficObject, ABC):
             target_long = longitudinal_offset
         else:
             target_long = lane.length + longitudinal_offset
-        # self.placement_long = np.clip(target_long, 0.1, lane.length - 0.1)
-        self.placement_long = np.maximum(target_long, 0.1)
+        # Keep the plate ON the lane. Without the upper bound a caller that
+        # mixes up the two conventions puts the sign past the lane end, where it
+        # renders nowhere and its zone comes out empty -- a silent failure that
+        # looks exactly like "the sign was never requested". Clamp, and say so.
+        upper = max(0.1, float(lane.length) - 0.1)
+        clamped = float(np.clip(float(target_long), 0.1, upper))
+        if abs(clamped - float(target_long)) > 1e-6:
+            print(f"[TrafficSign] {type(self).__name__}: requested s="
+                  f"{float(target_long):.1f}m is off lane "
+                  f"{getattr(lane, 'index', '?')} (length {float(lane.length):.1f}m); "
+                  f"clamped to {clamped:.1f}m -- check the offset convention")
+        self.placement_long = clamped
 
         if lateral_offset is None:
             lane_width = lane.width_at(self.placement_long)

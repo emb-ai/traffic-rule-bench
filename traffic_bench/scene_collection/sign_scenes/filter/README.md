@@ -6,5 +6,6 @@
 
 ```bash
 python -m traffic_bench.scene_collection reject --sign yield --apply --refill --loop
+python -m traffic_bench.scene_collection reject --all --apply --refill --loop
 python -m traffic_bench.scene_collection review --scenes-dir data/scenes/yield
 ```

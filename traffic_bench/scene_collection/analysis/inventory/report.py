@@ -1,4 +1,4 @@
-"""Write inventory.md + summary.json next to the figures."""
+"""Write README.md + summary.json for the harvest inventory experiment."""
 
 from __future__ import annotations
 
@@ -6,7 +6,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from traffic_bench.scene_collection.analysis.inventory import HarvestSnapshot, summary_dict
+from traffic_bench.scene_collection.analysis.inventory.harvest import (
+    HarvestSnapshot,
+    summary_dict,
+)
 
 
 def _md_table(headers: list[str], rows: list[list[Any]]) -> str:
@@ -16,7 +19,14 @@ def _md_table(headers: list[str], rows: list[list[Any]]) -> str:
     return "\n".join((head, sep, body))
 
 
-def write_report(snap: HarvestSnapshot, out_dir: Path) -> Path:
+def write_report(
+    snap: HarvestSnapshot,
+    out_dir: Path,
+    *,
+    figures_rel: str = "figures",
+) -> Path:
+    """Write ``summary.json`` + ``README.md`` under the inventory package dir."""
+    out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     stats = summary_dict(snap)
     (out_dir / "summary.json").write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
@@ -34,23 +44,26 @@ def write_report(snap: HarvestSnapshot, out_dir: Path) -> Path:
         for shape in ("T", "X", "O")
     ]
 
+    fr = figures_rel.rstrip("/")
     md = f"""# Harvest inventory
 
 Sign-free cropped SUMO nets on disk (`maps/crops/`).
 Per-sign quota **N** = 80 train + 20 test is sampled later (`assign`);
 it is not the harvest size.
 
-Regenerate:
+## Reproduce
 
 ```bash
-python -m traffic_bench.scene_collection analysis
+python -m traffic_bench.scene_collection analysis inventory
 ```
+
+Outputs: this README, `summary.json`, PNGs under [`{fr}/`]({fr}/).
 
 ## Inventory
 
 {_md_table(["Family", "On disk"], fam_rows)}
 
-![Harvest inventory](inventory.png)
+![Harvest inventory]({fr}/inventory.png)
 
 ## Junctions (T / X / O)
 
@@ -59,14 +72,14 @@ python -m traffic_bench.scene_collection analysis
 Place identity (`junction_id` / `scene_id`) is split 80/20 *before*
 allocation to signs, stratified by shape.
 
-![Junction topology and split](junction_shapes.png)
+![Junction topology and split]({fr}/junction_shapes.png)
 
 ## Dual-path atoms
 
 Each cell is one `(baseline, compliant)` slot among {{l, s, r}}.
 The same junction may contribute at most one atom per slot.
 
-![Dual-path slot counts and detour gain](dual_path.png)
+![Dual-path slot counts and detour gain]({fr}/dual_path.png)
 
 ## Segments (corridors)
 
@@ -77,20 +90,20 @@ Gates: length ≥ 150 m; **straight** chord/arc ≥ 0.99; **curved** in [0.97, 0
 - `pass_right_ok`: {stats["segment"]["pass_right_ok"]}
 - `pass_left_ok`: {stats["segment"]["pass_left_ok"]}
 
-![Segment length, straightness, lanes](segment_diversity.png)
+![Segment length, straightness, lanes]({fr}/segment_diversity.png)
 
 ## Geographic coverage
 
 Points are cropped nets on disk. Dual-path locations are unique parent junctions.
 
-![Geographic coverage](geo_coverage.png)
+![Geographic coverage]({fr}/geo_coverage.png)
 
 ## Example crops
 
 One net per cell. Labels are `family/group` and `scene_id`.
 
-![Example cropped maps](examples.png)
+![Example cropped maps]({fr}/examples.png)
 """
-    path = out_dir / "inventory.md"
+    path = out_dir / "README.md"
     path.write_text(md, encoding="utf-8")
     return path

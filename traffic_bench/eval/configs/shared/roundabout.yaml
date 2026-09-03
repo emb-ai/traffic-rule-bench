@@ -6,6 +6,3 @@ augmentation:
 
 auxiliary:
   enabled: true
-
-simulation:
-  destination_max_along_m: 50.0

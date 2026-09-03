@@ -88,11 +88,11 @@ HORIZON_DEFAULT = 600
 BETA_DEFAULT = 0.25
 # IDM-family policies with ego variants (default/s1..s4): pre-selected down to
 # ONE variant via pick_best_idm before competing with the rest.
-# "comprehensive" is the legacy recorder name for comprehensive_rule_expert.
-IDM_FAMILY_POLICIES = {"comprehensive", "comprehensive_rule_expert", "idm"}
+# "comprehensive" / "comprehensive_rule_expert" are legacy recorder names for idm_rule.
+IDM_FAMILY_POLICIES = {"comprehensive", "comprehensive_rule_expert", "idm_rule", "idm"}
 # Single-variant policies that compete directly. Legacy "carl"/"plant2" rows
 # were recorded by the sign-aware classes now named carl_rule/plant2_rule.
-NON_IDM_POLICIES = {"rule_compliant", "carl", "plant2",
+NON_IDM_POLICIES = {"ppo_rule", "rule_compliant", "carl", "plant2",
                     "carl_rule", "plant2_rule", "ppo_lidar"}
 MIN_FINAL_STEP = 30
 MIN_ROUTE_COMPLETION = 0.0
@@ -561,7 +561,7 @@ def run_self_tests():
     print("  pick_best_idm:   ok")
 
     # select_expert_per_scene with NEW recorder policy names:
-    # comprehensive_rule_expert rows form the IDM pre-selection pool (one
+    # idm_rule rows form the IDM pre-selection pool (one
     # variant survives); carl_rule/plant2_rule compete directly.
     def _row(policy, variant, fs, smooth, viol=0):
         return {"valid": True, "policy": policy, "variant": variant,
@@ -573,16 +573,16 @@ def run_self_tests():
                 "violations_by_class": {"sign": 0, "traffic_light": 0,
                                         "crosswalk": 0},
                 "violations_by_class_event": {"SpeedLimitSign": viol}}
-    rows = [_row("comprehensive_rule_expert", "default", 120, 0.9),
-            _row("comprehensive_rule_expert", "s1", 100, 0.9),
+    rows = [_row("idm_rule", "default", 120, 0.9),
+            _row("idm_rule", "s1", 100, 0.9),
             _row("carl_rule", "default", 110, 0.8),
             _row("plant2_rule", "default", 90, 0.9, viol=1)]  # non-compliant
     picks, groups, recs = select_expert_per_scene(rows, ["3.24"], top_n=4)
     assert len(picks) == 2, f"expected best-IDM + carl_rule, got {len(picks)}"
-    assert {p["winner_policy"] for p in picks} == {"comprehensive_rule_expert",
+    assert {p["winner_policy"] for p in picks} == {"idm_rule",
                                                    "carl_rule"}
     best = next(p for p in picks if p["rank"] == 1)
-    assert best["winner_policy"] == "comprehensive_rule_expert"
+    assert best["winner_policy"] == "idm_rule"
     assert best["winner_variant"] == "s1", "faster variant must win the pool"
     assert all(p["winner_policy"] != "plant2_rule" for p in picks), \
         "target-class event violation must exclude the row"

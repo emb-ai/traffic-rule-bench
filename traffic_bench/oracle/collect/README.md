@@ -40,7 +40,7 @@ Output of a run (default under `data/trajectories/<sign>/`):
 │   ├── catalog.jsonl
 │   └── var_0/<policy>[_<variant>]_replays.jsonl
 ├── catalog.jsonl
-├── comprehensive_rule_expert/
+├── idm_rule/
 │   ├── all_runs.jsonl
 │   ├── catalog.jsonl
 │   ├── gifs/*.gif                 # if SAVE_GIFS=1
@@ -62,7 +62,7 @@ Custom tiny run:
 
 ```bash
 SIGN=yield COUNT=5 SAVE_GIFS=1 SKIP_CARL=1 SKIP_PLANT2=1 \
-POLICIES_CPU="comprehensive_rule_expert" \
+POLICIES_CPU="idm_rule" \
 SMOKE_EXTRA_SAMPLES=0 \
 ./collect.sh
 ```
@@ -81,7 +81,7 @@ SIGN=yield \
 PER_SIGN_COMPLIANT_NPC=1 EGO_SAMPLER=styles EGO_CURVE_AWARE=1 \
 EGO_HOLD_V0=1 CARL_LONGITUDINAL=tracking \
 MANIFEST=data/runs/yield/debug/2026-08-23_18-08-37/real_manifest.jsonl \
-POLICIES_CPU="comprehensive_rule_expert rule_compliant" \
+POLICIES_CPU="idm_rule ppo_rule" \
 POLICIES_CARL="carl_rule" POLICIES_PLANT2="plant2_rule" \
 PLANT2_ACTION_MODE=pid \
 GPU_IDS=0,1,2,3,4,5,6,7 \
@@ -97,9 +97,9 @@ bash collect.sh
 Notes:
 
 - **CPU parallelism:** `N_WORKERS` = max concurrent CPU processes (default 8).
-IDM-family policies (`comprehensive_rule_expert`, …) are sharded into
+IDM-family policies (`idm_rule`, …) are sharded into
 `IDM_CHUNKS` workers (default 8) via `--start/--count/--worker-id`.
-Without sharding, `POLICIES_CPU="comprehensive_rule_expert rule_compliant"`
+Without sharding, `POLICIES_CPU="idm_rule ppo_rule"`
 would only use **2** CPU processes even if `N_WORKERS=8`.
 - **Live progress:** every `PROGRESS_EVERY_S` seconds (default 30) the shell
 prints a per-policy bar (`done/target`) and the last `[i/N]` line from each

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from traffic_bench.eval.engine.expand.manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
@@ -28,7 +28,6 @@ class ScenarioConfig:
     max_scenarios: Optional[int] = None
     max_total: Optional[int] = None
     min_dual_path_gain_m: float = 20.0
-    dual_path_route_budget_m: Optional[float] = None
 
 
 @dataclass
@@ -54,7 +53,13 @@ class SimulationConfig:
     compliant_stop_speed_mps: float = 0.5
     min_hops_after_depart: int = 0
     spawn_offset_from_start: float = 10.0
-    max_path_length_m: float = 100.0
+    max_path_length_m: float = 150.0
+    max_path_length_levels: Tuple[float, ...] = (130.0, 150.0, 170.0)
+    # Detour: ego spawn distance before the plate (m). Keep below shortest
+    # max_path_length level so destination still lands past the sign zone.
+    approach_before_sign_m: float = 50.0
+    # Detour: minimum room kept between plate and edge end for cones/zone.
+    tail_after_sign_m: float = 30.0
     max_ego_lanes: int = 8
     zone_tail_m: float = 8.0
     zone_min_m: float = 20.0
@@ -114,8 +119,6 @@ class GenerateCfg:
     auxiliary: AuxiliaryConfig
     expert: ExpertConfig
     max_ego_lanes: int = 3
-    max_density_levels: int = 3
     max_pedestrian_presets: int = 3
     crosswalk_positions: Optional[List[str]] = None
-    traffic_density_augment: bool = True
     ped_cfg: Optional[Dict[str, Any]] = None

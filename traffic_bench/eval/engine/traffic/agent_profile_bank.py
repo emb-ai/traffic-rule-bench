@@ -112,7 +112,18 @@ def sample_one_profile(seed: int, density_cap: float = 1.0, horizon_steps: int =
     deacc_factor = float(np.clip(sampler.deacc_factor(), 0.2, 5.0))
     distance_wanted = float(np.clip(sampler.distance_wanted(), 5.0, 45.0))
     raw_density = float(sampler.traffic_density())
-    traffic_density = float(np.clip(raw_density / 80.0, 0.0, density_cap))
+    # The density a scene runs at comes from the measured curve, not from
+    # raw / 80: that divisor mapped a per-frame vehicle total onto a per-lane
+    # spawn fraction, two quantities that are not comparable, and no measurement
+    # ever fixed its value. sample_traffic_density inverts the response
+    # SumoTrafficManager was measured to produce on these scenes. raw_density is
+    # still reported as nuplan_vehicles_per_frame so the manifest keeps the
+    # nuPlan figure the scene was matched against.
+    from traffic_bench.eval.engine.traffic.traffic_density_levels import (
+        sample_traffic_density,
+    )
+
+    traffic_density = float(np.clip(sample_traffic_density(seed), 0.0, density_cap))
     # horizon_steps from caller (mini=600, full=1200)
     time_wanted = distance_wanted / max(normal_speed, 0.5)
 
@@ -125,6 +136,8 @@ def sample_one_profile(seed: int, density_cap: float = 1.0, horizon_steps: int =
         "DISTANCE_WANTED": round(distance_wanted, 4),
         "TIME_WANTED": round(min(time_wanted, 10.0), 4),
         "LANE_CHANGE_FREQ": round(lane_change_freq, 4),
+        # Raw nuPlan vehicles/frame before MetaDrive scale / aux credit.
+        "nuplan_vehicles_per_frame": round(raw_density, 4),
         "traffic_density": round(traffic_density, 4),
         "horizon_steps": horizon_steps,
     }

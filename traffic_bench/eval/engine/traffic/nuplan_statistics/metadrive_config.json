@@ -1,0 +1,121 @@
+{
+  "INITIAL_SPEED": {
+    "mean": 7.483433097655115
+  },
+  "NORMAL_SPEED": {
+    "mean": 7.565841022201584,
+    "median": 7.569133008400592,
+    "std": 4.227683402219124,
+    "percentiles": {
+      "5": 1.0894712751612858,
+      "50": 7.569133008400592,
+      "85": 12.188885588588732,
+      "95": 14.560800119882567
+    }
+  },
+  "MAX_SPEED": {
+    "percentile_95": 14.560800119882567,
+    "percentile_99": 17.258013522059773
+  },
+  "CREEP_SPEED": {
+    "percentile_5": 1.0894712751612858
+  },
+  "ACC_FACTOR": {
+    "mean": 0.7902997534010493,
+    "median": 0.6134660538319285,
+    "std": 0.7012629470929518
+  },
+  "DEACC_FACTOR": {
+    "mean": 0.754337605504082,
+    "median": 0.5699216069627866,
+    "std": 0.6960354944144118
+  },
+  "DISTANCE_WANTED": {
+    "mean": 20.511451160925024,
+    "median": 15.381891594124149,
+    "std": 16.815297942977658
+  },
+  "LANE_CHANGE_FREQ": {
+    "per_km": 1.2753090932125013
+  },
+  "horizon": {
+    "min": 1.0000100135803223,
+    "mean": 15.652174734992482,
+    "median": 6.9005690813064575
+  },
+  "traffic_density_per_lane": {
+    "mean": 4.2184135679569055,
+    "percentiles": {
+      "5": 0.5,
+      "10": 1.0,
+      "25": 2.3333333333333335,
+      "50": 4.0,
+      "75": 5.5,
+      "90": 7.5,
+      "95": 9.0
+    }
+  },
+  "accident_prob": 0.7822250139210287,
+  "size_prob": {
+    "m": 0.7901589912280702,
+    "l": 0.12578810307017543,
+    "xl": 0.08120888157894737,
+    "s": 0.0028440241228070177
+  },
+  "route_length": {
+    "min": 2.0011962315456064,
+    "mean": 77.05820246936364,
+    "median": 48.17471812848255,
+    "std": 123.21956409836831
+  },
+  "ego_route_length": {
+    "per_scene": {
+      "mean": 75.37152030151529,
+      "median": 57.20213423848344,
+      "std": 74.51065996115355,
+      "p5": 0.006010496754954398,
+      "p95": 218.49020580808215,
+      "n": 1363
+    },
+    "per_log": {
+      "mean": 1609.197132353072,
+      "median": 1637.8930630246755,
+      "min": 389.50752051045714,
+      "max": 2936.1978243267413,
+      "n": 64
+    }
+  },
+  "_provenance": {
+    "generated": "2026-09-02 16:40:28",
+    "source": "/home/jovyan/shares/SR006.nfs2/smirnova/nuplan/data/cache/mini",
+    "n_dbs": 64,
+    "maps_root": "/home/jovyan/shares/SR006.nfs2/smirnova/nuplan/maps",
+    "counters": {
+      "moving_tracks": 29471,
+      "acc_dropped_gt8": 8835,
+      "lane_samples_assigned": 1076412,
+      "lane_samples_total": 1846030,
+      "lane_events_raw": 3139,
+      "lane_group_transitions": 1782,
+      "density_frames_with_lanes": 329127,
+      "density_frames_no_lane": 189872,
+      "frames_with_static": 405974,
+      "frames_total": 518999,
+      "dbs_ok": 64
+    },
+    "definitions": {
+      "speeds": "per-frame speeds of moving car tracks, >=0.5 m/s, <=40",
+      "acc": "gradient of the 0.25 s smoothed speed; |a|<=8; deadband 0.05",
+      "following": "bumper-to-bumper to the nearest leader (cars + ego): dx<=120, |dy|<=1.9, dyaw<=45deg; followers are tracks only",
+      "densities.count_r150": "cars within 150 m of the ego -- one episode's worth of road",
+      "densities.count_moving_r150": "of those, the moving ones",
+      "densities.ego_lanes": "lanes on the ego's own road (lane_group), 0 in junctions",
+      "densities.count_moving_r150_per_lane": "count_moving_r150 / ego_lanes -- the quantity traffic_density is calibrated against",
+      "lane_changes": "1 row = 1 event: a lane_fid change within one lane_group",
+      "accident_prob": "share of frames with a static obstacle closer than 20 m to the ego",
+      "routes.distance": "track path INSIDE THE ANNOTATION WINDOW (~50-80 m), cut by observation",
+      "ego_routes": "ego route: kind=scene (~20 s) and kind=log -- not cut",
+      "size_class": "median track dimensions, thresholds as in nuplan_sampler"
+    }
+  }
+}

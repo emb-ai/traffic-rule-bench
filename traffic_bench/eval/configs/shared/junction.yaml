@@ -1,5 +1,5 @@
 # @package _global_
-# Shared knobs for main_road / secondary / yield / stop.
+# Shared knobs for main_road / secondary / yield / stop / roundabout.
 
 augmentation:
   layout: true

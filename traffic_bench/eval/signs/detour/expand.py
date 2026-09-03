@@ -9,12 +9,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
-from traffic_bench.eval.engine.traffic.traffic_density_levels import TrafficDensityLevel, list_traffic_density_levels
+from traffic_bench.eval.engine.traffic.traffic_density_levels import (
+    density_quantiles,
+    sample_traffic_density,
+)
+from traffic_bench.eval.engine.spawn.route_length_levels import (
+    list_route_length_levels,
+    select_route_length_levels,
+)
+from traffic_bench.eval.engine.spawn.route_budget import measure_spawn_to_dest_length_m
+
+from traffic_bench.eval.engine.traffic.agent_profile_bank import sample_one_profile
+from traffic_bench.eval.engine.traffic.npc_profile import embed_npc_profile
+from traffic_bench.eval.engine.traffic.stable_hash import stable_hash
 from traffic_bench.scene_collection.sign_scenes.filter.selection import is_reserved_scene_dir
 
 MAX_AXIS = 3
@@ -23,13 +36,28 @@ MAX_AXIS = 3
 @dataclass(frozen=True)
 class DetourSimParams:
     spawn_offset_from_start: float = 10.0
-    max_path_length_m: float = 100.0
+    max_path_length_m: float = 150.0
+    max_path_length_levels: Tuple[float, ...] = (130.0, 150.0, 170.0)
     sign_distance_before_end: float = 12.0
+    # Room kept between the plate and the edge end. The manoeuvre lives AFTER
+    # the plate: cones at +1.25..+5.75 m, the verdict at +5.5 m, the zone
+    # closing at +18.5 m. A plate 12 m from the end leaves none of it on the
+    # edge, so the episode cannot contain the thing it is meant to measure.
+    tail_after_sign_m: float = 30.0
+    # How far back the ego starts from the plate. The travel budget is measured
+    # from the spawn, so anchoring the spawn to the plate (rather than to the
+    # edge start) makes episode length independent of how long the edge is.
+    # Keep this below the shortest max_path_length level (90/100/110) so dest
+    # still lands past the sign zone (~+18.5 m after the plate).
+    approach_before_sign_m: float = 50.0
     spawn_velocity_ms: float = 5.0
     horizon: int = 400
     traffic_density: float = 0.0
-    traffic_density_augment: bool = True
-    max_density_levels: int = MAX_AXIS
+    n_variations: int = MAX_AXIS
+    profile_density_cap: float = 1.0
+    # How far the plate may slide around its nominal position. The manoeuvre
+    # lives after the plate, so tail_after_sign_m still bounds it.
+    sign_jitter_m: float = 15.0
 
 
 @dataclass(frozen=True)
@@ -127,7 +155,9 @@ def build_detour_manifest_entry(
     pdd_code: str,
     sign_type: str = "detour",
     variant: int = 0,
-    density_level: Optional[TrafficDensityLevel] = None,
+    npc_profile: Optional[Dict[str, Any]] = None,
+    max_path_length_m: Optional[float] = None,
+    route_length_augment: bool = False,
 ) -> Dict[str, Any]:
     """Build one manifest row for a detour scene."""
     scene_name = str(meta.get("scene_name") or scene_dir.name)
@@ -137,31 +167,61 @@ def build_detour_manifest_entry(
     road_id = str(meta.get("road_id") or "")
     sign_lane_index = _obstacle_lane_index(meta, pdd_code)
     edge_length = float(meta.get("length_m", 200.0))
+    # The plate offset gets its own seed, deliberately not the row seed below:
+    # that one folds in the route-length level, which would slide the plate every
+    # time the path budget changes. The plate belongs to the scene geometry, not
+    # to the budget axis, so two rl-variants of one scene must place it alike.
+    jitter_seed = _stable_seed(scene_name, variant, "sign_jitter")
+
     if meta.get("sign_s") is not None:
         sign_s = float(meta["sign_s"])
     else:
         sign_s = max(20.0, edge_length - float(sim.sign_distance_before_end))
 
+    # Keep the manoeuvre on the edge, whether sign_s came from the scene meta or
+    # from the formula above.
+    sign_s = min(max(20.0, sign_s),
+                 max(20.0, edge_length - float(sim.tail_after_sign_m)))
+
+    # Slide the plate UPSTREAM per profile, never downstream: the nominal
+    # position already sits at the last metre that leaves room for the manoeuvre,
+    # so pushing it further would eat the tail, and clamping it back is what made
+    # every profile of a scene land on the same metre. Moving it earlier only
+    # lengthens the run-up.
+    jitter = float(sim.sign_jitter_m)
+    if jitter > 0.0:
+        room = min(jitter, max(0.0, sign_s - 20.0))
+        if room > 0.0:
+            sign_s -= random.Random(jitter_seed ^ 0x44546F).random() * room
+
     spawn_lane_id = f"{road_id}_{sign_lane_index}"
+    # Anchor the spawn to the plate. With the spawn pinned to the edge start and
+    # the plate near its end, the finish line landed before the sign on every
+    # detour row in the repository -- 900 of 900, by as much as 1470 m -- so no
+    # episode ever reached the obstacle it was built around.
     spawn_offset = float(sim.spawn_offset_from_start)
+    approach = float(sim.approach_before_sign_m)
+    if sign_s - approach > spawn_offset:
+        spawn_offset = sign_s - approach
+    path_budget_m = float(
+        max_path_length_m if max_path_length_m is not None else sim.max_path_length_m
+    )
     spawn_before_end = max(20.0, edge_length - spawn_offset)
     dest_along = min(
-        spawn_offset + float(sim.max_path_length_m),
+        spawn_offset + path_budget_m,
         max(spawn_offset + 1.0, edge_length - 5.0),
     )
 
-    traffic_density = (
-        float(density_level.traffic_density)
-        if density_level is not None
-        else float(sim.traffic_density)
-    )
-    if density_level is not None:
-        seed_key = f"td{density_level.id}"
-        scene_id = f"{scene_name}_td{density_level.id}_v{variant}"
-    else:
-        seed_key = "td0"
-        scene_id = f"{scene_name}_v{variant}"
+    seed_key = f"npc{variant}"
+    scene_id = f"{scene_name}_v{variant}"
+    if route_length_augment:
+        seed_key += f"_rl{int(round(path_budget_m))}"
+        scene_id = f"{scene_id}_rl{int(round(path_budget_m))}"
     seed = _stable_seed(scene_name, variant, seed_key)
+    # Fallback density for a row built without a profile. embed_npc_profile
+    # overwrites it whenever one is passed, which is the normal path; without
+    # this the field falls back to the config default of 0.0, i.e. no traffic.
+    traffic_density = sample_traffic_density(seed)
 
     sign_class_map = {
         "4.2.1": "DetourRightSign",
@@ -170,7 +230,7 @@ def build_detour_manifest_entry(
     }
     sign_class = sign_class_map.get(pdd_code, "DetourRightSign")
 
-    return {
+    row: Dict[str, Any] = {
         "valid": True,
         "scene_id": scene_id,
         "scene_name": scene_name,
@@ -193,16 +253,13 @@ def build_detour_manifest_entry(
         "detour_code": pdd_code,
         "spawn_distance_before_end": spawn_before_end,
         "destination_max_along_m": dest_along,
-        "max_path_length_m": float(sim.max_path_length_m),
+        "max_path_length_m": path_budget_m,
+        "route_length_level_m": path_budget_m,
         "sign_distance_before_end": float(sim.sign_distance_before_end),
         "spawn_velocity_ms": float(sim.spawn_velocity_ms),
         "spawn_offset_from_start": spawn_offset,
         "traffic_density": traffic_density,
-        "traffic_density_level_id": density_level.id if density_level is not None else None,
-        "traffic_density_level_name": density_level.name if density_level is not None else None,
-        "nuplan_vehicles_per_frame": (
-            density_level.nuplan_vehicles_per_frame if density_level is not None else None
-        ),
+        "sign_s_nominal": round(float(meta.get("sign_s") or 0.0), 3),
         "horizon": int(sim.horizon),
         "horizon_steps": int(sim.horizon),
         "auxiliary_agent": False,
@@ -216,6 +273,11 @@ def build_detour_manifest_entry(
         "edge_length_m": edge_length,
         "valid_obstacle_lanes": meta.get("valid_obstacle_lanes"),
     }
+    if npc_profile is not None:
+        row = embed_npc_profile(
+            row, npc_profile, density_cap=float(sim.profile_density_cap)
+        )
+    return row
 
 
 def expand_detour_scene_entries(
@@ -228,27 +290,51 @@ def expand_detour_scene_entries(
     pdd_code: str,
     sign_type: str = "detour",
 ) -> List[Dict[str, Any]]:
-    """Expand one segment_detour scene into manifest rows (density axis)."""
-    density_levels: List[Optional[TrafficDensityLevel]]
-    if sim.traffic_density_augment:
-        density_levels = list(list_traffic_density_levels(int(sim.max_density_levels)))
-    else:
-        density_levels = [None]
-
+    """Expand one segment_detour scene into manifest rows (NPC profile axis)."""
+    n_variations = max(1, int(sim.n_variations))
     entries: List[Dict[str, Any]] = []
-    for density in density_levels:
-        entries.append(
-            build_detour_manifest_entry(
-                scene_dir=scene_dir,
-                scenes_root=scenes_root,
-                meta=meta,
-                sim=sim,
-                pdd_code=pdd_code,
-                sign_type=sign_type,
-                variant=0,
-                density_level=density,
-            )
+    configured_route_levels = list_route_length_levels(sim)
+    road_id = str(meta.get("road_id") or "")
+    spawn_offset = float(sim.spawn_offset_from_start)
+    net_full = scene_dir / str(meta.get("net_file") or "map.net.xml")
+    available_route_m = None
+    if road_id:
+        available_route_m = measure_spawn_to_dest_length_m(
+            net_path=net_full,
+            spawn_edge=road_id,
+            spawn_lane=int(meta.get("sign_lane_index") or 0),
+            dest_edge=road_id,
+            spawn_along_m=spawn_offset,
         )
+    route_levels, route_augment = select_route_length_levels(
+        configured_route_levels, available_route_m
+    )
+    for npc_var in range(n_variations):
+        for path_len_m in route_levels:
+            seed = stable_hash(
+                str(meta.get("scene_name") or scene_dir.name),
+                npc_var,
+                int(round(float(path_len_m))),
+            )
+            npc_profile = sample_one_profile(
+                int(seed),
+                density_cap=float(sim.profile_density_cap),
+                horizon_steps=int(sim.horizon),
+            )
+            entries.append(
+                build_detour_manifest_entry(
+                    scene_dir=scene_dir,
+                    scenes_root=scenes_root,
+                    meta=meta,
+                    sim=sim,
+                    pdd_code=pdd_code,
+                    sign_type=sign_type,
+                    variant=npc_var,
+                    npc_profile=npc_profile,
+                    max_path_length_m=float(path_len_m),
+                    route_length_augment=route_augment,
+                )
+            )
 
     max_sc = expansion.max_scenarios
     pre_cap = len(entries)
@@ -257,13 +343,13 @@ def expand_detour_scene_entries(
         max_sc,
         seed_key=(
             str(scene_dir.name),
-            "detour_density_cap",
+            "detour_npc_cap",
             int(max_sc) if max_sc is not None else 0,
         ),
     )
     if max_sc is not None and pre_cap > max_sc:
         print(
-            f"  Retained {len(entries)} of {pre_cap} density variants "
+            f"  Retained {len(entries)} of {pre_cap} NPC variants "
             f"(shuffled, cap={max_sc})"
         )
     return entries
@@ -297,8 +383,7 @@ def generate(cfg, scenes=None):
     split = cfg.split
 
     split = normalize_split(split)
-    max_density_levels = int(cfg.max_density_levels)
-    traffic_density_augment = bool(cfg.traffic_density_augment)
+    n_variations = max(1, int(getattr(sim_cfg, "n_variations", 3) or 3))
 
     detour_code = PDD_CODE  # e.g. "4.2.1"
     all_scenes = discover_segment_detour_scenes(scenes_dir, detour_code=detour_code)
@@ -308,19 +393,31 @@ def generate(cfg, scenes=None):
         all_scenes, scenes_dir=scenes_dir, split=split
     )
     print(
-        f"Augmentation axes: density={max_density_levels} "
-        f"(traffic_density_augment={bool(traffic_density_augment)})"
+        f"Augmentation axes: n_variations={n_variations} "
+        f"× route_length={list(getattr(sim_cfg, 'max_path_length_levels', (130, 150, 170)))}; "
+        f"each row samples its own traffic density and plate offset "
+        f"(density quantiles {density_quantiles()})"
     )
 
     sim_params = DetourSimParams(
         spawn_offset_from_start=float(sim_cfg.spawn_offset_from_start),
         max_path_length_m=float(sim_cfg.max_path_length_m),
+        max_path_length_levels=tuple(
+            float(x) for x in getattr(sim_cfg, "max_path_length_levels", (130.0, 150.0, 170.0))
+        ),
         sign_distance_before_end=float(sim_cfg.sign_distance_before_end),
+        approach_before_sign_m=float(
+            getattr(sim_cfg, "approach_before_sign_m", 50.0) or 50.0
+        ),
+        tail_after_sign_m=float(
+            getattr(sim_cfg, "tail_after_sign_m", 30.0) or 30.0
+        ),
         spawn_velocity_ms=float(sim_cfg.spawn_velocity_ms),
         horizon=int(sim_cfg.horizon),
         traffic_density=float(sim_cfg.traffic_density),
-        traffic_density_augment=bool(traffic_density_augment),
-        max_density_levels=int(max_density_levels),
+        n_variations=n_variations,
+        profile_density_cap=float(getattr(sim_cfg, "profile_density_cap", 1.0) or 1.0),
+        sign_jitter_m=float(getattr(sim_cfg, "sign_jitter_m", 15.0) or 0.0),
     )
     det_expansion = DetourExpansionConfig(
         max_scenarios=scenario_cfg.max_scenarios,
@@ -383,13 +480,23 @@ def generate(cfg, scenes=None):
             "total_entries_before_max_total": pre_total,
             "max_scenarios": scenario_cfg.max_scenarios,
             "max_total": scenario_cfg.max_total,
-            "max_density_levels": max_density_levels,
-            "traffic_density_augment": bool(traffic_density_augment),
+            "n_variations": n_variations,
+            "profile_density_cap": float(getattr(sim_cfg, "profile_density_cap", 1.0) or 1.0),
+            "npc_world": "engine.traffic.agent_profile_bank.sample_one_profile",
             "spawn_velocity_ms": sim_cfg.spawn_velocity_ms,
             "horizon": sim_cfg.horizon,
             "sign_distance_before_end": sim_cfg.sign_distance_before_end,
             "spawn_offset_from_start": sim_cfg.spawn_offset_from_start,
             "max_path_length_m": sim_cfg.max_path_length_m,
+            "max_path_length_levels": list(
+                getattr(sim_cfg, "max_path_length_levels", (130.0, 150.0, 170.0))
+            ),
+            "approach_before_sign_m": float(
+                getattr(sim_cfg, "approach_before_sign_m", 50.0) or 50.0
+            ),
+            "tail_after_sign_m": float(
+                getattr(sim_cfg, "tail_after_sign_m", 30.0) or 30.0
+            ),
             "auxiliary_agent": False,
         },
     )

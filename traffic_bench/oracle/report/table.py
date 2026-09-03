@@ -52,7 +52,8 @@ METRICS = [
 
 POLICY_ALIASES = {
     # RuleCompliantExpertPolicy is the PPO+signs expert in replay_mini_new.py.
-    "rule_compliant": "ppo_signs",
+    "ppo_rule": "ppo_signs",
+    "rule_compliant": "ppo_signs",  # legacy spelling of ppo_rule
     "carl": "carl_signs",
     "plant2": "plant2_signs",
 }
@@ -95,7 +96,7 @@ def policy_label(policy: str | None, variant: str | None) -> str:
     policy = policy or "unknown"
     variant = variant or "default"
     # The IDM-family expert is reported as "idm_rule" in the tables.
-    if policy in {"comprehensive", "comprehensive_rule_expert"}:
+    if policy in {"comprehensive", "comprehensive_rule_expert", "idm_rule"}:
         return f"idm_rule_{variant}"
     if policy in {"ppo_signs", "carl_signs", "plant2_signs"}:
         return policy
