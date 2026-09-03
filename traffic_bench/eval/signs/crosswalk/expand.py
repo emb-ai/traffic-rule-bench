@@ -33,7 +33,10 @@ from traffic_bench.eval.engine.map.lane_keys import lane_edge_id, make_lane_key
 from traffic_bench.scene_collection.sign_scenes.filter.selection import is_reserved_scene_dir
 
 from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
-from traffic_bench.eval.engine.traffic.traffic_density_levels import TrafficDensityLevel, list_traffic_density_levels
+from traffic_bench.eval.engine.traffic.traffic_density_levels import (
+    TrafficDensityLevel,
+    sampled_density_level,
+)
 
 MAX_AXIS = 3
 DEFAULT_POSITIONS = ("middle",)
@@ -335,7 +338,10 @@ def expand_crosswalk_scene_entries(
     )
     density_levels: List[Optional[TrafficDensityLevel]]
     if sim.traffic_density_augment:
-        density_levels = list(list_traffic_density_levels(int(sim.max_density_levels)))  # type: ignore[arg-type]
+        # One sampled density per former tier slot: the tiers are gone, but this
+        # family's expansion still wants a list to multiply the scene by.
+        density_levels = [sampled_density_level(i)
+                          for i in range(max(1, int(sim.max_density_levels)))]
     else:
         density_levels = [None]
 
