@@ -281,12 +281,17 @@ def main() -> None:
                 continue
             # The OUTER name carries the sign code and names the route in the
             # split; only the source path moves inward.
-            sign = route_sign(p.name, uid2sign)
-            if sign is None:
-                sign = sniff_sign(route)
-            if sign is None:
+            # The boxes decide admission, the uid map only refines WHICH sign.
+            # With the order reversed, a route whose plate was never placed (the
+            # geometry checks reject some) still entered on the uid map alone:
+            # 60 such routes reached one split, and the dataset then resolved
+            # them BY NAME, handing the model a route-level sign token with no
+            # sign anywhere in its frames.
+            sniffed = sniff_sign(route)
+            if sniffed is None:
                 unknown += 1
                 continue
+            sign = route_sign(p.name, uid2sign) or sniffed
             by[sign].append((route, p.name, tag))
 
     bare_tags: dict[str, set[str]] = defaultdict(set)
