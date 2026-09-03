@@ -3,8 +3,10 @@ Traffic manager for SUMO-based environments.
 Spawns TrajectoryIDM-controlled vehicles that follow PointLane trajectories
 built from the navigation route — the same approach used in ScenarioNet.
 """
+import json
 import logging
 import math
+import os
 
 # Suppress verbose NPC warnings (DRIFT, TRAJ_SHORT, SPAWN REPORT, RESPAWN, REMOVE).
 # All logging.warning() calls in this module use the root logger directly;
@@ -20,7 +22,12 @@ from traffic_bench.envs.npc_idm import SumoTrajectoryIDMPolicy
 
 
 class SumoTrafficManager(BaseManager):
-    EGO_SAFE_RADIUS = 50   # don't spawn near ego (metres)
+    # Point guard only: a spawn position this close to the ego is skipped so a
+    # car cannot materialise inside it. The 50 m radius this replaces was applied
+    # per LANE and blanked the whole road the ego was on, so no NPC was ever
+    # within reach: min_ttc_sec came back null in all 319 speed episodes and
+    # driving_efficiency had no support at all.
+    EGO_KEEP_CLEAR_M = 12.0
     VEHICLE_MIN_GAP = 12   # metres between any two spawned vehicles
     VEHICLE_GAP_ON_LANE = 12  # metres between vehicles on the same lane
     MAX_PER_LANE = 6       # max vehicles per lane
@@ -75,16 +82,14 @@ class SumoTrafficManager(BaseManager):
         """
         if self._nuplan_sampler is None and not self._nuplan_sampler_failed:
             try:
-                from pathlib import Path
-                profiles = (
-                    Path(__file__).resolve().parent.parent
-                    / "bench"
-                    / "core" / "profiles"
-                )
+                # No stats_dir: the sampler's own default is the directory the
+                # statistics actually ship in. The path named here before,
+                # traffic_bench/bench/core/profiles/nuplan_statistics, exists in
+                # no checkout, so the constructor raised every time and the
+                # except below quietly turned every NPC spawn speed into the
+                # uniform [5, 10] fallback -- nuPlan was never consulted.
                 from traffic_bench.eval.engine.traffic.nuplan_sampler import NuPlanSampler
-                self._nuplan_sampler = NuPlanSampler(
-                    stats_dir=str(profiles / "nuplan_statistics")
-                )
+                self._nuplan_sampler = NuPlanSampler()
             except Exception:
                 self._nuplan_sampler_failed = True
         if self._nuplan_sampler is not None:
@@ -261,7 +266,12 @@ class SumoTrafficManager(BaseManager):
         navigation checkpoints — this works on cyclic graphs where BFS
         fails to find terminal lanes.
         """
-        spawn_lane_index = vehicle.config.get("spawn_lane_index", None)
+        # config["spawn_lane_index"] carries the ROAD id, which is what
+        # BaseVehicle needs to place the car; the route builder below needs the
+        # LANE key instead, so the spawner stashes it on the object.
+        spawn_lane_index = getattr(vehicle, "_trb_lane_key", None)
+        if spawn_lane_index is None:
+            spawn_lane_index = vehicle.config.get("spawn_lane_index", None)
         if spawn_lane_index is None:
             self._reject_reason = "no_lane"
             return None
@@ -376,26 +386,12 @@ class SumoTrafficManager(BaseManager):
         if not spawnable_lanes:
             return
 
-        # Filter lanes near ego and ego's own lane
+        # Ego's own lane and the ones beside it are spawnable; only the point
+        # guard below keeps a car from appearing inside the ego.
         ego_position = None
-        ego_lane_index = None
         agents = self.engine.agent_manager.active_agents
         if agents:
-            ego = list(agents.values())[0]
-            ego_position = ego.position
-            if ego.lane is not None:
-                ego_lane_index = ego.lane.index
-        if ego_position is not None:
-            safe_lanes = []
-            for lane in spawnable_lanes:
-                # Skip ego's own lane entirely
-                if lane.index == ego_lane_index:
-                    continue
-                lng, lat = lane.local_coordinates(ego_position)
-                if 0 <= lng <= lane.length and abs(lat) < self.EGO_SAFE_RADIUS:
-                    continue
-                safe_lanes.append(lane)
-            spawnable_lanes = safe_lanes
+            ego_position = list(agents.values())[0].position
 
         # Use ALL spawnable lanes, spawn multiple vehicles per lane based on density
         traffic_v_config = self.engine.global_config.get("traffic_vehicle_config", {})
@@ -422,13 +418,19 @@ class SumoTrafficManager(BaseManager):
                 lng = 5 + i * self.VEHICLE_GAP_ON_LANE
                 if lng > lane.length - 5:
                     break
+                if ego_position is not None:
+                    px, py = lane.position(lng, 0)
+                    dx = float(px) - float(ego_position[0])
+                    dy = float(py) - float(ego_position[1])
+                    if dx * dx + dy * dy < self.EGO_KEEP_CLEAR_M ** 2:
+                        continue
                 positions.append(lng)
 
             for lng in positions:
                 _n_attempted += 1
                 vehicle_type = self._random_vehicle_type()
                 cfg = {
-                    "spawn_lane_index": lane.index,
+                    "spawn_lane_index": self._road_id_from_lane_index(lane.index),
                     "spawn_longitude": lng,
                 }
                 cfg.update(traffic_v_config)
@@ -437,8 +439,18 @@ class SumoTrafficManager(BaseManager):
                 cfg["destination"] = None
                 try:
                     v = self.spawn_object(vehicle_type, vehicle_config=cfg)
-                except Exception:
+                except Exception as exc:
+                    # Was a bare `continue`: a failure here is invisible in the
+                    # SPAWN REPORT, which then shows attempted>0 with every
+                    # reject counter at zero and no way to tell why.
+                    _reject_details = getattr(self, "_reject_reasons_agg", {})
+                    key = "spawn_object:%s" % type(exc).__name__
+                    _reject_details[key] = _reject_details.get(key, 0) + 1
+                    self._reject_reasons_agg = _reject_details
+                    self._last_spawn_error = "%s: %s" % (type(exc).__name__, exc)
                     continue
+
+                v._trb_lane_key = lane.index
 
                 # Fix position: EdgeRoadNetwork may place vehicle on wrong lane.
                 # Force vehicle to the intended lane position and heading.
@@ -509,6 +521,9 @@ class SumoTrafficManager(BaseManager):
             dict(_reject_details),
             len(self._traffic_vehicles),
         )
+        if _n_ok == 0 and _n_attempted:
+            _log.warning("SPAWN REPORT: last error: %s",
+                         getattr(self, "_last_spawn_error", "none recorded"))
 
     RESPAWN_INTERVAL = 30  # try to respawn every N steps
     RESPAWN_BATCH = 5      # max vehicles to try spawning per interval
@@ -530,23 +545,9 @@ class SumoTrafficManager(BaseManager):
                 return 0
 
         ego_position = None
-        ego_lane_index = None
         agents = self.engine.agent_manager.active_agents
         if agents:
-            ego = list(agents.values())[0]
-            ego_position = ego.position
-            if ego.lane is not None:
-                ego_lane_index = ego.lane.index
-        if ego_position is not None:
-            safe_lanes = []
-            for lane in spawnable_lanes:
-                if lane.index == ego_lane_index:
-                    continue
-                lng, lat = lane.local_coordinates(ego_position)
-                if 0 <= lng <= lane.length and abs(lat) < self.EGO_SAFE_RADIUS:
-                    continue
-                safe_lanes.append(lane)
-            spawnable_lanes = safe_lanes
+            ego_position = list(agents.values())[0].position
 
         if not spawnable_lanes:
             return 0
@@ -560,7 +561,8 @@ class SumoTrafficManager(BaseManager):
                 break
             lng = self.np_random.uniform(5, max(6, lane.length - 5))
             vehicle_type = self._random_vehicle_type()
-            cfg = {"spawn_lane_index": lane.index, "spawn_longitude": lng}
+            cfg = {"spawn_lane_index": self._road_id_from_lane_index(lane.index),
+                   "spawn_longitude": lng}
             cfg.update(traffic_v_config)
             # Explicitly clear inherited destination: without this NPC gets
             # ego's destination via global_config["vehicle_config"] merge, and
@@ -572,6 +574,8 @@ class SumoTrafficManager(BaseManager):
                 v = self.spawn_object(vehicle_type, vehicle_config=cfg)
             except Exception:
                 continue
+
+            v._trb_lane_key = lane.index
 
             # Fix position: EdgeRoadNetwork may place vehicle on wrong lane
             correct_pos = lane.position(lng, 0)
@@ -593,7 +597,7 @@ class SumoTrafficManager(BaseManager):
             if ego_position is not None:
                 dx = v.position[0] - ego_position[0]
                 dy = v.position[1] - ego_position[1]
-                if dx * dx + dy * dy < self.EGO_SAFE_RADIUS ** 2:
+                if dx * dx + dy * dy < self.EGO_KEEP_CLEAR_M ** 2:
                     self.clear_objects([v.id])
                     continue
 
@@ -637,7 +641,86 @@ class SumoTrafficManager(BaseManager):
 
     MAX_LATERAL_DRIFT = 3.5  # metres off PointLane before forced removal (was 5.0 — tighter to remove drifters sooner)
 
+    # Calibration probe. With TRB_DENSITY_PROBE naming a file, append the count of
+    # moving NPCs within PROBE_RADIUS of the ego, divided by the lanes on the ego's
+    # road -- the same quantity nuPlan reports as count_moving_r150_per_lane. Off
+    # unless the variable is set, so production runs are untouched.
+    PROBE_RADIUS_M = 150.0
+    PROBE_MOVING_KMH = 1.8
+    PROBE_EVERY = 5
+
+    @staticmethod
+    def _road_id_from_lane_index(index):
+        """Bare SUMO edge id out of a lane index.
+
+        BaseVehicle resolves spawn_lane_index through
+        find_rightmost_lane_by_road_id, which parses lane keys as
+        'lane_<edge>_<n>' and matches on <edge>. Handing it the whole lane key
+        made every NPC spawn raise ValueError, and the bare `except Exception:
+        continue` around the spawn turned that into silently empty traffic --
+        which is why min_ttc_sec was null in every episode. The vehicle is
+        repositioned onto the intended lane right after spawning, so resolving
+        to the edge's rightmost lane here costs nothing.
+        """
+        s = str(index)
+        parts = s.split("_")
+        if s.startswith("lane_") and len(parts) >= 3:
+            return "_".join(parts[1:-1])
+        return s
+
+    @staticmethod
+    def _edge_key(index):
+        """Edge part of a lane index. SUMO lane keys are 'edge_<n>' strings here,
+        but PG networks use tuples, so handle both rather than assume."""
+        if isinstance(index, (tuple, list)):
+            return tuple(index[:-1])
+        s = str(index)
+        return s.rsplit("_", 1)[0] if "_" in s else s
+
+    def _lanes_on_ego_edge(self, ego) -> int:
+        """How many lanes the ego's own road has, counted off the road network."""
+        try:
+            if ego.lane is None:
+                return 1
+            key = self._edge_key(ego.lane.index)
+            n = sum(1 for lane in self._get_spawnable_lanes()
+                    if self._edge_key(lane.index) == key)
+            return max(1, n)
+        except Exception:
+            return 1
+
+    def _density_probe(self):
+        path = os.environ.get("TRB_DENSITY_PROBE")
+        if not path:
+            return
+        step = int(getattr(self.engine, "episode_step", 0) or 0)
+        if step % self.PROBE_EVERY:
+            return
+        agents = self.engine.agent_manager.active_agents
+        if not agents:
+            return
+        ego = list(agents.values())[0]
+        ex, ey = ego.position
+        n = 0
+        for v in self._traffic_vehicles:
+            dx = v.position[0] - ex
+            dy = v.position[1] - ey
+            if dx * dx + dy * dy <= self.PROBE_RADIUS_M ** 2 \
+                    and v.speed_km_h > self.PROBE_MOVING_KMH:
+                n += 1
+        lanes = self._lanes_on_ego_edge(ego)
+        try:
+            # One file per process: the eval runs 8 workers and NFS gives no
+            # atomicity guarantee for concurrent appends to one file.
+            with open("%s.%d" % (path, os.getpid()), "a") as fh:
+                fh.write(json.dumps({"density": float(self.density), "step": step,
+                                     "n": n, "lanes": lanes,
+                                     "per_lane": n / float(lanes)}) + "\n")
+        except OSError:
+            pass
+
     def after_step(self, *args, **kwargs):
+        self._density_probe()
         to_remove = []
         remove_reasons = {}          # vehicle_name → reason string
 
