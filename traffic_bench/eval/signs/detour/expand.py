@@ -9,12 +9,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
-from traffic_bench.eval.engine.traffic.traffic_density_levels import TrafficDensityLevel, list_traffic_density_levels
+from traffic_bench.eval.engine.traffic.traffic_density_levels import (
+    density_quantiles,
+    sample_traffic_density,
+)
 from traffic_bench.scene_collection.sign_scenes.filter.selection import is_reserved_scene_dir
 
 MAX_AXIS = 3
@@ -39,6 +43,12 @@ class DetourSimParams:
     traffic_density: float = 0.0
     traffic_density_augment: bool = True
     max_density_levels: int = MAX_AXIS
+    # Profiles per scene: each draws its own traffic density and its own plate
+    # offset along the edge.
+    n_variations: int = 10
+    # How far the plate may slide either way around its nominal position. The
+    # manoeuvre lives after the plate, so tail_after_sign_m still bounds it.
+    sign_jitter_m: float = 15.0
 
 
 @dataclass(frozen=True)
@@ -136,7 +146,6 @@ def build_detour_manifest_entry(
     pdd_code: str,
     sign_type: str = "detour",
     variant: int = 0,
-    density_level: Optional[TrafficDensityLevel] = None,
 ) -> Dict[str, Any]:
     """Build one manifest row for a detour scene."""
     scene_name = str(meta.get("scene_name") or scene_dir.name)
@@ -146,14 +155,30 @@ def build_detour_manifest_entry(
     road_id = str(meta.get("road_id") or "")
     sign_lane_index = _obstacle_lane_index(meta, pdd_code)
     edge_length = float(meta.get("length_m", 200.0))
+    seed = _stable_seed(scene_name, variant, "v")
+    traffic_density = sample_traffic_density(seed)
+    scene_id = f"{scene_name}_v{variant}"
+
     if meta.get("sign_s") is not None:
         sign_s = float(meta["sign_s"])
     else:
         sign_s = max(20.0, edge_length - float(sim.sign_distance_before_end))
 
-    # Keep the manoeuvre on the edge, whether sign_s came from the scene meta
-    # or from the formula above.
-    sign_s = min(sign_s, max(20.0, edge_length - float(sim.tail_after_sign_m)))
+    # Keep the manoeuvre on the edge, whether sign_s came from the scene meta or
+    # from the formula above.
+    sign_s = min(max(20.0, sign_s),
+                 max(20.0, edge_length - float(sim.tail_after_sign_m)))
+
+    # Slide the plate UPSTREAM per profile, never downstream: the nominal
+    # position already sits at the last metre that leaves room for the manoeuvre,
+    # so pushing it further would eat the tail, and clamping it back is what made
+    # every profile of a scene land on the same metre. Moving it earlier only
+    # lengthens the run-up.
+    jitter = float(sim.sign_jitter_m)
+    if jitter > 0.0:
+        room = min(jitter, max(0.0, sign_s - 20.0))
+        if room > 0.0:
+            sign_s -= random.Random(seed ^ 0x44546F).random() * room
 
     spawn_lane_id = f"{road_id}_{sign_lane_index}"
     # Anchor the spawn to the plate. With the spawn pinned to the edge start and
@@ -170,18 +195,6 @@ def build_detour_manifest_entry(
         max(spawn_offset + 1.0, edge_length - 5.0),
     )
 
-    traffic_density = (
-        float(density_level.traffic_density)
-        if density_level is not None
-        else float(sim.traffic_density)
-    )
-    if density_level is not None:
-        seed_key = f"td{density_level.id}"
-        scene_id = f"{scene_name}_td{density_level.id}_v{variant}"
-    else:
-        seed_key = "td0"
-        scene_id = f"{scene_name}_v{variant}"
-    seed = _stable_seed(scene_name, variant, seed_key)
 
     sign_class_map = {
         "4.2.1": "DetourRightSign",
@@ -218,11 +231,10 @@ def build_detour_manifest_entry(
         "spawn_velocity_ms": float(sim.spawn_velocity_ms),
         "spawn_offset_from_start": spawn_offset,
         "traffic_density": traffic_density,
-        "traffic_density_level_id": density_level.id if density_level is not None else None,
-        "traffic_density_level_name": density_level.name if density_level is not None else None,
-        "nuplan_vehicles_per_frame": (
-            density_level.nuplan_vehicles_per_frame if density_level is not None else None
-        ),
+        "traffic_density_level_id": None,
+        "traffic_density_level_name": None,
+        "nuplan_vehicles_per_frame": None,
+        "sign_s_nominal": round(float(meta.get("sign_s") or 0.0), 3),
         "horizon": int(sim.horizon),
         "horizon_steps": int(sim.horizon),
         "auxiliary_agent": False,
@@ -248,15 +260,9 @@ def expand_detour_scene_entries(
     pdd_code: str,
     sign_type: str = "detour",
 ) -> List[Dict[str, Any]]:
-    """Expand one segment_detour scene into manifest rows (density axis)."""
-    density_levels: List[Optional[TrafficDensityLevel]]
-    if sim.traffic_density_augment:
-        density_levels = list(list_traffic_density_levels(int(sim.max_density_levels)))
-    else:
-        density_levels = [None]
-
+    """Expand one segment_detour scene into manifest rows (profile axis)."""
     entries: List[Dict[str, Any]] = []
-    for density in density_levels:
+    for variant in range(max(1, int(sim.n_variations))):
         entries.append(
             build_detour_manifest_entry(
                 scene_dir=scene_dir,
@@ -265,8 +271,7 @@ def expand_detour_scene_entries(
                 sim=sim,
                 pdd_code=pdd_code,
                 sign_type=sign_type,
-                variant=0,
-                density_level=density,
+                variant=variant,
             )
         )
 
@@ -328,7 +333,9 @@ def generate(cfg, scenes=None):
         all_scenes, scenes_dir=scenes_dir, split=split
     )
     print(
-        f"Augmentation axes: density={max_density_levels} "
+        f"Augmentation axes: profiles={int(getattr(sim_cfg, 'n_variations', 10) or 10)}; "
+        f"each row samples its own traffic density and plate offset "
+        f"(density quantiles {density_quantiles()}) "
         f"(traffic_density_augment={bool(traffic_density_augment)})"
     )
 
@@ -341,6 +348,7 @@ def generate(cfg, scenes=None):
         traffic_density=float(sim_cfg.traffic_density),
         traffic_density_augment=bool(traffic_density_augment),
         max_density_levels=int(max_density_levels),
+        n_variations=int(getattr(sim_cfg, "n_variations", 10) or 10),
     )
     det_expansion = DetourExpansionConfig(
         max_scenarios=scenario_cfg.max_scenarios,
