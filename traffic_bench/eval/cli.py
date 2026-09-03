@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
+
+# Headless nodes have no sound card; MetaDrive/Panda3D otherwise spams ALSA errors.
+os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+os.environ.setdefault("PULSE_SERVER", "none")
 
 from traffic_bench.eval.run_layout import (
     default_run_manifest_dir,

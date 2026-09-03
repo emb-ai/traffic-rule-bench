@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import multiprocessing as mp
+import os
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any
 
 from omegaconf import DictConfig, OmegaConf
 
@@ -33,6 +36,187 @@ NN_NO_CHECKPOINT = {"ppo_rule", "ppo_lidar"}
 ALL_POLICIES = IDM_FAMILY | NN_NEED_CHECKPOINT | NN_NO_CHECKPOINT
 EGO_VARIANTS = ["default", "s1", "s2", "s3", "s4"]
 RUN_EVAL_OUT = "eval_out"
+
+
+def _is_nn_policy(policy: str) -> bool:
+    return policy in NN_NEED_CHECKPOINT
+
+
+def _apply_cuda_devices(raw) -> None:
+    """Set CUDA_VISIBLE_DEVICES before NN checkpoints load (leave GPU 0 free, etc.)."""
+    if raw is None:
+        return
+    text = str(raw).strip()
+    if not text or text.lower() in {"null", "none", "~"}:
+        return
+    os.environ["CUDA_VISIBLE_DEVICES"] = text
+    print(f"[run] CUDA_VISIBLE_DEVICES={text}", flush=True)
+
+
+def _parse_cuda_device_list(raw) -> list[str]:
+    """Physical GPU ids from cfg or existing CUDA_VISIBLE_DEVICES."""
+    text = None if raw is None else str(raw).strip()
+    if not text or text.lower() in {"null", "none", "~"}:
+        text = (os.environ.get("CUDA_VISIBLE_DEVICES") or "").strip()
+    if not text:
+        return []
+    return [p.strip() for p in text.split(",") if p.strip()]
+
+
+def _nn_gpu_targets(cuda_device_list: list[str]) -> list[str]:
+    """GPU ids for NN workers: numeric CUDA_VISIBLE_DEVICES only (collect.sh style).
+
+    On MLSpace, overriding ``NVIDIA_VISIBLE_DEVICES`` to a single UUID is ignored by
+    the container runtime; pairing that with ``CUDA_VISIBLE_DEVICES=0`` dumps every
+    worker onto physical GPU0. Keep the cluster-injected NVD list and pin via CVD.
+    """
+    cvd = (os.environ.get("CUDA_VISIBLE_DEVICES") or "").strip()
+    # Parent (run_signs_parallel) already pinned us to one card.
+    if cvd and "," not in cvd and cvd.replace(".", "").isdigit():
+        print(f"[run] honor existing CUDA_VISIBLE_DEVICES={cvd}", flush=True)
+        return [cvd]
+    if not cuda_device_list:
+        return []
+    # Drop accidental UUID tokens — numeric indices only.
+    out = [x for x in cuda_device_list if x.replace(".", "").isdigit()]
+    if len(out) != len(cuda_device_list):
+        print(
+            "[run] warn: ignoring non-numeric cuda_devices entries; "
+            "use nvidia-smi indices (collect.sh style)",
+            flush=True,
+        )
+    return out
+
+
+def _completed_row_indices(final_dir: Path, policy: str, rows: list[dict]) -> set[int]:
+    """Rows already present in a serial/merged episodes jsonl (for resume → parallel)."""
+    path = final_dir / f"episodes_{policy}.jsonl"
+    if not path.is_file() or path.stat().st_size == 0:
+        return set()
+    from traffic_bench.eval.run.episode import _episode_key_from_result, _episode_key_from_row
+
+    done: set[tuple] = set()
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                done.add(_episode_key_from_result(json.loads(line)))
+            except (json.JSONDecodeError, TypeError, KeyError):
+                continue
+    return {i for i, row in enumerate(rows) if _episode_key_from_row(row) in done}
+
+
+def _pool_initializer(gpu_ids: list[str], counter, lock) -> None:
+    """Pin each process-pool worker to one GPU before tasks run (CPU policies)."""
+    os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+    os.environ.setdefault("PULSE_SERVER", "none")
+    if not gpu_ids:
+        return
+    with lock:
+        slot = int(counter.value)
+        counter.value = slot + 1
+    _pin_job_gpu(gpu_ids[slot % len(gpu_ids)])
+    print(
+        f"[worker pid={os.getpid()}] CUDA_VISIBLE_DEVICES="
+        f"{os.environ.get('CUDA_VISIBLE_DEVICES')!r} "
+        f"NVIDIA_VISIBLE_DEVICES={os.environ.get('NVIDIA_VISIBLE_DEVICES')!r}",
+        flush=True,
+    )
+
+
+def _pin_job_gpu(gpu: str | None) -> None:
+    """Pin to one GPU via CUDA_VISIBLE_DEVICES; leave NVIDIA_VISIBLE_DEVICES alone."""
+    if gpu is None:
+        return
+    text = str(gpu).strip()
+    if not text or text.lower() in {"null", "none", "~"}:
+        return
+    # Never replace cluster NVD with a single UUID — that remaps everyone to GPU0.
+    os.environ["CUDA_VISIBLE_DEVICES"] = text
+    os.environ["_TRAFFIC_BENCH_GPU_PINNED"] = "1"
+
+
+def _run_scene_shard(job: dict[str, Any]) -> int:
+    """Process/subprocess worker: one shard (possibly many scenes)."""
+    os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+    os.environ.setdefault("PULSE_SERVER", "none")
+    if os.environ.get("_TRAFFIC_BENCH_GPU_PINNED") != "1":
+        _pin_job_gpu(job.get("cuda_devices"))
+    run_episodes(
+        policy=str(job["policy"]),
+        rows=list(job["rows"]),
+        scenes_root=Path(job["scenes_root"]),
+        out_dir=Path(job["out_dir"]),
+        ego_variant=str(job["ego_variant"]),
+        ego_sample_seed_base=int(job["ego_sample_seed_base"]),
+        max_steps=int(job["max_steps"]),
+        model_path=Path(job["model_path"]) if job.get("model_path") else None,
+        plant2_action_mode=str(job["plant2_action_mode"]),
+        force_rerun=bool(job["force_rerun"]),
+        rerun_failed=bool(job["rerun_failed"]),
+        skip_error_episodes=bool(job["skip_error_episodes"]),
+        emit_replay_sidecar=bool(job["emit_replay_sidecar"]),
+        replay_root=Path(job["replay_root"]) if job.get("replay_root") else None,
+        save_gifs=bool(job["save_gifs"]),
+        gif_dir=Path(job["gif_dir"]) if job.get("gif_dir") else None,
+        gif_window_m=float(job["gif_window_m"]),
+        hide_signs=bool(job["hide_signs"]),
+        draw_path_conflict=bool(job["draw_path_conflict"]),
+        run_name=str(job["run_name"]),
+    )
+    return int(job["idx"])
+
+
+def _run_nn_chunks_subprocess(
+    tasks: list[tuple[int, Path, dict[str, Any]]],
+    *,
+    run_name: str,
+) -> list[str]:
+    """Launch one OS process per chunk with GPU UUID env (collect.sh pattern)."""
+    import subprocess
+
+    failures: list[str] = []
+    procs: list[tuple[int, Path, subprocess.Popen]] = []
+    for idx, shard_out, job in tasks:
+        shard_out.mkdir(parents=True, exist_ok=True)
+        job_path = shard_out / "job.json"
+        job_path.write_text(json.dumps(job, default=str), encoding="utf-8")
+        env = os.environ.copy()
+        gpu = job.get("cuda_devices")
+        if gpu:
+            # Numeric CVD only; preserve inherited NVIDIA_VISIBLE_DEVICES.
+            env["CUDA_VISIBLE_DEVICES"] = str(gpu).strip()
+        env.setdefault("SDL_AUDIODRIVER", "dummy")
+        env.setdefault("PULSE_SERVER", "none")
+        env["_TRAFFIC_BENCH_GPU_PINNED"] = "1"
+        print(
+            f"[{run_name}] spawn chunk={shard_out.name} "
+            f"scenes={len(job['rows'])} "
+            f"CVD={env.get('CUDA_VISIBLE_DEVICES')}",
+            flush=True,
+        )
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "traffic_bench.eval.run.shard_worker", str(job_path)],
+            env=env,
+        )
+        procs.append((idx, shard_out, proc))
+
+    for idx, shard_out, proc in procs:
+        code = proc.wait()
+        if code != 0:
+            failures.append(f"chunk {idx} ({shard_out.name}): exit {code}")
+        else:
+            print(f"[{run_name}] finished {shard_out.name}", flush=True)
+    return failures
+
+def _jobs_for_policy(policy: str, *, jobs: int, jobs_nn: int, save_gifs: bool) -> int:
+    if save_gifs:
+        return 1
+    if _is_nn_policy(policy):
+        return max(1, int(jobs_nn))
+    return max(1, int(jobs))
 
 
 def plan_baselines(
@@ -200,6 +384,10 @@ def run_policy_list(cfg: DictConfig, policies: list[str]) -> None:
     bad = [p for p in policies if p not in ALL_POLICIES]
     if bad:
         raise ValueError(f"Unknown policies: {bad}. Supported: {sorted(ALL_POLICIES)}")
+
+    # Before torch/CARL touch CUDA — hide GPUs the user wants free (e.g. physical 0).
+    _apply_cuda_devices(cfg.get("cuda_devices"))
+
     manifest_path = resolve_manifest_file(cfg.manifest)
     rows = _assemble_rows(manifest_path, cfg)
     scenes_root = cfg.get("scenes_root")
@@ -238,67 +426,174 @@ def run_policy_list(cfg: DictConfig, policies: list[str]) -> None:
     gif_cfg = cfg.get("gif") or {}
     save_gifs = _bool(gif_cfg.get("enabled"))
     jobs = max(1, int(cfg.get("jobs") or 1))
-    if save_gifs and jobs > 1:
-        print("gif.enabled=true: jobs=1 (Panda3D ShowBase is not thread-safe)")
+    jobs_nn = max(1, int(cfg.get("jobs_nn") or 1))
+    if save_gifs and (jobs > 1 or jobs_nn > 1):
+        print("gif.enabled=true: jobs=jobs_nn=1 (Panda3D ShowBase is not process/thread-safe for GIFs)")
         jobs = 1
+        jobs_nn = 1
+    print(
+        f"[run] parallelism: jobs={jobs} (CPU, process pool)  "
+        f"jobs_nn={jobs_nn} (carl/plant2)"
+    )
     bench_root = out_dir / "benchmark" / "full" / "policy_eval"
+    cuda_device_list = _parse_cuda_device_list(cfg.get("cuda_devices"))
+    if cuda_device_list:
+        print(f"[run] NN GPU pool ({len(cuda_device_list)}): {','.join(cuda_device_list)}")
+
+    def _shard_job(
+        *,
+        idx: int,
+        policy: str,
+        variant: str,
+        shard_rows: list[dict],
+        shard_out: Path,
+        worker_slot: int = 0,
+    ) -> dict[str, Any]:
+        model_path = model_paths.get(policy)
+        # Pin each NN worker to one GPU so jobs_nn>1 actually uses the pool.
+        if _is_nn_policy(policy) and cuda_device_list:
+            cuda_for_job: str | None = cuda_device_list[worker_slot % len(cuda_device_list)]
+        elif cuda_device_list:
+            cuda_for_job = ",".join(cuda_device_list)
+        else:
+            cuda_for_job = None
+        return {
+            "idx": idx,
+            "policy": policy,
+            "rows": shard_rows,
+            "scenes_root": str(scenes_root),
+            "out_dir": str(shard_out),
+            "ego_variant": variant,
+            "ego_sample_seed_base": int(cfg.ego_sample_seed_base),
+            "max_steps": int(cfg.max_steps),
+            "model_path": str(model_path) if model_path else None,
+            "plant2_action_mode": str(cfg.plant2_action_mode),
+            "force_rerun": _bool(cfg.force_rerun),
+            "rerun_failed": _bool(cfg.rerun_failed),
+            "skip_error_episodes": _bool(cfg.skip_error_episodes),
+            "emit_replay_sidecar": True,
+            "replay_root": str(out_dir / "runs" / "var_0" / f"{policy}_{variant}" / "replays"),
+            "save_gifs": save_gifs,
+            "gif_dir": str(gif_cfg.dir) if gif_cfg.get("dir") else None,
+            "gif_window_m": float(gif_cfg.get("window_m") or 80.0),
+            "hide_signs": _bool(cfg.hide_signs),
+            "draw_path_conflict": _bool(cfg.draw_path_conflict)
+            or _bool(gif_cfg.get("draw_path_conflict")),
+            "run_name": f"{policy}_{variant}",
+            "cuda_devices": cuda_for_job,
+        }
 
     def _one(policy: str, variant: str, shard_rows: list[dict], shard_out: Path) -> None:
-        run_episodes(
-            policy=policy,
-            rows=shard_rows,
-            scenes_root=scenes_root,
-            out_dir=shard_out,
-            ego_variant=variant,
-            ego_sample_seed_base=int(cfg.ego_sample_seed_base),
-            max_steps=int(cfg.max_steps),
-            model_path=model_paths.get(policy),
-            plant2_action_mode=str(cfg.plant2_action_mode),
-            force_rerun=_bool(cfg.force_rerun),
-            rerun_failed=_bool(cfg.rerun_failed),
-            skip_error_episodes=_bool(cfg.skip_error_episodes),
-            emit_replay_sidecar=True,
-            replay_root=out_dir / "runs" / "var_0" / f"{policy}_{variant}" / "replays",
-            save_gifs=save_gifs,
-            gif_dir=Path(str(gif_cfg.dir)) if gif_cfg.get("dir") else None,
-            gif_window_m=float(gif_cfg.get("window_m") or 80.0),
-            hide_signs=_bool(cfg.hide_signs),
-            draw_path_conflict=_bool(cfg.draw_path_conflict)
-            or _bool(gif_cfg.get("draw_path_conflict")),
-            run_name=f"{policy}_{variant}",
+        _run_scene_shard(
+            _shard_job(
+                idx=0,
+                policy=policy,
+                variant=variant,
+                shard_rows=shard_rows,
+                shard_out=shard_out,
+                worker_slot=0,
+            )
         )
 
     for policy, variant in baselines:
         run_name = f"{policy}_{variant}"
         final_dir = bench_root / run_name
-        if jobs <= 1 or len(rows) <= 1:
+        policy_jobs = _jobs_for_policy(
+            policy, jobs=jobs, jobs_nn=jobs_nn, save_gifs=save_gifs
+        )
+        if policy_jobs <= 1 or len(rows) <= 1:
+            print(f"\n[{run_name}] jobs={policy_jobs} (serial)")
             _one(policy, variant, rows, final_dir)
             continue
-        workers = min(jobs, len(rows))
-        shards_root = out_dir / "_scene_shards" / run_name
-        shards_root.mkdir(parents=True, exist_ok=True)
-        tasks = []
-        for idx, row in enumerate(rows):
-            shard_out = final_dir / "_shards" / f"{idx:04d}"
-            tasks.append((idx, [row], shard_out))
-        print(f"\n[{run_name}] parallelizing {len(tasks)} scene(s) with jobs={workers}")
-        failures: list[str] = []
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {
-                pool.submit(_one, policy, variant, shard_rows, shard_out): idx
-                for idx, shard_rows, shard_out in tasks
-            }
-            for future in as_completed(futures):
-                idx = futures[future]
-                try:
-                    future.result()
-                except Exception as exc:
-                    failures.append(f"row {idx}: {exc}")
+        workers = min(policy_jobs, len(rows))
+        (out_dir / "_scene_shards" / run_name).mkdir(parents=True, exist_ok=True)
+        skip_idx = set()
+        if not _bool(cfg.force_rerun):
+            skip_idx = _completed_row_indices(final_dir, policy, rows)
+            if skip_idx:
+                print(
+                    f"[{run_name}] resume: skip {len(skip_idx)} episode(s) "
+                    f"already in {final_dir / f'episodes_{policy}.jsonl'}"
+                )
+        pending = [(idx, row) for idx, row in enumerate(rows) if idx not in skip_idx]
+        if not pending:
+            print(f"\n[{run_name}] nothing to run (all {len(rows)} already done)")
+            continue
+        is_nn = _is_nn_policy(policy)
+        gpu_targets = _nn_gpu_targets(cuda_device_list) if is_nn else []
+        workers = min(workers, len(pending))
+        # Collect-style: few long-lived workers, each runs many scenes with one
+        # model load — not one ProcessPool job per scene.
+        chunks: list[list[tuple[int, dict]]] = [[] for _ in range(workers)]
+        for i, item in enumerate(pending):
+            chunks[i % workers].append(item)
+        tasks: list[tuple[int, Path, dict[str, Any]]] = []
+        for slot, chunk in enumerate(chunks):
+            if not chunk:
+                continue
+            shard_rows = [row for _, row in chunk]
+            shard_id = chunk[0][0]
+            shard_out = final_dir / "_shards" / f"w{slot:02d}"
+            job = _shard_job(
+                idx=shard_id,
+                policy=policy,
+                variant=variant,
+                shard_rows=shard_rows,
+                shard_out=shard_out,
+                worker_slot=slot,
+            )
+            if gpu_targets:
+                job["cuda_devices"] = gpu_targets[slot % len(gpu_targets)]
+            tasks.append((shard_id, shard_out, job))
+        print(
+            f"\n[{run_name}] parallelizing {len(pending)} scene(s) in "
+            f"{len(tasks)} chunk(s), jobs={workers}"
+            + (
+                f" (subprocess+CVD, GPUs={len(gpu_targets)}: "
+                f"{','.join(gpu_targets)})"
+                if is_nn and gpu_targets
+                else " (ProcessPool spawn)"
+            ),
+            flush=True,
+        )
+        if is_nn and gpu_targets:
+            failures = _run_nn_chunks_subprocess(tasks, run_name=run_name)
+        else:
+            failures = []
+            done = 0
+            ctx = mp.get_context("spawn")
+            counter = ctx.Value("i", 0)
+            lock = ctx.Lock()
+            with ProcessPoolExecutor(
+                max_workers=workers,
+                mp_context=ctx,
+                initializer=_pool_initializer,
+                initargs=([], counter, lock),
+            ) as pool:
+                futures = {
+                    pool.submit(_run_scene_shard, job): idx for idx, _, job in tasks
+                }
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        failures.append(f"chunk {idx}: {exc}")
+                    done += 1
+                    print(
+                        f"[{run_name}] finished chunk {done}/{len(tasks)}",
+                        flush=True,
+                    )
         if failures:
             raise RuntimeError(f"[{run_name}] scene failures:\n  - " + "\n  - ".join(failures))
         merged = final_dir / f"episodes_{policy}.jsonl"
         lines: list[str] = []
-        for _, _, shard_out in tasks:
+        # Keep previously completed serial/merged rows, then append new shards.
+        if merged.is_file() and skip_idx:
+            lines.extend(
+                ln for ln in merged.read_text(encoding="utf-8").splitlines() if ln.strip()
+            )
+        for _, shard_out, _ in tasks:
             ep = shard_out / f"episodes_{policy}.jsonl"
             if ep.is_file():
                 lines.extend(ln for ln in ep.read_text(encoding="utf-8").splitlines() if ln.strip())
