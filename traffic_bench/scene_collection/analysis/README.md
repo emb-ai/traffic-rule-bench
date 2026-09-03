@@ -1,20 +1,22 @@
 # analysis/
 
-Reads cropped SUMO nets on disk (`maps/crops/`). Writes figures to `[figures/](figures/)`.
-
-```bash
-python -m traffic_bench.scene_collection analysis
-python -m traffic_bench.scene_collection analysis --pdf   # also write PDF
+```text
+analysis/
+  inventory/          # harvest crop counts
+  overlap/            # train/test place reuse + allocation verify
+  assign_verify.py    # post-assign leak / counts / topology / reuse
+  run.py
 ```
 
-See `[figures/inventory.md](figures/inventory.md)` for the latest counts.
+```bash
+python -m traffic_bench.scene_collection analysis inventory
+python -m traffic_bench.scene_collection analysis overlap          # figures + README + allocation_verify.*
+python -m traffic_bench.scene_collection analysis assign_verify    # verify only → overlap/
+```
 
-
-| File           | Role                                    |
-| -------------- | --------------------------------------- |
-| `inventory.py` | load indexes, count crops               |
-| `figures.py`   | matplotlib                              |
-| `report.py`    | `figures/inventory.md` + `summary.json` |
-| `run.py`       | CLI                                     |
-
-
+| Path | Role |
+| --- | --- |
+| `overlap/README.md` | place-overlap narrative + numbers |
+| `overlap/allocation_verify.md` | assign policy verification |
+| `overlap/figures/` | PNGs (21) |
+| `overlap/summary.json` | machine-readable overlap metrics |

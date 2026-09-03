@@ -20,6 +20,7 @@ from traffic_bench.eval.engine.spawn.scene_augmentation import (
     _is_valid_departure,
     _lane_keys_lookup,
     _pick_outgoing_lane_key,
+    _pick_reachable_dest_lane_key,
     build_spawn_lanes_by_edge,
     lane_lengths_from_spawn_lanes,
     parse_intersection_approach_lanes,
@@ -79,9 +80,16 @@ def enumerate_spawn_scenarios_equal_priority(
                 continue
 
             for ego_dest_edge in ego_dest_edges:
-                ego_dest_lane_key = _pick_outgoing_lane_key(
-                    ego_dest_edge, ego_lane, lane_keys_by_edge
+                ego_dest_lane_key = _pick_reachable_dest_lane_key(
+                    ego_dest_edge,
+                    ego_lane,
+                    lane_keys_by_edge,
+                    route_index=route_index,
+                    from_edge=ego_edge,
+                    from_lane=ego_lane,
                 )
+                if ego_dest_lane_key is None:
+                    continue
                 if not _is_valid_departure(
                     ego_edge, ego_lane, ego_dest_edge, ego_dest_lane_key
                 ):
@@ -162,9 +170,16 @@ def enumerate_spawn_scenarios_yield(
                     if ego_dest_edge == ego_edge:
                         continue
 
-                    ego_dest_lane_key = _pick_outgoing_lane_key(
-                        ego_dest_edge, ego_lane, lane_keys_by_edge
+                    ego_dest_lane_key = _pick_reachable_dest_lane_key(
+                        ego_dest_edge,
+                        ego_lane,
+                        lane_keys_by_edge,
+                        route_index=route_index,
+                        from_edge=ego_edge,
+                        from_lane=ego_lane,
                     )
+                    if ego_dest_lane_key is None:
+                        continue
                     if not _is_valid_departure(
                         ego_edge, ego_lane, ego_dest_edge, ego_dest_lane_key
                     ):
@@ -239,7 +254,16 @@ def pick_default_main_spawn_meta(
     for candidate_dest in dest_edges:
         if candidate_dest == ego_edge:
             continue
-        lane_key = _pick_outgoing_lane_key(candidate_dest, ego_lane, lane_keys_by_edge)
+        lane_key = _pick_reachable_dest_lane_key(
+            candidate_dest,
+            ego_lane,
+            lane_keys_by_edge,
+            route_index=route_index,
+            from_edge=ego_edge,
+            from_lane=ego_lane,
+        )
+        if lane_key is None:
+            continue
         if not _is_valid_departure(ego_edge, ego_lane, candidate_dest, lane_key):
             continue
         if route_index is not None and not route_index.can_reach_edge(
@@ -309,7 +333,16 @@ def pick_default_yield_spawn_meta(
     for candidate_dest in dest_edges:
         if candidate_dest == ego_edge:
             continue
-        lane_key = _pick_outgoing_lane_key(candidate_dest, ego_lane, lane_keys_by_edge)
+        lane_key = _pick_reachable_dest_lane_key(
+            candidate_dest,
+            ego_lane,
+            lane_keys_by_edge,
+            route_index=route_index,
+            from_edge=ego_edge,
+            from_lane=ego_lane,
+        )
+        if lane_key is None:
+            continue
         if not _is_valid_departure(ego_edge, ego_lane, candidate_dest, lane_key):
             continue
         if route_index is not None and not route_index.can_reach_edge(

@@ -13,7 +13,17 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
+from traffic_bench.eval.engine.spawn.route_budget import (
+    apply_route_budget,
+    measure_spawn_to_dest_length_m,
+)
+from traffic_bench.eval.engine.spawn.route_length_levels import (
+    list_route_length_levels,
+    select_route_length_levels,
+    tag_entry_route_length,
+)
 from traffic_bench.eval.engine.traffic.agent_profile_bank import sample_one_profile
+from traffic_bench.eval.engine.traffic.npc_profile import embed_npc_profile
 from traffic_bench.eval.engine.traffic.stable_hash import stable_hash
 from traffic_bench.eval.engine.spawn.scene_augmentation import (
     SpawnScenario,
@@ -33,7 +43,8 @@ class BlockedRoadSimParams:
     compliant_stop_speed_mps: float
     n_variations: int = 3
     profile_density_cap: float = 1.0
-    destination_max_along_m: Optional[float] = 50.0
+    max_path_length_m: float = 150.0
+    max_path_length_levels: Tuple[float, ...] = (130.0, 150.0, 170.0)
 
 
 @dataclass(frozen=True)
@@ -52,6 +63,7 @@ def blocked_road_geometry_key(entry: Dict[str, Any]) -> Tuple:
         entry.get("spawn_lane_num"),
         entry.get("destination_lane_id"),
         entry.get("var_idx"),
+        round(float(entry.get("route_length_level_m") or entry.get("max_path_length_m") or 0.0), 1),
     )
 
 
@@ -109,7 +121,6 @@ def expand_blocked_road_scene_entries(
                 net_path,
                 scenario.ego_destination_edge_id,
                 sign_distance_from_start=sim.sign_distance_from_start,
-                destination_max_along_m=float(sim.destination_max_along_m or 50.0),
             )
             if not geom_ok:
                 skipped_geometry += 1
@@ -128,6 +139,7 @@ def expand_blocked_road_scene_entries(
         for layout_i, scenario in layout_kept
         for var_idx in range(n_variations)
     ]
+    configured_route_levels = list_route_length_levels(sim)
     pre_cap = len(candidates)
     cap = expansion.max_scenarios
     candidates = shuffle_cap(
@@ -149,34 +161,50 @@ def expand_blocked_road_scene_entries(
 
     scene_entries: List[Dict[str, Any]] = []
     seen: set = set()
+    spawn_before_end = float(sim.spawn_distance_before_end)
 
     for layout_i, scenario, var_idx in candidates:
         scenario_id = scenario.scenario_id if scenario is not None else ""
-        seed = stable_hash(scene_name, scenario_id, var_idx)
-        profile = sample_one_profile(
-            int(seed),
-            density_cap=float(sim.profile_density_cap),
-            horizon_steps=int(sim.horizon),
+        available_route_m = None
+        if scenario is not None:
+            available_route_m = measure_spawn_to_dest_length_m(
+                net_path=net_path,
+                spawn_edge=str(scenario.ego_edge_id),
+                spawn_lane=int(scenario.ego_lane_num),
+                dest_edge=str(scenario.ego_destination_edge_id),
+                spawn_distance_before_end=spawn_before_end,
+            )
+        route_levels, route_augment = select_route_length_levels(
+            configured_route_levels, available_route_m
         )
+        for path_len_m in route_levels:
+            seed = stable_hash(scene_name, scenario_id, var_idx, int(round(path_len_m)))
+            profile = sample_one_profile(
+                int(seed),
+                density_cap=float(sim.profile_density_cap),
+                horizon_steps=int(sim.horizon),
+            )
 
-        entry = build_entry(
-            scene_dir=scene_dir,
-            scenes_root=scenes_root,
-            meta=meta,
-            layout_variant=layout_i,
-            var_idx=var_idx,
-            seed=seed,
-            sim=sim,
-            spawn_scenario=scenario,
-            spawn_lanes_cache=list(spawn_lanes),
-            junction_layout_cache=junction_layout,
-            npc_profile=profile,
-        )
-        key = blocked_road_geometry_key(entry)
-        if key in seen:
-            continue
-        seen.add(key)
-        scene_entries.append(entry)
+            entry = build_entry(
+                scene_dir=scene_dir,
+                scenes_root=scenes_root,
+                meta=meta,
+                layout_variant=layout_i,
+                var_idx=var_idx,
+                seed=seed,
+                sim=sim,
+                spawn_scenario=scenario,
+                spawn_lanes_cache=list(spawn_lanes),
+                junction_layout_cache=junction_layout,
+                npc_profile=profile,
+                max_path_length_m=float(path_len_m),
+                route_length_augment=route_augment,
+            )
+            key = blocked_road_geometry_key(entry)
+            if key in seen:
+                continue
+            seen.add(key)
+            scene_entries.append(entry)
 
     print(f"  Manifest entries for {scene_name}: {len(scene_entries)}")
     return scene_entries
@@ -199,6 +227,8 @@ def build_blocked_road_manifest_entry(
     sign_type: str,
     sign_class: str = "NoTrafficSign",
     sign_title: str = "Movement prohibited",
+    max_path_length_m: Optional[float] = None,
+    route_length_augment: bool = False,
 ) -> Dict[str, Any]:
     """Build one manifest row for a through-path + NPC-profile variation."""
     del layout_variant  # encoded in augmentation_id / spawn fields
@@ -259,12 +289,13 @@ def build_blocked_road_manifest_entry(
         "source_osm": meta.get("source_osm"),
         "osm_file": meta.get("osm_file"),
     }
-    if sim.destination_max_along_m is not None:
-        entry["destination_max_along_m"] = float(sim.destination_max_along_m)
 
     # Same profile_* embedding as sumo_runner.materialize_sumo_scene.
-    for key, value in npc_profile.items():
-        entry[f"profile_{key}"] = value
+    entry = embed_npc_profile(
+        entry,
+        npc_profile,
+        density_cap=float(sim.profile_density_cap),
+    )
 
     if spawn_scenario is not None:
         entry.update(spawn_scenario.to_manifest_fields())
@@ -275,6 +306,20 @@ def build_blocked_road_manifest_entry(
 
     if junction_layout_cache is not None:
         entry["junction_layout"] = junction_layout_cache
+
+    path_budget_m = float(
+        max_path_length_m if max_path_length_m is not None else sim.max_path_length_m
+    )
+
+    max_path_m = path_budget_m
+    if max_path_m > 0.0 and entry.get("destination_edge_id"):
+        entry = apply_route_budget(
+            entry,
+            net_path=scene_dir / net_file,
+            max_path_length_m=max_path_m,
+            spawn_distance_before_end=float(sim.spawn_distance_before_end),
+        )
+    entry = tag_entry_route_length(entry, path_budget_m, augment=route_length_augment)
 
     return {k: v for k, v in entry.items() if v is not None}
 
@@ -342,7 +387,10 @@ def generate(cfg, scenes=None):
         compliant_stop_speed_mps=sim_cfg.compliant_stop_speed_mps,
         n_variations=n_variations,
         profile_density_cap=float(sim_cfg.profile_density_cap),
-        destination_max_along_m=sim_cfg.destination_max_along_m,
+        max_path_length_m=float(sim_cfg.max_path_length_m),
+        max_path_length_levels=tuple(
+            float(x) for x in getattr(sim_cfg, "max_path_length_levels", (130.0, 150.0, 170.0))
+        ),
     )
 
     print(
@@ -448,7 +496,10 @@ def generate(cfg, scenes=None):
             "horizon": sim_cfg.horizon,
             "sign_distance_from_start": sim_cfg.sign_distance_from_start,
             "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
-            "destination_max_along_m": sim_cfg.destination_max_along_m,
+            "max_path_length_m": float(sim_cfg.max_path_length_m),
+            "max_path_length_levels": list(
+                getattr(sim_cfg, "max_path_length_levels", (130.0, 150.0, 170.0))
+            ),
             "compliant_stop_success_seconds": sim_cfg.compliant_stop_success_seconds,
             "compliant_stop_max_dist_m": sim_cfg.compliant_stop_max_dist_m,
             "compliant_stop_speed_mps": sim_cfg.compliant_stop_speed_mps,

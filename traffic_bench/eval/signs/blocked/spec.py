@@ -8,6 +8,9 @@ from typing import Optional
 
 from traffic_bench.eval.engine.map.sumo_utils import is_vehicle_drivable_lane
 
+# Minimum drivable distance on the forbidden lane after the no-entry sign.
+MIN_FORBIDDEN_LANE_FINISH_M = 10.0
+
 
 def edge_length_m(net_path: Path | str, edge_id: str) -> Optional[float]:
     """Return length of lane 0 on ``edge_id``, or None if missing."""
@@ -33,23 +36,22 @@ def forbidden_edge_geometry_ok(
     edge_id: str,
     *,
     sign_distance_from_start: float,
-    destination_max_along_m: float,
+    min_finish_m: float = MIN_FORBIDDEN_LANE_FINISH_M,
 ) -> tuple[bool, str]:
-    """Check destination/forbidden edge is long enough for sign + finish mark."""
+    """Check forbidden edge is long enough for sign placement + minimal drive room."""
     if not edge_id:
         return False, "missing forbidden edge_id"
     length = edge_length_m(net_path, edge_id)
     if length is None or length <= 0:
         return False, f"edge {edge_id!r} missing or empty"
-    # Need room for the sign and for the capped finish (leave 5 m like MetaDrive).
     needed = max(
         float(sign_distance_from_start) + 1.0,
-        float(destination_max_along_m) + 5.0,
+        float(sign_distance_from_start) + float(min_finish_m) + 5.0,
     )
     if length <= needed:
         return (
             False,
             f"forbidden edge {edge_id!r} length {length:.2f}m <= "
-            f"needed {needed:.2f}m (sign/dest cap)",
+            f"needed {needed:.2f}m (sign + min finish)",
         )
     return True, "ok"

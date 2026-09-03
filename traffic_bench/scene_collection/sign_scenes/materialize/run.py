@@ -25,6 +25,7 @@ from traffic_bench.scene_collection.assign.assign import (
     load_signs_yaml,
     sample,
 )
+from traffic_bench.scene_collection.assign.refill_pick import pick_refill_ids_tiered
 from traffic_bench.scene_collection.sign_scenes.materialize.pool_index import (
     load_moscow_pool,
     save_moscow_pool,
@@ -569,6 +570,7 @@ def _pick_refill_ids(
     excluded: Set[str],
     seed_key: str,
 ) -> List[str]:
+    """Legacy junction-only random pick (kept for tests / fallback). Prefer tiered."""
     if need <= 0:
         return []
     need_by_shape = counts_for_sign(shapes=shapes, n_total=need, x_share=x_share)
@@ -602,7 +604,11 @@ def refill(
     force_preview: bool,
     crop_missing: bool,
 ) -> dict:
-    """Top up kept train/test counts to signs.yaml quotas with fresh scenes."""
+    """Top up kept train/test counts to signs.yaml quotas with fresh scenes.
+
+    Picks use the same tiered place-reuse policy as ``assign`` (unique → same
+    behavioral family → same semantic group; no cross-semantic).
+    """
     signs_cfg = load_signs_yaml(signs_yaml)
     n_train, n_test, shapes, x_share, seed = _sign_quotas(signs_cfg, sign)
     targets = {"train": n_train, "test": n_test}
@@ -613,13 +619,6 @@ def refill(
     block = alloc_doc["signs"][sign]
     place_mode = "copy" if str(block.get("prepare") or "") == "crosswalk" else mode
 
-    train_doc = _load_json(train_ids_path)
-    test_doc = _load_json(test_ids_path)
-    pools = {
-        "train": train_doc.get("by_shape") or {},
-        "test": test_doc.get("by_shape") or {},
-    }
-
     kept = _kept_by_split(dest_scenes)
     excluded = _excluded_ids(dest_scenes, block)
     junction_index = _index_by_scene_id(index_path)
@@ -629,7 +628,8 @@ def refill(
 
     print(
         f"[refill] targets train={n_train} test={n_test}; "
-        f"kept train={len(kept['train'])} test={len(kept['test'])}"
+        f"kept train={len(kept['train'])} test={len(kept['test'])}; "
+        f"policy=tiered_place_reuse"
     )
 
     new_by_half: Dict[str, List[str]] = {"train": [], "test": []}
@@ -639,16 +639,21 @@ def refill(
             print(f"  [{half}] already at quota ({len(kept[half])})")
             continue
         print(f"  [{half}] need {need} more")
-        picked = _pick_refill_ids(
+        picked, tiers = pick_refill_ids_tiered(
+            pdd_code=str(sign),
+            half=half,
             need=need,
-            shapes=shapes,
-            x_share=x_share,
-            by_shape_pool=pools[half],
-            excluded=excluded,
-            seed_key=f"{seed}|{sign}|refill|{half}|{len(excluded)}",
+            excluded_scene_ids=excluded,
+            alloc_doc=alloc_doc,
+            signs_yaml=signs_yaml,
+            train_ids_path=train_ids_path,
+            test_ids_path=test_ids_path,
+            seed=seed,
         )
         new_by_half[half] = picked
-        print(f"  [{half}] picked {len(picked)}")
+        print(f"  [{half}] picked {len(picked)} tiers={tiers}")
+        # Newly chosen IDs must not be re-drawn for the other half.
+        excluded.update(picked)
 
     dest_scenes.mkdir(parents=True, exist_ok=True)
     pool = load_moscow_pool(dest_scenes) or {

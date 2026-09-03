@@ -17,7 +17,7 @@
 # Length ≥ 150 m is a harvest gate (braking 60→20 km/h + compliance zone).
 # x_share = T/X mix in the protocol (0.5 = equal topologies, not Moscow's ~83% T).
 # Junction/dual_path split: junction_id. Segment split: osm_way_id.
-# Signs share the pool (same map may appear under several signs).
+# Signs share places within a split under tiered reuse rules (see assign/README.md).
 #
 # n_train / n_test = official protocol size per sign (not harvest size).
 

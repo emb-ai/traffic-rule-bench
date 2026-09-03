@@ -7,9 +7,16 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from traffic_bench.eval.engine.traffic.agent_profile_bank import sample_one_profile
+from traffic_bench.eval.engine.traffic.npc_profile import embed_npc_profile
 from traffic_bench.eval.engine.traffic.stable_hash import stable_hash
 from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
 from traffic_bench.eval.engine.spawn.scene_augmentation import SpawnScenario
+from traffic_bench.eval.engine.spawn.route_length_levels import (
+    list_route_length_levels,
+    select_route_length_levels,
+    tag_entry_route_length,
+)
+from traffic_bench.eval.engine.spawn.route_budget import measure_spawn_to_dest_length_m
 from traffic_bench.eval.signs.dual_path.budget import (
     apply_dual_path_route_budget,
     load_sumo_edge_lengths,
@@ -34,7 +41,8 @@ class DualPathSimParams:
     profile_density_cap: float = 1.0
     min_dual_path_gain_m: float = 20.0
     min_ego_lane_m: float = 8.0
-    dual_path_route_budget_m: Optional[float] = None
+    max_path_length_m: float = 150.0
+    max_path_length_levels: Tuple[float, ...] = (130.0, 150.0, 170.0)
 
 
 @dataclass(frozen=True)
@@ -55,6 +63,7 @@ def dual_path_geometry_key(entry: Dict[str, Any]) -> Tuple:
         entry.get("destination_lane_id"),
         entry.get("baseline_dir") or entry.get("baseline_turn_dir"),
         entry.get("var_idx"),
+        round(float(entry.get("route_length_level_m") or entry.get("max_path_length_m") or 0.0), 1),
     )
 
 
@@ -181,36 +190,63 @@ def expand_dual_path_scene_entries(
 
     scene_entries: List[Dict[str, Any]] = []
     seen: set = set()
+    configured_route_levels = list_route_length_levels(sim)
+    spawn_before_end = float(sim.spawn_distance_before_end)
 
     for dual_i, dual, lane_num, var_idx in candidates:
         spawn_scenario = dual_path_to_spawn_scenario(dual, ego_lane_num=lane_num)
-        seed = stable_hash(
-            scene_name, spawn_scenario.scenario_id, lane_num, var_idx
+        net_full = scene_dir / str(meta.get("net_file") or "map.net.xml")
+        branch_lens = []
+        for path in (dual.turn_path, dual.straight_path):
+            if not path:
+                continue
+            measured = measure_spawn_to_dest_length_m(
+                net_path=net_full,
+                spawn_edge=str(dual.ego_edge_id),
+                spawn_lane=int(lane_num),
+                dest_edge=str(path[-1]),
+                spawn_distance_before_end=spawn_before_end,
+            )
+            if measured is not None:
+                branch_lens.append(measured)
+        available_route_m = max(branch_lens) if branch_lens else None
+        route_levels, route_augment = select_route_length_levels(
+            configured_route_levels, available_route_m
         )
-        profile = sample_one_profile(
-            int(seed),
-            density_cap=float(sim.profile_density_cap),
-            horizon_steps=int(sim.horizon),
-        )
-        entry = build_entry(
-            scene_dir=scene_dir,
-            scenes_root=scenes_root,
-            meta=meta,
-            layout_variant=dual_i,
-            var_idx=var_idx,
-            seed=seed,
-            sim=sim,
-            spawn_scenario=spawn_scenario,
-            dual_path=dual,
-            spawn_lanes_cache=list(spawn_lanes),
-            junction_layout_cache=junction_layout,
-            npc_profile=profile,
-        )
-        key = dual_path_geometry_key(entry)
-        if key in seen:
-            continue
-        seen.add(key)
-        scene_entries.append(entry)
+        for path_len_m in route_levels:
+            seed = stable_hash(
+                scene_name,
+                spawn_scenario.scenario_id,
+                lane_num,
+                var_idx,
+                int(round(path_len_m)),
+            )
+            profile = sample_one_profile(
+                int(seed),
+                density_cap=float(sim.profile_density_cap),
+                horizon_steps=int(sim.horizon),
+            )
+            entry = build_entry(
+                scene_dir=scene_dir,
+                scenes_root=scenes_root,
+                meta=meta,
+                layout_variant=dual_i,
+                var_idx=var_idx,
+                seed=seed,
+                sim=sim,
+                spawn_scenario=spawn_scenario,
+                dual_path=dual,
+                spawn_lanes_cache=list(spawn_lanes),
+                junction_layout_cache=junction_layout,
+                npc_profile=profile,
+                max_path_length_m=float(path_len_m),
+                route_length_augment=route_augment,
+            )
+            key = dual_path_geometry_key(entry)
+            if key in seen:
+                continue
+            seen.add(key)
+            scene_entries.append(entry)
 
     print(f"  Manifest entries for {scene_name}: {len(scene_entries)}")
     return scene_entries
@@ -232,6 +268,8 @@ def build_dual_path_manifest_entry(
     npc_profile: Dict[str, Any],
     pdd_code: str,
     sign_type: str = "",
+    max_path_length_m: Optional[float] = None,
+    route_length_augment: bool = False,
 ) -> Dict[str, Any]:
     del layout_variant
     spec = get_spec(pdd_code)
@@ -294,8 +332,11 @@ def build_dual_path_manifest_entry(
     else:
         entry["forbidden_dirs"] = []
 
-    for key, value in npc_profile.items():
-        entry[f"profile_{key}"] = value
+    entry = embed_npc_profile(
+        entry,
+        npc_profile,
+        density_cap=float(sim.profile_density_cap),
+    )
 
     if spawn_scenario is not None:
         entry.update(spawn_scenario.to_manifest_fields())
@@ -324,8 +365,10 @@ def build_dual_path_manifest_entry(
             entry["forbidden_dir"] = spec.forbidden_dir
             dual_meta["forbidden_dir"] = spec.forbidden_dir
 
-        budget = sim.dual_path_route_budget_m
-        if budget is not None and float(budget) > 0.0:
+        budget = float(
+            max_path_length_m if max_path_length_m is not None else sim.max_path_length_m
+        )
+        if budget > 0.0:
             net_full = scene_dir / str(meta.get("net_file", "map.net.xml"))
             edge_lengths = load_sumo_edge_lengths(net_full)
             spawn_rem = float(sim.spawn_distance_before_end)
@@ -351,6 +394,7 @@ def build_dual_path_manifest_entry(
             ):
                 if trimmed.get(key) is None:
                     entry.pop(key, None)
+            entry = tag_entry_route_length(entry, budget, augment=route_length_augment)
             print(
                 f"  [dual-path budget] L={float(budget):.0f}m "
                 f"(both branches capped; shorter keeps full geometry)\n"
@@ -480,7 +524,10 @@ def generate(cfg, scenes=None):
         profile_density_cap=float(sim_cfg.profile_density_cap),
         min_dual_path_gain_m=float(scenario_cfg.min_dual_path_gain_m),
         min_ego_lane_m=min(float(sim_cfg.spawn_distance_before_end), 8.0),
-        dual_path_route_budget_m=scenario_cfg.dual_path_route_budget_m,
+        max_path_length_m=float(sim_cfg.max_path_length_m),
+        max_path_length_levels=tuple(
+            float(x) for x in getattr(sim_cfg, "max_path_length_levels", (130.0, 150.0, 170.0))
+        ),
     )
 
     family = profile.sign_type
@@ -489,7 +536,8 @@ def generate(cfg, scenes=None):
         f"dual-path (n_variations={n_variations}, "
         f"density_cap={sim_cfg.profile_density_cap}, "
         f"min_gain={scenario_cfg.min_dual_path_gain_m}m, "
-        f"route_budget_m={scenario_cfg.dual_path_route_budget_m}, "
+        f"max_path_length_m={sim_cfg.max_path_length_m}, "
+        f"route_length_levels={list(getattr(sim_cfg, 'max_path_length_levels', (130, 150, 170)))}, "
         f"horizon={sim_cfg.horizon})"
     )
 
@@ -588,6 +636,10 @@ def generate(cfg, scenes=None):
             "horizon": sim_cfg.horizon,
             "sign_distance_before_end": sim_cfg.sign_distance_before_end,
             "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
+            "max_path_length_m": float(sim_cfg.max_path_length_m),
+            "max_path_length_levels": list(
+                getattr(sim_cfg, "max_path_length_levels", (130.0, 150.0, 170.0))
+            ),
             "auxiliary_agent": False,
         },
     )

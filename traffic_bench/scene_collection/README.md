@@ -27,6 +27,8 @@ python -m traffic_bench.scene_collection materialize --all
 # 4. Review and reject scenes
 python -m traffic_bench.scene_collection review --scenes-dir data/scenes/yield
 python -m traffic_bench.scene_collection reject --sign yield --apply --refill --loop
+# or every sign that has data/scenes/<id>/:
+python -m traffic_bench.scene_collection reject --all --apply --refill --loop
 
 # 5. Pack scenes and optional upload Hugging Face
 python -m traffic_bench.scene_collection pack --all
@@ -34,6 +36,7 @@ python -m traffic_bench.scene_collection publish
 
 # 6. Generate statistics and diversity figures
 python -m traffic_bench.scene_collection analysis
+python -m traffic_bench.scene_collection analysis overlap   # cross-sign map reuse + train/test leakage
 ```
 
 *Prebuilt official scenes are available on Hugging Face:*
@@ -74,6 +77,16 @@ Useful stage controls:
 ```
 maps/splits/sign_allocations.json
 ```
+
+Allocation is **tiered by physical place** within each split (train/test separately):
+
+1. unused place in this split
+2. place already used by the same behavioral family (e.g. 4.1.1–4.1.6)
+3. place used elsewhere in the same semantic group (priority / speed / obstacle / reroute)
+
+Cross-semantic reuse is rejected. Signs are processed in taxonomy order so early
+signs get unique places first. Topology quotas (T/X 50/50, segment straight/curved)
+are preserved per sign.
 
 CLI `--sign` and Hydra `sign=` use **eval profile IDs** (`yield`, `roundabout`, `crosswalk`, ...), matching `python -m traffic_bench.eval manifest`.
 

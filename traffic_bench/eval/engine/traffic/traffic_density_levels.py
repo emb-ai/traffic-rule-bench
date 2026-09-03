@@ -12,6 +12,10 @@ against `density_calibration_sumo.json`: the u-th quantile of nuPlan's
 `count_moving_r150_per_lane` is looked up on the curve that SumoTrafficManager
 was measured to produce on the benchmark's own scenes. Outside the reachable
 range the table clamps, which the calibration file records explicitly.
+
+The MetaDrive scale constants at the bottom are what the tiers used to divide by.
+They stay because `npc_profile` still needs a vehicles-per-frame unit when it
+subtracts the auxiliary convoy; they no longer size any scene's traffic.
 """
 from __future__ import annotations
 
@@ -86,6 +90,16 @@ def sampled_density_level(seed: int) -> TrafficDensityLevel:
         id=None, name=None, percentile=None, nuplan_vehicles_per_frame=None,
         traffic_density=sample_traffic_density(seed),
     )
+
+
+# Legacy MetaDrive scale. Vehicles-per-frame divided by SCALE was the old density
+# mapping, and no measurement ever supported the divisor. Nothing sizes a scene
+# with it now -- `sample_traffic_density` reads the measured curve -- but
+# `npc_profile` converts between vehicles and density to subtract the auxiliary
+# convoy, and that conversion needs a unit.
+META_DENSITY_SCALE = 80.0
+META_DENSITY_CAP = 0.5
+MAX_TRAFFIC_DENSITY_LEVELS = 3
 
 
 def list_traffic_density_levels(num_levels: int = 1, **_) -> List[TrafficDensityLevel]:

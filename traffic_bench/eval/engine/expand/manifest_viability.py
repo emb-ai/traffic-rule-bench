@@ -616,17 +616,13 @@ def check_manifest_viability(
     result.scenario_count = len(scenarios)
     if scenarios:
         if strategy == "blocked_road":
-            from .manifest_config import (
-                DEFAULT_DESTINATION_MAX_ALONG_M,
-                DEFAULT_SIGN_DISTANCE_FROM_START,
-            )
+            from .manifest_config import DEFAULT_SIGN_DISTANCE_FROM_START
 
             for sc in scenarios:
                 ok, _ = forbidden_edge_geometry_ok(
                     net_path,
                     sc.ego_destination_edge_id,
                     sign_distance_from_start=DEFAULT_SIGN_DISTANCE_FROM_START,
-                    destination_max_along_m=DEFAULT_DESTINATION_MAX_ALONG_M,
                 )
                 if ok:
                     return result

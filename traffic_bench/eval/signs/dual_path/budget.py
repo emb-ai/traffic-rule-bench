@@ -197,7 +197,7 @@ def apply_dual_path_route_budget(
         "turn_length_m": out["turn_length_m"],
         "straight_length_m": out["straight_length_m"],
         "dual_path_gain_m": out["gain_m"],
-        "dual_path_route_budget_m": budget,
+        "max_path_length_m": budget,
         "baseline_truncated": base.truncated,
         "compliant_truncated": comp.truncated,
     }
