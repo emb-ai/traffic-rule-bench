@@ -93,4 +93,4 @@ traffic_bench/scene_collection/map_pool/nets/
 !tools/nuplan_resample/stats_r150/*.json
 
 ### GIF dumps of validation runs (large, regenerated per run)
-reports/gifval/
+reports/gifval*/
