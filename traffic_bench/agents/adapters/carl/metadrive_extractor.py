@@ -286,74 +286,106 @@ class MetaDriveExtractor:
         
         return polygons
     
+    # ---- range helpers ------------------------------------------------------
+    # Everything map-side is kept when ANY of its points lies within fov_range
+    # of the ego. The earlier checks used one representative point (the lane
+    # midpoint, the polyline mean, the first vertex), which on the long SUMO
+    # edges of the segment scenes dropped the very lane the ego was driving on:
+    # with the ego at the start of a 640 m edge the midpoint is 320 m away, so
+    # the route channel came out empty and the lane-line channel flickered
+    # between roads. Measured on seg_1158657284: route 0 px in every frame,
+    # lane lines 1652 px at spawn and 121 px forty steps later.
+    @staticmethod
+    def _min_dist(points, ego_pos) -> float:
+        pts = np.asarray(points, dtype=np.float64)
+        if pts.ndim != 2 or len(pts) == 0:
+            return float("inf")
+        ego = np.asarray(ego_pos, dtype=np.float64)[:2]
+        return float(np.min(np.linalg.norm(pts[:, :2] - ego, axis=1)))
+
+    @staticmethod
+    def _polyline2d(raw) -> Optional[np.ndarray]:
+        if raw is None:
+            return None
+        pl = np.asarray(raw, dtype=np.float64)
+        if pl.ndim != 2 or pl.shape[0] < 2:
+            return None
+        return pl[:, :2]
+
+    def _map_data(self):
+        mm = getattr(self.engine, "map_manager", None)
+        current_map = getattr(mm, "current_map", None)
+        blocks = getattr(current_map, "blocks", None)
+        if blocks:
+            return getattr(blocks[-1], "map_data", None)
+        return None
+
+    @staticmethod
+    def _is_internal_lane_id(lane_id) -> bool:
+        return isinstance(lane_id, str) and lane_id.startswith("lane_:")
+
+    def _append_lane_polygon_if_near(self, polygons: List[np.ndarray], lane, ego_pos) -> None:
+        poly = self._get_lane_polygon_cached(lane)
+        if poly is None or len(poly) < 3:
+            return
+        if self._min_dist(poly, ego_pos) < self.fov_range:
+            polygons.append(poly)
+
     def get_route_polygons(self, vehicle: BaseVehicle, ego_pos: np.ndarray) -> List[np.ndarray]:
+        """Polygons of the lanes on the ego route (every peer lane of each
+        checkpoint edge), for the route channel -- the one channel that tells
+        the policy which side of the roadway is its own.
         """
-        Extract route/navigation polygons.
-        
-        """
-        polygons = []
-        
+        polygons: List[np.ndarray] = []
         try:
-            if not hasattr(vehicle, 'navigation') or vehicle.navigation is None:
+            navigation = getattr(vehicle, "navigation", None)
+            if navigation is None:
                 return polygons
-            
-            navigation = vehicle.navigation
             road_network = self.engine.current_map.road_network
-            
+            checkpoints = list(getattr(navigation, "checkpoints", None) or [])
+
             if isinstance(road_network, NodeRoadNetwork):
-                # Existing logic for NodeRoadNetwork
-                if hasattr(navigation, 'checkpoints'):
-                    checkpoints = navigation.checkpoints
-                    
-                    for i, checkpoint in enumerate(checkpoints[:-1]):
-                        next_checkpoint = checkpoints[i + 1]
-                        if checkpoint in road_network.graph and next_checkpoint in road_network.graph.get(checkpoint, {}):
-                            for lane in road_network.graph[checkpoint][next_checkpoint]:
-                                lane_center = self._get_lane_center(lane)
-                                if lane_center is not None:
-                                    dist = np.linalg.norm(lane_center - ego_pos)
-                                    if dist < self.fov_range:
-                                        poly = self._lane_to_polygon(lane)
-                                        if poly is not None and len(poly) >= 3:
-                                            polygons.append(poly)
-            
+                for i, checkpoint in enumerate(checkpoints[:-1]):
+                    next_checkpoint = checkpoints[i + 1]
+                    if checkpoint in road_network.graph and next_checkpoint in road_network.graph.get(checkpoint, {}):
+                        for lane in road_network.graph[checkpoint][next_checkpoint]:
+                            self._append_lane_polygon_if_near(polygons, lane, ego_pos)
+
             elif isinstance(road_network, EdgeRoadNetwork):
-                if not hasattr(navigation, 'checkpoints'):
-                    return
-
-                checkpoints = navigation.checkpoints
-                if len(checkpoints) < 2:
-                    return
-
-                for i in range(len(checkpoints)):
-                    lane_index = checkpoints[i]
+                seen = set()
+                for lane_index in checkpoints:
                     try:
                         peer_lanes = road_network.get_peer_lanes_from_index(lane_index)
-                        for lane in peer_lanes:
-                            lane_center = self._get_lane_center(lane)
-                            if lane_center is not None:
-                                dist = np.linalg.norm(lane_center - ego_pos)
-                                if dist < self.fov_range:
-                                    poly = self._lane_to_polygon(lane)
-                                    if poly is not None and len(poly) >= 3:
-                                        polygons.append(poly)
                     except KeyError:
                         continue
-                
+                    for lane in peer_lanes:
+                        if id(lane) in seen:
+                            continue
+                        seen.add(id(lane))
+                        self._append_lane_polygon_if_near(polygons, lane, ego_pos)
         except Exception as e:
-            pass
-        
+            print(f"[MetaDriveExtractor] get_route_polygons failed: {e!r}")
+
         return polygons
-    
+
     def get_lane_boundaries(self, ego_pos: np.ndarray) -> List[np.ndarray]:
+        """Lane boundary polylines for the lane-line channel.
+
+        On SUMO maps the map data carries the painted lines (lane dividers,
+        the yellow axial line between opposing flows): they ARE boundaries and
+        are drawn where they lie. The previous code took each of them for a
+        lane centreline and drew two lines 1.75 m to either side -- through
+        the middle of the neighbouring lanes, with nothing on the paint itself.
+        Lane edges are added from every lane's centreline +- half its width,
+        which is what nuPlan's lane-boundary channel contains; that also puts a
+        line on the outer road edge. SUMO's internal junction lanes are skipped
+        (their edges criss-cross the intersection).
         """
-        Extract lane boundary polylines.
-        """
-        boundaries = []
-        
+        boundaries: List[np.ndarray] = []
+
         try:
             road_network = self.engine.current_map.road_network
-            
+
             if isinstance(road_network, NodeRoadNetwork):
                 for i in self._lane_ids_in_fov(ego_pos):
                     lane = self._cached_lane_objs[i]
@@ -362,52 +394,31 @@ class MetaDriveExtractor:
                         boundaries.append(left)
                     if right is not None and len(right) >= 2:
                         boundaries.append(right)
-            
+
             elif isinstance(road_network, EdgeRoadNetwork):
-                # For EdgeRoadNetwork, extract lane boundaries from map data
-                map_data = None
-                if hasattr(self.engine, 'map_manager') and hasattr(self.engine.map_manager, 'current_map'):
-                    current_map = self.engine.map_manager.current_map
-                    if hasattr(current_map, 'blocks') and len(current_map.blocks) > 0:
-                        if hasattr(current_map.blocks[-1], 'map_data'):
-                            map_data = current_map.blocks[-1].map_data
-                
+                map_data = self._map_data()
                 if map_data:
                     for lane_id, lane_info in map_data.items():
-                        if isinstance(lane_id, str) and lane_id.startswith("lane_:"):
-                            # Skip SUMO internal/junction lanes in BEV lane-boundary channel.
+                        if not isinstance(lane_info, dict) or self._is_internal_lane_id(lane_id):
                             continue
-                        # Check if this is a lane
-                        if not MetaDriveType.is_road_line(lane_info.get("type")):
+                        kind = lane_info.get("type")
+                        polyline = self._polyline2d(lane_info.get("polyline"))
+                        if polyline is None or self._min_dist(polyline, ego_pos) >= self.fov_range:
                             continue
-                        
-                        # Extract boundaries from polyline data
-                        if "polyline" in lane_info:
-                            polyline = np.array(lane_info["polyline"])
-                            if polyline.shape[1] > 2:
-                                polyline = polyline[:, :2]
-                            
-                            # Calculate center position for distance check
-                            center = polyline.mean(axis=0)
-                            dist = np.linalg.norm(center - ego_pos)
-                            
-                            if dist < self.fov_range:
-                                # For edge-based networks, we might need to create boundaries differently
-                                # Try to get width information
-                                width = lane_info.get("width", 3.5)
-                                
-                                # Create left and right boundaries by offsetting the centerline
-                                left_boundary, right_boundary = self._create_boundaries_from_centerline(polyline, width)
-                                
-                                if left_boundary is not None and len(left_boundary) >= 2:
-                                    boundaries.append(left_boundary)
-                                if right_boundary is not None and len(right_boundary) >= 2:
-                                    boundaries.append(right_boundary)
+                        if MetaDriveType.is_road_line(kind):
+                            boundaries.append(polyline)
+                        elif MetaDriveType.is_lane(kind):
+                            width = float(lane_info.get("width", 3.5) or 3.5)
+                            left, right = self._create_boundaries_from_centerline(polyline, width)
+                            if left is not None and len(left) >= 2:
+                                boundaries.append(left)
+                            if right is not None and len(right) >= 2:
+                                boundaries.append(right)
         except Exception as e:
-            pass
-        
+            print(f"[MetaDriveExtractor] get_lane_boundaries failed: {e!r}")
+
         return boundaries
-    
+
     def get_vehicles(self, ego_vehicle: BaseVehicle, ego_pos: np.ndarray) -> List[Dict]:
         """
         Extract other vehicles in scene.
@@ -639,9 +650,11 @@ class MetaDriveExtractor:
                                 if polyline.shape[1] > 2:
                                     polyline = polyline[:, :2]
                                 
-                                # Use first point for distance check
+                                # Any point of the lane within range: the
+                                # first-vertex check dropped the ego's own lane
+                                # once it was 100 m past the lane start.
                                 if len(polyline) > 0:
-                                    dist = np.linalg.norm(polyline[0] - ego_pos)
+                                    dist = self._min_dist(polyline, ego_pos)
                                     if dist < self.fov_range:
                                         # Calculate approximate speed limit
                                         speed_limit_kmh = lane_info["speed"] * 3.6
@@ -656,6 +669,40 @@ class MetaDriveExtractor:
 
         return speed_limits
     
+    def get_static_objects(self, ego_pos: np.ndarray) -> List[Dict]:
+        """Cones, barriers and other static traffic objects near the ego, for
+        the pedestrians+static channel (where CaRL's nuPlan renderer puts them).
+
+        Traffic signs are TrafficObjects too, but nuPlan never draws sign posts
+        as obstacles and this benchmark stands its plates on the lane
+        centreline, so they are left out explicitly.
+        """
+        objects: List[Dict] = []
+        try:
+            from metadrive.component.static_object.traffic_object import TrafficObject
+            try:
+                from traffic_bench.signs.base import BaseTrafficSign
+            except Exception:  # pragma: no cover - signs package optional
+                BaseTrafficSign = ()
+            ego = np.asarray(ego_pos, dtype=np.float64)[:2]
+            for obj in self.engine.get_objects(
+                lambda o: isinstance(o, TrafficObject) and not isinstance(o, BaseTrafficSign)
+            ).values():
+                pos = np.asarray(obj.position, dtype=np.float64)[:2]
+                if np.linalg.norm(pos - ego) >= self.fov_range:
+                    continue
+                length = getattr(obj, "top_down_length", None) or getattr(obj, "LENGTH", None) or 1.0
+                width = getattr(obj, "top_down_width", None) or getattr(obj, "WIDTH", None) or 1.0
+                objects.append({
+                    "position": pos,
+                    "heading": float(getattr(obj, "heading_theta", 0.0) or 0.0),
+                    "length": float(length),
+                    "width": float(width),
+                })
+        except Exception as e:
+            print(f"[MetaDriveExtractor] get_static_objects failed: {e!r}")
+        return objects
+
     def extract_all(self, vehicle: BaseVehicle) -> Dict[str, Any]:
         ego_state = self.get_ego_state(vehicle)
         ego_pos = ego_state["position"]
@@ -670,8 +717,8 @@ class MetaDriveExtractor:
             "speed_limits": self.get_speed_limits(ego_pos),
             "vehicles": self.get_vehicles(vehicle, ego_pos),
             "pedestrians": self.get_pedestrians(ego_pos),
+            "static_objects": self.get_static_objects(ego_pos),
         }
-        
     def _get_lane_center(self, lane: AbstractLane) -> Optional[np.ndarray]:
         """Get approximate center of lane."""
         try:

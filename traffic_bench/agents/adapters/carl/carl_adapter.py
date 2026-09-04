@@ -721,6 +721,7 @@ class CaRLMetaDriveAdapter:
             speed_limits=data["speed_limits"],
             vehicles=data["vehicles"],
             pedestrians=data["pedestrians"],
+            static_objects=data.get("static_objects"),
         )
         
         # Measurements
