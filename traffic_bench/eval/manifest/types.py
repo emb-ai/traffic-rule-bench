@@ -48,6 +48,10 @@ class SimulationConfig:
     sign_distance_from_start: float = 10.0
     n_variations: int = 3
     profile_density_cap: float = 1.0
+    # Variant 0 is the nominal scene: no traffic, no NPC profile, the plate at
+    # its nominal position, the reference approach speed. Variants 1..N-1 sample
+    # everything. Off by default so existing manifests rebuild unchanged.
+    default_first_variant: bool = False
     compliant_stop_success_seconds: float = 3.0
     compliant_stop_max_dist_m: float = 12.0
     compliant_stop_speed_mps: float = 0.5
