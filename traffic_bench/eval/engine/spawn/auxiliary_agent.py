@@ -24,11 +24,17 @@ DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END = 15.0
 DEFAULT_CONVOY_SIZE = 3
 DEFAULT_CONVOY_GAP_M = 10.0
 MIN_SPAWN_LONGITUDE_M = 3.0
-# Hard-stop aux when Euclidean center distance to ego falls below STOP;
-# resume only after RESUME (hysteresis avoids brake chatter at the threshold).
-# ~4.5 m vehicle length → STOP=7 m ≈ 2.5 m bumper gap on head-on / crossing.
+# Hard-stop aux only when ego is *directly ahead on the same lane* (not merely
+# within Euclidean radius — adjacent-lane ego must not freeze the convoy).
+# ~4.5 m vehicle length → STOP=7 m ≈ 2.5 m bumper gap on the lane.
 DEFAULT_EGO_PROXIMITY_STOP_M = 7.0
 DEFAULT_EGO_PROXIMITY_RESUME_M = 9.0
+# Lateral slack beyond half lane width when projecting ego onto aux's lane.
+EGO_AHEAD_LATERAL_MARGIN_M = 0.5
+# Despawn aux that have been essentially stopped for this long (post-release).
+DEFAULT_STATIONARY_DESPAWN_S = 3.0
+STATIONARY_SPEED_MPS = 0.15
+PHYSICS_DT_S = 0.1
 # Don't despawn for arrive_destination checks until aux has been driving a bit.
 ARRIVE_GRACE_STEPS = 10
 AuxPolicyType = Literal["idm", "stationary"]
@@ -114,8 +120,11 @@ class StationaryPolicy(BasePolicy):
 class AuxiliaryIDMPolicy(IDMPolicy):
     """IDM that sticks tightly to the routed lane centerline (incl. turns).
 
-    Also hard-stops when too close to ego: stock IDM only brakes for same-lane
-    front objects, so crossing/junction approaches would otherwise plow into ego.
+    Also hard-stops when ego is directly ahead on the *same* lane: stock IDM
+    only brakes for same-lane front objects in its own front-object detector,
+    but a Euclidean proximity gate would also freeze aux for ego on a peer
+    lane — which deadlocks yield benches. Restrict the hard-stop to same-lane
+    ahead with hysteresis.
     """
 
     # Look-ahead along the lane for heading (meters); longer helps on sharp turns.
@@ -158,28 +167,47 @@ class AuxiliaryIDMPolicy(IDMPolicy):
             pass
         return None
 
-    def _ego_proximity_m(self) -> float:
+    def _ego_directly_ahead_gap_m(self) -> Optional[float]:
+        """Longitudinal gap to ego when ego is on aux's lane and ahead, else None.
+
+        Projects ego onto the aux vehicle's current lane. Peer/adjacent lanes
+        produce a large |lat| and are rejected so aux does not freeze forever
+        while ego waits on a neighbouring approach.
+        """
         ego = self._resolve_ego()
-        if ego is None or ego is self.control_object:
-            return float("inf")
+        aux = self.control_object
+        if ego is None or ego is aux:
+            return None
+        lane = getattr(aux, "lane", None)
+        if lane is None:
+            return None
         try:
-            dx = float(ego.position[0]) - float(self.control_object.position[0])
-            dy = float(ego.position[1]) - float(self.control_object.position[1])
-            return float(math.hypot(dx, dy))
+            aux_long, _aux_lat = lane.local_coordinates(aux.position)
+            ego_long, ego_lat = lane.local_coordinates(ego.position)
         except Exception:
-            return float("inf")
+            return None
+        lane_w = float(getattr(lane, "width", 3.5) or 3.5)
+        if abs(float(ego_lat)) > (lane_w * 0.5 + EGO_AHEAD_LATERAL_MARGIN_M):
+            return None
+        gap = float(ego_long) - float(aux_long)
+        if gap <= 0.0:
+            return None
+        return gap
 
     def _should_hard_stop_for_ego(self) -> bool:
-        """True while aux must fully stop to avoid hitting ego (with hysteresis)."""
+        """True while ego is directly ahead on the same lane (with hysteresis)."""
         if self._ego_proximity_stop_m <= 0:
             return False
-        dist = self._ego_proximity_m()
+        gap = self._ego_directly_ahead_gap_m()
+        if gap is None:
+            self._ego_proximity_holding = False
+            return False
         if self._ego_proximity_holding:
-            if dist > self._ego_proximity_resume_m:
+            if gap > self._ego_proximity_resume_m:
                 self._ego_proximity_holding = False
                 return False
             return True
-        if dist <= self._ego_proximity_stop_m:
+        if gap <= self._ego_proximity_stop_m:
             self._ego_proximity_holding = True
             return True
         return False
@@ -419,6 +447,8 @@ class AuxiliaryAgentsManager(BaseManager):
         self._convoy_positions: List[int] = []
         self._aux_policies: List[BasePolicy] = []
         self._ring_circulate_flags: List[bool] = []
+        self._stationary_time_s: List[float] = []
+        self._stationary_despawn_s = float(DEFAULT_STATIONARY_DESPAWN_S)
 
     def reset(self):
         self._aux_vehicles = []
@@ -427,6 +457,7 @@ class AuxiliaryAgentsManager(BaseManager):
         self._convoy_positions = []
         self._aux_policies = []
         self._ring_circulate_flags = []
+        self._stationary_time_s = []
 
     def after_reset(self):
         self._spawn_auxiliary_vehicles()
@@ -525,6 +556,7 @@ class AuxiliaryAgentsManager(BaseManager):
             self._convoy_positions.append(convoy_position)
             ring_circ = bool(self._ring_circulate_by_lane.get(str(spawn_lane_index), False))
             self._ring_circulate_flags.append(ring_circ)
+            self._stationary_time_s.append(0.0)
             try:
                 aux_vehicle._pdd_ring_circulate = ring_circ
                 aux_vehicle._pdd_spawn_lane_key = str(spawn_lane_index)
@@ -684,6 +716,8 @@ class AuxiliaryAgentsManager(BaseManager):
         self._spawn_destinations = []
         self._convoy_positions = []
         self._aux_policies = []
+        self._ring_circulate_flags = []
+        self._stationary_time_s = []
 
         for idx, spawn_lane_index in enumerate(self._requested_spawn_lane_indices):
             candidate_lanes = [spawn_lane_index]
@@ -837,6 +871,51 @@ class AuxiliaryAgentsManager(BaseManager):
 
         return False, ""
 
+    def _update_stationary_timer(self, idx: int, aux_vehicle) -> Optional[str]:
+        """Accumulate stopped time; return despawn reason when over the limit.
+
+        Gated aux waiting for ego release is intentionally stationary — do not
+        count those seconds. Once released (or never gated), freeze past
+        ``_stationary_despawn_s`` clears stuck convoys (e.g. old Euclidean
+        proximity deadlock with ego on a peer lane).
+        """
+        while len(self._stationary_time_s) < len(self._aux_vehicles):
+            self._stationary_time_s.append(0.0)
+        if idx >= len(self._stationary_time_s):
+            return None
+
+        policy = None
+        try:
+            policy = self.engine.get_policy(aux_vehicle.name)
+        except Exception:
+            policy = self._aux_policies[idx] if idx < len(self._aux_policies) else None
+
+        if isinstance(policy, GatedAuxiliaryIDMPolicy) and not bool(
+            getattr(policy, "released", False)
+        ):
+            self._stationary_time_s[idx] = 0.0
+            return None
+        if isinstance(policy, StationaryPolicy):
+            # Explicitly stationary agents are meant to stay put.
+            self._stationary_time_s[idx] = 0.0
+            return None
+
+        try:
+            speed = abs(float(getattr(aux_vehicle, "speed", 0.0) or 0.0))
+        except Exception:
+            speed = 0.0
+        if speed < STATIONARY_SPEED_MPS:
+            self._stationary_time_s[idx] += PHYSICS_DT_S
+        else:
+            self._stationary_time_s[idx] = 0.0
+
+        if (
+            self._stationary_despawn_s > 0
+            and self._stationary_time_s[idx] >= self._stationary_despawn_s
+        ):
+            return "stationary_timeout"
+        return None
+
     def _remove_aux_at(self, idx: int, reason: str) -> None:
         aux_vehicle = self._aux_vehicles[idx]
         lane = (
@@ -855,6 +934,7 @@ class AuxiliaryAgentsManager(BaseManager):
             self._convoy_positions,
             self._aux_policies,
             self._ring_circulate_flags,
+            self._stationary_time_s,
         ):
             if idx < len(seq):
                 seq.pop(idx)
@@ -1017,6 +1097,10 @@ class AuxiliaryAgentsManager(BaseManager):
                 aux_vehicle.after_step()
             except Exception:
                 to_remove.append((idx, "after_step_error"))
+                continue
+            stuck = self._update_stationary_timer(idx, aux_vehicle)
+            if stuck:
+                to_remove.append((idx, stuck))
                 continue
             should, reason = self._should_despawn(aux_vehicle)
             if should and reason in (
