@@ -92,6 +92,25 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
     horizon = _manifest_horizon(row, fallback=max_steps)
     net_path = str(scenes_root / row["net_path"]) if not str(row["net_path"]).startswith("/") else str(row["net_path"])
     sign_spawn_distance = _resolve_sign_spawn_distance(row, scenes_root)
+    # Speed plates: no background traffic between the ego and the plate. The
+    # approach is what the plate is judged on, and an NPC placed on it either
+    # boxes the ego in or gets rear-ended before the sign is even reached. The
+    # cut uses the row's sign_s -- the same longitude place_speed_signs puts the
+    # plate at (signs/speed/place.py) -- so the two cannot drift apart;
+    # sign_spawn_distance is the junction-style fallback and is not the plate.
+    if _row_is_speed(row) and row.get("road_id"):
+        _sign_s = row.get("sign_s")
+        traffic_after_lng = float(_sign_s if _sign_s is not None else sign_spawn_distance)
+        traffic_after_edge = str(row["road_id"])
+        traffic_after_kmh = float(row.get("v_target_kmh") or 0.0)
+        # Share of NPCs honouring the plate; rows made before the field
+        # existed get 1.0, the old all-compliant behaviour.
+        traffic_compliance = float(row.get("npc_compliance_rate", 1.0) or 0.0)
+    else:
+        traffic_after_lng = -1.0
+        traffic_after_edge = ""
+        traffic_after_kmh = 0.0
+        traffic_compliance = 1.0
     background_excluded_edges = (
         resolve_row_background_excluded_edges(row, net_path)
         if _row_is_one_way(row)
@@ -127,6 +146,10 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         traffic_density=traffic_density,
         tl_speed_factor=float(row.get("tl_speed_factor", 20.0)),
         sign_spawn_distance=sign_spawn_distance,
+        traffic_spawn_after_lng=traffic_after_lng,
+        traffic_spawn_after_edge=traffic_after_edge,
+        traffic_spawn_after_kmh=traffic_after_kmh,
+        traffic_npc_compliance_rate=traffic_compliance,
         min_route_hops_after_spawn=int(row.get("min_route_hops_after_spawn", 10)),
         max_route_hops_after_spawn=int(row.get("max_route_hops_after_spawn", 10)),
         horizon=horizon,

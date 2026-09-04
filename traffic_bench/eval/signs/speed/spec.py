@@ -24,8 +24,24 @@ ACCEL_DEFICIT_KMH = 15.0
 ACCEL_DEFICIT_MIN_KMH = 12.0
 ACCEL_DEFICIT_MAX_KMH = 18.0
 ACCEL_V0_FLOOR_KMH = 5.0
-ACCEL_APPROACH_M = 20.0
+# Run-up from the spawn to the 4.6 plate; the zone opens 10 m past the plate.
+# The ego starts 12-18 km/h under the minimum and must be at it when the zone
+# opens. Over the 30 m the old 20 m gave, that needs 1.3 m/s^2 for a 40 plate
+# and 2.0 m/s^2 for a 60 plate -- above the comfortable IDM acceleration, so
+# the rule expert only made it by flooring the throttle regardless of the car
+# ahead, and once that was stopped every episode opened the zone in breach,
+# traffic or no traffic. 50 m (60 m to the zone) brings the requirement down
+# to 0.6-1.0 m/s^2, which a safe approach can deliver.
+ACCEL_APPROACH_M = 50.0
 MIN_SPEED_FLOOR_KMH = 35.0
+
+# Share of the background cars that honour the plate, drawn per sampled
+# variant from this range (the nominal variant carries no traffic). With every
+# car obeying, a sign-blind policy passes the zone by trailing the car ahead;
+# a few cars ignoring the plate take that shortcut away while the scene stays
+# coherent. Speed families only -- detour traffic must still leave the closed
+# lane, that is physics rather than a rule.
+NPC_COMPLIANCE_RANGE = (0.5, 1.0)
 
 SPEED_LIMIT_TARGETS_KMH = (20, 30, 40)
 MIN_SPEED_TARGETS_KMH = (40, 50, 60)
@@ -137,6 +153,16 @@ def assign_limit_kmh(
     return float(SPEED_LIMIT_TARGETS_KMH[idx % len(SPEED_LIMIT_TARGETS_KMH)])
 
 
+
+def sample_npc_compliance_rate(seed: int) -> float:
+    """Per-row share of plate-abiding NPCs. Drawn from a stream of its own so
+    the other per-row draws (density, v0, plate offset) keep their values."""
+    import random
+
+    lo, hi = NPC_COMPLIANCE_RANGE
+    rng = random.Random(int(seed) ^ 0x6E7063)
+    return round(float(rng.uniform(float(lo), float(hi))), 3)
+
 def spawn_mode_for(pdd_code: str) -> str:
     if pdd_code in ACCEL_SPAWN_CODES:
         return "accel"
@@ -191,6 +217,16 @@ def braking_v0_mps(seed: int, v_target_kmh: float) -> float:
     if v0 <= v_target_mps + 1e-6:
         v0 = min(v0_cap_mps, v_target_mps + V0_MIN_EXCESS_MPS_DEFAULT)
     return float(v0)
+
+
+def nominal_braking_v0_mps(v_target_kmh: float) -> float:
+    """The reference approach for a ceiling plate: the limit plus the minimum
+    exceedance, with no draw. This is the value braking_v0_mps falls back to
+    when the sampler is unavailable, so the nominal row of a scene is the same
+    approach the sampled rows are spread around."""
+    v_target_mps = float(v_target_kmh) / 3.6
+    v0_cap_mps = (float(v_target_kmh) + V0_MAX_EXCESS_KMH) / 3.6
+    return float(min(v0_cap_mps, v_target_mps + V0_MIN_EXCESS_MPS_DEFAULT))
 
 
 def braking_d_required_m(v0_mps: float, v_target_kmh: float) -> float:
