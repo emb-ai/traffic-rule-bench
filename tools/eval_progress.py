@@ -9,6 +9,7 @@ Usage (repo root)::
     python tools/eval_progress.py
     python tools/eval_progress.py --watch 30
     python tools/eval_progress.py --policies carl,carl_rule --watch
+    python tools/eval_progress.py --signs stop,yield,main_road,secondary --watch 30
 """
 from __future__ import annotations
 
@@ -125,9 +126,13 @@ def collect(
     split: str,
     policies: list[str],
     ego: str,
+    signs_filter: list[str] | None = None,
 ) -> list[SignProgress]:
+    wanted = set(signs_filter) if signs_filter else None
     out: list[SignProgress] = []
     for sign, disk in SIGN_SPECS:
+        if wanted is not None and sign not in wanted:
+            continue
         man = root / "data" / "runs" / disk / split / "real_manifest.jsonl"
         if not man.is_file():
             continue
@@ -248,6 +253,14 @@ def main(argv: list[str] | None = None) -> int:
         default=",".join(DEFAULT_POLICIES),
         help="Comma-separated policy ids (default: parallel-script set)",
     )
+    p.add_argument(
+        "--signs",
+        default="",
+        help=(
+            "Comma/space-separated hydra sign ids to track "
+            "(e.g. stop,yield,main_road,secondary). Empty = all."
+        ),
+    )
     p.add_argument("--ego", default=DEFAULT_EGO, help="Ego variant suffix (default: default)")
     p.add_argument("--detail", action="store_true", help="Show every baseline per sign, not only incomplete")
     p.add_argument(
@@ -268,14 +281,28 @@ def main(argv: list[str] | None = None) -> int:
 
     root = (args.root or _repo_root()).resolve()
     policies = _parse_list(args.policies)
+    signs_filter = _parse_list(args.signs) or None
     if not policies:
         print("no policies", file=sys.stderr)
         return 2
+    if signs_filter is not None:
+        known = {sign for sign, _ in SIGN_SPECS}
+        unknown = [s for s in signs_filter if s not in known]
+        if unknown:
+            print(f"unknown --signs ids: {unknown}", file=sys.stderr)
+            print(f"known: {sorted(known)}", file=sys.stderr)
+            return 2
 
     history: list[tuple[float, int]] = []
 
     def once(*, clear: bool) -> None:
-        signs = collect(root, split=args.split, policies=policies, ego=args.ego)
+        signs = collect(
+            root,
+            split=args.split,
+            policies=policies,
+            ego=args.ego,
+            signs_filter=signs_filter,
+        )
         if not signs:
             print(f"no manifests under {root}/data/runs/*/ {args.split}/", file=sys.stderr)
             return

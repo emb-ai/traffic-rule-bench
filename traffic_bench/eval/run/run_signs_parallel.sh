@@ -8,6 +8,7 @@
 # Usage (from repo root, conda env active):
 #   bash traffic_bench/eval/run/run_signs_parallel.sh
 #   CPU_WORKERS=4 GPUS=1,2,3,4,5,6,7 JOBS=16 JOBS_NN=16 bash ...
+#   SIGNS="stop yield" CPU_WORKERS=3 GPUS=1,2,3 JOBS=16 JOBS_NN=16 bash ...
 
 set -euo pipefail
 
@@ -22,6 +23,10 @@ cd "$ROOT"
 : "${CPU_POLICIES:=[idm,idm_rule,ppo_lidar,ppo_rule]}"
 : "${GPU_POLICIES:=[carl,carl_rule]}"
 : "${LOG_DIR:=data/eval_parallel_logs}"
+# Optional subset, space- or comma-separated hydra sign ids.
+#   SIGNS="stop yield main_road" …
+# Empty / unset → full default list below.
+: "${SIGNS:=}"
 
 mkdir -p "$LOG_DIR"
 
@@ -53,7 +58,7 @@ sign_dir() {
   esac
 }
 
-SIGNS=(
+DEFAULT_SIGNS=(
   main_road secondary yield stop roundabout blocked_road no_entry
   no_turn/right no_turn/left
   direction/straight direction/right direction/left
@@ -63,8 +68,18 @@ SIGNS=(
   speed_limit min_speed residential_zone zone_speed_limit crosswalk
 )
 
+if [[ -n "${SIGNS}" ]]; then
+  # Accept "a b c" or "a,b,c"
+  SIGNS="${SIGNS//,/ }"
+  # shellcheck disable=SC2206
+  SIGNS_ARR=($SIGNS)
+else
+  SIGNS_ARR=("${DEFAULT_SIGNS[@]}")
+fi
+
 IFS=',' read -ra GPU_LIST <<< "$GPUS"
 echo "CPU_WORKERS=$CPU_WORKERS  GPUS=${GPU_LIST[*]}  JOBS=$JOBS  JOBS_NN=$JOBS_NN"
+echo "SIGNS (${#SIGNS_ARR[@]}): ${SIGNS_ARR[*]}"
 echo "logs: $LOG_DIR"
 echo "GPU pin: CUDA_VISIBLE_DEVICES=<index> (cluster NVD left intact)"
 
@@ -117,7 +132,7 @@ run_gpu_sign() {
 
 # --- CPU pool: fill up to CPU_WORKERS, refill as jobs finish ---
 cpu_pids=()
-cpu_signs=("${SIGNS[@]}")
+cpu_signs=("${SIGNS_ARR[@]}")
 cpu_i=0
 
 launch_cpu() {
@@ -131,7 +146,7 @@ launch_cpu() {
 
 # --- GPU pool: one sign per GPU ---
 gpu_pids=()
-gpu_signs=("${SIGNS[@]}")
+gpu_signs=("${SIGNS_ARR[@]}")
 gpu_i=0
 gpu_slot=0  # index into GPU_LIST for next free assignment — actually track per-slot
 

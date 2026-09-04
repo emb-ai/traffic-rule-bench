@@ -34,9 +34,10 @@ def discover_failure_gifs(root: Path) -> list[dict[str, Any]]:
                 meta_by_key[key] = row
 
     gifs: list[dict[str, Any]] = []
-    for gif_path in sorted(root.rglob("replay.gif")):
+    for gif_path in sorted(root.rglob("replay*.gif")):
         rel = gif_path.relative_to(root).as_posix()
         parts = gif_path.relative_to(root).parts
+        version = gif_path.stem  # replay / replay_v2 / ...
         category = sign_group = baseline = scene_uid = ""
         if "rule_expert_sign_compliance_0" in parts:
             category = "rule_expert_sign_compliance_0"
@@ -66,6 +67,7 @@ def discover_failure_gifs(root: Path) -> list[dict[str, Any]]:
         index_row = meta_by_key.get((category, sign_group, scene_uid), {})
         gifs.append({
             "rel_path": rel,
+            "version": version,
             "category": category or index_row.get("category", ""),
             "sign_group": sign_group or index_row.get("sign_group", ""),
             "baseline": baseline or index_row.get("baseline", ""),
@@ -139,6 +141,7 @@ REVIEW_HTML = """<!doctype html>
       <select id="filter-category"><option value="">all categories</option></select>
       <select id="filter-sign"><option value="">all signs</option></select>
       <select id="filter-baseline"><option value="">all baselines</option></select>
+      <select id="filter-version"><option value="">all versions</option></select>
       <input id="search" type="search" placeholder="search scene_uid / scene_id" />
       <span id="stats"></span>
     </div>
@@ -161,7 +164,7 @@ REVIEW_HTML = """<!doctype html>
   </script>
   <script>
     let gifs = Array.isArray(window.__GIFS__) ? window.__GIFS__ : [];
-    let filterCategory = "", filterSign = "", filterBaseline = "", searchQuery = "";
+    let filterCategory = "", filterSign = "", filterBaseline = "", filterVersion = "", searchQuery = "";
     let lightboxIndex = -1;
 
     function gifUrl(relPath) {
@@ -187,6 +190,7 @@ REVIEW_HTML = """<!doctype html>
         if (filterCategory && g.category !== filterCategory) return false;
         if (filterSign && g.sign_group !== filterSign) return false;
         if (filterBaseline && g.baseline !== filterBaseline) return false;
+        if (filterVersion && g.version !== filterVersion) return false;
         if (searchQuery) {
           const q = searchQuery.toLowerCase();
           if (!g.scene_uid.toLowerCase().includes(q) &&
@@ -221,6 +225,7 @@ REVIEW_HTML = """<!doctype html>
             <span class="tag cat">${esc(gif.category)}</span>
             <span class="tag sign">${esc(gif.sign_group)} (${esc(gif.pdd_code)})</span>
             <span class="tag policy">${esc(gif.baseline)}</span>
+            <span class="tag">${esc(gif.version)}</span>
           </div>
         </div>`;
       card.querySelector("img").addEventListener("click", () => openLightbox(gif.rel_path));
@@ -276,6 +281,9 @@ REVIEW_HTML = """<!doctype html>
     document.getElementById("filter-baseline").addEventListener("change", (e) => {
       filterBaseline = e.target.value; render();
     });
+    document.getElementById("filter-version").addEventListener("change", (e) => {
+      filterVersion = e.target.value; render();
+    });
     document.getElementById("search").addEventListener("input", (e) => {
       searchQuery = e.target.value; render();
     });
@@ -301,12 +309,13 @@ REVIEW_HTML = """<!doctype html>
         }
         if (!gifs.length) {
           err.hidden = false;
-          err.textContent = "No replay.gif files found under the failure_cases folder.";
+          err.textContent = "No replay*.gif files found under the failure_cases folder.";
           return;
         }
         fillSelect("filter-category", [...new Set(gifs.map(g => g.category).filter(Boolean))].sort());
         fillSelect("filter-sign", [...new Set(gifs.map(g => g.sign_group).filter(Boolean))].sort());
         fillSelect("filter-baseline", [...new Set(gifs.map(g => g.baseline).filter(Boolean))].sort());
+        fillSelect("filter-version", [...new Set(gifs.map(g => g.version).filter(Boolean))].sort());
         render();
       } catch (e) {
         err.hidden = false;
@@ -415,9 +424,9 @@ def main() -> None:
         print(f"Not a directory: {root}", file=sys.stderr)
         sys.exit(1)
 
-    n = len(list(root.rglob("replay.gif")))
+    n = len(list(root.rglob("replay*.gif")))
     if n == 0:
-        print(f"No replay.gif under {root}", file=sys.stderr)
+        print(f"No replay*.gif under {root}", file=sys.stderr)
         sys.exit(1)
 
     handler = make_handler(root)

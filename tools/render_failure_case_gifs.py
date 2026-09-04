@@ -24,6 +24,7 @@ SIGN_GROUP_TO_SCENES = {
     "secondary_road": REPO_ROOT / "data/scenes/secondary_road",
     "yield": REPO_ROOT / "data/scenes/yield",
     "stop": REPO_ROOT / "data/scenes/stop",
+    "roundabout": REPO_ROOT / "data/scenes/roundabout",
 }
 
 MODEL_CACHE: dict[str, dict] = {}
@@ -31,10 +32,12 @@ MODEL_CACHE: dict[str, dict] = {}
 
 def _load_models(policy: str) -> dict:
     if policy not in MODEL_CACHE:
+        from traffic_bench.eval.engine.sim.checkpoints import resolve_nn_checkpoint
         from traffic_bench.eval.run.policy import _load_policy_models
 
+        model_path = resolve_nn_checkpoint(policy, None)
         MODEL_CACHE[policy] = _load_policy_models(
-            policy, None, plant2_action_mode="discrete"
+            policy, model_path, plant2_action_mode="discrete"
         )
     return MODEL_CACHE[policy]
 
@@ -70,8 +73,14 @@ def _find_replays(root: Path, *, category: str | None, sign: str | None) -> list
     return replays
 
 
-def render_one(replay_path: Path, *, force: bool, gif_window_m: float) -> str:
-    gif_path = replay_path.parent / "replay.gif"
+def render_one(
+    replay_path: Path,
+    *,
+    force: bool,
+    gif_window_m: float,
+    gif_name: str = "replay.gif",
+) -> str:
+    gif_path = replay_path.parent / gif_name
     if gif_path.exists() and not force:
         return "skip"
 
@@ -131,8 +140,18 @@ def main() -> None:
     parser.add_argument("--sign", choices=list(SIGN_GROUP_TO_SCENES))
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--gif-name",
+        default="replay.gif",
+        help="Output GIF filename next to replay.json "
+             "(use e.g. replay_v2.gif to keep older GIFs)",
+    )
     parser.add_argument("--gif-window-m", type=float, default=60.0)
     args = parser.parse_args()
+
+    gif_name = args.gif_name
+    if not gif_name.endswith(".gif"):
+        gif_name = f"{gif_name}.gif"
 
     replays = _find_replays(
         args.root.resolve(),
@@ -142,6 +161,7 @@ def main() -> None:
     if args.limit is not None:
         replays = replays[: args.limit]
 
+    print(f"Writing GIFs as {gif_name!r} under {args.root}")
     stats: dict[str, int] = {}
     for i, replay_path in enumerate(replays, start=1):
         rel = replay_path.relative_to(args.root.resolve())
@@ -150,6 +170,7 @@ def main() -> None:
                 replay_path,
                 force=args.force,
                 gif_window_m=args.gif_window_m,
+                gif_name=gif_name,
             )
         except Exception:
             status = "error"
