@@ -919,8 +919,16 @@ class Kinematics:
                 # is below the min doesn't keep dipping under min - tolerance. NN
                 # policies (carl/plant2) have no internal target to raise, so this
                 # firm throttle floor is their only lever to reach/hold the minimum.
+                #
+                # Never turn a braking request into acceleration. The target speed
+                # is already raised to the floor upstream, so a negative throttle
+                # arriving here means the controller is braking for something --
+                # a slower leader, a curve cap -- and the floor must yield to it.
+                # Overriding it drove every rule expert into the car ahead on the
+                # 4.6 scenes with traffic (20 of 24 rows, crash at step ~25, while
+                # the sign-unaware idm on the same rows arrived 24 of 24).
                 floor_target = self._speed_floor + FLOOR_OVERSHOOT_KMH
-                if speed_kmh < floor_target:
+                if speed_kmh < floor_target and throttle >= 0.0:
                     deficit = floor_target - speed_kmh
                     accel = min(FLOOR_PROP_GAIN * deficit + FLOOR_BIAS, 1.0)
                     throttle = max(throttle, accel)

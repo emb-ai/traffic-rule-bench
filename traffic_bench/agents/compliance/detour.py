@@ -42,6 +42,17 @@ from traffic_bench.agents.compliance.kinematics import (
 import numpy as np
 
 class DetourCompliance:
+        def _detour_preempt_m(self) -> float:
+            """Per-episode preempt distance, cached after the first draw."""
+            if getattr(self, "_detour_preempt_cache", None) is None:
+                rng = getattr(self.engine, "np_random", None)
+                if self.PREEMPT_DETOUR_RANGE_M is None or rng is None:
+                    self._detour_preempt_cache = float(self.PREEMPT_DETOUR_M)
+                else:
+                    lo, hi = self.PREEMPT_DETOUR_RANGE_M
+                    self._detour_preempt_cache = float(rng.uniform(lo, hi))
+            return self._detour_preempt_cache
+
         def _handle_detour(self, sign):
             self._blocked_lanes.add(getattr(sign.lane, "index", None))
             if not on_same_road(self.control_object.lane, sign.lane):
@@ -67,7 +78,7 @@ class DetourCompliance:
                 return
             in_zone = sign.zone_start <= veh_long <= sign.zone_end
             approaching = (veh_long < sign.zone_start
-                           and sign.zone_start - veh_long < self.PREEMPT_DETOUR_M)
+                           and sign.zone_start - veh_long < self._detour_preempt_m())
             if not (in_zone or approaching):
                 # Queue at the cones: NPCs on the obstacle lane pile up behind the
                 # cluster. Merge BEFORE reaching the queue tail instead of joining
@@ -77,13 +88,18 @@ class DetourCompliance:
                     return
             violation_long = getattr(
                 sign, "violation_long",
-                sign.obstacle_long + getattr(sign, "OBSTACLE_OFFSET", 2.0),
+                sign.obstacle_long + getattr(sign, "OBSTACLE_OFFSET", 0.0),
             )
             if in_zone and violation_long - veh_long <= 0:
                 return
-            self._cap_speed(max(SLOW_APPROACH_MIN_KMH,
-                                self.control_object.speed_km_h * SLOW_APPROACH_FACTOR))
             target = self._detour_target_lane(sign)
+            if not (target is not None and self._detour_gap_ok(target)):
+                # Target gap blocked (or no target): bleed speed off while
+                # waiting. With a free gap the ego keeps momentum and merges at
+                # speed instead of crawling up to the plate.
+                self._cap_speed(max(self.DETOUR_APPROACH_MIN_KMH,
+                                    self.control_object.speed_km_h
+                                    * self.DETOUR_APPROACH_FACTOR))
             if target is not None:
                 if self._lc_target_lane is None and not same_lane(
                     self.control_object.lane, target
