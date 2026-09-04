@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import pickle
 import random
 from collections import defaultdict
@@ -45,7 +46,8 @@ from traffic_bench.envs.sumo import TrafficSignSumoEnv
 from traffic_bench.envs.traffic import SumoTrafficManager
 from traffic_bench.agents.idm_rule import ComprehensiveRuleExpertPolicy
 from traffic_bench.agents.ppo_rule import RuleCompliantExpertPolicy
-from metadrive.policy.idm_policy import ModifiedIDMPolicy
+from metadrive.policy.idm_policy import IDMPolicy
+from traffic_bench.agents.curve_aware_idm import CurveAwareIDMPolicy
 from metadrive.policy.expert_policy import ExpertPolicy
 from traffic_bench.eval.engine.traffic.ego_defaults import (
     apply_ego_defaults,
@@ -301,7 +303,15 @@ def run_one_episode(
 
     policy_cls = None
     if policy_type == "idm":
-        policy_cls = ModifiedIDMPolicy  # Good driving, no sign compliance
+        # The base idm carries the rule expert's defensive layer -- curvature
+        # speed cap, longer steering lookahead, braking for crossing traffic --
+        # and nothing about signs, so the idm / idm_rule gap is sign knowledge
+        # alone. The old benchmark ran idm_default this way; ModifiedIDMPolicy
+        # was a different set of tweaks (junction scan, stop-sign wait) and gave
+        # a baseline that could not hold OSM turns at 40+ km/h.
+        # EGO_CURVE_AWARE=0 restores the raw MetaDrive IDMPolicy.
+        policy_cls = (IDMPolicy if os.environ.get("EGO_CURVE_AWARE", "1") == "0"
+                      else CurveAwareIDMPolicy)
     elif policy_type == "idm_rule":
         policy_cls = ComprehensiveRuleExpertPolicy
     elif policy_type == "ppo_rule":
