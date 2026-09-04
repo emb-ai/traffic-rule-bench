@@ -96,6 +96,16 @@ python tools/eval_progress.py --watch 30
 python -m traffic_bench.eval metrics combine sign=all
 ```
 
+### 5. Baseline comparison plots
+
+After per-sign reports exist under `data/runs/*/train/eval_out/reports/`:
+
+```
+python -m traffic_bench.eval metrics plot
+```
+
+Writes PNGs + `analysis.md` to `data/runs/_all/train/plots/benchmark/` — per-sign bar charts (base vs rule expert), family overviews, macro summary. See `traffic_bench/eval/metrics/README.md`.
+
 ## Evaluation workflow
 
 ### Manifest

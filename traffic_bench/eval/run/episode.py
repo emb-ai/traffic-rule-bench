@@ -53,6 +53,40 @@ from traffic_bench.eval.engine.traffic.ego_defaults import (
     numpy_legacy_seed,
     sample_ego_params,
 )
+
+
+def _assert_idm_baseline_has_no_stop_sign_handling(policy_cls) -> None:
+    """Guard: baseline ``idm`` must not re-grow stop-sign compliance.
+
+    Stop / yield / priority rules belong on ``idm_rule`` (SignComplianceMixin).
+    ``ModifiedIDMPolicy`` may keep driving aids (curvature, crossing brake) only.
+    """
+    import inspect
+
+    assert policy_cls is ModifiedIDMPolicy, (
+        f"baseline idm must use ModifiedIDMPolicy, got {policy_cls!r}"
+    )
+    assert not hasattr(policy_cls, "_find_relevant_stop_sign"), (
+        "ModifiedIDMPolicy regained _find_relevant_stop_sign — remove stop handling "
+        "from third_party/metadrive/.../idm_policy.py (baseline idm is not the rule expert)"
+    )
+    for name in (
+        "waiting_at_stop_sign",
+        "stop_sign_wait_time",
+        "stop_sign_total_wait",
+        "has_stopped_at_stop_sign",
+    ):
+        assert name not in getattr(policy_cls, "__dict__", {}), (
+            f"ModifiedIDMPolicy defines stop-sign state {name!r}; remove it"
+        )
+    accel_src = inspect.getsource(policy_cls.acceleration)
+    assert "stop_sign" not in accel_src and "StopSign" not in accel_src, (
+        "ModifiedIDMPolicy.acceleration mentions stop_sign/StopSign — strip that logic"
+    )
+    assert not any(
+        getattr(base, "__name__", "") == "SignComplianceMixin"
+        for base in policy_cls.__mro__
+    ), "baseline idm must not inherit SignComplianceMixin (that is idm_rule)"
 from traffic_bench.signs.junction import (
     MainRoadSign,
     YieldSign,
@@ -301,7 +335,11 @@ def run_one_episode(
 
     policy_cls = None
     if policy_type == "idm":
-        policy_cls = ModifiedIDMPolicy  # Good driving, no sign compliance
+        # ModifiedIDMPolicy = MetaDrive IDM + driving aids (curvature / crossing
+        # brake). Not stock IDMPolicy, and deliberately NOT SignComplianceMixin /
+        # stop-sign handling — that belongs on idm_rule only.
+        policy_cls = ModifiedIDMPolicy
+        _assert_idm_baseline_has_no_stop_sign_handling(policy_cls)
     elif policy_type == "idm_rule":
         policy_cls = ComprehensiveRuleExpertPolicy
     elif policy_type == "ppo_rule":

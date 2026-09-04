@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import List, Literal, Optional
 
@@ -23,6 +24,11 @@ DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END = 15.0
 DEFAULT_CONVOY_SIZE = 3
 DEFAULT_CONVOY_GAP_M = 10.0
 MIN_SPAWN_LONGITUDE_M = 3.0
+# Hard-stop aux when Euclidean center distance to ego falls below STOP;
+# resume only after RESUME (hysteresis avoids brake chatter at the threshold).
+# ~4.5 m vehicle length → STOP=7 m ≈ 2.5 m bumper gap on head-on / crossing.
+DEFAULT_EGO_PROXIMITY_STOP_M = 7.0
+DEFAULT_EGO_PROXIMITY_RESUME_M = 9.0
 # Don't despawn for arrive_destination checks until aux has been driving a bit.
 ARRIVE_GRACE_STEPS = 10
 AuxPolicyType = Literal["idm", "stationary"]
@@ -106,12 +112,25 @@ class StationaryPolicy(BasePolicy):
 
 
 class AuxiliaryIDMPolicy(IDMPolicy):
-    """IDM that sticks tightly to the routed lane centerline (incl. turns)."""
+    """IDM that sticks tightly to the routed lane centerline (incl. turns).
+
+    Also hard-stops when too close to ego: stock IDM only brakes for same-lane
+    front objects, so crossing/junction approaches would otherwise plow into ego.
+    """
 
     # Look-ahead along the lane for heading (meters); longer helps on sharp turns.
     HEADING_LOOKAHEAD_M = 4.0
+    EGO_PROXIMITY_STOP_M = DEFAULT_EGO_PROXIMITY_STOP_M
+    EGO_PROXIMITY_RESUME_M = DEFAULT_EGO_PROXIMITY_RESUME_M
 
-    def __init__(self, control_object, random_seed: int):
+    def __init__(
+        self,
+        control_object,
+        random_seed: int,
+        ego_vehicle=None,
+        ego_proximity_stop_m: float = DEFAULT_EGO_PROXIMITY_STOP_M,
+        ego_proximity_resume_m: float = DEFAULT_EGO_PROXIMITY_RESUME_M,
+    ):
         super().__init__(control_object=control_object, random_seed=random_seed)
         self.enable_lane_change = False
         self.enable_idm_overtake = False
@@ -119,6 +138,70 @@ class AuxiliaryIDMPolicy(IDMPolicy):
         # junction connectors instead of cutting across / skipping the turn.
         self.heading_pid = PIDController(2.8, 0.01, 4.5)
         self.lateral_pid = PIDController(1.0, 0.002, 0.25)
+        self._ego_vehicle = ego_vehicle
+        stop_m = float(ego_proximity_stop_m)
+        resume_m = float(ego_proximity_resume_m)
+        if resume_m < stop_m:
+            resume_m = stop_m
+        self._ego_proximity_stop_m = max(0.0, stop_m)
+        self._ego_proximity_resume_m = max(0.0, resume_m)
+        self._ego_proximity_holding = False
+
+    def _resolve_ego(self):
+        if self._ego_vehicle is not None:
+            return self._ego_vehicle
+        try:
+            agents = getattr(self.engine, "agents", None) or {}
+            if agents:
+                return next(iter(agents.values()))
+        except Exception:
+            pass
+        return None
+
+    def _ego_proximity_m(self) -> float:
+        ego = self._resolve_ego()
+        if ego is None or ego is self.control_object:
+            return float("inf")
+        try:
+            dx = float(ego.position[0]) - float(self.control_object.position[0])
+            dy = float(ego.position[1]) - float(self.control_object.position[1])
+            return float(math.hypot(dx, dy))
+        except Exception:
+            return float("inf")
+
+    def _should_hard_stop_for_ego(self) -> bool:
+        """True while aux must fully stop to avoid hitting ego (with hysteresis)."""
+        if self._ego_proximity_stop_m <= 0:
+            return False
+        dist = self._ego_proximity_m()
+        if self._ego_proximity_holding:
+            if dist > self._ego_proximity_resume_m:
+                self._ego_proximity_holding = False
+                return False
+            return True
+        if dist <= self._ego_proximity_stop_m:
+            self._ego_proximity_holding = True
+            return True
+        return False
+
+    def _hard_stop_action(self):
+        """Full brake; keep lane-following steer so the vehicle does not drift."""
+        steering = 0.0
+        try:
+            self.move_to_next_road()
+            lane = self.routing_target_lane
+            if lane is not None:
+                steering = float(self.steering_control(lane))
+        except Exception:
+            steering = 0.0
+        # Strong brake. If already crawling, zero velocity so physics does not
+        # creep through the contact zone into ego.
+        try:
+            if float(getattr(self.control_object, "speed", 0.0) or 0.0) < 1.0:
+                self.control_object.set_velocity([0.0, 0.0], in_local_frame=True)
+        except Exception:
+            pass
+        return [steering, -1.0]
 
     def steering_control(self, target_lane) -> float:
         if target_lane is None:
@@ -173,6 +256,11 @@ class AuxiliaryIDMPolicy(IDMPolicy):
                 return True
         return False
 
+    def act(self, *args, **kwargs):
+        if self._should_hard_stop_for_ego():
+            return self._hard_stop_action()
+        return super().act(*args, **kwargs)
+
 
 class GatedAuxiliaryIDMPolicy(AuxiliaryIDMPolicy):
     """IDM that stays stopped until ego is near the end of its spawn lane."""
@@ -185,9 +273,16 @@ class GatedAuxiliaryIDMPolicy(AuxiliaryIDMPolicy):
         ego_spawn_lane_index: str,
         release_distance_before_end: float = DEFAULT_EGO_RELEASE_DISTANCE_BEFORE_END,
         release_speed_ms: float = DEFAULT_SPAWN_VELOCITY_MS,
+        ego_proximity_stop_m: float = DEFAULT_EGO_PROXIMITY_STOP_M,
+        ego_proximity_resume_m: float = DEFAULT_EGO_PROXIMITY_RESUME_M,
     ):
-        super().__init__(control_object=control_object, random_seed=random_seed)
-        self._ego_vehicle = ego_vehicle
+        super().__init__(
+            control_object=control_object,
+            random_seed=random_seed,
+            ego_vehicle=ego_vehicle,
+            ego_proximity_stop_m=ego_proximity_stop_m,
+            ego_proximity_resume_m=ego_proximity_resume_m,
+        )
         self._ego_spawn_lane_index = ego_spawn_lane_index
         self._release_distance_before_end = float(release_distance_before_end)
         self._release_speed_ms = float(release_speed_ms)
@@ -407,6 +502,7 @@ class AuxiliaryAgentsManager(BaseManager):
                         AuxiliaryIDMPolicy,
                         aux_vehicle,
                         self.generate_seed(),
+                        ego_vehicle=self._ego_vehicle,
                     )
                 aux_policy = self.get_policy(aux_vehicle.id)
                 apply_aux_cruise_speed(aux_policy, self._spawn_velocity_ms)

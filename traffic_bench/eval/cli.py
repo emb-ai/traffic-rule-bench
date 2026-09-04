@@ -245,7 +245,7 @@ def cmd_run(argv: List[str]) -> int:
 
 
 def cmd_metrics(argv: List[str]) -> int:
-    commands = ("csv", "aggregate", "report", "combine")
+    commands = ("csv", "aggregate", "report", "combine", "plot")
     if not argv or argv[0] in ("-h", "--help"):
         print(
             "usage: python -m traffic_bench.eval metrics "
@@ -254,6 +254,7 @@ def cmd_metrics(argv: List[str]) -> int:
             "  aggregate   CSV → aggregations + reports/cumulative.json\n"
             "  report      cumulative JSON → markdown table\n"
             "  combine     per-sign CSVs → one overall report (sign=all)\n"
+            "  plot        cumulative JSON(s) → baseline comparison charts\n"
         )
         return 0
     command = argv[0]
@@ -270,6 +271,8 @@ def cmd_metrics(argv: List[str]) -> int:
         from traffic_bench.eval.metrics import aggregate as mod
     elif command == "combine":
         from traffic_bench.eval.metrics import combine as mod
+    elif command == "plot":
+        from traffic_bench.eval.metrics import plot_benchmark as mod
     else:
         from traffic_bench.eval.metrics import report as mod
     return _run_module_main(mod, argv[1:])
