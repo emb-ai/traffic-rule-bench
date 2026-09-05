@@ -288,6 +288,93 @@ def _scan_dual_path_candidates(
     return by_shape
 
 
+def _segment_subtype(meta: dict) -> str:
+    if meta.get("subtype"):
+        return str(meta["subtype"])
+    seg = str(meta.get("segment_type") or "unknown")
+    bucket = str(meta.get("lane_bucket") or "")
+    if not bucket:
+        n = int(meta.get("lane_count") or 0)
+        bucket = "1" if n <= 1 else ("2" if n == 2 else "3plus")
+    return f"{seg}|{bucket}"
+
+
+def _segment_balance_keys(spec: dict) -> List[str]:
+    """Subtype keys for per-sign balance: (segment_type × lane_bucket)."""
+    types = {str(t) for t in (spec.get("segment_types") or ["straight", "curved"])}
+    min_lanes = int(spec.get("lane_count_min") or 0)
+    keys: List[str] = []
+    for seg_type in sorted(types):
+        for bucket in ("1", "2", "3plus"):
+            if min_lanes >= 2 and bucket == "1":
+                continue
+            if min_lanes >= 3 and bucket in {"1", "2"}:
+                continue
+            keys.append(f"{seg_type}|{bucket}")
+    return keys
+
+
+def _even_counts(keys: List[str], n_total: int) -> Dict[str, int]:
+    keys = list(keys)
+    if not keys or n_total <= 0:
+        return {}
+    base = n_total // len(keys)
+    rem = n_total % len(keys)
+    return {k: base + (1 if i < rem else 0) for i, k in enumerate(keys)}
+
+
+def _deficit_refill_needs(
+    target_by_key: Dict[str, int],
+    kept_by_key: Dict[str, int],
+    total_need: int,
+) -> Dict[str, int]:
+    """Allocate ``total_need`` refill slots to keys that are below target first.
+
+    Prefer largest subtype deficits so reject→refill restores per-sign balance
+    instead of ignoring what is already kept.
+    """
+    keys = list(target_by_key.keys())
+    if not keys or total_need <= 0:
+        return {}
+    deficits = {
+        k: max(0, int(target_by_key[k]) - int(kept_by_key.get(k, 0))) for k in keys
+    }
+    out = {k: 0 for k in keys}
+    remaining = int(total_need)
+    while remaining > 0:
+        under = [k for k in keys if out[k] < deficits[k]]
+        if under:
+            key = max(
+                under,
+                key=lambda k: (
+                    deficits[k] - out[k],
+                    int(target_by_key[k]) - int(kept_by_key.get(k, 0)) - out[k],
+                    k,
+                ),
+            )
+        else:
+            # All subtype targets met but still short on headcount — top up
+            # the keys that are furthest below a soft equal share of kept+out.
+            key = min(
+                keys,
+                key=lambda k: (
+                    int(kept_by_key.get(k, 0)) + out[k],
+                    -int(target_by_key[k]),
+                    k,
+                ),
+            )
+        out[key] += 1
+        remaining -= 1
+    return {k: v for k, v in out.items() if v > 0}
+
+
+def _aggregate_segment_type_counts(got_by_subtype: Dict[str, int]) -> Dict[str, int]:
+    out: Dict[str, int] = defaultdict(int)
+    for key, n in got_by_subtype.items():
+        out[str(key).split("|", 1)[0]] += int(n)
+    return dict(out)
+
+
 def _scan_segment_candidates(
     segment_root: Path,
     segments_index: Dict[str, Dict],
@@ -295,8 +382,9 @@ def _scan_segment_candidates(
     spec: dict,
     allowed_osm_ways: Set[str],
 ) -> Dict[str, List[SceneCandidate]]:
-    allowed_types = {str(t) for t in (spec.get("segment_types") or ["straight", "curved"])}
-    by_type: Dict[str, List[SceneCandidate]] = {t: [] for t in allowed_types}
+    """Pool keyed by subtype ``straight|1`` / ``curved|2`` / … for balanced pick."""
+    balance_keys = _segment_balance_keys(spec)
+    by_subtype: Dict[str, List[SceneCandidate]] = {k: [] for k in balance_keys}
     for scene_dir in _iter_segment_scene_dirs(segment_root):
         if not (scene_dir / "map.net.xml").is_file():
             continue
@@ -313,18 +401,22 @@ def _scan_segment_candidates(
         osm_way = str(merged.get("osm_way_id") or "")
         if allowed_osm_ways and osm_way not in allowed_osm_ways:
             continue
+        subtype = _segment_subtype(merged)
+        if subtype not in by_subtype:
+            continue
         seg_type = str(merged.get("segment_type") or "")
-        by_type.setdefault(seg_type, []).append(
+        by_subtype[subtype].append(
             SceneCandidate(
                 scene_id=sid,
                 place_id=place_id_from_way(osm_way),
                 shape="segment",
                 segment_type=seg_type,
+                subtype=subtype,
             )
         )
-    for seg_type, rows in list(by_type.items()):
-        by_type[seg_type] = sorted(rows, key=lambda c: c.scene_id)
-    return by_type
+    for key, rows in list(by_subtype.items()):
+        by_subtype[key] = sorted(rows, key=lambda c: c.scene_id)
+    return by_subtype
 
 
 def _pick_with_shape_balance(
@@ -334,6 +426,7 @@ def _pick_with_shape_balance(
     registry: SplitPlaceRegistry,
     pdd_code: str,
     rng: random.Random,
+    redistribute_shortfalls: bool = False,
 ) -> Tuple[List[SceneCandidate], Dict[str, int], Dict[int, int]]:
     """Pick scenes one-by-one, always taking from the bucket with highest remaining quota."""
     picked: List[SceneCandidate] = []
@@ -341,11 +434,14 @@ def _pick_with_shape_balance(
     got: Dict[str, int] = defaultdict(int)
     tier_hist: Dict[int, int] = defaultdict(int)
     used_scenes: Set[str] = set()
+    # Keys that ran out of candidates (for optional redistribution).
+    exhausted: Set[str] = set()
 
     while remaining and sum(remaining.values()) > 0:
         key = max(remaining, key=lambda k: remaining[k])
         if remaining[key] <= 0:
-            break
+            del remaining[key]
+            continue
         pool = candidates_by_key.get(key) or []
         result = pick_tiered(
             pool,
@@ -355,7 +451,19 @@ def _pick_with_shape_balance(
             rng=rng,
         )
         if result is None:
-            remaining[key] = 0
+            shortfall = remaining.pop(key, 0)
+            exhausted.add(key)
+            if redistribute_shortfalls and shortfall > 0:
+                alt = [
+                    k
+                    for k in remaining
+                    if k not in exhausted and (candidates_by_key.get(k) or [])
+                ]
+                if alt:
+                    # Spread leftover onto still-open buckets (prefer largest need).
+                    for i in range(shortfall):
+                        dest = max(alt, key=lambda k: remaining.get(k, 0))
+                        remaining[dest] = remaining.get(dest, 0) + 1
             continue
         chosen, tier = result
         picked.append(chosen)
@@ -545,6 +653,7 @@ def allocate(
 
         elif crop_kind == "segment":
             segment_types = set(spec.get("segment_types") or ["straight", "curved"])
+            balance_keys = _segment_balance_keys(spec)
             train_pool = _scan_segment_candidates(
                 segment_root,
                 segments_index,
@@ -557,13 +666,8 @@ def allocate(
                 spec=spec,
                 allowed_osm_ways=test_ways,
             )
-            train_need = {t: sign_n_train // len(segment_types) for t in segment_types}
-            test_need = {t: sign_n_test // len(segment_types) for t in segment_types}
-            for i, t in enumerate(sorted(segment_types)):
-                if i < sign_n_train % len(segment_types):
-                    train_need[t] += 1
-                if i < sign_n_test % len(segment_types):
-                    test_need[t] += 1
+            train_need = _even_counts(balance_keys, sign_n_train)
+            test_need = _even_counts(balance_keys, sign_n_test)
             train_picked, got_train, tr_tiers = _pick_with_shape_balance(
                 train_pool,
                 train_need,
@@ -581,16 +685,19 @@ def allocate(
             train_ids = [c.scene_id for c in train_picked]
             test_ids = [c.scene_id for c in test_picked]
             block["segment_types"] = sorted(segment_types)
+            block["balance_keys"] = balance_keys
             block["shapes"] = []
             block["train"] = {
                 "scene_ids": sorted(set(train_ids)),
-                "by_segment_type": got_train,
+                "by_subtype": got_train,
+                "by_segment_type": _aggregate_segment_type_counts(got_train),
                 "reuse_tiers": tr_tiers,
                 "n": len(set(train_ids)),
             }
             block["test"] = {
                 "scene_ids": sorted(set(test_ids)),
-                "by_segment_type": got_test,
+                "by_subtype": got_test,
+                "by_segment_type": _aggregate_segment_type_counts(got_test),
                 "reuse_tiers": te_tiers,
                 "n": len(set(test_ids)),
             }
@@ -711,7 +818,9 @@ def main() -> None:
     test_ways = _load_way_split(args.segment_test_ids)
     if not train_ways or not test_ways:
         # Fallback: derive from index with same stratified logic as make_split.
-        from traffic_bench.scene_collection.collect.make_split import split_segments_by_type
+        from traffic_bench.scene_collection.collect.segments.select import (
+            split_segments_by_type,
+        )
 
         rows = list(segments_index.values())
         if rows:

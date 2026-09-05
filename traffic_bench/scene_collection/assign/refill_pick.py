@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from traffic_bench.scene_collection.assign.assign import (
+    _deficit_refill_needs,
+    _even_counts,
     _junction_candidates,
     _junction_ids_for_split,
     _load_segments_index,
@@ -25,6 +27,7 @@ from traffic_bench.scene_collection.assign.assign import (
     _pick_with_shape_balance,
     _scan_dual_path_candidates,
     _scan_segment_candidates,
+    _segment_balance_keys,
     counts_for_sign,
     load_signs_yaml,
 )
@@ -159,8 +162,14 @@ def pick_refill_ids_tiered(
     dual_root: Path = DUAL_PATH_CROPS,
     segment_root: Path = SEGMENT_CROPS,
     seed: Optional[int] = None,
+    half_quota: Optional[int] = None,
+    kept_by_subtype: Optional[Dict[str, int]] = None,
 ) -> Tuple[List[str], Dict[int, int]]:
     """Pick up to ``need`` refill scenes for one sign/half under tiered policy.
+
+    For segments, when ``kept_by_subtype`` + ``half_quota`` are provided, refill
+    slots are allocated to subtypes that are below their per-sign target first
+    (restores balance after reject), not as a fresh even split of ``need``.
 
     Returns ``(scene_ids, reuse_tier_histogram)``.
     """
@@ -237,7 +246,6 @@ def pick_refill_ids_tiered(
             rng=rng,
         )
     elif crop_kind == "segment":
-        segment_types = set(spec.get("segment_types") or ["straight", "curved"])
         allowed_ways = train_ways if half == "train" else test_ways
         pool = _scan_segment_candidates(
             segment_root,
@@ -246,17 +254,28 @@ def pick_refill_ids_tiered(
             allowed_osm_ways=allowed_ways,
         )
         pool = _filter_pool(pool)
-        type_need = {t: need // len(segment_types) for t in segment_types}
-        for i, t in enumerate(sorted(segment_types)):
-            if i < need % len(segment_types):
-                type_need[t] += 1
-        picked, _got, tiers = _pick_with_shape_balance(
+        balance_keys = _segment_balance_keys(spec)
+        quota = int(half_quota) if half_quota is not None else need
+        targets = _even_counts(balance_keys, quota)
+        if kept_by_subtype is not None:
+            type_need = _deficit_refill_needs(targets, kept_by_subtype, need)
+            print(
+                f"  [refill] segment subtype targets={targets} "
+                f"kept={dict(sorted((kept_by_subtype or {}).items()))} "
+                f"need={type_need}"
+            )
+        else:
+            type_need = _even_counts(balance_keys, need)
+        picked, got, tiers = _pick_with_shape_balance(
             pool,
             type_need,
             registry=registry,
             pdd_code=str(pdd_code),
             rng=rng,
+            redistribute_shortfalls=True,
         )
+        if got:
+            print(f"  [refill] segment subtype filled={dict(sorted(got.items()))}")
     else:
         by_shape = train_by_shape if half == "train" else test_by_shape
         pool = _junction_candidates(

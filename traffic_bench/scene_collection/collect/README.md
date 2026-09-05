@@ -34,17 +34,22 @@ python -m traffic_bench.scene_collection collect \
 ## Pipeline
 
 
-| Step                         | Module                                      | Writes                                                  |
-| ---------------------------- | ------------------------------------------- | ------------------------------------------------------- |
-| 1. Download + convert        | `build_net.py`                              | `maps/raw/`, `maps/nets/moscow.net.xml`                 |
-| 2. Enumerate junctions       | `enumerate/junctions.py`                    | `maps/index/junctions.jsonl`                            |
-| 3. Train / test split        | `make_split.py`                             | `maps/splits/train_ids.json`, `test_ids.json`           |
-| 4. Crop junctions            | `junctions/crop.py`                         | `maps/crops/junction/{T,X,O}/<id>/`                     |
-| 5. Crop dual-path            | `dual_path/crop.py`                         | `maps/crops/dual_path/{T,X}/<slot>/<id>/`               |
-| 6. Enumerate + crop segments | `enumerate/segments.py`, `segments/crop.py` | `maps/index/segments.jsonl`, `maps/crops/segment/<id>/` |
+| Step | Module | Writes |
+| --- | --- | --- |
+| 1. Download + convert | `build_net.py` | `maps/raw/`, `maps/nets/moscow.net.xml` |
+| 2. Enumerate junctions | `enumerate/junctions.py` | `maps/index/junctions.jsonl` |
+| 3. Junction train/test split | `make_split.py` | `maps/splits/train_ids.json`, `test_ids.json` |
+| 4. Crop junctions | `junctions/crop.py` | `maps/crops/junction/{T,X,O}/<id>/` |
+| 5. Crop dual-path | `dual_path/crop.py` | `maps/crops/dual_path/{T,X}/<slot>/<id>/` |
+| 6. Enumerate segments | `segments/enumerate.py` | `maps/index/segments.jsonl` |
+| 7. Segment train/test split | `segments/select.py` | `segment_{train,test}_ids.json` (all ways) |
+| 8. Crop segments | `segments/crop.py` | `maps/crops/segment/<id>/` (full pool) |
 
 
-`--skip-existing` is passed only to crop steps (4–6). It skips a scene when `map.net.xml` is already on disk. Download / netconvert / enumerate / split still run unless you pass the matching `--skip-*` flags.
+`--skip-existing` is passed only to crop steps. It skips a scene when `map.net.xml` is already on disk. Download / netconvert / enumerate / split still run unless you pass the matching `--skip-*` flags.
+
+Segment harvest details: [`segments/README.md`](segments/README.md).
+
 
 ## Useful flags
 
@@ -58,7 +63,7 @@ python -m traffic_bench.scene_collection collect \
 | `--skip-split`               | Skip train/test id files                       |
 | `--skip-crop`                | Skip junction crops                            |
 | `--skip-dual-path`           | Skip dual_path crops                           |
-| `--skip-segment`             | Skip segment enumerate + crops                 |
+| `--skip-segment`             | Skip segment enumerate + select + crops        |
 | `--workers N`                | Parallel workers for junction crop (default 8) |
 | `--shapes T,X,O`             | Junction shapes to enumerate/crop              |
 | `--max-per-shape N`          | Cap junction crops per shape                   |

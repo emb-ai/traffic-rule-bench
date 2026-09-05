@@ -48,7 +48,8 @@ maps/
 | `segment`   | `crops/segment/<scene_id>/`     | 3.24, 4.6, 5.21, 5.31, 4.2.x, 5.19 |
 
 
-Junction and dual-path maps are keyed by SUMO `junction_id`. Segment maps are keyed by incoming `edge_id` and split by `osm_way_id`.
+Junction and dual-path maps are keyed by SUMO `junction_id`. Segment maps are
+keyed by corridor `edge_id` / `scene_id` and split by `osm_way_id`.
 
 ### Dual-path crops
 
@@ -60,28 +61,42 @@ where `l`, `s`, and `r` denote left, straight, and right.
 
 ### Segment crops
 
-Segment crops are built from incoming edges in `index/junctions.jsonl` and end **10 m before the junction**.
+Segment crops are mid-corridor windows from the full Moscow net (not junction
+approaches). Pipeline: `enumerate` → diversity `select` → `crop`. See
+[`../collect/segments/README.md`](../collect/segments/README.md).
 
-Current inclusion gates (`collect/segments/metrics.py`):
+Gates (`collect/segments/metrics.py`):
 
-- **length ≥ 150 m** — sufficient for braking from 60 → 20 km/h plus a compliance zone;
+- **length ≥ 150 m** — braking 60→20 km/h plus compliance zone;
 - **straight** — chord/arc ≥ 0.99;
 - **curved** — 0.97 ≤ chord/arc < 0.99.
 
-Each segment stores the following in `meta.json` and the index:
+Harvest crops **all** qualifying ways (~13k). Diversity
+`(straight|curved) × (lanes 1|2|3plus)` is enforced at **assign** time
+(even quotas within each sign’s query), not at crop time. Train/test stay
+place-disjoint on `osm_way_id`.
+
+Each segment stores in `meta.json` / index:
 
 ```
+road_id
+osm_way_id
 length_m
 straightness
 segment_type
 lane_count
+lane_bucket
 vehicle_lane_indices
 pass_right_ok
 pass_left_ok
-osm_way_id
+crop_window
 ```
 
 SUMO lane index `0` is the rightmost lane.
+
+Index files: `segments.jsonl` (all candidates to crop),
+`segment_{train,test}_ids.json` (place-disjoint way split).
+
 
 ## Sign queries
 

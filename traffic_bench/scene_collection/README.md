@@ -137,14 +137,15 @@ Shared path constants are defined in `paths.py`. `preview.py` generates a top-do
 
 | Symbol | Meaning                             | This iteration                                          |
 | ------ | ----------------------------------- | ------------------------------------------------------- |
-| **P**  | Full Moscow population in the index | junctions 6457 (T 5181 / X 1052 / O 224); segments 7620 |
-| **H**  | Cropped nets on disk                | **H = P** (crop until the city runs out)                |
+| **P**  | Full Moscow population in the index | junctions 6457 (T 5181 / X 1052 / O 224); segment candidates from full net |
+| **H**  | Cropped nets on disk                | junctions **H = P**; segments **H ≈ all qualifying ways (~13k)** |
 | **N**  | Official maps per sign              | 80 train + 20 test                                      |
 
 
 The independent benchmark unit is a **map**. Scenario augmentations (≤10 per map) are correlated. The train/test split is assigned by **place identity before sign allocation**: 1) junctions / dual-path: `junction_id`, and 2) segments: `osm_way_id`. Thus, the same street cannot appear in both train and test.
 
-The `50/50` T/X split in `signs.yaml` ensures balanced sampling across T- and X-junction topologies, rather than reflecting Moscow's natural ~83% T-junction distribution.
+Segment assign balances `(straight|curved) × (1|2|3plus lanes)` within each sign’s query (see `collect/segments/README.md`), analogous to the protocol T/X 50/50 mix for junctions.
+
 
 ## Sign mapping
 

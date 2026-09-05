@@ -25,6 +25,7 @@ SIGN_GROUP_TO_SCENES = {
     "yield": REPO_ROOT / "data/scenes/yield",
     "stop": REPO_ROOT / "data/scenes/stop",
     "roundabout": REPO_ROOT / "data/scenes/roundabout",
+    "crosswalk": REPO_ROOT / "data/scenes/crosswalk",
 }
 
 MODEL_CACHE: dict[str, dict] = {}
@@ -61,6 +62,7 @@ def _find_replays(root: Path, *, category: str | None, sign: str | None) -> list
         search_roots = [
             root / "rule_expert_sign_compliance_0" / sign,
             root / "baseline_sign_compliance_1" / sign,
+            root / "rule_expert_no_dest" / sign,
         ]
     else:
         search_roots = [root]
@@ -136,6 +138,7 @@ def main() -> None:
     parser.add_argument("--category", choices=[
         "rule_expert_sign_compliance_0",
         "baseline_sign_compliance_1",
+        "rule_expert_no_dest",
     ])
     parser.add_argument("--sign", choices=list(SIGN_GROUP_TO_SCENES))
     parser.add_argument("--limit", type=int, default=None)

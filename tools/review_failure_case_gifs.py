@@ -46,6 +46,13 @@ def discover_failure_gifs(root: Path) -> list[dict[str, Any]]:
                 sign_group = parts[idx + 1]
                 scene_uid = parts[idx + 2]
                 baseline = parts[idx + 3] if len(parts) > idx + 3 else ""
+        elif "rule_expert_no_dest" in parts:
+            category = "rule_expert_no_dest"
+            idx = parts.index(category)
+            if len(parts) > idx + 3:
+                sign_group = parts[idx + 1]
+                baseline = parts[idx + 2]
+                scene_uid = parts[idx + 3]
         elif "baseline_sign_compliance_1" in parts:
             category = "baseline_sign_compliance_1"
             idx = parts.index(category)

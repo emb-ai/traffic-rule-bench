@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Crop indexed segments into crops/segment/<scene_id>/.
+"""Crop corridor maps into crops/segment/<scene_id>/.
 
-Each scene contains the segment edge cropped to an XY boundary that ends
-BEFORE the junction (margin 10m), so the scene is a corridor without
-an intersection. ``segment_type`` lives in meta.json, not in the path.
+Reads ``index/segments.jsonl`` (full candidate pool from ``enumerate``). Each
+scene is an XY neighborhood around the corridor window.
+
+Jobs are **round-robin interleaved by subtype**
+``(straight|curved) × (1|2|3plus)`` so an interrupted / resumed run
+(``--skip-existing``) leaves a balanced partial pool on disk. Per-sign
+quotas are still applied later by ``assign``.
 """
 
 from __future__ import annotations
@@ -14,33 +18,130 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Sequence, Set, Tuple
 
-from traffic_bench.eval.engine.map.junction_priority_layout import JunctionLayoutError as CropError
 from traffic_bench.scene_collection.collect.lib.crop_xy import crop_net_to_xy_boundary
-from traffic_bench.scene_collection.collect.segments.metrics import enrich_lane_fields
-from traffic_bench.scene_collection.paths import MOSCOW_NET, SEGMENT_CROPS, SEGMENTS_INDEX
+from traffic_bench.scene_collection.collect.segments.metrics import (
+    enrich_lane_fields,
+    lane_bucket,
+)
+from traffic_bench.scene_collection.paths import (
+    MOSCOW_NET,
+    SEGMENT_CROPS,
+    SEGMENTS_INDEX,
+)
 from traffic_bench.scene_collection.preview import parse_sumo_net, render_network
 
 
 def json_dumps(obj) -> str:
-    """Compact JSON dump."""
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 
 DEFAULT_NET = MOSCOW_NET
 DEFAULT_INDEX = SEGMENTS_INDEX
 DEFAULT_OUT = SEGMENT_CROPS
-DEFAULT_MAX_SCENES = 0  # 0 = no cap; crop all of P
+CROP_MARGIN_M = 40.0
 
-# Margin before junction (meters) — segment ends this far before the junction
-JUNCTION_MARGIN_M = 10.0
-# Margin around segment for cropping (meters)
-CROP_MARGIN_M = 30.0
+SUBTYPE_ORDER = (
+    "straight|1",
+    "straight|2",
+    "straight|3plus",
+    "curved|1",
+    "curved|2",
+    "curved|3plus",
+)
 
 
-def load_segments_index(path: Path) -> List[Dict[str, Any]]:
-    """Load segments.jsonl."""
+def _row_subtype(row: Dict[str, Any]) -> str:
+    if row.get("subtype"):
+        return str(row["subtype"])
+    seg = str(row.get("segment_type") or "unknown")
+    bucket = str(row.get("lane_bucket") or "")
+    if not bucket:
+        bucket = lane_bucket(int(row.get("lane_count") or 0))
+    return f"{seg}|{bucket}"
+
+
+def interleave_by_subtype(
+    rows: List[Dict[str, Any]],
+    *,
+    seed: int,
+    on_disk_by_subtype: Dict[str, int] | None = None,
+) -> List[Dict[str, Any]]:
+    """Round-robin jobs across subtypes so partial crops stay balanced.
+
+    When ``on_disk_by_subtype`` is set (resume with --skip-existing), subtypes
+    that are furthest behind their fair share of the *remaining* work are
+    visited first each round.
+    """
+    import random
+    from collections import defaultdict
+
+    pools: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        pools[_row_subtype(row)].append(row)
+
+    rng = random.Random(seed)
+    for key in pools:
+        rng.shuffle(pools[key])
+
+    keys = [k for k in SUBTYPE_ORDER if pools.get(k)]
+    for k in sorted(pools):
+        if k not in keys:
+            keys.append(k)
+
+    on_disk = dict(on_disk_by_subtype or {})
+    remaining = {k: len(pools[k]) for k in keys}
+    cursors = {k: 0 for k in keys}
+    out: List[Dict[str, Any]] = []
+
+    while any(remaining.values()):
+        active = [k for k in keys if remaining[k] > 0]
+        if not active:
+            break
+
+        def _deficit(k: str) -> float:
+            # Prefer subtypes with fewer crops on disk relative to how many
+            # are still queued (keeps resume balanced).
+            done = on_disk.get(k, 0)
+            left = remaining[k]
+            total_for_k = done + left
+            if total_for_k <= 0:
+                return 0.0
+            return left / total_for_k
+
+        active.sort(key=lambda k: (-_deficit(k), SUBTYPE_ORDER.index(k) if k in SUBTYPE_ORDER else 99, k))
+        for key in active:
+            i = cursors[key]
+            if i >= len(pools[key]):
+                remaining[key] = 0
+                continue
+            row = pools[key][i]
+            cursors[key] = i + 1
+            remaining[key] -= 1
+            on_disk[key] = on_disk.get(key, 0) + 1
+            out.append(row)
+    return out
+
+
+def _count_on_disk_by_subtype(scenes_root: Path) -> Dict[str, int]:
+    from collections import Counter
+
+    counts: Counter = Counter()
+    for scene_dir in iter_segment_scene_dirs(scenes_root):
+        if not (scene_dir / "map.net.xml").is_file():
+            continue
+        meta_path = scene_dir / "meta.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            counts["unknown"] += 1
+            continue
+        counts[_row_subtype(enrich_lane_fields(meta))] += 1
+    return dict(counts)
+
+
+def load_selected_index(path: Path) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     with path.open(encoding="utf-8") as f:
         for line in f:
@@ -51,32 +152,31 @@ def load_segments_index(path: Path) -> List[Dict[str, Any]]:
 
 
 def compute_crop_bbox(
-    start_xy: tuple,
-    end_xy: tuple,
-    junction_xy: tuple,
+    start_xy: Sequence[float],
+    end_xy: Sequence[float],
+    window_shape: Sequence[Sequence[float]] | None = None,
     margin_m: float = CROP_MARGIN_M,
-    junction_margin_m: float = JUNCTION_MARGIN_M,
-) -> tuple:
-    """Compute bounding box for segment crop.
-
-    The segment runs from start_xy toward end_xy (which is near the junction).
-    We want to include most of the segment but stop before the junction.
-    """
-    # Collect all relevant points
-    xs = [start_xy[0], end_xy[0]]
-    ys = [start_xy[1], end_xy[1]]
-
-    # Add margin
-    xmin = min(xs) - margin_m
-    xmax = max(xs) + margin_m
-    ymin = min(ys) - margin_m
-    ymax = max(ys) + margin_m
-
-    return (xmin, ymin, xmax, ymax)
+) -> Tuple[float, float, float, float]:
+    """Axis-aligned bbox around the corridor window + neighborhood margin."""
+    xs: List[float] = []
+    ys: List[float] = []
+    if window_shape:
+        for pt in window_shape:
+            if len(pt) >= 2:
+                xs.append(float(pt[0]))
+                ys.append(float(pt[1]))
+    if not xs:
+        xs = [float(start_xy[0]), float(end_xy[0])]
+        ys = [float(start_xy[1]), float(end_xy[1])]
+    return (
+        min(xs) - margin_m,
+        min(ys) - margin_m,
+        max(xs) + margin_m,
+        max(ys) + margin_m,
+    )
 
 
 def flatten_legacy_segment_layout(scenes_root: Path) -> int:
-    """Move crops/segment/{straight,curved}/<id>/ → crops/segment/<id>/."""
     moved = 0
     if not scenes_root.is_dir():
         return moved
@@ -102,7 +202,6 @@ def flatten_legacy_segment_layout(scenes_root: Path) -> int:
 
 
 def backfill_segment_metas(scenes_root: Path) -> int:
-    """Write vehicle_lane_indices / pass_* onto existing meta.json files."""
     updated = 0
     for scene_dir in iter_segment_scene_dirs(scenes_root):
         meta_path = scene_dir / "meta.json"
@@ -118,7 +217,6 @@ def backfill_segment_metas(scenes_root: Path) -> int:
 
 
 def iter_segment_scene_dirs(scenes_root: Path):
-    """Yield scene dirs; supports flat layout and leftover straight/curved nests."""
     if not scenes_root.is_dir():
         return
     for child in sorted(scenes_root.iterdir()):
@@ -134,20 +232,13 @@ def iter_segment_scene_dirs(scenes_root: Path):
 
 
 def write_scene_meta(scene_dir: Path, meta: dict) -> None:
-    (scene_dir / "meta.json").write_text(
-        json_dumps(meta) + "\n", encoding="utf-8"
-    )
+    (scene_dir / "meta.json").write_text(json_dumps(meta) + "\n", encoding="utf-8")
     leftover = scene_dir / "center.json"
     if leftover.is_file():
         leftover.unlink()
 
 
-def render_segment_preview(
-    net_path: Path,
-    out_png: Path,
-    road_id: str,
-) -> None:
-    """Same top-down preview as junction / dual_path / lane_direction scenes."""
+def render_segment_preview(net_path: Path, out_png: Path, road_id: str) -> None:
     edges, junctions = parse_sumo_net(net_path)
     render_network(
         edges,
@@ -166,10 +257,9 @@ def crop_segment_scene(
     source_net: Path,
     scenes_root: Path,
     skip_existing: bool,
+    margin_m: float = CROP_MARGIN_M,
 ) -> tuple:
-    """Crop a single segment scene. Returns (status, scene_id, detail)."""
     scene_id = row["scene_id"]
-    segment_type = row["segment_type"]
     scene_dir = scenes_root / scene_id
     out_net = scene_dir / "map.net.xml"
 
@@ -178,9 +268,8 @@ def crop_segment_scene(
 
     start_xy = tuple(row["start_xy"])
     end_xy = tuple(row["end_xy"])
-    junction_xy = tuple(row["to_junction_xy"])
-
-    bbox = compute_crop_bbox(start_xy, end_xy, junction_xy)
+    window_shape = row.get("window_shape")
+    bbox = compute_crop_bbox(start_xy, end_xy, window_shape, margin_m=margin_m)
 
     scene_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -195,38 +284,43 @@ def crop_segment_scene(
     meta = {
         "scene_name": scene_id,
         "scene_kind": "segment",
-        "segment_type": segment_type,
+        "segment_type": row["segment_type"],
         "road_id": row["edge_id"],
-        "junction_id": row["junction_id"],
+        "junction_id": row.get("junction_id"),
         "osm_way_id": row["osm_way_id"],
         "length_m": row["length_m"],
         "straightness": row["straightness"],
         "lane_count": row["lane_count"],
+        "lane_bucket": row.get("lane_bucket"),
+        "length_bucket": row.get("length_bucket"),
+        "subtype": row.get("subtype"),
+        "geo_cell": row.get("geo_cell"),
+        "split": row.get("split"),
         "vehicle_lane_indices": row.get("vehicle_lane_indices") or [],
         "pass_right_ok": bool(row.get("pass_right_ok")),
         "pass_left_ok": bool(row.get("pass_left_ok")),
         "center_xy": row["center_xy"],
         "start_xy": row["start_xy"],
         "end_xy": row["end_xy"],
-        "to_junction_xy": row["to_junction_xy"],
+        "crop_window": {
+            "start_xy": row["start_xy"],
+            "end_xy": row["end_xy"],
+            "shape": row.get("window_shape") or [row["start_xy"], row["end_xy"]],
+        },
         "crop_bbox": list(bbox),
+        "crop_margin_m": margin_m,
         "latitude": row["latitude"],
         "longitude": row["longitude"],
         "net_file": "map.net.xml",
         "source_project": "scene_collection",
-        "harvest": "sign_free_moscow_osm",
+        "harvest": "diverse_segment_v2",
         "source_net": row.get("source_net", source_net.name),
     }
     write_scene_meta(scene_dir, meta)
 
-    # Render PNG preview
     out_png = scene_dir / "custom_cropped.png"
     try:
-        render_segment_preview(
-            out_net,
-            out_png,
-            road_id=row["edge_id"],
-        )
+        render_segment_preview(out_net, out_png, road_id=row["edge_id"])
     except Exception as exc:
         print(f"  [png warn] {scene_id}: {exc}")
 
@@ -234,16 +328,16 @@ def crop_segment_scene(
 
 
 def _crop_one(args_tuple: tuple) -> tuple:
-    """Worker for parallel crop. Returns (status, scene_id, detail)."""
-    row, net, scenes_root, skip_existing = args_tuple
+    row, net, scenes_root, skip_existing, margin_m = args_tuple
     try:
         return crop_segment_scene(
             row,
             source_net=Path(net),
             scenes_root=Path(scenes_root),
             skip_existing=bool(skip_existing),
+            margin_m=float(margin_m),
         )
-    except Exception as exc:  # noqa: BLE001 — collect failures in worker
+    except Exception as exc:  # noqa: BLE001
         scene_id = str(row.get("scene_id") or "?")
         return ("fail", scene_id, str(exc))
 
@@ -253,34 +347,19 @@ def main() -> None:
     ap.add_argument("--net", type=Path, default=DEFAULT_NET)
     ap.add_argument("--index", type=Path, default=DEFAULT_INDEX)
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    ap.add_argument("--margin-m", type=float, default=CROP_MARGIN_M)
     ap.add_argument(
         "--segment-types",
         default="straight,curved",
-        help="Comma-separated segment types to crop (default: straight,curved)",
+        help="Comma-separated segment types to crop",
     )
-    ap.add_argument(
-        "--max-scenes",
-        type=int,
-        default=DEFAULT_MAX_SCENES,
-        help="Max scenes to crop (0 = no cap, harvest all of P)",
-    )
-    ap.add_argument(
-        "--max-per-type",
-        type=int,
-        default=None,
-        help="Deprecated alias for --max-scenes (ignored if --max-scenes is set)",
-    )
+    ap.add_argument("--max-scenes", type=int, default=0, help="0 = no cap")
     ap.add_argument("--skip-existing", action="store_true")
-    ap.add_argument(
-        "--workers",
-        type=int,
-        default=4,
-        help="Parallel netconvert workers (default 4)",
-    )
+    ap.add_argument("--workers", type=int, default=4)
     ap.add_argument(
         "--png-only",
         action="store_true",
-        help="Re-render custom_cropped.png for existing scenes (no netconvert)",
+        help="Re-render custom_cropped.png for existing scenes",
     )
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
@@ -299,14 +378,17 @@ def main() -> None:
     if not args.net.is_file():
         sys.exit(f"ERROR: net not found: {args.net}")
     if not args.index.is_file():
-        sys.exit(f"ERROR: segments index not found: {args.index}")
+        sys.exit(
+            f"ERROR: segments index not found: {args.index}\n"
+            "Run: python -m traffic_bench.scene_collection.collect.segments.enumerate"
+        )
 
     want_types = {s.strip() for s in args.segment_types.split(",") if s.strip()}
     rows = [
-        r for r in load_segments_index(args.index)
+        enrich_lane_fields(r)
+        for r in load_selected_index(args.index)
         if r.get("segment_type") in want_types
     ]
-    rows = [enrich_lane_fields(r) for r in rows]
 
     moved = flatten_legacy_segment_layout(args.out)
     if moved:
@@ -315,39 +397,49 @@ def main() -> None:
     if n_backfill:
         print(f"[crop_segment] backfilled lane fields on {n_backfill} metas")
 
-    max_scenes = int(args.max_scenes or 0)
-    if max_scenes <= 0 and args.max_per_type:
-        max_scenes = int(args.max_per_type)
-
     print(f"[crop_segment] net={args.net}")
-    print(f"[crop_segment] index={args.index} ({len(rows)} segments of types {want_types})")
-    cap_note = "unlimited" if max_scenes <= 0 else str(max_scenes)
-    print(f"[crop_segment] max_scenes={cap_note}, skip_existing={args.skip_existing}, workers={args.workers}")
+    print(f"[crop_segment] index={args.index} ({len(rows)} candidates of types {want_types})")
+    print(
+        f"[crop_segment] margin_m={args.margin_m} skip_existing={args.skip_existing} "
+        f"workers={args.workers}"
+    )
 
     existing_ids: Set[str] = set()
+    on_disk_by_subtype: Dict[str, int] = {}
     if args.skip_existing:
+        on_disk_by_subtype = _count_on_disk_by_subtype(args.out)
         for scene_dir in iter_segment_scene_dirs(args.out):
             if (scene_dir / "map.net.xml").is_file():
                 existing_ids.add(scene_dir.name)
         print(f"[crop_segment] existing on disk: {len(existing_ids)}")
+        if on_disk_by_subtype:
+            print(f"[crop_segment] existing by subtype: {dict(sorted(on_disk_by_subtype.items()))}")
 
-    import random
-    rng = random.Random(args.seed)
-    rng.shuffle(rows)
-
+    pending = [
+        row
+        for row in rows
+        if not (args.skip_existing and str(row.get("scene_id") or "") in existing_ids)
+    ]
+    # Round-robin by subtype so an interrupted run leaves a balanced partial pool.
+    ordered = interleave_by_subtype(
+        pending,
+        seed=args.seed,
+        on_disk_by_subtype=on_disk_by_subtype if args.skip_existing else None,
+    )
     jobs: List[Dict] = []
-    for row in rows:
-        sid = str(row.get("scene_id") or "")
-        if args.skip_existing and sid in existing_ids:
-            continue
+    for row in ordered:
         jobs.append(row)
-        if max_scenes > 0 and len(jobs) >= max_scenes:
+        if args.max_scenes > 0 and len(jobs) >= args.max_scenes:
             break
 
+    from collections import Counter
+
+    job_subtypes = Counter(_row_subtype(r) for r in jobs)
     print(f"[crop_segment] jobs to process: {len(jobs)}")
+    print(f"[crop_segment] jobs by subtype (round-robin order): {dict(sorted(job_subtypes.items()))}")
 
     job_args = [
-        (row, str(args.net), str(args.out), bool(args.skip_existing))
+        (row, str(args.net), str(args.out), bool(args.skip_existing), float(args.margin_m))
         for row in jobs
     ]
 
@@ -365,7 +457,8 @@ def main() -> None:
             print(f"  [fail] {scene_id}: {detail}")
         if i % 25 == 0 or i == len(job_args):
             print(
-                f"  [{i}/{len(job_args)}] ok={stats['ok']} fail={stats['fail']} skip={stats['skip']}"
+                f"  [{i}/{len(job_args)}] ok={stats['ok']} fail={stats['fail']} "
+                f"skip={stats['skip']}"
             )
 
     if workers == 1:
@@ -382,12 +475,16 @@ def main() -> None:
                 _consume(i, status, scene_id, detail)
 
     elapsed = time.time() - t0
-    print(f"[crop_segment] Done in {elapsed:.1f}s: ok={stats['ok']} fail={stats['fail']} skip={stats['skip']}")
+    print(
+        f"[crop_segment] Done in {elapsed:.1f}s: "
+        f"ok={stats['ok']} fail={stats['fail']} skip={stats['skip']}"
+    )
+    final_by_subtype = _count_on_disk_by_subtype(args.out)
+    print(f"[crop_segment] on disk by subtype: {dict(sorted(final_by_subtype.items()))}")
     print(f"[crop_segment] Output: {args.out}")
 
 
 def _render_one_png(scene_dir: Path) -> tuple:
-    """Worker: write custom_cropped.png. Returns (status, scene_id, detail)."""
     try:
         meta = json.loads((scene_dir / "meta.json").read_text(encoding="utf-8"))
         render_segment_preview(
@@ -406,7 +503,6 @@ def _rerender_existing_pngs(
     skip_existing: bool = False,
     workers: int = 1,
 ) -> None:
-    """Write custom_cropped.png for cropped scenes (optionally only missing)."""
     jobs = []
     skipped = 0
     for scene_dir in iter_segment_scene_dirs(scenes_root):
