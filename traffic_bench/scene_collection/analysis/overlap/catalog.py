@@ -31,10 +31,12 @@ _SEG_RE = re.compile(r"^seg_(\d+)(?:_\d+)?$")
 _DUAL_RE = re.compile(r"^dual_")
 _RB_RE = re.compile(r"^rb_")
 
-# Eval folder name → PDD code (from sign registry).
-_PDD_BY_FOLDER: Dict[str, str] = {
-    p.data_subdir: p.pdd_code for p in list_profiles()
-}
+# Eval folder name → PDD code (from sign registry). Both the eval folder
+# (``main_road``) and the HF / registry id (``main``) resolve to the same code.
+_PDD_BY_FOLDER: Dict[str, str] = {}
+for _profile in list_profiles():
+    _PDD_BY_FOLDER[_profile.data_subdir] = _profile.pdd_code
+    _PDD_BY_FOLDER.setdefault(_profile.id, _profile.pdd_code)
 
 # Behavioral family of each eval sign folder (reviewer roll-ups).
 SIGN_FAMILY: Dict[str, str] = {
@@ -169,7 +171,12 @@ def load_catalog(
     if not root.is_dir():
         return cat
 
+    seen_dirs: Set[Path] = set()
     for sign_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        real_dir = sign_dir.resolve()
+        if real_dir in seen_dirs:
+            continue  # alias symlink (main_road -> main) — same pool, do not double count
+        seen_dirs.add(real_dir)
         pool_path = sign_dir / "moscow_pool.json"
         if not pool_path.is_file():
             continue
