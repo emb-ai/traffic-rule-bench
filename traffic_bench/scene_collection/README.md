@@ -42,9 +42,7 @@ python -m traffic_bench.scene_collection analysis overlap   # cross-sign map reu
 *Prebuilt official scenes are available on Hugging Face:*
 
 ```
-huggingface-cli download emb-ai/traffic-sign-bench \
-    --repo-type dataset \
-    --local-dir data
+python tools/fetch_hf_scenes.py     # catalog scenes only, aliases + moscow_pool.json
 ```
 
 ## Details

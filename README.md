@@ -122,10 +122,14 @@ Download the official per-sign maps into `data/scenes/<sign>/`:
 
 ```bash
 pip install huggingface_hub
-huggingface-cli download emb-ai/traffic-sign-bench \
-    --repo-type dataset \
-    --local-dir data
+python tools/fetch_hf_scenes.py
 ```
+
+The script pins one dataset revision, downloads only the 2500 catalog scenes
+(the raw repo tree also carries folders from earlier publishes), replaces the
+previous `data/scenes/`, creates the `main_road` / `secondary_road` aliases and
+writes `data/scenes/<sign>/moscow_pool.json`, which `paths.split=train|test`
+needs. Re-run it to resume an interrupted download.
 
 To harvest new maps from OSM instead: [`traffic_bench/scene_collection/`](traffic_bench/scene_collection/README.md).
 
