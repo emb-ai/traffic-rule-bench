@@ -22,6 +22,10 @@ from traffic_bench.eval.signs.roundabout.place import (
     place_roundabout_signs,
     row_is_roundabout,
 )
+from traffic_bench.eval.signs.restricted_lane.place import (
+    place_restricted_lane_signs,
+    row_is_restricted_lane,
+)
 from traffic_bench.eval.signs.speed.place import place_speed_signs, row_is_speed
 
 
@@ -37,6 +41,8 @@ def place_signs_for_row(
         return place_detour_signs(env, row, show_model=show_model)
     if row_is_speed(row):
         return place_speed_signs(env, row, show_model=show_model)
+    if row_is_restricted_lane(row):
+        return place_restricted_lane_signs(env, row, show_model=show_model)
     if row_is_crosswalk(row):
         return place_crosswalk_signs(
             env,

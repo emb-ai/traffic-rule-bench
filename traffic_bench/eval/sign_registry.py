@@ -21,6 +21,7 @@ SignFamily = Literal[
     "crosswalk",
     "detour",
     "speed",
+    "restricted_lane",
 ]
 
 EVAL = Path(__file__).resolve().parent
@@ -303,6 +304,46 @@ ZONE_SPEED_LIMIT = SignProfile(
     spawn_strategy="speed_zone",
 )
 
+BUS_LANE = SignProfile(
+    id="bus_lane",
+    family="restricted_lane",
+    sign_code="5.14.1",
+    sign_type="restricted_lane",
+    sign_name="Bus lane (5.14.1)",
+    layout_mode="main_main",
+    spawn_strategy="restricted_lane",
+)
+
+BIKE_LANE = SignProfile(
+    id="bike_lane",
+    family="restricted_lane",
+    sign_code="5.14.2",
+    sign_type="restricted_lane",
+    sign_name="Bicycle lane (5.14.2)",
+    layout_mode="main_main",
+    spawn_strategy="restricted_lane",
+)
+
+BUS_LANE_ROAD = SignProfile(
+    id="bus_lane_road",
+    family="restricted_lane",
+    sign_code="5.11.1",
+    sign_type="restricted_lane",
+    sign_name="Road with a bus lane (5.11.1)",
+    layout_mode="main_main",
+    spawn_strategy="restricted_lane",
+)
+
+BIKE_LANE_ROAD = SignProfile(
+    id="bike_lane_road",
+    family="restricted_lane",
+    sign_code="5.11.2",
+    sign_type="restricted_lane",
+    sign_name="Road with a bicycle lane (5.11.2)",
+    layout_mode="main_main",
+    spawn_strategy="restricted_lane",
+)
+
 CROSSWALK = SignProfile(
     id="crosswalk",
     family="crosswalk",
@@ -338,6 +379,10 @@ _PROFILES = (
     MIN_SPEED,
     RESIDENTIAL_ZONE,
     ZONE_SPEED_LIMIT,
+    BUS_LANE,
+    BIKE_LANE,
+    BUS_LANE_ROAD,
+    BIKE_LANE_ROAD,
     CROSSWALK,
 )
 

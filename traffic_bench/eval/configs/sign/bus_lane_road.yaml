@@ -1,0 +1,6 @@
+# @package _global_
+# 5.11.1 — road with a bus lane
+defaults:
+  - /shared/restricted_lane
+
+sign: bus_lane_road

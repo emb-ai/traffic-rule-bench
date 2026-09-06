@@ -12,6 +12,7 @@ Each group is a set of eval ids that share spawn geometry and plate placement.
 | [crosswalk](crosswalk/README.md)   | `crosswalk`                                                        | 5.19                      |
 | [detour](detour/README.md)         | `detour_right`, `detour_left`, `detour_either`                     | 4.2.1–4.2.3               |
 | [speed](speed/README.md)           | `speed_limit`, `min_speed`, `residential_zone`, `zone_speed_limit` | 3.24, 4.6, 5.21, 5.31     |
+| [restricted_lane](restricted_lane/README.md) | `bus_lane`, `bike_lane`, `bus_lane_road`, `bike_lane_road` | 5.14.1, 5.14.2, 5.11.1, 5.11.2 |
 
 
 Per-group files (skip if unused):

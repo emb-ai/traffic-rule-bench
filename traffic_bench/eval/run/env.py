@@ -20,6 +20,13 @@ from traffic_bench.eval.engine.map.lane_keys import clamp_lane_key_to_graph, lan
 from traffic_bench.eval.signs.blocked.place import row_is_blocked_road as _row_is_blocked_road
 from traffic_bench.eval.signs.crosswalk.place import row_is_crosswalk as _row_is_crosswalk
 from traffic_bench.eval.signs.detour.place import row_is_detour as _row_is_detour
+from traffic_bench.eval.signs.restricted_lane.place import (
+    row_is_restricted_lane as _row_is_restricted_lane,
+)
+
+# Reserved lane: no background car on the ego edge within this many metres past
+# the ego teleport point (front headway at the 5 m/s spawn speed plus margin).
+RESTRICTED_SPAWN_CLEAR_M = 30.0
 from traffic_bench.eval.signs.dual_path.nav import (
     OneWaySumoTrafficManager,
     resolve_row_background_excluded_edges,
@@ -106,6 +113,20 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         # Share of NPCs honouring the plate; rows made before the field
         # existed get 1.0, the old all-compliant behaviour.
         traffic_compliance = float(row.get("npc_compliance_rate", 1.0) or 0.0)
+    elif _row_is_restricted_lane(row) and row.get("road_id"):
+        # Reserved lane: the ego is teleported to spawn_offset_from_start
+        # AFTER traffic has spawned, so the keep-clear guard saw it at the edge
+        # start. On the ego's edge let background cars start only past the
+        # teleport point; the zone and the neighbouring lane keep their traffic.
+        # A ladder starting 5 m past the ego put the first car within its
+        # 3-second braking distance: ppo/carl baselines and experts alike crashed
+        # at step ~30 in a fifth of the rows. Keep the front headway clear.
+        traffic_after_lng = (
+            float(row.get("spawn_offset_from_start") or 0.0) + RESTRICTED_SPAWN_CLEAR_M
+        )
+        traffic_after_edge = str(row["road_id"])
+        traffic_after_kmh = 0.0
+        traffic_compliance = 1.0
     else:
         traffic_after_lng = -1.0
         traffic_after_edge = ""

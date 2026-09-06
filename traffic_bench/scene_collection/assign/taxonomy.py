@@ -15,6 +15,7 @@ BehavioralFamily = Literal[
     "speed_control",
     "pedestrian_crossing",
     "roundabout",
+    "lane_restriction",
 ]
 TopologyKind = Literal["T", "X", "O", "dual_path", "segment"]
 
@@ -44,6 +45,10 @@ SEMANTIC_GROUP: Dict[str, SemanticGroup] = {
     "4.1.6": "reroute",
     "5.7.1": "reroute",
     "5.7.2": "reroute",
+    "5.14.1": "obstacle",
+    "5.14.2": "obstacle",
+    "5.11.1": "obstacle",
+    "5.11.2": "obstacle",
 }
 
 BEHAVIORAL_FAMILY: Dict[str, BehavioralFamily] = {
@@ -72,6 +77,10 @@ BEHAVIORAL_FAMILY: Dict[str, BehavioralFamily] = {
     "5.31": "speed_control",
     "5.19": "pedestrian_crossing",
     "4.3": "roundabout",
+    "5.14.1": "lane_restriction",
+    "5.14.2": "lane_restriction",
+    "5.11.1": "lane_restriction",
+    "5.11.2": "lane_restriction",
 }
 
 # Process signs in this order so unique places go to early families first.
@@ -101,6 +110,10 @@ SIGN_ALLOC_ORDER: Tuple[str, ...] = (
     "4.1.6",
     "5.7.1",
     "5.7.2",
+    "5.14.1",
+    "5.14.2",
+    "5.11.1",
+    "5.11.2",
 )
 
 SEMANTIC_GROUP_ORDER: Tuple[SemanticGroup, ...] = (

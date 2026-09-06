@@ -91,6 +91,9 @@ from traffic_bench.eval.signs.crosswalk.place import (
     row_is_crosswalk as _row_is_crosswalk,
 )
 from traffic_bench.eval.signs.detour.place import row_is_detour as _row_is_detour
+from traffic_bench.eval.signs.restricted_lane.place import (
+    row_is_restricted_lane as _row_is_restricted_lane,
+)
 from traffic_bench.eval.signs.speed.place import row_is_speed as _row_is_speed
 from traffic_bench.eval.engine.spawn.auxiliary_agent import (
     DEFAULT_CONVOY_GAP_M,
@@ -355,7 +358,7 @@ def run_one_episode(
         if _row_is_speed(row):
             _apply_manifest_ego_spawn_velocity(base_env, row)
         _apply_manifest_ego_destination(base_env, row)
-        if _row_is_detour(row) or _row_is_speed(row):
+        if _row_is_detour(row) or _row_is_speed(row) or _row_is_restricted_lane(row):
             _apply_destination_along_cap(base_env, row)
         install_segment_crosswalk_geometry(base_env, row)
 
@@ -378,7 +381,8 @@ def run_one_episode(
         # Validate route: check that destination is different from spawn.
         # Detour finishes on the same obstacle edge (along-cap), so skip this.
         nav = getattr(base_env.vehicle, "navigation", None)
-        if nav is not None and not _row_is_detour(row) and not _row_is_speed(row):
+        if (nav is not None and not _row_is_detour(row) and not _row_is_speed(row)
+                and not _row_is_restricted_lane(row)):
             checkpoints = getattr(nav, "checkpoints", [])
             spawn_lane_idx = getattr(base_env.vehicle.lane, "index", None)
             if checkpoints and spawn_lane_idx:
@@ -416,6 +420,7 @@ def run_one_episode(
                 and not _row_is_crosswalk(row)
                 and not _row_is_detour(row)
                 and not _row_is_speed(row)
+                and not _row_is_restricted_lane(row)
             ):
                 place_right_hand_yield_tracker(
                     base_env,
@@ -793,6 +798,7 @@ def run_one_episode(
                 or _row_is_crosswalk(row)
                 or _row_is_detour(row)
                 or _row_is_speed(row)
+                or _row_is_restricted_lane(row)
             ):
                 raw_cap = row.get("destination_max_along_m")
                 if raw_cap is None:
@@ -808,7 +814,8 @@ def run_one_episode(
             capped_arrive = capped_arrive or _ego_reached_capped_destination(
                 vehicle,
                 max_along_m=dest_cap_m,
-                allow_same_lane=_row_is_detour(row) or _row_is_speed(row),
+                allow_same_lane=(_row_is_detour(row) or _row_is_speed(row)
+                                 or _row_is_restricted_lane(row)),
             )
             natural_done = bool(terminated or truncated)
 

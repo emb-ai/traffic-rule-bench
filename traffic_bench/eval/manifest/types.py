@@ -67,6 +67,8 @@ class SimulationConfig:
     max_ego_lanes: int = 8
     zone_tail_m: float = 8.0
     zone_min_m: float = 20.0
+    # Reserved lane (5.14.x / 5.11.x): zone length after the plate.
+    restricted_zone_m: float = 60.0
 
 
 @dataclass

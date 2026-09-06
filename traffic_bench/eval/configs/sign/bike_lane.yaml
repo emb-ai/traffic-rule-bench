@@ -1,0 +1,6 @@
+# @package _global_
+# 5.14.2 — bicycle lane
+defaults:
+  - /shared/restricted_lane
+
+sign: bike_lane

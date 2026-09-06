@@ -302,6 +302,9 @@ def _job_from_hydra(cfg: DictConfig, profile, scenes_dir: Path, output_dir: Path
         max_ego_lanes=int(getattr(cfg.simulation, "max_ego_lanes", 8) or 8),
         zone_tail_m=float(getattr(cfg.simulation, "zone_tail_m", 8.0) or 8.0),
         zone_min_m=float(getattr(cfg.simulation, "zone_min_m", 20.0) or 20.0),
+        restricted_zone_m=float(
+            getattr(cfg.simulation, "restricted_zone_m", 60.0) or 60.0
+        ),
     )
     expert_cfg = ExpertConfig(
         stop_wait_steps=int(
@@ -383,6 +386,8 @@ def _generate_for_family(job: GenerateCfg):
         from traffic_bench.eval.signs.detour.expand import generate
     elif family == "speed":
         from traffic_bench.eval.signs.speed.expand import generate
+    elif family == "restricted_lane":
+        from traffic_bench.eval.signs.restricted_lane.expand import generate
     else:
         from traffic_bench.eval.signs.junction.expand import generate
     return generate(job)
