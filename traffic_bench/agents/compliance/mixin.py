@@ -64,7 +64,21 @@ class SignComplianceMixin(
     APPLY_UTURN_ZONE_ASSIST = False
     APPLY_LANE_DIRS_NAV_HOLD = True
     NO_ENTRY_STOP_MARGIN = 3.0
+    # Distance (m) before the detour zone at which the preemptive lane change
+    # starts. When PREEMPT_DETOUR_RANGE_M is set, it is sampled ONCE per episode
+    # from that range via the episode-seeded engine RNG, so the same scene seed
+    # always yields the same value and eval, recording and replay stay
+    # deterministic. A fixed distance made every recorded detour begin the
+    # manoeuvre at the same metre, which is not something a model should learn.
+    # Set the range to None to fall back to the constant.
     PREEMPT_DETOUR_M = 10.0
+    PREEMPT_DETOUR_RANGE_M = (5.0, 25.0)
+    # Detour approach slowdown, softer than the generic lane-change approach
+    # and applied ONLY while the target-lane gap is blocked. With a free gap
+    # the ego keeps its momentum and merges at speed; the unconditional cap it
+    # replaces made every recorded detour crawl up to the plate.
+    DETOUR_APPROACH_MIN_KMH = 30.0
+    DETOUR_APPROACH_FACTOR = 0.85
     DETOUR_RETURN_CLEARANCE_M = 8.0
     DETOUR_QUEUE_LOOKAHEAD_M = 35.0
     PREEMPT_RESTRICTED_LANE_M = 50.0
@@ -78,6 +92,9 @@ class SignComplianceMixin(
     def _init_sign_compliance(self):
         self._lc_target_lane = None
         self._lc_final_sumo_num = None
+        # Cleared here so the preempt distance is drawn once per episode rather
+        # than once per process.
+        self._detour_preempt_cache = None
         self._stop_states = {}
         self._speed_cap = None
         self._speed_floor = None

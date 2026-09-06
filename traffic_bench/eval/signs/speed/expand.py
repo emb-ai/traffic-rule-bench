@@ -25,6 +25,7 @@ from traffic_bench.eval.signs.speed.spec import (
     ZONE_MIN_M,
     ZONE_TAIL_M,
     accel_v0_mps,
+    sample_npc_compliance_rate,
     approach_m,
     assign_limit_kmh,
     braking_v0_mps,
@@ -84,6 +85,10 @@ class SpeedSimParams:
     # the scene is built on, and shortening it would make the scene unsatisfiable
     # rather than varied.
     sign_jitter_max_m: float = 25.0
+    # Variant 0 built as the nominal scene -- no traffic, no NPC profile, no
+    # plate jitter, the reference v0 -- and only variants 1..N-1 sampled. Gives
+    # every scene one clean reference row next to its sampled ones.
+    default_first_variant: bool = False
 
 
 @dataclass(frozen=True)
@@ -155,6 +160,7 @@ def build_speed_manifest_entry(
     npc_profile: Optional[Dict[str, Any]] = None,
     max_path_length_m: Optional[float] = None,
     route_length_augment: bool = False,
+    default_variant: bool = False,
 ) -> Optional[Dict[str, Any]]:
     scene_name = str(meta.get("scene_name") or scene_dir.name)
     net_file = str(meta.get("net_file") or "map.net.xml")
@@ -182,10 +188,18 @@ def build_speed_manifest_entry(
         seed_key += f"_rl{int(round(path_budget_m))}"
         scene_id = f"{scene_id}_rl{int(round(path_budget_m))}"
     seed = _stable_seed(scene_name, variant, seed_key)
-    traffic_density = sample_traffic_density(seed)
+    # The nominal row carries no traffic and the reference approach speed; the
+    # sampled rows draw both. Density here is the fallback for a row built
+    # without a profile -- embed_npc_profile overwrites it when one is passed.
+    traffic_density = 0.0 if default_variant else sample_traffic_density(seed)
+    npc_compliance_rate = 1.0 if default_variant else sample_npc_compliance_rate(seed)
 
     if spawn_mode == "accel":
-        v0 = accel_v0_mps(v_target_kmh, seed=seed)
+        v0 = accel_v0_mps(v_target_kmh, seed=None if default_variant else seed)
+    elif default_variant:
+        from traffic_bench.eval.signs.speed.spec import nominal_braking_v0_mps
+
+        v0 = nominal_braking_v0_mps(v_target_kmh)
     else:
         v0 = braking_v0_mps(seed, v_target_kmh)
     d_req = approach_m(pdd_code, v0, v_target_kmh)
@@ -197,9 +211,10 @@ def build_speed_manifest_entry(
         return None
 
     # Slide the plate downstream within whatever room the zone can spare, so the
-    # profiles of one cell do not all put the sign at the same metre.
+    # profiles of one cell do not all put the sign at the same metre. The
+    # nominal row keeps the plate where the approach distance puts it.
     room = (s_end - float(sim.zone_min_m)) - sign_s
-    if room > 0.0:
+    if room > 0.0 and not default_variant:
         jitter = random.Random(seed ^ 0x516E4A).random() * min(
             float(sim.sign_jitter_max_m), room)
         sign_s += jitter
@@ -246,6 +261,9 @@ def build_speed_manifest_entry(
         # passed, which is the normal path. The config default is 0.0, so
         # falling back to it would mean a scene with no traffic at all.
         "traffic_density": float(traffic_density),
+        # Share of NPCs that obey the plate (1.0 = all). Read by the traffic
+        # manager at spawn; every other family leaves it at the default 1.0.
+        "npc_compliance_rate": float(npc_compliance_rate),
         "sign_s_earliest": round(float(spawn_offset + d_req), 3),
         "horizon": int(sim.horizon),
         "horizon_steps": int(sim.horizon),
@@ -306,14 +324,20 @@ def expand_speed_scene_entries(
     )
     for lane_num in _lane_range(meta, sim.max_ego_lanes):
         for npc_var in range(n_variations):
-            for path_len_m in route_levels:
+            # Variant 0 of a cell is the nominal scene when asked for: a single
+            # row at the configured budget, no profile, no traffic. The
+            # route-length axis stays on the sampled variants only, so the
+            # reference row is one row and not one per budget.
+            nominal = bool(sim.default_first_variant) and npc_var == 0
+            levels = [float(sim.max_path_length_m)] if nominal else route_levels
+            for path_len_m in levels:
                 seed = stable_hash(
                     str(meta.get("scene_name") or scene_dir.name),
                     lane_num,
                     npc_var,
                     int(round(float(path_len_m))),
                 )
-                npc_profile = sample_one_profile(
+                npc_profile = None if nominal else sample_one_profile(
                     int(seed),
                     density_cap=float(sim.profile_density_cap),
                     horizon_steps=int(sim.horizon),
@@ -329,7 +353,8 @@ def expand_speed_scene_entries(
                     variant=npc_var,
                     npc_profile=npc_profile,
                     max_path_length_m=float(path_len_m),
-                    route_length_augment=route_augment,
+                    route_length_augment=route_augment and not nominal,
+                    default_variant=nominal,
                 )
                 if row is not None:
                     entries.append(row)
@@ -410,6 +435,7 @@ def generate(cfg, scenes=None):
         zone_tail_m=float(sim_cfg.zone_tail_m),
         zone_min_m=float(sim_cfg.zone_min_m),
         sign_jitter_max_m=float(getattr(sim_cfg, "sign_jitter_max_m", 25.0) or 0.0),
+        default_first_variant=bool(getattr(sim_cfg, "default_first_variant", False)),
     )
     speed_expansion = SpeedExpansionConfig(
         max_scenarios=scenario_cfg.max_scenarios,

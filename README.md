@@ -181,7 +181,7 @@ Full contract: [`traffic_bench/eval/README.md`](traffic_bench/eval/README.md).
 | CaRL | `carl` / `carl_rule` | yes |
 | PlanT2 | `plant2` / `plant2_rule` / `plant2_ft` | yes |
 
-`policies=all` runs the registered set. `idm` is MetaDrive `ModifiedIDMPolicy`.
+`policies=all` runs the registered set. `idm` is `CurveAwareIDMPolicy`: the raw MetaDrive IDM plus the rule expert's defensive layer (curvature speed cap, longer steering lookahead, braking for crossing traffic) and no sign knowledge, so the `idm` / `idm_rule` gap is sign compliance alone. `EGO_CURVE_AWARE=0` falls back to the raw `IDMPolicy`.
 
 ---
 

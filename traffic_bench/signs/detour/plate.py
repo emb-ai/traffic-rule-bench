@@ -23,13 +23,26 @@ class DetourSign(BaseTrafficSign):
     allowed_directions: set  # set by subclasses
 
     # How far ahead of the obstacle the vehicle must have already changed lane.
-    OBSTACLE_OFFSET = 2.0
+    # Zero: the violation is registered at the obstacle itself, the latest point
+    # at which the manoeuvre can still be judged. Any margin above it condemns a
+    # car that is still legally free to change lane.
+    OBSTACLE_OFFSET = 0.0
     # Distance from sign icon to the centre of the cone cluster.
     # The first cone is at obstacle_long − 2.25 m, so the sign sits ~1.25 m
     # before the first cone (3.5 − 2.25 = 1.25).
     SIGN_TO_OBSTACLE = 3.5
-    # Zone parameters (relative to obstacle position)
-    ZONE_BEFORE = 30.0
+    # Zone parameters (relative to obstacle position). A violation is counted on
+    # every step inside the zone while the vehicle has not moved aside, so
+    # ZONE_BEFORE is the distance at which the breach starts being recorded, and
+    # 30 m condemned the whole run-up: a car merging at 25 m collected five
+    # metres of violations for a manoeuvre it completed in time. It is now the
+    # shortest span that still catches the case the sign exists for -- a vehicle
+    # that stops in the signed lane in front of the cones. Where that car stops
+    # is set by its following gap to the cluster, not by cone geometry: measured
+    # over 56 stalled sign-unaware idm episodes, the centre came to rest 9.2 to
+    # 13.2 m before the cluster centre (median 11.6). A 10 m zone caught 8 of
+    # them; 15 m catches all 56 with about two metres to spare.
+    ZONE_BEFORE = 15.0
     ZONE_AFTER = 15.0
 
     def __init__(self, lane, zone_length=None, icon_path=None, **kwargs):
@@ -203,7 +216,10 @@ class DetourSign(BaseTrafficSign):
 
         # Violating on every step inside the zone while not yet changed
         # correctly. No per-step "compliance credit" is granted to vehicles
-        # that haven't yet performed the prescribed lane change.
+        # that haven't yet performed the prescribed lane change. Judging only at
+        # the obstacle would clear a car that comes to a stop in front of the
+        # cones in the signed lane, which is exactly the failure the sign
+        # exists to catch.
         return state["entered_zone"] and not state["changed_correctly"]
     
     def get_rule_description(self) -> str:
