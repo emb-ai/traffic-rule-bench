@@ -121,6 +121,12 @@ def entry_geometry_key(entry: Dict) -> Tuple:
         gap_key,
         round(float(entry.get("route_length_level_m") or entry.get("max_path_length_m") or 0.0), 1),
         int(entry.get("var_idx") or 0),
+        int(entry.get("density_level_id") if entry.get("density_level_id") is not None else -1),
+        int(
+            entry.get("spawn_velocity_level_id")
+            if entry.get("spawn_velocity_level_id") is not None
+            else -1
+        ),
     )
 
 

@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from traffic_bench.eval.engine.map.junction_sign_placement import resolve_layout_lane
+from traffic_bench.eval.engine.map.sumo_metadrive_along import (
+    remap_sumo_along_to_metadrive,
+    row_sumo_edge_length_m,
+)
 from traffic_bench.signs.speed.end_of_zone import EndOfSpeedLimitSign, EndOfZoneSpeedLimitSign
 from traffic_bench.signs.speed.min_speed import MinimumSpeedLimitSign
 from traffic_bench.signs.speed.residential import (
@@ -58,7 +62,13 @@ def place_speed_signs(env, row: dict, show_model: bool = True) -> bool:
         if lane is None:
             lane = vehicle.lane
 
-        placement_long = max(0.1, min(sign_s, float(lane.length) - 1.0))
+        sumo_len = row_sumo_edge_length_m(row)
+        md_len = float(lane.length)
+        placement_long = remap_sumo_along_to_metadrive(
+            sign_s,
+            sumo_edge_length_m=sumo_len,
+            metadrive_lane_length_m=md_len,
+        )
         start_kwargs = dict(
             lane=lane,
             longitudinal_offset=placement_long,
@@ -75,7 +85,7 @@ def place_speed_signs(env, row: dict, show_model: bool = True) -> bool:
             # offset from the lane END. Feeding it `sign_s` unconverted put the
             # plate at `lane.length + sign_s`, i.e. off the far end of the lane,
             # where it is invisible and its zone is empty.
-            start_kwargs["longitudinal_offset"] = placement_long - float(lane.length)
+            start_kwargs["longitudinal_offset"] = placement_long - md_len
             if v_target > 0:
                 start_kwargs["min_speed_override"] = v_target
 
@@ -90,7 +100,13 @@ def place_speed_signs(env, row: dict, show_model: bool = True) -> bool:
         if end_code and s_end is not None:
             end_cls = end_cls_map.get(end_code)
             if end_cls is not None:
-                end_long = max(placement_long + 1.0, min(float(s_end), float(lane.length) - 0.5))
+                end_sumo = float(s_end)
+                end_long = remap_sumo_along_to_metadrive(
+                    end_sumo,
+                    sumo_edge_length_m=sumo_len,
+                    metadrive_lane_length_m=md_len,
+                )
+                end_long = max(placement_long + 1.0, min(end_long, md_len - 0.5))
                 end_kwargs = dict(
                     lane=lane,
                     longitudinal_offset=end_long,
@@ -111,9 +127,18 @@ def place_speed_signs(env, row: dict, show_model: bool = True) -> bool:
 
         print(
             f"[SpeedSign] Placed {pdd_code}@{placement_long:.1f}m "
+            f"(sumo_s={sign_s:.1f}m) "
             f"v_target={v_target:.0f} end={end_code or '-'} "
             f"s_end={float(s_end) if s_end is not None else float('nan'):.1f}"
         )
+        # NPC "after plate" cut uses MetaDrive longitude — keep it aligned with
+        # the remapped plate, not the raw SUMO sign_s from env construction.
+        try:
+            cfg = getattr(getattr(env, "engine", None), "global_config", None)
+            if cfg is not None and float(cfg.get("traffic_spawn_after_lng", -1.0)) >= 0.0:
+                cfg["traffic_spawn_after_lng"] = float(placement_long)
+        except Exception:
+            pass
         return True
     except Exception as e:
         print(f"[SpeedSign] Failed to place sign: {e}")

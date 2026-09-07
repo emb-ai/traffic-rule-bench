@@ -1,9 +1,9 @@
-"""Expand blocked-road (3.2) scenes into manifest rows (layout × NPC profile).
+"""Expand blocked-road (3.2) scenes into manifest rows (layout × world grid).
 
-NPC world params come from ``core.profiles``
-(``sample_one_profile``, ``stable_hash``). Geometry expansion stays here.
+NPC world params come from ``sample_profile_for_cell`` over the shared
+route × density × spawn-velocity × NPC axes. Geometry expansion stays here.
 
-``max_scenarios`` caps the combined (lane/dest × n_variations) pool after shuffle.
+``max_scenarios`` caps the combined (layout × world-grid) pool after shuffle.
 """
 
 from __future__ import annotations
@@ -12,7 +12,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from traffic_bench.eval.engine.expand.manifest_config import (
+    DEFAULT_SPAWN_VELOCITY_LEVELS_MS,
+    DEFAULT_TRAFFIC_DENSITY_LEVELS,
+)
 from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
+from traffic_bench.eval.engine.expand.world_axes import (
+    DEFAULT_HORIZON_STEPS,
+    DEFAULT_MAX_PATH_LENGTH_M,
+    DEFAULT_ROUTE_LENGTH_LEVELS_M,
+    describe_world_axes,
+    iter_world_axis_cells,
+    sample_profile_for_cell,
+    stamp_world_axis_fields,
+)
 from traffic_bench.eval.engine.spawn.route_budget import (
     apply_route_budget,
     measure_spawn_to_dest_length_m,
@@ -22,7 +35,6 @@ from traffic_bench.eval.engine.spawn.route_length_levels import (
     select_route_length_levels,
     tag_entry_route_length,
 )
-from traffic_bench.eval.engine.traffic.agent_profile_bank import sample_one_profile
 from traffic_bench.eval.engine.traffic.npc_profile import embed_npc_profile
 from traffic_bench.eval.engine.traffic.stable_hash import stable_hash
 from traffic_bench.eval.engine.spawn.scene_augmentation import (
@@ -37,14 +49,16 @@ class BlockedRoadSimParams:
     sign_distance_from_start: float
     spawn_distance_before_end: float
     spawn_velocity_ms: float
-    horizon: int
-    compliant_stop_success_seconds: float
-    compliant_stop_max_dist_m: float
-    compliant_stop_speed_mps: float
+    horizon: int = DEFAULT_HORIZON_STEPS
+    compliant_stop_success_seconds: float = 3.0
+    compliant_stop_max_dist_m: float = 12.0
+    compliant_stop_speed_mps: float = 0.5
     n_variations: int = 3
     profile_density_cap: float = 1.0
-    max_path_length_m: float = 150.0
-    max_path_length_levels: Tuple[float, ...] = (130.0, 150.0, 170.0)
+    traffic_density_levels: Tuple[float, ...] = DEFAULT_TRAFFIC_DENSITY_LEVELS
+    spawn_velocity_levels_ms: Tuple[float, ...] = DEFAULT_SPAWN_VELOCITY_LEVELS_MS
+    max_path_length_m: float = DEFAULT_MAX_PATH_LENGTH_M
+    max_path_length_levels: Tuple[float, ...] = DEFAULT_ROUTE_LENGTH_LEVELS_M
 
 
 @dataclass(frozen=True)
@@ -63,6 +77,8 @@ def blocked_road_geometry_key(entry: Dict[str, Any]) -> Tuple:
         entry.get("spawn_lane_num"),
         entry.get("destination_lane_id"),
         entry.get("var_idx"),
+        entry.get("density_level_id"),
+        entry.get("spawn_velocity_level_id"),
         round(float(entry.get("route_length_level_m") or entry.get("max_path_length_m") or 0.0), 1),
     )
 
@@ -79,9 +95,8 @@ def expand_blocked_road_scene_entries(
     expansion: BlockedRoadExpansionConfig,
     build_entry: BuildBlockedRoadEntryFn,
 ) -> List[Dict[str, Any]]:
-    """Expand one scene: layout through-paths × n_variations NPC profiles."""
+    """Expand one scene: layout through-paths × shared world grid."""
     scene_name = str(meta.get("scene_name") or scene_dir.name)
-    n_variations = max(1, int(sim.n_variations))
     print(
         f"  Junction layout: {junction_layout['shape']} @ {junction_layout['junction_id']} "
         f"(arms={len(junction_layout.get('arms', []))})"
@@ -110,9 +125,6 @@ def expand_blocked_road_scene_entries(
         scenarios = [None]
         print("  Layout axis off: one default spawn per scene")
 
-    # Filter layouts by forbidden-lane geometry, then expand with NPC profiles.
-    # max_scenarios caps the *combined* (lane/dest × var_idx) pool — not layouts
-    # first and then × n_variations.
     layout_kept: List[Tuple[int, Optional[SpawnScenario]]] = []
     skipped_geometry = 0
     for layout_i, scenario in enumerate(scenarios):
@@ -134,36 +146,12 @@ def expand_blocked_road_scene_entries(
     if skipped_geometry:
         print(f"  [geometry] Skipped {skipped_geometry} layout(s) (forbidden edge too short)")
 
-    candidates: List[Tuple[int, Optional[SpawnScenario], int]] = [
-        (layout_i, scenario, var_idx)
-        for layout_i, scenario in layout_kept
-        for var_idx in range(n_variations)
-    ]
     configured_route_levels = list_route_length_levels(sim)
-    pre_cap = len(candidates)
-    cap = expansion.max_scenarios
-    candidates = shuffle_cap(
-        candidates,
-        cap,
-        seed_key=(scene_name, "blocked_road_combo_cap", int(cap) if cap is not None else 0),
-    )
-    if cap is not None and pre_cap > cap:
-        print(
-            f"  Retained {len(candidates)} of {pre_cap} "
-            f"(layout×NPC) scenario(s) (shuffled, cap={cap}; "
-            f"{len(layout_kept)} layouts × {n_variations} profiles)"
-        )
-    else:
-        print(
-            f"  Combined scenarios: {pre_cap} "
-            f"({len(layout_kept)} layouts × {n_variations} NPC profiles)"
-        )
-
+    spawn_before_end = float(sim.spawn_distance_before_end)
     scene_entries: List[Dict[str, Any]] = []
     seen: set = set()
-    spawn_before_end = float(sim.spawn_distance_before_end)
 
-    for layout_i, scenario, var_idx in candidates:
+    for layout_i, scenario in layout_kept:
         scenario_id = scenario.scenario_id if scenario is not None else ""
         available_route_m = None
         if scenario is not None:
@@ -177,36 +165,56 @@ def expand_blocked_road_scene_entries(
         route_levels, route_augment = select_route_length_levels(
             configured_route_levels, available_route_m
         )
-        for path_len_m in route_levels:
-            seed = stable_hash(scene_name, scenario_id, var_idx, int(round(path_len_m)))
-            profile = sample_one_profile(
-                int(seed),
-                density_cap=float(sim.profile_density_cap),
-                horizon_steps=int(sim.horizon),
-            )
-
+        for cell in iter_world_axis_cells(
+            route_levels=route_levels,
+            sim=sim,
+            task_conditioned_spawn=False,
+        ):
+            suffix = cell.scene_suffix(route_augment=route_augment)
+            seed = stable_hash(scene_name, scenario_id, *cell.seed_tags())
+            profile = sample_profile_for_cell(cell, seed=int(seed), sim=sim)
             entry = build_entry(
                 scene_dir=scene_dir,
                 scenes_root=scenes_root,
                 meta=meta,
                 layout_variant=layout_i,
-                var_idx=var_idx,
+                var_idx=cell.npc_var,
                 seed=seed,
                 sim=sim,
                 spawn_scenario=scenario,
                 spawn_lanes_cache=list(spawn_lanes),
                 junction_layout_cache=junction_layout,
                 npc_profile=profile,
-                max_path_length_m=float(path_len_m),
+                max_path_length_m=float(cell.route_length_m),
                 route_length_augment=route_augment,
+                spawn_velocity_ms=cell.spawn_velocity_ms,
+                traffic_density=float(cell.density.traffic_density),
+                scene_id_suffix=suffix,
             )
+            entry = stamp_world_axis_fields(entry, cell)
             key = blocked_road_geometry_key(entry)
             if key in seen:
                 continue
             seen.add(key)
             scene_entries.append(entry)
 
-    print(f"  Manifest entries for {scene_name}: {len(scene_entries)}")
+    cap = expansion.max_scenarios
+    pre_cap = len(scene_entries)
+    scene_entries = shuffle_cap(
+        scene_entries,
+        cap,
+        seed_key=(scene_name, "blocked_road_world_cap", int(cap) if cap is not None else 0),
+    )
+    if cap is not None and pre_cap > cap:
+        print(
+            f"  Retained {len(scene_entries)} of {pre_cap} world-grid variants "
+            f"(shuffled, cap={cap}; {len(layout_kept)} layouts)"
+        )
+    else:
+        print(
+            f"  Manifest entries for {scene_name}: {len(scene_entries)} "
+            f"({len(layout_kept)} layouts × world grid)"
+        )
     return scene_entries
 
 
@@ -229,17 +237,28 @@ def build_blocked_road_manifest_entry(
     sign_title: str = "Movement prohibited",
     max_path_length_m: Optional[float] = None,
     route_length_augment: bool = False,
+    spawn_velocity_ms: Optional[float] = None,
+    traffic_density: Optional[float] = None,
+    scene_id_suffix: str = "",
 ) -> Dict[str, Any]:
-    """Build one manifest row for a through-path + NPC-profile variation."""
+    """Build one manifest row for a through-path + world-grid cell."""
     del layout_variant  # encoded in augmentation_id / spawn fields
     scene_name = str(meta.get("scene_name") or scene_dir.name)
     net_file = meta.get("net_file", "map.net.xml")
     net_rel = scene_dir.relative_to(scenes_root) / net_file
 
-    traffic_density = float(npc_profile["traffic_density"])
+    row_density = float(
+        traffic_density
+        if traffic_density is not None
+        else npc_profile["traffic_density"]
+    )
     horizon = int(npc_profile.get("horizon_steps", sim.horizon))
-    # Same scene_id across NPC variations (sumo_catalog); distinguish via var_idx.
     scene_id = scene_name
+    if scene_id_suffix and scene_id_suffix not in scene_id:
+        scene_id = f"{scene_id}_{scene_id_suffix}"
+    v0 = float(
+        spawn_velocity_ms if spawn_velocity_ms is not None else sim.spawn_velocity_ms
+    )
 
     selected_lane = None
     if spawn_scenario is not None and spawn_lanes_cache:
@@ -272,8 +291,8 @@ def build_blocked_road_manifest_entry(
         "sign_family": "blocked_road",
         "sign_title": sign_title,
         "sign_class": sign_class,
-        "spawn_velocity_ms": sim.spawn_velocity_ms,
-        "traffic_density": traffic_density,
+        "spawn_velocity_ms": v0,
+        "traffic_density": row_density,
         "horizon": horizon,
         "sign_road_id": sign_road_id,
         "sign_distance_from_start": sim.sign_distance_from_start,
@@ -369,8 +388,7 @@ def generate(cfg, scenes=None):
     n_variations = max(1, int(sim_cfg.n_variations))
     print(
         f"Augmentation axes: layout={expansion_cfg.layout_on}, "
-        f"n_variations={n_variations} (combined with lane/dest; "
-        f"max_scenarios caps the product)"
+        f"{describe_world_axes(sim_cfg)}"
     )
 
     blocked_road_expansion = BlockedRoadExpansionConfig(
@@ -387,16 +405,30 @@ def generate(cfg, scenes=None):
         compliant_stop_speed_mps=sim_cfg.compliant_stop_speed_mps,
         n_variations=n_variations,
         profile_density_cap=float(sim_cfg.profile_density_cap),
+        traffic_density_levels=tuple(
+            float(x)
+            for x in (
+                getattr(sim_cfg, "traffic_density_levels", None)
+                or DEFAULT_TRAFFIC_DENSITY_LEVELS
+            )
+        ),
+        spawn_velocity_levels_ms=tuple(
+            float(x)
+            for x in (
+                getattr(sim_cfg, "spawn_velocity_levels_ms", None)
+                or DEFAULT_SPAWN_VELOCITY_LEVELS_MS
+            )
+        ),
         max_path_length_m=float(sim_cfg.max_path_length_m),
         max_path_length_levels=tuple(
-            float(x) for x in getattr(sim_cfg, "max_path_length_levels", (130.0, 150.0, 170.0))
+            float(x)
+            for x in getattr(sim_cfg, "max_path_length_levels", DEFAULT_ROUTE_LENGTH_LEVELS_M)
         ),
     )
 
     print(
-        f"[blocked_road] NPC world: sample_one_profile in shared pool with "
-        f"lane/dest (n_variations={n_variations}, "
-        f"density_cap={sim_cfg.profile_density_cap})"
+        f"[blocked_road] world grid: {describe_world_axes(sim_params)} "
+        f"(density_cap={sim_cfg.profile_density_cap})"
     )
 
     build_entry = partial(
@@ -498,7 +530,7 @@ def generate(cfg, scenes=None):
             "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
             "max_path_length_m": float(sim_cfg.max_path_length_m),
             "max_path_length_levels": list(
-                getattr(sim_cfg, "max_path_length_levels", (130.0, 150.0, 170.0))
+                getattr(sim_cfg, "max_path_length_levels", DEFAULT_ROUTE_LENGTH_LEVELS_M)
             ),
             "compliant_stop_success_seconds": sim_cfg.compliant_stop_success_seconds,
             "compliant_stop_max_dist_m": sim_cfg.compliant_stop_max_dist_m,

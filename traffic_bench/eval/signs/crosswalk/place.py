@@ -613,6 +613,11 @@ def place_crosswalk_signs(
 
         # No-split: place relative to zebra mark (from lane start).
         # Legacy inject: place relative to approach stub end.
+        from traffic_bench.eval.engine.map.sumo_metadrive_along import (
+            remap_sumo_along_to_metadrive,
+            row_sumo_edge_length_m,
+        )
+
         from_start = row.get("sign_distance_from_start")
         if from_start is None and row.get("crosswalk_position_m") and not row.get(
             "crosswalk_node_id"
@@ -626,9 +631,18 @@ def place_crosswalk_signs(
                 from_start = None
 
         if from_start is not None:
-            placement_long = sign_placement_long_from_start(lane, float(from_start))
-            long_offset = sign_longitudinal_offset_from_start(lane, float(from_start))
-            where = f"{float(from_start):.1f}m from start"
+            sumo_from_start = float(from_start)
+            md_from_start = remap_sumo_along_to_metadrive(
+                sumo_from_start,
+                sumo_edge_length_m=row_sumo_edge_length_m(row),
+                metadrive_lane_length_m=float(lane.length),
+            )
+            placement_long = sign_placement_long_from_start(lane, md_from_start)
+            long_offset = sign_longitudinal_offset_from_start(lane, md_from_start)
+            where = (
+                f"{md_from_start:.1f}m from start "
+                f"(sumo={sumo_from_start:.1f}m)"
+            )
         else:
             placement_long = sign_placement_long(lane, distance_before_end)
             long_offset = sign_longitudinal_offset(lane, distance_before_end)

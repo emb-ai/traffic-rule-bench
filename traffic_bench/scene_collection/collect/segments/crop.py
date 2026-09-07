@@ -281,6 +281,14 @@ def crop_segment_scene(
         return ("fail", scene_id, "netconvert did not write output")
 
     row = enrich_lane_fields(row)
+    window_length_m = float(row["length_m"])
+    net_length_m = None
+    try:
+        from traffic_bench.eval.signs.blocked.spec import edge_length_m
+
+        net_length_m = edge_length_m(out_net, str(row["edge_id"]))
+    except Exception:
+        net_length_m = None
     meta = {
         "scene_name": scene_id,
         "scene_kind": "segment",
@@ -288,7 +296,12 @@ def crop_segment_scene(
         "road_id": row["edge_id"],
         "junction_id": row.get("junction_id"),
         "osm_way_id": row["osm_way_id"],
-        "length_m": row["length_m"],
+        # Harvest corridor window (enumerate). May differ from the cropped edge.
+        "length_m": window_length_m,
+        "window_length_m": window_length_m,
+        "net_length_m": (
+            float(net_length_m) if net_length_m is not None and net_length_m > 0 else None
+        ),
         "straightness": row["straightness"],
         "lane_count": row["lane_count"],
         "lane_bucket": row.get("lane_bucket"),

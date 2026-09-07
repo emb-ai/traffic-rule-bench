@@ -1,32 +1,30 @@
-"""Traffic density drawn from the nuPlan distribution, not bucketed into tiers.
+"""Traffic density: calibrated nuPlan quantile probes + optional full-distribution draw.
 
-The three tiers this replaces (low/medium/high at nuPlan percentiles 25/50/75)
-presented three points of a distribution as three kinds of scene, and the value
-each of them carried came from `count / 80` -- a divisor no measurement
-supported, applied to a per-frame total that is not comparable to a per-lane
-spawn fraction. A scene now draws its own density, so the benchmark's traffic
-spans the distribution instead of sitting on three points of it.
+Controlled augmentation uses three fixed probes at nuPlan p25/p50/p75 of
+``count_moving_r150_per_lane``, mapped to MetaDrive ``traffic_density`` through
+``density_calibration_sumo.json``. That is an explicit stress-test grid, not a
+claim that traffic has three modes.
 
-The mapping from a uniform draw to `traffic_density` is quantile matching
-against `density_calibration_sumo.json`: the u-th quantile of nuPlan's
-`count_moving_r150_per_lane` is looked up on the curve that SumoTrafficManager
-was measured to produce on the benchmark's own scenes. Outside the reachable
-range the table clamps, which the calibration file records explicitly.
-
-The MetaDrive scale constants at the bottom are what the tiers used to divide by.
-They stay because `npc_profile` still needs a vehicles-per-frame unit when it
-subtracts the auxiliary convoy; they no longer size any scene's traffic.
+``sample_traffic_density`` remains for callers that still want one draw from the
+full calibrated curve (e.g. legacy rows). Expand paths that honour the shared
+grid should call ``list_traffic_density_levels`` instead.
 """
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
 CALIBRATION_NAME = "density_calibration_sumo.json"
+# Empirical probes of nuPlan count_moving_r150_per_lane (see calibration file).
+DEFAULT_DENSITY_PERCENTILES: Tuple[int, ...] = (25, 50, 75)
+
+META_DENSITY_SCALE = 80.0
+META_DENSITY_CAP = 0.5
+MAX_TRAFFIC_DENSITY_LEVELS = 3
 
 
 def _calibration_path() -> Path:
@@ -34,76 +32,142 @@ def _calibration_path() -> Path:
 
 
 _TABLE: Optional[Tuple[np.ndarray, np.ndarray]] = None
+_CALIB: Optional[dict] = None
 
 
-def _table() -> Tuple[np.ndarray, np.ndarray]:
-    """(u, density) of the sampling table, read once."""
-    global _TABLE
-    if _TABLE is None:
+def _calibration() -> dict:
+    global _CALIB
+    if _CALIB is None:
         path = _calibration_path()
         if not path.is_file():
             raise FileNotFoundError(
                 f"traffic density calibration not found: {path}. Run "
                 "tools/nuplan_resample/calibrate_density_sumo.py to produce it."
             )
-        data = json.loads(path.read_text())["sampling_table"]
-        _TABLE = (np.asarray(data["u"], dtype=float),
-                  np.asarray(data["density"], dtype=float))
+        _CALIB = json.loads(path.read_text())
+    return _CALIB
+
+
+def _table() -> Tuple[np.ndarray, np.ndarray]:
+    """(u, density) of the sampling table, read once."""
+    global _TABLE
+    if _TABLE is None:
+        data = _calibration()["sampling_table"]
+        _TABLE = (
+            np.asarray(data["u"], dtype=float),
+            np.asarray(data["density"], dtype=float),
+        )
     return _TABLE
 
 
 def sample_traffic_density(seed: int) -> float:
-    """One scene's density. Deterministic in the seed, so a manifest rebuilds
-    identically and a variant of the same cell gets its own traffic."""
+    """One density draw from the full calibrated curve (not a fixed probe)."""
     us, ds = _table()
     u = float(np.random.default_rng(int(seed) & 0xFFFFFFFF).random())
     return float(np.interp(u, us, ds))
 
 
 def density_quantiles(qs=(5, 25, 50, 75, 95)) -> dict:
-    """What the sampler spans, for the line the expanders print."""
+    """What the calibrated sampler spans, for expander log lines."""
     _, ds = _table()
     return {int(q): float(np.percentile(ds, q)) for q in qs}
 
 
-# --- Compatibility ------------------------------------------------------------
-# The expanders used to multiply a scene by a list of tiers. They now sample per
-# row, but the manifest keeps the two level fields as None so readers that group
-# by them degrade to a single group instead of raising.
+def density_at_quantile(q: float) -> float:
+    """MetaDrive traffic_density at nuPlan quantile q ∈ [0, 1]."""
+    us, ds = _table()
+    return float(np.interp(float(q), us, ds))
+
 
 @dataclass(frozen=True)
 class TrafficDensityLevel:
-    id: Optional[int]
-    name: Optional[str]
-    percentile: Optional[int]
-    nuplan_vehicles_per_frame: Optional[float]
+    id: int
+    name: str
+    percentile: int
+    nuplan_per_lane: float
     traffic_density: float
 
+    @property
+    def nuplan_vehicles_per_frame(self) -> float:
+        """Aux-credit unit: density × legacy MetaDrive scale (not per-lane)."""
+        return float(self.traffic_density) * META_DENSITY_SCALE
+
     def describe(self) -> str:
-        return f"sampled: MetaDrive density {self.traffic_density:.4f}"
+        return (
+            f"{self.name}: nuPlan p{self.percentile} "
+            f"({self.nuplan_per_lane:.2f}/lane) → density {self.traffic_density:.4f}"
+        )
+
+
+def _nuplan_per_lane_at(percentile: int) -> float:
+    raw = _calibration().get("nuplan_per_lane") or {}
+    key = str(int(percentile))
+    if key in raw:
+        return float(raw[key])
+    # Fallback: interpolate from known keys if a custom percentile is requested.
+    items = sorted((int(k), float(v)) for k, v in raw.items())
+    if not items:
+        return float("nan")
+    xs = np.asarray([p for p, _ in items], dtype=float)
+    ys = np.asarray([v for _, v in items], dtype=float)
+    return float(np.interp(float(percentile), xs, ys))
+
+
+def list_traffic_density_levels(
+    num_levels: int = MAX_TRAFFIC_DENSITY_LEVELS,
+    percentiles: Sequence[int] | None = None,
+    **_,
+) -> List[TrafficDensityLevel]:
+    """Fixed calibrated probes (default nuPlan p25/p50/p75)."""
+    qs = tuple(int(p) for p in (percentiles or DEFAULT_DENSITY_PERCENTILES))
+    if num_levels is not None and int(num_levels) > 0:
+        qs = qs[: int(num_levels)]
+    names = ("sparse", "typical", "dense", "extra")
+    out: List[TrafficDensityLevel] = []
+    for i, p in enumerate(qs):
+        dens = density_at_quantile(p / 100.0)
+        out.append(
+            TrafficDensityLevel(
+                id=i,
+                name=names[i] if i < len(names) else f"p{p}",
+                percentile=int(p),
+                nuplan_per_lane=_nuplan_per_lane_at(int(p)),
+                traffic_density=round(float(dens), 4),
+            )
+        )
+    return out
+
+
+def resolve_traffic_density_levels(sim: object | None = None) -> List[TrafficDensityLevel]:
+    """Levels from ``sim.traffic_density_levels`` floats, or default probes."""
+    raw = getattr(sim, "traffic_density_levels", None) if sim is not None else None
+    if raw:
+        vals = [float(x) for x in raw if float(x) >= 0.0]
+        if vals:
+            defaults = list_traffic_density_levels(num_levels=max(len(vals), 1))
+            out: List[TrafficDensityLevel] = []
+            for i, dens in enumerate(vals):
+                base = defaults[min(i, len(defaults) - 1)]
+                out.append(
+                    TrafficDensityLevel(
+                        id=i,
+                        name=base.name if i < len(defaults) else f"d{i}",
+                        percentile=base.percentile if i < len(defaults) else -1,
+                        nuplan_per_lane=base.nuplan_per_lane if i < len(defaults) else float("nan"),
+                        traffic_density=round(float(dens), 4),
+                    )
+                )
+            return out
+    return list_traffic_density_levels()
 
 
 def sampled_density_level(seed: int) -> TrafficDensityLevel:
-    """A level-shaped carrier for one sampled density, so the expanders keep
-    their existing plumbing without pretending the value is a tier."""
+    """Level-shaped carrier for one full-curve draw (no fixed percentile)."""
+    dens = sample_traffic_density(seed)
     return TrafficDensityLevel(
-        id=None, name=None, percentile=None, nuplan_vehicles_per_frame=None,
-        traffic_density=sample_traffic_density(seed),
-    )
-
-
-# Legacy MetaDrive scale. Vehicles-per-frame divided by SCALE was the old density
-# mapping, and no measurement ever supported the divisor. Nothing sizes a scene
-# with it now -- `sample_traffic_density` reads the measured curve -- but
-# `npc_profile` converts between vehicles and density to subtract the auxiliary
-# convoy, and that conversion needs a unit.
-META_DENSITY_SCALE = 80.0
-META_DENSITY_CAP = 0.5
-MAX_TRAFFIC_DENSITY_LEVELS = 3
-
-
-def list_traffic_density_levels(num_levels: int = 1, **_) -> List[TrafficDensityLevel]:
-    raise RuntimeError(
-        "traffic density tiers are gone; a scene samples its own density. Use "
-        "sample_traffic_density(seed) or sampled_density_level(seed)."
+        id=-1,
+        name="sampled",
+        percentile=-1,
+        nuplan_per_lane=float("nan"),
+        traffic_density=float(dens),
     )

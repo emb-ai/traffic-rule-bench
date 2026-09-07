@@ -6,10 +6,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from traffic_bench.eval.engine.traffic.agent_profile_bank import sample_one_profile
+from traffic_bench.eval.engine.expand.manifest_config import (
+    DEFAULT_SPAWN_VELOCITY_LEVELS_MS,
+    DEFAULT_TRAFFIC_DENSITY_LEVELS,
+)
+from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
+from traffic_bench.eval.engine.expand.world_axes import (
+    DEFAULT_HORIZON_STEPS,
+    DEFAULT_MAX_PATH_LENGTH_M,
+    DEFAULT_ROUTE_LENGTH_LEVELS_M,
+    describe_world_axes,
+    iter_world_axis_cells,
+    sample_profile_for_cell,
+    stamp_world_axis_fields,
+)
 from traffic_bench.eval.engine.traffic.npc_profile import embed_npc_profile
 from traffic_bench.eval.engine.traffic.stable_hash import stable_hash
-from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
 from traffic_bench.eval.engine.spawn.scene_augmentation import SpawnScenario
 from traffic_bench.eval.engine.spawn.route_length_levels import (
     list_route_length_levels,
@@ -36,13 +48,15 @@ class DualPathSimParams:
     spawn_distance_before_end: float
     sign_distance_before_end: float
     spawn_velocity_ms: float
-    horizon: int
+    horizon: int = DEFAULT_HORIZON_STEPS
     n_variations: int = 3
     profile_density_cap: float = 1.0
+    traffic_density_levels: Tuple[float, ...] = DEFAULT_TRAFFIC_DENSITY_LEVELS
+    spawn_velocity_levels_ms: Tuple[float, ...] = DEFAULT_SPAWN_VELOCITY_LEVELS_MS
     min_dual_path_gain_m: float = 20.0
     min_ego_lane_m: float = 8.0
-    max_path_length_m: float = 150.0
-    max_path_length_levels: Tuple[float, ...] = (130.0, 150.0, 170.0)
+    max_path_length_m: float = DEFAULT_MAX_PATH_LENGTH_M
+    max_path_length_levels: Tuple[float, ...] = DEFAULT_ROUTE_LENGTH_LEVELS_M
 
 
 @dataclass(frozen=True)
@@ -63,6 +77,8 @@ def dual_path_geometry_key(entry: Dict[str, Any]) -> Tuple:
         entry.get("destination_lane_id"),
         entry.get("baseline_dir") or entry.get("baseline_turn_dir"),
         entry.get("var_idx"),
+        entry.get("density_level_id"),
+        entry.get("spawn_velocity_level_id"),
         round(float(entry.get("route_length_level_m") or entry.get("max_path_length_m") or 0.0), 1),
     )
 
@@ -82,7 +98,6 @@ def expand_dual_path_scene_entries(
 ) -> List[Dict[str, Any]]:
     spec = get_spec(pdd_code)
     scene_name = str(meta.get("scene_name") or scene_dir.name)
-    n_variations = max(1, int(sim.n_variations))
     print(
         f"  Junction layout: {junction_layout.get('shape')} @ "
         f"{junction_layout.get('junction_id')} "
@@ -143,57 +158,27 @@ def expand_dual_path_scene_entries(
             f"gain={dp.gain_m:.1f}m"
         )
 
-    candidates: List[Tuple[int, DualPathScenario, int, int]] = [
-        (dual_i, dp, lane_num, var_idx)
+    geometries: List[Tuple[int, DualPathScenario, int]] = [
+        (dual_i, dp, lane_num)
         for dual_i, dp in enumerate(dual_paths)
         for lane_num in ego_spawn_lane_nums_for_dual(
             dp,
             spawn_lanes,
             min_lane_length_m=float(sim.min_ego_lane_m),
         )
-        for var_idx in range(n_variations)
     ]
-    pre_cap = len(candidates)
-    n_lane_combos = sum(
-        len(
-            ego_spawn_lane_nums_for_dual(
-                dp,
-                spawn_lanes,
-                min_lane_length_m=float(sim.min_ego_lane_m),
-            )
-        )
-        for dp in dual_paths
+    n_lane_combos = len(geometries)
+    print(
+        f"  Dual×lane geometries: {n_lane_combos} "
+        f"({len(dual_paths)} dual × lane slots)"
     )
-    cap = expansion.max_scenarios
-    candidates = shuffle_cap(
-        candidates,
-        cap,
-        seed_key=(
-            scene_name,
-            f"{spec.family}_combo_cap",
-            int(cap) if cap is not None else 0,
-        ),
-    )
-    if cap is not None and pre_cap > cap:
-        print(
-            f"  Retained {len(candidates)} of {pre_cap} "
-            f"(dual×lane×NPC) scenario(s) (shuffled, cap={cap}; "
-            f"{len(dual_paths)} dual, {n_lane_combos} lane-slots, "
-            f"{n_variations} profiles)"
-        )
-    else:
-        print(
-            f"  Combined scenarios: {pre_cap} "
-            f"({len(dual_paths)} dual, {n_lane_combos} lane-slots, "
-            f"{n_variations} NPC profiles)"
-        )
 
     scene_entries: List[Dict[str, Any]] = []
     seen: set = set()
     configured_route_levels = list_route_length_levels(sim)
     spawn_before_end = float(sim.spawn_distance_before_end)
 
-    for dual_i, dual, lane_num, var_idx in candidates:
+    for dual_i, dual, lane_num in geometries:
         spawn_scenario = dual_path_to_spawn_scenario(dual, ego_lane_num=lane_num)
         net_full = scene_dir / str(meta.get("net_file") or "map.net.xml")
         branch_lens = []
@@ -213,25 +198,25 @@ def expand_dual_path_scene_entries(
         route_levels, route_augment = select_route_length_levels(
             configured_route_levels, available_route_m
         )
-        for path_len_m in route_levels:
+        for cell in iter_world_axis_cells(
+            route_levels=route_levels,
+            sim=sim,
+            task_conditioned_spawn=False,
+        ):
+            suffix = cell.scene_suffix(route_augment=route_augment)
             seed = stable_hash(
                 scene_name,
                 spawn_scenario.scenario_id,
                 lane_num,
-                var_idx,
-                int(round(path_len_m)),
+                *cell.seed_tags(),
             )
-            profile = sample_one_profile(
-                int(seed),
-                density_cap=float(sim.profile_density_cap),
-                horizon_steps=int(sim.horizon),
-            )
+            profile = sample_profile_for_cell(cell, seed=int(seed), sim=sim)
             entry = build_entry(
                 scene_dir=scene_dir,
                 scenes_root=scenes_root,
                 meta=meta,
                 layout_variant=dual_i,
-                var_idx=var_idx,
+                var_idx=cell.npc_var,
                 seed=seed,
                 sim=sim,
                 spawn_scenario=spawn_scenario,
@@ -239,16 +224,37 @@ def expand_dual_path_scene_entries(
                 spawn_lanes_cache=list(spawn_lanes),
                 junction_layout_cache=junction_layout,
                 npc_profile=profile,
-                max_path_length_m=float(path_len_m),
+                max_path_length_m=float(cell.route_length_m),
                 route_length_augment=route_augment,
+                spawn_velocity_ms=cell.spawn_velocity_ms,
+                traffic_density=float(cell.density.traffic_density),
+                scene_id_suffix=suffix,
             )
+            entry = stamp_world_axis_fields(entry, cell)
             key = dual_path_geometry_key(entry)
             if key in seen:
                 continue
             seen.add(key)
             scene_entries.append(entry)
 
-    print(f"  Manifest entries for {scene_name}: {len(scene_entries)}")
+    cap = expansion.max_scenarios
+    pre_cap = len(scene_entries)
+    scene_entries = shuffle_cap(
+        scene_entries,
+        cap,
+        seed_key=(
+            scene_name,
+            f"{spec.family}_world_cap",
+            int(cap) if cap is not None else 0,
+        ),
+    )
+    if cap is not None and pre_cap > cap:
+        print(
+            f"  Retained {len(scene_entries)} of {pre_cap} world-grid variants "
+            f"(shuffled, cap={cap}; {n_lane_combos} dual×lane geometries)"
+        )
+    else:
+        print(f"  Manifest entries for {scene_name}: {len(scene_entries)}")
     return scene_entries
 
 
@@ -270,6 +276,9 @@ def build_dual_path_manifest_entry(
     sign_type: str = "",
     max_path_length_m: Optional[float] = None,
     route_length_augment: bool = False,
+    spawn_velocity_ms: Optional[float] = None,
+    traffic_density: Optional[float] = None,
+    scene_id_suffix: str = "",
 ) -> Dict[str, Any]:
     del layout_variant
     spec = get_spec(pdd_code)
@@ -278,8 +287,18 @@ def build_dual_path_manifest_entry(
     net_file = meta.get("net_file", "map.net.xml")
     net_rel = scene_dir.relative_to(scenes_root) / net_file
 
-    traffic_density = float(npc_profile["traffic_density"])
+    row_density = float(
+        traffic_density
+        if traffic_density is not None
+        else npc_profile["traffic_density"]
+    )
     horizon = int(npc_profile.get("horizon_steps", sim.horizon))
+    scene_id = scene_name
+    if scene_id_suffix and scene_id_suffix not in scene_id:
+        scene_id = f"{scene_id}_{scene_id_suffix}"
+    v0 = float(
+        spawn_velocity_ms if spawn_velocity_ms is not None else sim.spawn_velocity_ms
+    )
 
     selected_lane = None
     if spawn_scenario is not None and spawn_lanes_cache:
@@ -297,7 +316,7 @@ def build_dual_path_manifest_entry(
                     break
 
     entry: Dict[str, Any] = {
-        "scene_id": scene_name,
+        "scene_id": scene_id,
         "scene_name": scene_name,
         "net_path": str(net_rel),
         "seed": int(seed),
@@ -309,8 +328,8 @@ def build_dual_path_manifest_entry(
         "sign_title": spec.title,
         "sign_class": spec.class_name,
         "allowed_dirs": sorted(spec.allowed_dirs),
-        "spawn_velocity_ms": sim.spawn_velocity_ms,
-        "traffic_density": traffic_density,
+        "spawn_velocity_ms": v0,
+        "traffic_density": row_density,
         "horizon": horizon,
         "sign_distance_before_end": float(sim.sign_distance_before_end),
         "spawn_distance_before_end": float(sim.spawn_distance_before_end),
@@ -506,8 +525,7 @@ def generate(cfg, scenes=None):
     n_variations = max(1, int(sim_cfg.n_variations))
     print(
         f"Augmentation axes: layout={expansion_cfg.layout_on}, "
-        f"n_variations={n_variations} (combined with dual-path; "
-        f"max_scenarios caps the product)"
+        f"{describe_world_axes(sim_cfg)}"
     )
 
     expansion = DualPathExpansionConfig(
@@ -522,23 +540,34 @@ def generate(cfg, scenes=None):
         horizon=sim_cfg.horizon,
         n_variations=n_variations,
         profile_density_cap=float(sim_cfg.profile_density_cap),
+        traffic_density_levels=tuple(
+            float(x)
+            for x in (
+                getattr(sim_cfg, "traffic_density_levels", None)
+                or DEFAULT_TRAFFIC_DENSITY_LEVELS
+            )
+        ),
+        spawn_velocity_levels_ms=tuple(
+            float(x)
+            for x in (
+                getattr(sim_cfg, "spawn_velocity_levels_ms", None)
+                or DEFAULT_SPAWN_VELOCITY_LEVELS_MS
+            )
+        ),
         min_dual_path_gain_m=float(scenario_cfg.min_dual_path_gain_m),
         min_ego_lane_m=min(float(sim_cfg.spawn_distance_before_end), 8.0),
         max_path_length_m=float(sim_cfg.max_path_length_m),
         max_path_length_levels=tuple(
-            float(x) for x in getattr(sim_cfg, "max_path_length_levels", (130.0, 150.0, 170.0))
+            float(x)
+            for x in getattr(sim_cfg, "max_path_length_levels", DEFAULT_ROUTE_LENGTH_LEVELS_M)
         ),
     )
 
     family = profile.sign_type
     print(
-        f"[{family}] NPC world: sample_one_profile in shared pool with "
-        f"dual-path (n_variations={n_variations}, "
-        f"density_cap={sim_cfg.profile_density_cap}, "
-        f"min_gain={scenario_cfg.min_dual_path_gain_m}m, "
-        f"max_path_length_m={sim_cfg.max_path_length_m}, "
-        f"route_length_levels={list(getattr(sim_cfg, 'max_path_length_levels', (130, 150, 170)))}, "
-        f"horizon={sim_cfg.horizon})"
+        f"[{family}] world grid: {describe_world_axes(sim_params)} "
+        f"(density_cap={sim_cfg.profile_density_cap}, "
+        f"min_gain={scenario_cfg.min_dual_path_gain_m}m)"
     )
 
     build_entry = partial(
@@ -638,7 +667,7 @@ def generate(cfg, scenes=None):
             "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
             "max_path_length_m": float(sim_cfg.max_path_length_m),
             "max_path_length_levels": list(
-                getattr(sim_cfg, "max_path_length_levels", (130.0, 150.0, 170.0))
+                getattr(sim_cfg, "max_path_length_levels", DEFAULT_ROUTE_LENGTH_LEVELS_M)
             ),
             "auxiliary_agent": False,
         },

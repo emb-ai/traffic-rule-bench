@@ -7,8 +7,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from traffic_bench.eval.engine.expand.manifest_config import (
     DEFAULT_AUX_DISTANCE_FROM_INTERSECTION,
+    DEFAULT_HORIZON_STEPS,
+    DEFAULT_MAX_PATH_LENGTH_LEVELS,
+    DEFAULT_MAX_PATH_LENGTH_M,
     DEFAULT_SPAWN_DISTANCE_BEFORE_END,
+    DEFAULT_SPAWN_VELOCITY_LEVELS_MS,
     DEFAULT_STOP_WAIT_STEPS,
+    DEFAULT_TRAFFIC_DENSITY_LEVELS,
 )
 from traffic_bench.eval.engine.expand.manifest_expansion import ExpansionConfig
 from traffic_bench.eval.engine.spawn.auxiliary_agent import DEFAULT_CONVOY_GAP_M
@@ -41,7 +46,7 @@ class AugmentationAxesConfig:
 class SimulationConfig:
     spawn_velocity_ms: float = 2.5
     traffic_density: float = 0.0
-    horizon: int = 600
+    horizon: int = DEFAULT_HORIZON_STEPS
     sign_distance_before_end: float = 0.0
     spawn_distance_before_end: float = DEFAULT_SPAWN_DISTANCE_BEFORE_END
     destination_max_along_m: Optional[float] = None
@@ -57,8 +62,11 @@ class SimulationConfig:
     compliant_stop_speed_mps: float = 0.5
     min_hops_after_depart: int = 0
     spawn_offset_from_start: float = 10.0
-    max_path_length_m: float = 150.0
-    max_path_length_levels: Tuple[float, ...] = (130.0, 150.0, 170.0)
+    max_path_length_m: float = DEFAULT_MAX_PATH_LENGTH_M
+    max_path_length_levels: Tuple[float, ...] = DEFAULT_MAX_PATH_LENGTH_LEVELS
+    # Fixed world-grid probes (all signs). Speed plates ignore spawn levels.
+    traffic_density_levels: Tuple[float, ...] = DEFAULT_TRAFFIC_DENSITY_LEVELS
+    spawn_velocity_levels_ms: Tuple[float, ...] = DEFAULT_SPAWN_VELOCITY_LEVELS_MS
     # Detour: ego spawn distance before the plate (m). Keep below shortest
     # max_path_length level so destination still lands past the sign zone.
     approach_before_sign_m: float = 50.0
