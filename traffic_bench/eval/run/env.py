@@ -29,8 +29,20 @@ from traffic_bench.eval.signs.restricted_lane.place import (
 )
 
 # Reserved lane: no background car on the ego edge within this many metres past
-# the ego teleport point (front headway at the 5 m/s spawn speed plus margin).
-RESTRICTED_SPAWN_CLEAR_M = 30.0
+# the ego teleport point: a 3 s headway at the row's spawn speed plus a margin,
+# never less than the 30 m the 5 m/s rows were tuned with.
+RESTRICTED_SPAWN_CLEAR_MIN_M = 30.0
+RESTRICTED_SPAWN_CLEAR_HEADWAY_S = 3.0
+RESTRICTED_SPAWN_CLEAR_MARGIN_M = 10.0
+RESTRICTED_SPAWN_CLEAR_M = RESTRICTED_SPAWN_CLEAR_MIN_M
+
+
+def restricted_spawn_clear_m(spawn_velocity_ms) -> float:
+    v0 = max(0.0, float(spawn_velocity_ms or 0.0))
+    return max(
+        RESTRICTED_SPAWN_CLEAR_MIN_M,
+        RESTRICTED_SPAWN_CLEAR_HEADWAY_S * v0 + RESTRICTED_SPAWN_CLEAR_MARGIN_M,
+    )
 from traffic_bench.eval.signs.dual_path.nav import (
     OneWaySumoTrafficManager,
     resolve_row_background_excluded_edges,
@@ -125,8 +137,8 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         # A ladder starting 5 m past the ego put the first car within its
         # 3-second braking distance: ppo/carl baselines and experts alike crashed
         # at step ~30 in a fifth of the rows. Keep the front headway clear.
-        traffic_after_lng = (
-            float(row.get("spawn_offset_from_start") or 0.0) + RESTRICTED_SPAWN_CLEAR_M
+        traffic_after_lng = float(row.get("spawn_offset_from_start") or 0.0) + restricted_spawn_clear_m(
+            row.get("spawn_velocity_ms")
         )
         traffic_after_edge = str(row["road_id"])
         traffic_after_kmh = 0.0
@@ -172,7 +184,9 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
             reserved_zone_start=float(row.get("sign_s") or 0.0),
             reserved_zone_end=float(row.get("zone_end_s") or 0.0),
             reserved_ego_s=float(row.get("spawn_offset_from_start") or -1.0),
-            reserved_agents_n=int(row.get("reserved_agents_n", 3) or 3),
+            reserved_agents_n=int(row.get("reserved_agents_n") or 1),
+            reserved_ego_v0_ms=float(row.get("spawn_velocity_ms") or 0.0),
+            reserved_sumo_edge_length_m=float(row_sumo_edge_length_m(row) or 0.0),
             traffic_ego_edge_max_per_lane=2,
         )
 
@@ -499,7 +513,10 @@ def _apply_destination_along_cap(env, row: dict) -> None:
         # Same-edge segment families author dest in SUMO corridor metres.
         # Do NOT use approach_lane_length_m for junction/dual_path dests — that
         # length is the spawn arm, not the finish edge.
-        if _row_is_detour(row) or _row_is_speed(row) or _row_is_crosswalk(row):
+        if (
+            _row_is_detour(row) or _row_is_speed(row) or _row_is_crosswalk(row)
+            or _row_is_restricted_lane(row)
+        ):
             cap = remap_sumo_along_to_metadrive(
                 cap,
                 sumo_edge_length_m=row_sumo_edge_length_m(row),

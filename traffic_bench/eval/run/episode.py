@@ -406,7 +406,8 @@ def run_one_episode(
             _reposition_ego_at_along(base_env, along_m)
         elif spawn_distance > 0:
             _reposition_ego_before_lane_end(base_env, spawn_distance)
-        if _row_is_speed(row):
+        if _row_is_speed(row) or _row_is_restricted_lane(row):
+            # The teleport above drops the spawn velocity; re-apply the row's.
             _apply_manifest_ego_spawn_velocity(base_env, row)
         _apply_manifest_ego_destination(base_env, row)
         if _row_is_detour(row) or _row_is_speed(row) or _row_is_restricted_lane(row):

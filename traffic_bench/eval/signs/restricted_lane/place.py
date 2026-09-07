@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from traffic_bench.eval.engine.map.junction_sign_placement import resolve_layout_lane
+from traffic_bench.eval.engine.map.sumo_metadrive_along import (
+    remap_sumo_along_to_metadrive,
+    row_sumo_edge_length_m,
+)
 from traffic_bench.signs.extra.restricted_lane import (
     BikeLaneRoadSign,
     BikeLaneSign,
@@ -53,7 +57,14 @@ def place_restricted_lane_signs(env, row: dict, show_model: bool = True) -> bool
         if lane is None:
             lane = vehicle.lane
 
-        placement_long = max(0.1, min(sign_s, float(lane.length) - 1.0))
+        # sign_s is a SUMO-edge longitude; the MetaDrive lane may carry a
+        # stitched prefix (shared-end model, same as speed/detour plates).
+        sign_s_md = remap_sumo_along_to_metadrive(
+            sign_s,
+            sumo_edge_length_m=row_sumo_edge_length_m(row),
+            metadrive_lane_length_m=float(lane.length),
+        )
+        placement_long = max(0.1, min(float(sign_s_md), float(lane.length) - 1.0))
         kwargs = dict(
             lane=lane,
             # RestrictedLaneSign reads the offset from the lane END (like 4.6).
@@ -75,7 +86,7 @@ def place_restricted_lane_signs(env, row: dict, show_model: bool = True) -> bool
         sign.reserved_user = str(row.get("lane_user") or ("bus" if pdd_code.endswith(".1") else "bicycle"))
         print(
             f"[RestrictedLaneSign] Placed {pdd_code} ({sign_cls.__name__}) on lane "
-            f"{getattr(lane, 'index', lane_key)} at s={sign_s:.1f}m "
+            f"{getattr(lane, 'index', lane_key)} at s={placement_long:.1f}m (sumo {sign_s:.1f}) "
             f"(zone [{sign.zone_start:.1f}, {sign.zone_end:.1f}])"
         )
         return True

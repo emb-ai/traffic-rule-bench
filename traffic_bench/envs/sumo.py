@@ -255,7 +255,11 @@ class TrafficSignSumoEnv(AutoSpawnMixin, BaseEnv):
         config["reserved_zone_start"] = 0.0
         config["reserved_zone_end"] = 0.0
         config["reserved_ego_s"] = -1.0
-        config["reserved_agents_n"] = 3
+        config["reserved_agents_n"] = 1
+        # Ego spawn speed (counter-flow release timing) and the SUMO edge length
+        # (longitudes are remapped when the MetaDrive lane carries a prefix).
+        config["reserved_ego_v0_ms"] = 0.0
+        config["reserved_sumo_edge_length_m"] = 0.0
         # Cap of background cars per lane spawned on the plate's edge (0 = default ladder).
         config["traffic_ego_edge_max_per_lane"] = 0
         config["tl_speed_factor"] = 1.0
