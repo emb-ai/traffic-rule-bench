@@ -243,17 +243,30 @@ class Kinematics:
                     return True
             return False
 
+        def _ref_lanes_by_num(self):
+            """Peer lanes keyed by lane number. ``get_peer_lanes_from_index`` returns
+            [self, left..., right...], so a list position is NOT a lane number:
+            that only coincided while the ego sat on lane 0."""
+            out = {}
+            for lane in self._get_ref_lanes() or []:
+                n = lane_index_num(lane)
+                if n is not None and n not in out:
+                    out[n] = lane
+            return out
+
         def _find_safe_lane_num(self):
             cur = self._cur_lane_num()
             if cur is None:
                 return None
-            ref = self._get_ref_lanes()
+            by_num = self._ref_lanes_by_num()
             for offset in (1, -1):
                 j = cur + offset
-                if 0 <= j < len(ref):
-                    idx = getattr(ref[j], "index", None)
-                    if idx not in self._blocked_lanes and idx not in self._restricted_lanes:
-                        return j
+                lane = by_num.get(j)
+                if lane is None:
+                    continue
+                idx = getattr(lane, "index", None)
+                if idx not in self._blocked_lanes and idx not in self._restricted_lanes:
+                    return j
             return None
 
         def _steering_control_for_lc(self, target_lane):
@@ -278,9 +291,13 @@ class Kinematics:
             cur = self._cur_lane_num()
             if cur is not None and cur == target_lane_num:
                 return
-            ref = self._get_ref_lanes()
-            if ref and 0 <= target_lane_num < len(ref):
-                self._lc_target_lane = ref[target_lane_num]
+            target = self._ref_lanes_by_num().get(target_lane_num)
+            if target is None:
+                ref = self._get_ref_lanes()
+                if ref and 0 <= target_lane_num < len(ref):
+                    target = ref[target_lane_num]  # legacy positional fallback
+            if target is not None:
+                self._lc_target_lane = target
                 self._lc_final_sumo_num = lane_index_num(self._lc_target_lane)
                 self._get_heading_pid().reset()
                 self._get_lateral_pid().reset()

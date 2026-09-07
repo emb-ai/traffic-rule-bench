@@ -41,7 +41,7 @@ def place_restricted_lane_signs(env, row: dict, show_model: bool = True) -> bool
         pdd_code = str(row.get("pdd_code") or row.get("sign_code") or "5.14.1")
         sign_cls = _SIGN_CLS_BY_CODE.get(pdd_code, BusLaneSign)
         road_id = str(row.get("road_id") or "")
-        lane_index = int(row.get("sign_lane_index", row.get("restricted_lane_index", 0)) or 0)
+        lane_index = int(row.get("reserved_lane_index", row.get("sign_lane_index", 0)) or 0)
         sign_s = float(row.get("sign_s", 60.0))
         zone_m = row.get("zone_length_m")
 
@@ -69,6 +69,10 @@ def place_restricted_lane_signs(env, row: dict, show_model: bool = True) -> bool
             print(f"[RestrictedLaneSign] Failed to place {pdd_code}")
             return False
         sign.is_priority_sign = False
+        sign.explicit_lane = True          # checker: this lane, not "the rightmost"
+        sign._trb_reserved = True          # NPC cars reroute around it
+        sign.reserved_flow = str(row.get("flow") or ("opposite" if pdd_code.startswith("5.11") else "same"))
+        sign.reserved_user = str(row.get("lane_user") or ("bus" if pdd_code.endswith(".1") else "bicycle"))
         print(
             f"[RestrictedLaneSign] Placed {pdd_code} ({sign_cls.__name__}) on lane "
             f"{getattr(lane, 'index', lane_key)} at s={sign_s:.1f}m "

@@ -81,7 +81,11 @@ class SignComplianceMixin(
     DETOUR_APPROACH_FACTOR = 0.85
     DETOUR_RETURN_CLEARANCE_M = 8.0
     DETOUR_QUEUE_LOOKAHEAD_M = 35.0
+    # Reserved lane: like the detour, the lane change starts a per-episode
+    # sampled distance before the zone (engine RNG, so eval / recording /
+    # replay agree); the constant is the fallback when the range is None.
     PREEMPT_RESTRICTED_LANE_M = 50.0
+    PREEMPT_RESTRICTED_LANE_RANGE_M = (20.0, 60.0)
 
     def _get_heading_pid(self):
         raise NotImplementedError
@@ -95,6 +99,7 @@ class SignComplianceMixin(
         # Cleared here so the preempt distance is drawn once per episode rather
         # than once per process.
         self._detour_preempt_cache = None
+        self._restricted_preempt_cache = None
         self._stop_states = {}
         self._speed_cap = None
         self._speed_floor = None
@@ -131,6 +136,8 @@ class SignComplianceMixin(
         self._rerouted_edges.clear()
         self._lc_target_lane = None
         self._lc_final_sumo_num = None
+        self._detour_preempt_cache = None
+        self._restricted_preempt_cache = None
         self._has_priority = False
         self._no_overtaking_active = False
         self._lane_dirs_nav_locked = False

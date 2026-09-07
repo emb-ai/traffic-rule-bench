@@ -157,6 +157,21 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
     use_yield = bool(row.get("use_pedestrian_yield_rule", False))
     ped_cfg = dict(row.get("pedestrian_manager") or {})
 
+    reserved_cfg: dict = {}
+    if _row_is_restricted_lane(row) and row.get("road_id"):
+        code = str(row.get("pdd_code") or row.get("sign_code") or "")
+        reserved_cfg = dict(
+            reserved_lane_edge=str(row["road_id"]),
+            reserved_lane_index=int(row.get("reserved_lane_index", row.get("sign_lane_index", 0)) or 0),
+            reserved_lane_flow=str(row.get("flow") or ("opposite" if code.startswith("5.11") else "same")),
+            reserved_lane_user=str(row.get("lane_user") or ("bus" if code.endswith(".1") else "bicycle")),
+            reserved_zone_start=float(row.get("sign_s") or 0.0),
+            reserved_zone_end=float(row.get("zone_end_s") or 0.0),
+            reserved_ego_s=float(row.get("spawn_offset_from_start") or -1.0),
+            reserved_agents_n=int(row.get("reserved_agents_n", 3) or 3),
+            traffic_ego_edge_max_per_lane=2,
+        )
+
     config = dict(
         use_render=False,
         manual_control=False,
@@ -170,6 +185,7 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         traffic_spawn_after_lng=traffic_after_lng,
         traffic_spawn_after_edge=traffic_after_edge,
         traffic_spawn_after_kmh=traffic_after_kmh,
+        **reserved_cfg,
         traffic_npc_compliance_rate=traffic_compliance,
         min_route_hops_after_spawn=int(row.get("min_route_hops_after_spawn", 10)),
         max_route_hops_after_spawn=int(row.get("max_route_hops_after_spawn", 10)),

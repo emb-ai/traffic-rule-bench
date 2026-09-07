@@ -144,6 +144,8 @@ class SumoTrajectoryIDMPolicy(TrajectoryIDMPolicy):
         self._detour_checked = True
         veh = self.control_object
         for sign in signs:
+            if getattr(sign, "_trb_reserved", False):
+                continue  # handled every few steps by _check_reserved_lanes
             if not hasattr(sign, "obstacle_long") or not getattr(sign, "_allowed_lane_indices", None):
                 continue
             try:
@@ -171,6 +173,85 @@ class SumoTrajectoryIDMPolicy(TrajectoryIDMPolicy):
                 self.destination = np.asarray(new_traj.end)
             return
 
+    def _check_reserved_lanes(self):
+        """Every 10 steps until settled: a car that is (or will be) on a reserved
+        lane ahead of its zone moves over. Cars entering the plate's edge from
+        upstream are only on that lane later, so this cannot be a one-shot check."""
+        if getattr(self, "_reserved_settled", False):
+            return
+        if int(getattr(self.engine, "episode_step", 0) or 0) % 10 != 0:
+            return
+        mgr = getattr(self.engine, "traffic_sign_manager", None)
+        signs = [s for s in (getattr(mgr, "signs", None) or []) if getattr(s, "_trb_reserved", False)]
+        if not signs:
+            return
+        veh = self.control_object
+        for sign in signs:
+            try:
+                s, lat = sign.lane.local_coordinates(veh.position)
+            except Exception:
+                continue
+            if abs(float(lat)) > self.DETOUR_ON_LANE_TOL_M or float(s) < -1.0:
+                continue
+            if float(s) >= float(sign.zone_end):
+                self._reserved_settled = True
+                return
+            if self._maybe_reroute_for_reserved(sign, veh):
+                self._reserved_settled = True
+                return
+            if float(s) >= float(sign.zone_start) - 5.0:
+                self._reserved_settled = True  # too late to blend; nothing more to try
+                return
+
+    def _maybe_reroute_for_reserved(self, sign, veh) -> bool:
+        """Reserved lane (5.11.x / 5.14.x): a car whose route runs on the plate's
+        lane moves to the neighbouring lane before the zone and returns after
+        it. Buses / cyclists of the lane are not IDM cars and never get here."""
+        try:
+            s, lat = sign.lane.local_coordinates(veh.position)
+        except Exception:
+            return False
+        if abs(float(lat)) > self.DETOUR_ON_LANE_TOL_M:
+            return False
+        if float(s) >= float(sign.zone_start) - 5.0:
+            return False
+        rn = self.engine.current_map.road_network
+        idx = str(getattr(sign.lane, "index", ""))
+        try:
+            prefix, num = idx.rsplit("_", 1)
+            num = int(num)
+        except ValueError:
+            return False
+        target = None
+        for cand in (num + 1, num - 1):
+            if cand < 0:
+                continue
+            try:
+                target = rn.get_lane(f"{prefix}_{cand}")
+                break
+            except Exception:
+                continue
+        if target is None:
+            return False
+        traffic_mgr = None
+        for m in (getattr(self.engine, "managers", None) or {}).values():
+            if hasattr(m, "rebuild_detour_trajectory"):
+                traffic_mgr = m
+                break
+        if traffic_mgr is None:
+            return False
+        new_traj = traffic_mgr.rebuild_detour_trajectory(
+            veh, sign, self.routing_target_lane,
+            target=target, zone_start=float(sign.zone_start), rejoin=float(sign.zone_end) + 10.0,
+        )
+        self._probe("reserved", rerouted=new_traj is not None, s_on_sign_lane=round(float(s), 1))
+        if new_traj is None:
+            return False
+        self.traj_to_follow = new_traj
+        self.routing_target_lane = new_traj
+        self.destination = np.asarray(new_traj.end)
+        return True
+
     def _probe(self, kind, **fields):
         """One JSON line per call when TRB_NPC_SIGN_PROBE names a file: what the
         traffic actually did around the plates. Off unless asked."""
@@ -192,6 +273,7 @@ class SumoTrajectoryIDMPolicy(TrajectoryIDMPolicy):
             # Leaving the closed lane is never optional: a car that stays
             # drives into the cones. The per-car flag below covers plates only.
             self._maybe_reroute_for_detour()
+            self._check_reserved_lanes()
         # Per-car plate compliance, drawn at spawn from the row's
         # npc_compliance_rate (traffic.py). Missing flag = compliant.
         comply = comply_all and bool(getattr(self.control_object, "_trb_sign_compliant", True))
@@ -219,6 +301,11 @@ class SumoTrajectoryIDMPolicy(TrajectoryIDMPolicy):
                 )
                 acc_front_obj = surrounding.front_object()
                 acc_front_dist = surrounding.front_min_distance()
+                # A reserved-lane bus / cyclist leads only cars on its own lane.
+                if acc_front_obj is not None and getattr(acc_front_obj, "_trb_reserved_agent", False):
+                    my_lane = str(getattr(getattr(self.control_object, "lane", None), "index", ""))
+                    if str(getattr(acc_front_obj, "_trb_reserved_lane_key", "")) != my_lane:
+                        acc_front_obj, acc_front_dist = None, self.IDM_MAX_DIST
 
                 # Only check crossing traffic if no same-lane vehicle nearby.
                 # Otherwise IDM already handles car-following correctly and
@@ -342,6 +429,9 @@ class SumoTrajectoryIDMPolicy(TrajectoryIDMPolicy):
 
         for obj in all_objects:
             if obj is ego:
+                continue
+            # Buses / cyclists of a reserved lane stay in it: not crossing traffic.
+            if getattr(obj, "_trb_reserved_agent", False):
                 continue
             dx = obj.position[0] - ego_pos[0]
             dy = obj.position[1] - ego_pos[1]

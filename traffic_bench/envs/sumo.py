@@ -245,6 +245,19 @@ class TrafficSignSumoEnv(AutoSpawnMixin, BaseEnv):
         # Share of background cars that obey the plate (speed families; the
         # manifest samples it per variant). 1.0 = every car, as before.
         config["traffic_npc_compliance_rate"] = 1.0
+        # Reserved lane (5.11.x / 5.14.x): the plate's edge and lane, who uses
+        # it (bus / bicycle) and in which direction (same / opposite), the zone
+        # and the ego spawn longitude. "" disables the reserved-lane manager.
+        config["reserved_lane_edge"] = ""
+        config["reserved_lane_index"] = 0
+        config["reserved_lane_flow"] = "same"
+        config["reserved_lane_user"] = "bus"
+        config["reserved_zone_start"] = 0.0
+        config["reserved_zone_end"] = 0.0
+        config["reserved_ego_s"] = -1.0
+        config["reserved_agents_n"] = 3
+        # Cap of background cars per lane spawned on the plate's edge (0 = default ladder).
+        config["traffic_ego_edge_max_per_lane"] = 0
         config["tl_speed_factor"] = 1.0
         # place ego onto a  parallel lane_num
         # sign's road_id after reset:  0 = rightmost
@@ -483,6 +496,10 @@ class TrafficSignSumoEnv(AutoSpawnMixin, BaseEnv):
         self.engine.register_manager("map_manager", SumoMapManager(map_path))
         self.engine.register_manager("traffic_manager", SimpleTrafficManager())
         self.engine.register_manager("traffic_sign_manager", TrafficSignManager())
+        if str(self.config.get("reserved_lane_edge", "") or ""):
+            from traffic_bench.envs.reserved_lane import ReservedLaneAgentManager
+
+            self.engine.register_manager("reserved_lane_manager", ReservedLaneAgentManager())
         if self.config.get("use_pedestrian_yield_rule", True):
             ped_cfg = self.config.get("pedestrian_manager", {})
             ped_cfg = ped_cfg.get_dict() if hasattr(ped_cfg, "get_dict") else dict(ped_cfg)

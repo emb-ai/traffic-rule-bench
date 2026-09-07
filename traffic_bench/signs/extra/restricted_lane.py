@@ -383,7 +383,11 @@ class RestrictedLaneSign(BaseTrafficSign):
         if current_lane not in target_lanes:
             return False
 
-        if not _is_max_lane_index_for(current_lane, getattr(self, "engine", None)):
+        # Auto-placed plates guard the rightmost lane; eval places the plate on the
+        # reserved lane explicitly (5.11.x: the leftmost lane of a one-way street).
+        if not getattr(self, "explicit_lane", False) and not _is_max_lane_index_for(
+            current_lane, getattr(self, "engine", None)
+        ):
             return False
 
         if current_lane == sign_lane:

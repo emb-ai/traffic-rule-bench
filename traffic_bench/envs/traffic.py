@@ -134,6 +134,11 @@ class SumoTrafficManager(BaseManager):
         """Non-junction driving lanes longer than 20 m."""
         graph = self.engine.map_manager.graph
         road_network = self.engine.current_map.road_network
+        cfg = self.engine.global_config
+        reserved_edge = str(cfg.get("reserved_lane_edge", "") or "")
+        reserved_key = (
+            f"{reserved_edge}_{int(cfg.get('reserved_lane_index', 0) or 0)}" if reserved_edge else None
+        )
         lanes = []
         for lane_name, lane_node in graph.lanes.items():
             if lane_node.type != "driving":
@@ -141,6 +146,9 @@ class SumoTrafficManager(BaseManager):
             if ":" in lane_name:
                 continue
             if lane_node.length < 10:
+                continue
+            # Reserved lane (5.11.x / 5.14.x): only its buses / cyclists drive there.
+            if reserved_key is not None and lane_name == reserved_key:
                 continue
             try:
                 lane_obj = road_network.get_lane("lane_" + lane_name)
@@ -471,7 +479,8 @@ class SumoTrafficManager(BaseManager):
     DETOUR_NPC_RETURN_M = 8.0
     DETOUR_NPC_BLEND_M = 15.0
 
-    def rebuild_detour_trajectory(self, vehicle, sign, current_traj=None):
+    def rebuild_detour_trajectory(self, vehicle, sign, current_traj=None, *,
+                                  target=None, zone_start=None, rejoin=None):
         """A PointLane for ``vehicle`` that passes ``sign``'s cones on the
         allowed adjacent lane: the stored route is re-sampled, and on the
         plate's lane the points blend over to the target lane before the zone
@@ -481,17 +490,19 @@ class SumoTrafficManager(BaseManager):
             return None
         road_network = self.engine.current_map.road_network
         sign_lane = sign.lane
-        target = None
-        for key in sorted(str(k) for k in (sign._allowed_lane_indices or ())):
-            try:
-                target = road_network.get_lane(key)
-                break
-            except Exception:
-                continue
+        if target is None:
+            for key in sorted(str(k) for k in (getattr(sign, "_allowed_lane_indices", None) or ())):
+                try:
+                    target = road_network.get_lane(key)
+                    break
+                except Exception:
+                    continue
         if target is None:
             return None
-        zone_start = float(sign.zone_start)
-        rejoin = float(sign.obstacle_long) + self.DETOUR_NPC_RETURN_M
+        zone_start = float(sign.zone_start) if zone_start is None else float(zone_start)
+        if rejoin is None:
+            rejoin = float(sign.obstacle_long) + self.DETOUR_NPC_RETURN_M
+        rejoin = float(rejoin)
         try:
             s_now = float(sign_lane.local_coordinates(vehicle.position)[0])
         except Exception:
@@ -716,6 +727,13 @@ class SumoTrafficManager(BaseManager):
             # density controls how many slots are filled
             n_to_spawn = max(1, int(self.density * max_slots))
             n_to_spawn = min(n_to_spawn, self.MAX_PER_LANE)
+            # Reserved-lane rows: with one lane closed to cars, a full ladder on
+            # the ego's edge parks a platoon at the edge end inside the zone.
+            ego_edge_cap = int(self.engine.global_config.get("traffic_ego_edge_max_per_lane", 0) or 0)
+            if ego_edge_cap > 0 and self._road_id_from_lane_index(lane.index) == str(
+                self.engine.global_config.get("traffic_spawn_after_edge", "") or ""
+            ):
+                n_to_spawn = min(n_to_spawn, ego_edge_cap)
 
             # Generate spawn positions spread along the lane. The ladder starts
             # at the lane start, except on the ego's edge of a speed scene,

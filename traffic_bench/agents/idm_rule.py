@@ -236,6 +236,10 @@ class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
         for obj in all_objects:
             if obj is ego:
                 continue
+            # Buses / cyclists of a reserved lane (5.11.x / 5.14.x) keep to it:
+            # they pass in the neighbouring lane, they never cross the ego's path.
+            if getattr(obj, "_trb_reserved_agent", False):
+                continue
             dx = obj.position[0] - ego_pos[0]
             dy = obj.position[1] - ego_pos[1]
             dist = math.hypot(dx, dy)
@@ -290,6 +294,16 @@ class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
 
         return best_obj, best_dist
 
+    def _drop_reserved_leader(self, front_obj, dist_to_front):
+        """A bus / cyclist of a reserved lane counts as a leader only while the ego
+        is on that lane: its body may graze the neighbouring lane polygon, and the
+        corner test then brakes the ego for a vehicle that never enters its lane."""
+        if front_obj is not None and getattr(front_obj, "_trb_reserved_agent", False):
+            my_lane = str(getattr(getattr(self.control_object, "lane", None), "index", ""))
+            if str(getattr(front_obj, "_trb_reserved_lane_key", "")) != my_lane:
+                return None, float("inf")
+        return front_obj, dist_to_front
+
     def acceleration(self, front_obj, dist_to_front) -> float:
         """IDM acceleration with the plate's bounds on the desired speed.
 
@@ -305,6 +319,7 @@ class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
         car-following, so the floor never fights the car ahead. A floor never
         exceeds the curvature-safe speed.
         """
+        front_obj, dist_to_front = self._drop_reserved_leader(front_obj, dist_to_front)
         if self._speed_cap is not None:
             self.target_speed = (0.0 if self._speed_cap < 1.0
                                  else min(self.target_speed, self._speed_cap))
@@ -321,11 +336,15 @@ class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
                                     min(float(self._speed_floor), self._floor_curvature_speed()))
         if os.environ.get("TRB_EXPERT_DEBUG"):
             try:
-                print("[EXPERT_FRONT] step=%d v=%.1f target=%.1f front=%s dist=%s"
+                print("[EXPERT_FRONT] step=%d v=%.1f target=%.1f front=%s dist=%s reserved=%s obj_lane=%s ego_lane=%s"
                       % (int(getattr(self.engine, "episode_step", 0) or 0),
                          float(self.control_object.speed_km_h), float(self.target_speed),
                          type(front_obj).__name__ if front_obj is not None else None,
-                         "%.1f" % dist_to_front if dist_to_front is not None else None))
+                         "%.1f" % dist_to_front if dist_to_front is not None else None,
+                         bool(getattr(front_obj, "_trb_reserved_agent", False)) if front_obj is not None else None,
+                         getattr(getattr(front_obj, "lane", None), "index", None) if front_obj is not None else None,
+                         getattr(getattr(self.control_object, "lane", None), "index", None),
+                         ) + " routing=%s" % (getattr(getattr(self, "routing_target_lane", None), "index", None),))
             except Exception:
                 pass
         return IDMPolicy.acceleration(self, front_obj, dist_to_front)

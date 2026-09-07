@@ -57,6 +57,12 @@ class CurveAwareIDMPolicy(IDMPolicy):
         self._is_sumo = self._detect_sumo()
 
     def acceleration(self, front_obj, dist_to_front) -> float:
+        # (0) Buses / cyclists of a reserved lane (5.11.x / 5.14.x) are leaders
+        # only on the ego's own lane; see IDMRulePolicy._drop_reserved_leader.
+        if front_obj is not None and getattr(front_obj, "_trb_reserved_agent", False):
+            my_lane = str(getattr(getattr(self.control_object, "lane", None), "index", ""))
+            if str(getattr(front_obj, "_trb_reserved_lane_key", "")) != my_lane:
+                front_obj, dist_to_front = None, None
         # (1) Speed cap from the curvature ahead. Hooked exactly here: the
         # base act() overwrites target_speed in its lane-change branches
         # BEFORE calling acceleration, so we clamp as the last word.

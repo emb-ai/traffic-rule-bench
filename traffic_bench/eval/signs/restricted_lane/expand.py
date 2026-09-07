@@ -51,9 +51,25 @@ SIGN_CLASS_BY_CODE = {
     "5.11.2": "BikeLaneRoadSign",
 }
 RESTRICTED_LANE_CODES = frozenset(SIGN_CLASS_BY_CODE)
-# The checker (RestrictedLaneSign._is_violating) only fires on SUMO lane 0,
-# the rightmost lane, so that is the reserved lane by construction.
+# 5.14.x: the reserved lane runs WITH the ego on the rightmost lane (SUMO 0).
+# 5.11.x: a counter-flow lane on a one-way street, i.e. the leftmost lane; the
+# buses / cyclists on it come towards the ego.
 RESERVED_LANE_INDEX = 0
+
+
+def flow_for(pdd_code: str) -> str:
+    return "opposite" if str(pdd_code).startswith("5.11") else "same"
+
+
+def lane_user_for(pdd_code: str) -> str:
+    return "bus" if str(pdd_code).endswith(".1") else "bicycle"
+
+
+def reserved_lane_for(meta: Dict[str, Any], pdd_code: str) -> int:
+    lanes = _vehicle_lane_indices(meta)
+    if not lanes:
+        return RESERVED_LANE_INDEX
+    return lanes[-1] if flow_for(pdd_code) == "opposite" else lanes[0]
 
 
 @dataclass(frozen=True)
@@ -162,7 +178,7 @@ def build_restricted_lane_entry(
     net_path = scene_dir.relative_to(scenes_root) / net_file
 
     road_id = str(meta.get("road_id") or "")
-    lane_index = RESERVED_LANE_INDEX
+    lane_index = reserved_lane_for(meta, pdd_code)
     edge_length = float(meta.get("length_m", 200.0))
     zone_m = float(sim.zone_m)
 
@@ -220,6 +236,9 @@ def build_restricted_lane_entry(
         "spawn_lane_num": lane_index,
         "sign_lane_index": lane_index,
         "restricted_lane_index": lane_index,
+        "reserved_lane_index": lane_index,
+        "flow": flow_for(pdd_code),
+        "lane_user": lane_user_for(pdd_code),
         "sign_s": sign_s,
         "zone_length_m": zone_m,
         "zone_end_s": zone_end,
@@ -267,7 +286,7 @@ def expand_restricted_lane_scene_entries(
         available_route_m = measure_spawn_to_dest_length_m(
             net_path=net_full,
             spawn_edge=road_id,
-            spawn_lane=RESERVED_LANE_INDEX,
+            spawn_lane=reserved_lane_for(meta, pdd_code),
             dest_edge=road_id,
             spawn_along_m=float(sim.spawn_offset_from_start),
         )

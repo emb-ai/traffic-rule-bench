@@ -116,6 +116,18 @@ class ExtraCompliance:
                 if dist_to_end < self._approach_dist(0.0):
                     self._cap_speed(0.001)
 
+        def _restricted_preempt_m(self) -> float:
+            """Per-episode pre-empt distance before a reserved-lane zone."""
+            if getattr(self, "_restricted_preempt_cache", None) is None:
+                rng = getattr(self.engine, "np_random", None)
+                rng_range = getattr(self, "PREEMPT_RESTRICTED_LANE_RANGE_M", None)
+                if rng_range is None or rng is None:
+                    self._restricted_preempt_cache = float(self.PREEMPT_RESTRICTED_LANE_M)
+                else:
+                    lo, hi = rng_range
+                    self._restricted_preempt_cache = float(rng.uniform(lo, hi))
+            return self._restricted_preempt_cache
+
         def _handle_restricted_lane(self, sign):
             sign_idx = getattr(sign.lane, "index", None)
             if sign_idx is not None:
@@ -132,13 +144,54 @@ class ExtraCompliance:
             # NN policies (CaRL/PlanT2) don't enter the bus/bike lane and trigger
             # a violation. Reactive case (already in zone) keeps the same logic.
             approaching = (veh_long < sign.zone_start
-                           and (sign.zone_start - veh_long) < self.PREEMPT_RESTRICTED_LANE_M)
+                           and (sign.zone_start - veh_long) < self._restricted_preempt_m())
             if in_zone or approaching:
                 safe = self._find_safe_lane_num()
                 if safe is not None:
+                    target = self._ref_lanes_by_num().get(safe)
+                    # The run-up is 60 m: wait for a real gap instead of cutting in.
+                    # A position-only 20 m check still put the ego in front of a
+                    # 50 km/h car closing from 25 m; the time-to-close rule below
+                    # refuses that. The approach cap stays at the slow-approach value:
+                    # the lateral controller over-steers a merge at 30 km/h.
+                    if (target is not None and self._lc_target_lane is None
+                            and not self._merge_gap_ok(target)):
+                        self._cap_speed(max(SLOW_APPROACH_MIN_KMH,
+                                            self.control_object.speed_km_h * SLOW_APPROACH_FACTOR))
+                        return
                     self._begin_lane_change(safe)
                     self._cap_speed(max(SLOW_APPROACH_MIN_KMH,
                                         self.control_object.speed_km_h * SLOW_APPROACH_FACTOR))
+
+        def _merge_gap_ok(self, target_lane, ahead=15.0, behind=20.0, t_close=2.0, look_behind=40.0):
+            """Gap in ``target_lane`` for a merge: nothing within [-behind, ahead] m
+            of the ego's projection, and no car further back that would close the
+            gap in under ``t_close`` seconds at the current speed difference."""
+            try:
+                ego = self.control_object
+                ego_long, _ = target_lane.local_coordinates(ego.position)
+                tm = getattr(self.engine, "traffic_manager", None)
+                vehicles = list(getattr(tm, "traffic_vehicles", None) or [])
+            except Exception:
+                return False
+            half_w = target_lane.width_at(0) / 2 + 0.3
+            v_ego = max(0.0, float(getattr(ego, "speed_km_h", 0.0))) / 3.6
+            for v in vehicles:
+                try:
+                    v_long, v_lat = target_lane.local_coordinates(v.position)
+                except Exception:
+                    continue
+                if abs(v_lat) > half_w:
+                    continue
+                gap = float(v_long) - float(ego_long)
+                if -behind < gap < ahead:
+                    return False
+                if -look_behind < gap <= -behind:
+                    v_other = max(0.0, float(getattr(v, "speed_km_h", 0.0))) / 3.6
+                    closing = v_other - v_ego
+                    if closing > 0.1 and (-gap) / closing < t_close:
+                        return False
+            return True
 
         def _handle_intersection_restricted_lane(self, sign):
             if hasattr(sign, "is_valid_placement") and not sign.is_valid_placement:
