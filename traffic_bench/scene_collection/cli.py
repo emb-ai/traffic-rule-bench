@@ -208,6 +208,12 @@ def cmd_publish(argv: List[str]) -> int:
     return pub.main(argv)
 
 
+def cmd_reserved_lane(argv: List[str]) -> int:
+    from traffic_bench.scene_collection.assign import reserved_lane
+
+    return reserved_lane.main(argv)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     commands = (
@@ -220,6 +226,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "pack",
         "publish",
         "analysis",
+        "reserved-lane",
     )
     if not argv or argv[0] in ("-h", "--help"):
         print(
@@ -236,6 +243,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "  pack          dereference scenes; --all writes the HF dataset folder\n"
             "  publish       pack (unless --no-pack) and upload to Hugging Face\n"
             "  analysis      harvest counts + diversity figures\n"
+            "  reserved-lane bus/bike lane scene set: select, crop, materialize, report\n"
         )
         return 0
     command = argv[0]
@@ -252,6 +260,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "pack": cmd_pack,
         "publish": cmd_publish,
         "analysis": cmd_analysis,
+        "reserved-lane": cmd_reserved_lane,
     }
     return dispatch[command](argv[1:])
 
