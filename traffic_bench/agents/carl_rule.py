@@ -136,6 +136,15 @@ class CarlSignCompliantPolicy(SignComplianceMixin, BasePolicy):
                         lane_steer = self._steering_control_for_lc(cur_lane)
                         steering = min(steering, lane_steer)
 
+            # Occupied crosswalk: hold lane center — CaRL otherwise swerves
+            # around pedestrians as obstacles and clips the zebra.
+            if self._pedestrian_yield_hold_steer and self._lc_target_lane is None:
+                cur_lane = self.control_object.lane
+                if cur_lane is not None:
+                    steering = float(np.clip(
+                        self._steering_control_for_lc(cur_lane), -1.0, 1.0
+                    ))
+
             # Clamp throttle by sign-driven speed_cap / speed_floor.
             throttle = self._apply_speed_constraints(
                 throttle, self.control_object.speed_km_h

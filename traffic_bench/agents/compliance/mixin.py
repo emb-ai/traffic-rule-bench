@@ -138,6 +138,9 @@ class SignComplianceMixin(
         # Sticky per step while a LaneDirectionsSign is in the scene.
         # Blocks U-turn body-hold (`set_position`) — 5.15.1 is steering-only.
         self._lane_dirs_active = False
+        # Set by CrosswalkCompliance when braking for an occupied zebra —
+        # NN policies must hold lane-center steering (no ped swerve).
+        self._pedestrian_yield_hold_steer = False
 
     def _reset_sign_compliance(self):
         """Call on episode reset to clear stale state."""
@@ -153,6 +156,7 @@ class SignComplianceMixin(
         self._lane_dirs_nav_locked = False
         self._lane_dirs_hold_applied = False
         self._lane_dirs_active = False
+        self._pedestrian_yield_hold_steer = False
         self._one_way_nav_clean = False
         self._no_turn_318_context = False
         self._restore_uturn_steering_limit()
@@ -184,6 +188,7 @@ class SignComplianceMixin(
         self._no_turn_318_context = False
         self._one_way_nav_clean = False
         self._lane_dirs_active = False
+        self._pedestrian_yield_hold_steer = False
 
         for sign in self._get_signs():
             try:

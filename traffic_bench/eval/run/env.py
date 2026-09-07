@@ -17,6 +17,10 @@ from traffic_bench.eval.engine.map.junction_priority_layout import (
     build_junction_priority_layout,
 )
 from traffic_bench.eval.engine.map.lane_keys import clamp_lane_key_to_graph, lane_edge_id, make_lane_key
+from traffic_bench.eval.engine.map.sumo_metadrive_along import (
+    remap_sumo_along_to_metadrive,
+    row_sumo_edge_length_m,
+)
 from traffic_bench.eval.signs.blocked.place import row_is_blocked_road as _row_is_blocked_road
 from traffic_bench.eval.signs.crosswalk.place import row_is_crosswalk as _row_is_crosswalk
 from traffic_bench.eval.signs.detour.place import row_is_detour as _row_is_detour
@@ -491,7 +495,17 @@ def _apply_destination_along_cap(env, row: dict) -> None:
     if final is None:
         return
     try:
-        target = min(cap, max(0.5, float(final.length) - 5.0))
+        md_len = float(final.length)
+        # Same-edge segment families author dest in SUMO corridor metres.
+        # Do NOT use approach_lane_length_m for junction/dual_path dests — that
+        # length is the spawn arm, not the finish edge.
+        if _row_is_detour(row) or _row_is_speed(row) or _row_is_crosswalk(row):
+            cap = remap_sumo_along_to_metadrive(
+                cap,
+                sumo_edge_length_m=row_sumo_edge_length_m(row),
+                metadrive_lane_length_m=md_len,
+            )
+        target = min(cap, max(0.5, md_len - 5.0))
     except Exception:
         return
 
@@ -663,20 +677,29 @@ def _reposition_ego_before_lane_end(env, distance_before_end: float) -> bool:
         lane_length = lane.length
         # spawn_longitude is from lane START, so: lane_length - distance_before_end
         spawn_long = max(1.0, min(lane_length - distance_before_end, lane_length - 0.1))
-        
+        return _reposition_ego_at_along(env, spawn_long)
+    except Exception as e:
+        print(f"[EgoReposition] Failed to reposition ego: {e}")
+        return False
+
+
+def _reposition_ego_at_along(env, spawn_along_m: float) -> bool:
+    """Place ego at an absolute along-lane mark (meters from lane start)."""
+    try:
+        vehicle = env.agent
+        if vehicle is None or vehicle.lane is None:
+            return False
+        lane = vehicle.lane
+        lane_length = float(lane.length)
+        spawn_long = max(1.0, min(float(spawn_along_m), lane_length - 0.1))
         pos = lane.position(spawn_long, 0.0)
         heading = lane.heading_theta_at(spawn_long)
-        
         vehicle.set_position(pos)
         vehicle.set_heading_theta(heading)
-        
-        # Update spawn_place so navigation uses the new position
         try:
             vehicle.spawn_place = pos.copy()
         except Exception:
             pass
-        
-        # Rebuild navigation from new position
         if hasattr(env, "_refresh_navigation_after_spawn"):
             env._refresh_navigation_after_spawn(lane)
         else:
@@ -684,10 +707,9 @@ def _reposition_ego_before_lane_end(env, distance_before_end: float) -> bool:
                 vehicle.reset_navigation(lane)
             except Exception:
                 pass
-        
         return True
     except Exception as e:
-        print(f"[EgoReposition] Failed to reposition ego: {e}")
+        print(f"[EgoReposition] Failed to reposition ego at along={spawn_along_m}: {e}")
         return False
 
 

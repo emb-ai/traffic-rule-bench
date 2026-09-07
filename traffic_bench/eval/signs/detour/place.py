@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from traffic_bench.eval.engine.map.junction_sign_placement import resolve_layout_lane
+from traffic_bench.eval.engine.map.sumo_metadrive_along import (
+    remap_sumo_along_to_metadrive,
+    row_sumo_edge_length_m,
+)
 from traffic_bench.signs.detour.plate import DetourEitherSign, DetourLeftSign, DetourRightSign
 
 
@@ -48,8 +52,12 @@ def place_detour_signs(env, row: dict, show_model: bool = True) -> bool:
         if lane is None:
             lane = vehicle.lane
 
-        placement_long = max(0.0, min(sign_s, lane.length - 1.0))
-        longitudinal_offset = placement_long - lane.length
+        placement_long = remap_sumo_along_to_metadrive(
+            sign_s,
+            sumo_edge_length_m=row_sumo_edge_length_m(row),
+            metadrive_lane_length_m=float(lane.length),
+        )
+        longitudinal_offset = placement_long - float(lane.length)
 
         sign = sign_mgr.add_sign(
             sign_cls,
@@ -73,7 +81,8 @@ def place_detour_signs(env, row: dict, show_model: bool = True) -> bool:
             print(
                 f"[DetourSign] Placed {pdd_code} on lane "
                 f"{getattr(lane, 'index', lane_key)} "
-                f"at s={sign_s:.1f}m (zone [{sign.zone_start:.1f}, {sign.zone_end:.1f}])"
+                f"at s={placement_long:.1f}m "
+                f"(sumo_s={sign_s:.1f}m, zone [{sign.zone_start:.1f}, {sign.zone_end:.1f}])"
             )
         return sign is not None
     except Exception as e:

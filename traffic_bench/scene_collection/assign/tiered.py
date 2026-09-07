@@ -22,6 +22,7 @@ class SceneCandidate:
     shape: str = ""
     slot: str = ""
     segment_type: str = ""
+    subtype: str = ""
 
 
 @dataclass

@@ -13,6 +13,9 @@ from traffic_bench.scene_collection.paths import (
     DUAL_PATH_CROPS,
     JUNCTION_CROPS,
     SEGMENT_CROPS,
+    SEGMENT_TEST_IDS,
+    SEGMENT_TRAIN_IDS,
+    SEGMENTS_INDEX,
     TEST_IDS,
     TRAIN_IDS,
 )
@@ -53,7 +56,7 @@ class FamilyTally:
 
 @dataclass
 class HarvestSnapshot:
-    """Crops that exist on disk under ``maps/crops/``."""
+    """Crops that exist on disk under ``maps/crops/`` (+ segment index/split)."""
 
     junction_rows: List[Dict[str, Any]]
     segment_rows: List[Dict[str, Any]]
@@ -63,6 +66,9 @@ class HarvestSnapshot:
     segment_on_disk: int
     train_ids: Dict[str, List[str]] = field(default_factory=dict)
     test_ids: Dict[str, List[str]] = field(default_factory=dict)
+    segment_index_rows: List[Dict[str, Any]] = field(default_factory=list)
+    segment_train_by_subtype: Dict[str, List[str]] = field(default_factory=dict)
+    segment_test_by_subtype: Dict[str, List[str]] = field(default_factory=dict)
 
     @property
     def junction(self) -> FamilyTally:
@@ -105,13 +111,19 @@ class HarvestSnapshot:
         return out
 
     def segment_geo(self) -> List[Tuple[float, float, str]]:
+        # Prefer cropped rows; fall back to index so inventory works mid-crop.
+        rows = self.segment_rows or self.segment_index_rows
         out: List[Tuple[float, float, str]] = []
-        for row in self.segment_rows:
+        for row in rows:
             xy = _latlon(row)
             if xy is None:
                 continue
             out.append((xy[0], xy[1], str(row.get("segment_type") or "?")))
         return out
+
+    def segment_stat_rows(self) -> List[Dict[str, Any]]:
+        """Rows for diversity stats: full index if present, else crops."""
+        return self.segment_index_rows or self.segment_rows
 
     def dual_path_geo(self) -> List[Tuple[float, float, str]]:
         out: List[Tuple[float, float, str]] = []
@@ -178,6 +190,38 @@ def _ids_by_shape(payload: Any) -> Dict[str, List[str]]:
     return {str(k): [str(x) for x in v] for k, v in raw.items() if isinstance(v, list)}
 
 
+def _load_jsonl(path: Path) -> List[Dict[str, Any]]:
+    if not path.is_file():
+        return []
+    rows: List[Dict[str, Any]] = []
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+
+def _ids_by_key(payload: Any, key: str) -> Dict[str, List[str]]:
+    if not isinstance(payload, dict):
+        return {}
+    raw = payload.get(key) or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): [str(x) for x in v] for k, v in raw.items() if isinstance(v, list)}
+
+
+def _segment_subtype(row: Mapping[str, Any]) -> str:
+    if row.get("subtype"):
+        return str(row["subtype"])
+    seg = str(row.get("segment_type") or "unknown")
+    bucket = str(row.get("lane_bucket") or "")
+    if not bucket:
+        n = int(row.get("lane_count") or 0)
+        bucket = "1" if n <= 1 else ("2" if n == 2 else "3plus")
+    return f"{seg}|{bucket}"
+
+
 def load_snapshot() -> HarvestSnapshot:
     junction_rows: List[Dict[str, Any]] = []
     junction_on_disk: Dict[str, int] = {}
@@ -197,6 +241,9 @@ def load_snapshot() -> HarvestSnapshot:
             dual_path_rows.extend(rows)
 
     segment_rows = _rows_from_crop_root(SEGMENT_CROPS)
+    segment_index_rows = _load_jsonl(SEGMENTS_INDEX)
+    seg_train = _load_json(SEGMENT_TRAIN_IDS)
+    seg_test = _load_json(SEGMENT_TEST_IDS)
     return HarvestSnapshot(
         junction_rows=junction_rows,
         segment_rows=segment_rows,
@@ -206,6 +253,9 @@ def load_snapshot() -> HarvestSnapshot:
         segment_on_disk=len(segment_rows),
         train_ids=_ids_by_shape(_load_json(TRAIN_IDS)),
         test_ids=_ids_by_shape(_load_json(TEST_IDS)),
+        segment_index_rows=segment_index_rows,
+        segment_train_by_subtype=_ids_by_key(seg_train, "by_subtype"),
+        segment_test_by_subtype=_ids_by_key(seg_test, "by_subtype"),
     )
 
 
@@ -247,8 +297,12 @@ def scene_example_dirs(
 
 
 def summary_dict(snap: HarvestSnapshot) -> Dict[str, Any]:
-    seg_type = Counter(str(r.get("segment_type") or "") for r in snap.segment_rows)
-    lanes = Counter(int(r.get("lane_count") or 0) for r in snap.segment_rows)
+    pool = snap.segment_stat_rows()
+    seg_type = Counter(str(r.get("segment_type") or "") for r in pool)
+    lanes = Counter(int(r.get("lane_count") or 0) for r in pool)
+    subtypes = Counter(_segment_subtype(r) for r in pool)
+    train_sub = {k: len(v) for k, v in sorted(snap.segment_train_by_subtype.items())}
+    test_sub = {k: len(v) for k, v in sorted(snap.segment_test_by_subtype.items())}
     return {
         "families": {name: {"on_disk": t.on_disk} for name, t in snap.families().items()},
         "junction_by_shape": dict(snap.junction_on_disk),
@@ -256,14 +310,24 @@ def summary_dict(snap: HarvestSnapshot) -> Dict[str, Any]:
             f"{a}/{b}": n for (a, b), n in sorted(snap.dual_path_on_disk.items())
         },
         "segment": {
+            "on_disk": snap.segment_on_disk,
+            "n_index": len(snap.segment_index_rows),
             "by_type": dict(seg_type),
+            "by_subtype": dict(sorted(subtypes.items())),
             "by_lane_count": {str(k): v for k, v in sorted(lanes.items())},
-            "pass_right_ok": sum(1 for r in snap.segment_rows if r.get("pass_right_ok")),
-            "pass_left_ok": sum(1 for r in snap.segment_rows if r.get("pass_left_ok")),
-            "n_osm_ways": len({str(r.get("osm_way_id") or "") for r in snap.segment_rows if r.get("osm_way_id")}),
+            "pass_right_ok": sum(1 for r in pool if r.get("pass_right_ok")),
+            "pass_left_ok": sum(1 for r in pool if r.get("pass_left_ok")),
+            "n_osm_ways": len(
+                {str(r.get("osm_way_id") or "") for r in pool if r.get("osm_way_id")}
+            ),
+            "harvest": "diverse_segment_v2",
         },
         "split": {
             "train": {k: len(v) for k, v in snap.train_ids.items()},
             "test": {k: len(v) for k, v in snap.test_ids.items()},
+            "segment_train_by_subtype": train_sub,
+            "segment_test_by_subtype": test_sub,
+            "segment_train_total": sum(train_sub.values()),
+            "segment_test_total": sum(test_sub.values()),
         },
     }

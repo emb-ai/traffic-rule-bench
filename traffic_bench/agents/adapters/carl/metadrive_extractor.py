@@ -601,6 +601,31 @@ class MetaDriveExtractor:
             pass
         
         return stop_signs
+
+    def get_crosswalks(self, ego_pos: np.ndarray) -> List[Dict]:
+        """Extract crosswalk (zebra) polygons from the current MetaDrive map."""
+        crosswalks: List[Dict] = []
+        try:
+            current_map = getattr(self.engine, "current_map", None)
+            feats = getattr(current_map, "crosswalks", None) or {}
+            for cw_id, feat in feats.items():
+                if not isinstance(feat, dict):
+                    continue
+                poly = np.asarray(feat.get("polygon", []), dtype=np.float64)
+                if poly.ndim != 2 or poly.shape[0] < 3 or poly.shape[1] < 2:
+                    continue
+                poly = poly[:, :2]
+                center = np.mean(poly, axis=0)
+                if float(np.linalg.norm(center - ego_pos)) > self.fov_range:
+                    continue
+                crosswalks.append({
+                    "polygon": poly,
+                    "type": "crosswalk",
+                    "id": str(cw_id),
+                })
+        except Exception:
+            pass
+        return crosswalks
     
     def get_speed_limits(self, ego_pos: np.ndarray) -> List[Dict]:
         """
@@ -714,6 +739,7 @@ class MetaDriveExtractor:
             "lane_boundaries": self.get_lane_boundaries(ego_pos),
             "traffic_lights": self.get_traffic_lights(ego_pos),
             "stop_signs": self.get_stop_signs(ego_pos),
+            "crosswalks": self.get_crosswalks(ego_pos),
             "speed_limits": self.get_speed_limits(ego_pos),
             "vehicles": self.get_vehicles(vehicle, ego_pos),
             "pedestrians": self.get_pedestrians(ego_pos),

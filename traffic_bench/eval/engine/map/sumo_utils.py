@@ -218,6 +218,44 @@ class VehicleRouteIndex:
                 queue.append((state, depth + 1))
         return found
 
+    def farthest_reachable_lane(
+        self,
+        from_edge: str,
+        from_lane: int,
+        *,
+        min_hops: int = 1,
+        max_hops: int = 8,
+    ) -> Optional[tuple[str, int]]:
+        """Farthest real-edge lane reachable within ``[min_hops, max_hops]`` hops."""
+        start = (str(from_edge), int(from_lane))
+        queue: deque[tuple[tuple[str, int], int]] = deque([(start, 0)])
+        visited = {start}
+        best: Optional[tuple[str, int]] = None
+        best_depth = -1
+
+        while queue:
+            state, depth = queue.popleft()
+            if depth > max_hops:
+                continue
+            edge, lane = state
+            if (
+                depth >= int(min_hops)
+                and is_real_sumo_edge_id(edge)
+                and depth >= best_depth
+                and state != start
+            ):
+                best = (edge, int(lane))
+                best_depth = depth
+            for next_edge, next_lane in self._adj.get(state, []):
+                if self._edge_fn.get(next_edge) == "walkingarea":
+                    continue
+                nxt = (next_edge, int(next_lane))
+                if nxt in visited:
+                    continue
+                visited.add(nxt)
+                queue.append((nxt, depth + 1))
+        return best
+
 
 def load_vehicle_route_index(net_path: Path) -> VehicleRouteIndex:
     root = ET.parse(net_path).getroot()

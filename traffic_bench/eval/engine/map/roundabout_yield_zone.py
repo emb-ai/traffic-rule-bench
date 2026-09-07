@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable, List, Optional, Sequence
+import math
+from typing import Any, Iterable, List, Optional, Sequence, Tuple
+
+# When SUMO splits one physical entry across several nodes, ring pieces that
+# end near the geometric spoke/ring meeting point still count as conflict.
+DEFAULT_ENTRY_GEOM_RADIUS_M = 12.0
+# Sample this much of the lane tail when deciding "approaches entry".
+DEFAULT_ENTRY_GEOM_TAIL_M = 30.0
 
 
 def _lane_index_key(lane) -> Optional[str]:
@@ -10,6 +17,169 @@ def _lane_index_key(lane) -> Optional[str]:
     if idx is None:
         return None
     return str(idx)
+
+
+def entry_xy_from_spoke_lane(lane) -> Optional[Tuple[float, float]]:
+    """Map XY where the ego spoke meets the ring (spoke lane end)."""
+    if lane is None:
+        return None
+    try:
+        p = lane.position(float(lane.length), 0.0)
+        return (float(p[0]), float(p[1]))
+    except Exception:
+        return None
+
+
+def _point_xy(lane, long_m: float) -> Optional[Tuple[float, float]]:
+    try:
+        p = lane.position(float(long_m), 0.0)
+        return (float(p[0]), float(p[1]))
+    except Exception:
+        return None
+
+
+def _dist_xy(a: Sequence[float], b: Sequence[float]) -> float:
+    return float(math.hypot(float(a[0]) - float(b[0]), float(a[1]) - float(b[1])))
+
+
+def closest_long_on_lane(
+    lane,
+    target_xy: Sequence[float],
+    *,
+    step_m: float = 2.0,
+) -> Optional[Tuple[float, float]]:
+    """Return ``(long_m, dist_m)`` for the sample on ``lane`` nearest ``target_xy``."""
+    if lane is None or target_xy is None:
+        return None
+    length = float(getattr(lane, "length", 0.0) or 0.0)
+    if length <= 1e-3:
+        return None
+    best_long = 0.0
+    best_dist = float("inf")
+    long_m = 0.0
+    step = max(0.5, float(step_m))
+    while long_m <= length + 1e-9:
+        pt = _point_xy(lane, min(long_m, length))
+        if pt is not None:
+            dist = _dist_xy(pt, target_xy)
+            if dist < best_dist:
+                best_dist = dist
+                best_long = min(long_m, length)
+        long_m += step
+    if not math.isfinite(best_dist):
+        return None
+    return (best_long, best_dist)
+
+
+def mean_lane_end_xy(lanes: Sequence[Any]) -> Optional[Tuple[float, float]]:
+    """Average of lane end XYs — ring-side conflict point for sticky release."""
+    xs: List[float] = []
+    ys: List[float] = []
+    for lane in lanes or []:
+        length = float(getattr(lane, "length", 0.0) or 0.0)
+        pt = _point_xy(lane, length) if length > 1e-3 else None
+        if pt is None:
+            continue
+        xs.append(pt[0])
+        ys.append(pt[1])
+    if not xs:
+        return None
+    return (sum(xs) / len(xs), sum(ys) / len(ys))
+
+
+def lane_approaches_entry_xy(
+    lane,
+    entry_xy: Sequence[float],
+    *,
+    radius_m: float = DEFAULT_ENTRY_GEOM_RADIUS_M,
+    tail_m: float = DEFAULT_ENTRY_GEOM_TAIL_M,
+) -> bool:
+    """True when the lane approaches ``entry_xy`` (not merely leaves it).
+
+    Accepts:
+    - downstream end / tail within ``radius_m``;
+    - or closest point within ``radius_m`` when that point is in the downstream
+      half (long circulating edges that pass a split SUMO node mid-lane).
+
+    Outgoing pieces (closest near the start, end farther away) return False.
+    """
+    if lane is None or entry_xy is None:
+        return False
+    length = float(getattr(lane, "length", 0.0) or 0.0)
+    if length <= 1e-3:
+        return False
+    end_xy = _point_xy(lane, length)
+    start_xy = _point_xy(lane, 0.0)
+    if end_xy is None:
+        return False
+    if _dist_xy(end_xy, entry_xy) <= float(radius_m):
+        return True
+
+    # Downstream tail near entry (SUMO ends a few metres early).
+    start_long = max(0.0, length - max(0.0, float(tail_m)))
+    step = 2.0
+    long_m = start_long
+    while long_m < length - 1e-6:
+        pt = _point_xy(lane, long_m)
+        if pt is not None and _dist_xy(pt, entry_xy) <= float(radius_m):
+            if start_xy is None:
+                return True
+            return _dist_xy(end_xy, entry_xy) <= _dist_xy(start_xy, entry_xy) + 1.0
+        long_m += step
+
+    # Long ring edge: closest sample mid-lane, still approaching.
+    closest = closest_long_on_lane(lane, entry_xy, step_m=step)
+    if closest is None:
+        return False
+    closest_long, closest_dist = closest
+    if closest_dist > float(radius_m):
+        return False
+    if closest_long < 0.5 * length:
+        return False
+    if start_xy is not None and _dist_xy(end_xy, entry_xy) > _dist_xy(start_xy, entry_xy) + 1.0:
+        return False
+    return True
+
+
+def ring_lanes_near_entry_xy(
+    ring_lanes: Sequence[Any],
+    entry_xy: Sequence[float],
+    *,
+    radius_m: float = DEFAULT_ENTRY_GEOM_RADIUS_M,
+    tail_m: float = DEFAULT_ENTRY_GEOM_TAIL_M,
+) -> List[Any]:
+    """Ring lanes whose approach (downstream end/tail/mid) is near the entry XY."""
+    if entry_xy is None:
+        return []
+    out: List[Any] = []
+    seen: set[str] = set()
+    for lane in ring_lanes or []:
+        if not lane_approaches_entry_xy(
+            lane, entry_xy, radius_m=radius_m, tail_m=tail_m
+        ):
+            continue
+        key = _lane_index_key(lane)
+        if key is not None and key in seen:
+            continue
+        if key is not None:
+            seen.add(key)
+        out.append(lane)
+    return out
+
+
+def merge_unique_lanes(*lane_groups: Sequence[Any]) -> List[Any]:
+    """Concatenate lane lists, dropping duplicates by lane.index."""
+    out: List[Any] = []
+    seen: set[str] = set()
+    for group in lane_groups:
+        for lane in group or []:
+            key = _lane_index_key(lane)
+            if key is not None and key in seen:
+                continue
+            if key is not None:
+                seen.add(key)
+            out.append(lane)
+    return out
 
 
 def entry_conflict_ring_edges(

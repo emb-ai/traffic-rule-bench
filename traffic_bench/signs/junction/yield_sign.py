@@ -13,7 +13,7 @@ class YieldSign(BaseTrafficSign):
     # the lane end (~half car length), so a junction entry/crash is not missed while
     # the rear is still geometrically on the approach lane.
     EGO_ZONE_END_CENTER_INSET = 4.0
-    MAIN_ROAD_ZONE_BEFORE = 15.0
+    MAIN_ROAD_ZONE_BEFORE = 25.0
     MAIN_ROAD_ZONE_AFTER = 5.0
     # Path-geometry sticky yield: sample routes and require foe to clear the
     # ego/foe path intersection after the coarse MAIN_ROAD_ZONE prefilter.

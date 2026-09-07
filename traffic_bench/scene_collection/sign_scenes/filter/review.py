@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Browse scene previews and mark which to keep or reject.
 
-Starts a small local web UI that shows custom_cropped.png for each scene
+Starts a small local web UI that shows a preview PNG for each scene
 folder directly under scenes/ (any name, e.g. sign_72424_j0 or savvinskaya_3).
-Decisions are saved to scenes/scene_selection.json. Use --apply to move
-rejected scenes aside.
+Default preview is ``custom_cropped.png``; for ``data/scenes/crosswalk`` it is
+``metadrive_first.png``. Decisions are saved to scenes/scene_selection.json.
+Use --apply to move rejected scenes aside.
 
 Examples:
     python -m traffic_bench.scene_collection review
@@ -42,6 +43,15 @@ from traffic_bench.eval.engine.map.sumo_utils import load_scene_meta
 SCENES_DIR_DEFAULT = DATA_SCENES / "yield"
 SELECTION_FILE = "scene_selection.json"
 PREVIEW_NAME_DEFAULT = "custom_cropped.png"
+# Sign folders that review MetaDrive first-frame previews instead of SUMO crops.
+PREVIEW_NAME_BY_SCENES_DIR = {
+    "crosswalk": "metadrive_first.png",
+}
+
+
+def default_preview_name(scenes_dir: Path) -> str:
+    """Pick preview filename from the scenes-dir leaf name (e.g. crosswalk)."""
+    return PREVIEW_NAME_BY_SCENES_DIR.get(scenes_dir.resolve().name, PREVIEW_NAME_DEFAULT)
 
 
 def selection_path(scenes_root: Path) -> Path:
@@ -721,8 +731,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--preview-name",
-        default=PREVIEW_NAME_DEFAULT,
-        help=f"Preview image filename (default: {PREVIEW_NAME_DEFAULT})",
+        default=None,
+        help=(
+            "Preview image filename. Default: metadrive_first.png for "
+            "data/scenes/crosswalk, else custom_cropped.png"
+        ),
     )
     parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8765, help="Bind port (default: 8765)")
@@ -758,16 +771,17 @@ def main() -> None:
     args = parser.parse_args()
 
     scenes_root = args.scenes_dir.expanduser().resolve()
+    preview_name = args.preview_name or default_preview_name(scenes_root)
 
     if args.list_kept:
-        for name in kept_scene_names(scenes_root, preview_name=args.preview_name):
+        for name in kept_scene_names(scenes_root, preview_name=preview_name):
             print(name)
         return
 
     if args.mark_all_keep:
         changed, total = mark_all_scenes(
             scenes_root,
-            preview_name=args.preview_name,
+            preview_name=preview_name,
             verdict=VERDICT_KEEP,
             only_pending=not args.force,
         )
@@ -781,7 +795,7 @@ def main() -> None:
     if args.apply:
         moved, total = apply_selection(
             scenes_root,
-            preview_name=args.preview_name,
+            preview_name=preview_name,
             dry_run=args.dry_run,
         )
         if total == 0:
@@ -795,7 +809,7 @@ def main() -> None:
         scenes_root,
         host=args.host,
         port=args.port,
-        preview_name=args.preview_name,
+        preview_name=preview_name,
         open_browser=not args.no_browser,
     )
 

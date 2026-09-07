@@ -183,6 +183,14 @@ class PlanT2SignCompliantPolicy(SignComplianceMixin, BasePolicy):
                         lane_steer = self._steering_control_for_lc(cur_lane)
                         steering = min(steering, lane_steer)
 
+            # Occupied crosswalk: hold lane center — do not swerve around peds.
+            if self._pedestrian_yield_hold_steer and self._lc_target_lane is None:
+                cur_lane = self.control_object.lane
+                if cur_lane is not None:
+                    steering = float(np.clip(
+                        self._steering_control_for_lc(cur_lane), -1.0, 1.0
+                    ))
+
             # Clamp throttle by sign-driven _speed_cap / _speed_floor.
             throttle = self._apply_speed_constraints(
                 throttle, self.control_object.speed_km_h

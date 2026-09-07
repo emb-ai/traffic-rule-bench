@@ -42,7 +42,23 @@ def prepare_sign(sign: str, *, scenes_dir: Path | None = None) -> int:
         print(f"[prepare] sign={profile.id} ({profile.pdd_code}) zebra → {dest}")
         stats = add_zebra_to_scenes_dir(dest)
         print(f"[prepare] {stats}")
-        return 0 if stats.get("fail", 0) == 0 else 1
+        n_fail = int(stats.get("fail", 0) or 0)
+        n_ok = int(stats.get("ok", 0) or 0) + int(stats.get("skip", 0) or 0)
+        # Partial inject failures are expected on awkward geometry; reject/viability
+        # drops those maps. Only abort when nothing usable remains.
+        if n_fail and n_ok:
+            print(
+                f"[prepare] warn: {n_fail} zebra inject failure(s); "
+                "continuing (reject will drop unusable maps)"
+            )
+            return 0
+        if n_fail and not n_ok:
+            print(
+                f"[prepare] ERROR: all {n_fail} zebra inject(s) failed",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
     if not hook:
         print(
             f"sign {profile.id!r} has no prepare: in signs.yaml; "

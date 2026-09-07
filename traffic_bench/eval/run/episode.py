@@ -55,6 +55,40 @@ from traffic_bench.eval.engine.traffic.ego_defaults import (
     numpy_legacy_seed,
     sample_ego_params,
 )
+
+
+def _assert_idm_baseline_has_no_stop_sign_handling(policy_cls) -> None:
+    """Guard: baseline ``idm`` must not re-grow stop-sign compliance.
+
+    Stop / yield / priority rules belong on ``idm_rule`` (SignComplianceMixin).
+    ``ModifiedIDMPolicy`` may keep driving aids (curvature, crossing brake) only.
+    """
+    import inspect
+
+    assert policy_cls is ModifiedIDMPolicy, (
+        f"baseline idm must use ModifiedIDMPolicy, got {policy_cls!r}"
+    )
+    assert not hasattr(policy_cls, "_find_relevant_stop_sign"), (
+        "ModifiedIDMPolicy regained _find_relevant_stop_sign — remove stop handling "
+        "from third_party/metadrive/.../idm_policy.py (baseline idm is not the rule expert)"
+    )
+    for name in (
+        "waiting_at_stop_sign",
+        "stop_sign_wait_time",
+        "stop_sign_total_wait",
+        "has_stopped_at_stop_sign",
+    ):
+        assert name not in getattr(policy_cls, "__dict__", {}), (
+            f"ModifiedIDMPolicy defines stop-sign state {name!r}; remove it"
+        )
+    accel_src = inspect.getsource(policy_cls.acceleration)
+    assert "stop_sign" not in accel_src and "StopSign" not in accel_src, (
+        "ModifiedIDMPolicy.acceleration mentions stop_sign/StopSign — strip that logic"
+    )
+    assert not any(
+        getattr(base, "__name__", "") == "SignComplianceMixin"
+        for base in policy_cls.__mro__
+    ), "baseline idm must not inherit SignComplianceMixin (that is idm_rule)"
 from traffic_bench.signs.junction import (
     MainRoadSign,
     YieldSign,
@@ -352,8 +386,25 @@ def run_one_episode(
         if _row_uses_dual_path_nav(row):
             row = resolve_row_for_policy(row, policy_type)
         _apply_manifest_ego_spawn_lane(base_env, row)
+        spawn_along = row.get("spawn_along_m")
         spawn_distance = float(row.get("spawn_distance_before_end", 0) or 0)
-        if spawn_distance > 0:
+        if spawn_along is not None:
+            from traffic_bench.eval.run.env import _reposition_ego_at_along
+            from traffic_bench.eval.engine.map.sumo_metadrive_along import (
+                remap_sumo_along_to_metadrive,
+                row_sumo_edge_length_m,
+            )
+
+            lane = getattr(base_env.vehicle, "lane", None)
+            along_m = float(spawn_along)
+            if lane is not None:
+                along_m = remap_sumo_along_to_metadrive(
+                    along_m,
+                    sumo_edge_length_m=row_sumo_edge_length_m(row),
+                    metadrive_lane_length_m=float(lane.length),
+                )
+            _reposition_ego_at_along(base_env, along_m)
+        elif spawn_distance > 0:
             _reposition_ego_before_lane_end(base_env, spawn_distance)
         if _row_is_speed(row):
             _apply_manifest_ego_spawn_velocity(base_env, row)
@@ -383,9 +434,19 @@ def run_one_episode(
         nav = getattr(base_env.vehicle, "navigation", None)
         if (nav is not None and not _row_is_detour(row) and not _row_is_speed(row)
                 and not _row_is_restricted_lane(row)):
+            # No-split crosswalk finishes on the same edge via along-cap.
+            same_edge_finish = (
+                _row_is_crosswalk(row)
+                and row.get("destination_max_along_m") is not None
+                and str(row.get("road_id") or "") == str(row.get("destination_edge_id") or "")
+            )
             checkpoints = getattr(nav, "checkpoints", [])
             spawn_lane_idx = getattr(base_env.vehicle.lane, "index", None)
-            if checkpoints and spawn_lane_idx:
+            if (
+                not same_edge_finish
+                and checkpoints
+                and spawn_lane_idx
+            ):
                 if len(checkpoints) <= 1 or checkpoints[-1] == spawn_lane_idx or checkpoints[0] == checkpoints[-1]:
                     scene_id = row.get("scene_id", "unknown")
                     dest = row.get("destination_lane_id", "unknown")

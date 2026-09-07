@@ -18,8 +18,10 @@ Outputs: this README, `summary.json`, PNGs under [`figures/`](figures/).
 | --- | --- |
 | junction | 6457 |
 | dual_path | 6507 |
-| segment | 7620 |
-| total | 20584 |
+| segment | 13056 |
+| total | 26020 |
+
+Segment index (candidates to crop): **13056** ways · cropped on disk: **13056**.
 
 ![Harvest inventory](figures/inventory.png)
 
@@ -45,18 +47,32 @@ The same junction may contribute at most one atom per slot.
 
 ## Segments (corridors)
 
-Incoming edges cropped so the scene ends 10 m before the junction.
-Gates: length ≥ 150 m; **straight** chord/arc ≥ 0.99; **curved** in [0.97, 0.99).
+Full-net mid-corridor windows (`harvest: diverse_segment_v2`), not junction
+approaches. Gates: length ≥ 150 m; **straight** chord/arc ≥ 0.99; **curved**
+in [0.97, 0.99). One map per `osm_way_id`. Train/test split is place-disjoint
+and stratified by subtype; per-sign lane/curve balance is applied at `assign`.
 
-- distinct OSM ways: 5544
-- `pass_right_ok`: 2044
-- `pass_left_ok`: 2044
+- distinct OSM ways (index): 13056
+- by type: {'curved': 1082, 'straight': 11974}
+- `pass_right_ok`: 6312
+- `pass_left_ok`: 6312
+- segment split totals: train 10446 / test 2610
+
+| Subtype | Index | Train ways | Test ways |
+| --- | --- | --- | --- |
+| curved|1 | 782 | 626 | 156 |
+| curved|2 | 225 | 180 | 45 |
+| curved|3plus | 75 | 60 | 15 |
+| straight|1 | 5962 | 4770 | 1192 |
+| straight|2 | 3082 | 2466 | 616 |
+| straight|3plus | 2930 | 2344 | 586 |
 
 ![Segment length, straightness, lanes](figures/segment_diversity.png)
 
 ## Geographic coverage
 
-Points are cropped nets on disk. Dual-path locations are unique parent junctions.
+Points are cropped nets on disk (segments fall back to the index when crops
+are incomplete). Dual-path locations are unique parent junctions.
 
 ![Geographic coverage](figures/geo_coverage.png)
 

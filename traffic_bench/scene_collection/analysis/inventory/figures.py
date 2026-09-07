@@ -186,12 +186,22 @@ def dual_path_slots(snap: HarvestSnapshot, out_dir: Path, *, pdf: bool = False) 
 
 def segment_diversity(snap: HarvestSnapshot, out_dir: Path, *, pdf: bool = False) -> List[Path]:
     _style()
-    rows = snap.segment_rows
+    rows = snap.segment_stat_rows()
     lengths = [float(r["length_m"]) for r in rows if r.get("length_m") is not None]
     straight = [float(r["straightness"]) for r in rows if r.get("straightness") is not None]
     lanes = [int(r.get("lane_count") or 0) for r in rows]
+    subtypes: Dict[str, int] = {}
+    for r in rows:
+        if r.get("subtype"):
+            key = str(r["subtype"])
+        else:
+            seg = str(r.get("segment_type") or "?")
+            n = int(r.get("lane_count") or 0)
+            bucket = "1" if n <= 1 else ("2" if n == 2 else "3plus")
+            key = f"{seg}|{bucket}"
+        subtypes[key] = subtypes.get(key, 0) + 1
 
-    fig, axes = plt.subplots(1, 3, figsize=(7.8, 2.7))
+    fig, axes = plt.subplots(1, 4, figsize=(10.2, 2.7))
     axes[0].hist(lengths, bins=32, color=STEEL, edgecolor="white", linewidth=0.4)
     axes[0].set_xlabel("Length (m)")
     axes[0].set_ylabel("Segments")
@@ -212,7 +222,13 @@ def segment_diversity(snap: HarvestSnapshot, out_dir: Path, *, pdf: bool = False
     axes[2].set_xlabel("Lanes")
     _title(axes[2], "c", "Vehicle lanes")
     _grid(axes[2])
-    fig.tight_layout(w_pad=1.6)
+
+    sub_keys = sorted(subtypes)
+    axes[3].barh(sub_keys, [subtypes[k] for k in sub_keys], color=STEEL, height=0.6, zorder=2)
+    axes[3].set_xlabel("Ways")
+    _title(axes[3], "d", "Subtype")
+    _grid(axes[3])
+    fig.tight_layout(w_pad=1.4)
     return _save(fig, out_dir, "segment_diversity", pdf=pdf)
 
 

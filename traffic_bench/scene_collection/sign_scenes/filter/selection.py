@@ -161,3 +161,64 @@ def apply_rejected_scenes(
         print(f"  moved {name} -> {REJECTED_SUBDIR}/{name}")
         moved += 1
     return moved, len(rejected)
+
+
+def restore_rejected_scenes(
+    scenes_root: Path,
+    *,
+    dry_run: bool = False,
+) -> tuple[int, int]:
+    """Move ``_rejected/*`` back to live scene dirs and clear reject verdicts.
+
+    Returns ``(restored, n_found)``. Safe to re-run: skips names that already
+    exist as live dirs.
+    """
+    rejected_root = scenes_root / REJECTED_SUBDIR
+    if not rejected_root.is_dir():
+        return 0, 0
+
+    found = sorted(
+        p for p in rejected_root.iterdir() if p.is_dir() and not p.name.startswith(".")
+    )
+    if not found:
+        return 0, 0
+
+    restored = 0
+    for src in found:
+        dst = scenes_root / src.name
+        if dry_run:
+            print(f"  would restore {REJECTED_SUBDIR}/{src.name} -> {src.name}")
+            restored += 1
+            continue
+        if dst.exists():
+            print(f"  [skip] {src.name}: live dir already exists")
+            continue
+        shutil.move(str(src), str(dst))
+        set_scene_verdict(scenes_root, src.name, VERDICT_PENDING)
+        print(f"  restored {src.name}")
+        restored += 1
+
+    # Drop empty _rejected folder when everything came back.
+    if not dry_run:
+        try:
+            if rejected_root.is_dir() and not any(rejected_root.iterdir()):
+                rejected_root.rmdir()
+        except OSError:
+            pass
+        # Clear leftover reject marks for names we restored (or that vanished).
+        selection = load_scene_selection(scenes_root)
+        scenes = selection.setdefault("scenes", {})
+        reasons = selection.setdefault("reject_reasons", {})
+        changed = False
+        for name in list(scenes.keys()):
+            if scenes.get(name) != VERDICT_REJECT:
+                continue
+            live = scenes_root / name
+            if live.is_dir():
+                scenes[name] = VERDICT_PENDING
+                reasons.pop(name, None)
+                changed = True
+        if changed:
+            save_scene_selection(scenes_root, selection)
+
+    return restored, len(found)

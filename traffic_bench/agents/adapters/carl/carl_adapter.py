@@ -267,6 +267,7 @@ class CaRLRenderer:
         lane_boundaries: Optional[List[np.ndarray]] = None,
         traffic_lights: Optional[List[Dict]] = None,
         stop_signs: Optional[List[Dict]] = None,
+        crosswalks: Optional[List[Dict]] = None,
         speed_limits: Optional[List[Dict]] = None,
         vehicles: Optional[List[Dict]] = None,
         pedestrians: Optional[List[Dict]] = None,
@@ -280,7 +281,7 @@ class CaRLRenderer:
         1: route - planned path
         2: lane_boundaries - lane boundary lines
         3: traffic_lights - red=255, yellow=170, green=80
-        4: stop_signs
+        4: stop_signs + crosswalks (zebra polygons; MetaDrive extension)
         5: speed_limits - intensity = limit/max_speed
         6: vehicles - intensity = speed/max_speed
         7: pedestrians + static - intensity = speed/max_speed
@@ -342,6 +343,17 @@ class CaRLRenderer:
                     local = self._global_to_local(pos, ego_pos, ego_heading)
                     pixels = self._local_to_pixel(local)[0]
                     cv2.circle(ch_stop, tuple(pixels), radius=3, color=MAX_VALUE, thickness=-1)
+
+        # Channel 4 (extension): Crosswalk zebra polygons.
+        # Upstream CaRL does not paint CROSSWALK into BEV; we reuse the
+        # stop/regulatory channel so the policy can see the crossing geometry.
+        if crosswalks:
+            for cw in crosswalks:
+                if "polygon" not in cw:
+                    continue
+                poly = np.array(cw["polygon"], dtype=np.float64)
+                local = self._global_to_local(poly, ego_pos, ego_heading)
+                self._render_polygon(ch_stop, local, MAX_VALUE)
         
         # Channel 5: Speed limits
         if speed_limits:
@@ -718,6 +730,7 @@ class CaRLMetaDriveAdapter:
             lane_boundaries=data["lane_boundaries"],
             traffic_lights=data["traffic_lights"],
             stop_signs=data["stop_signs"],
+            crosswalks=data.get("crosswalks"),
             speed_limits=data["speed_limits"],
             vehicles=data["vehicles"],
             pedestrians=data["pedestrians"],
