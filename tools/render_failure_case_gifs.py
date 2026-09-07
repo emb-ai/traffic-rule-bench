@@ -51,7 +51,13 @@ def _infer_sign_group(case_dir: Path) -> str | None:
     return None
 
 
-def _find_replays(root: Path, *, category: str | None, sign: str | None) -> list[Path]:
+def _find_replays(
+    root: Path,
+    *,
+    category: str | None,
+    sign: str | None,
+    policy: str | None = None,
+) -> list[Path]:
     replays: list[Path] = []
     search_roots: list[Path]
     if category and sign:
@@ -71,6 +77,8 @@ def _find_replays(root: Path, *, category: str | None, sign: str | None) -> list
         if not search_root.is_dir():
             continue
         for replay in sorted(search_root.rglob("replay.json")):
+            if policy is not None and policy not in replay.parts:
+                continue
             replays.append(replay)
     return replays
 
@@ -141,6 +149,12 @@ def main() -> None:
         "rule_expert_no_dest",
     ])
     parser.add_argument("--sign", choices=list(SIGN_GROUP_TO_SCENES))
+    parser.add_argument(
+        "--policy",
+        default=None,
+        help="Only render cases whose path contains this policy dir "
+             "(e.g. carl_rule_default)",
+    )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--force", action="store_true")
     parser.add_argument(
@@ -160,6 +174,7 @@ def main() -> None:
         args.root.resolve(),
         category=args.category,
         sign=args.sign,
+        policy=args.policy,
     )
     if args.limit is not None:
         replays = replays[: args.limit]
