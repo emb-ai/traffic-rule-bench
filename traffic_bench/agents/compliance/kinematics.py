@@ -1,3 +1,4 @@
+import os
 """
 Shared sign-compliance logic for rule-compliant expert policies.
 
@@ -283,6 +284,19 @@ class Kinematics:
             if abs(lat) > 0.35:
                 lat_term *= 1.6
             steering += lat_term
+            # A manoeuvre that may be gentle (reserved-lane merge on a 60 m
+            # run-up) caps the steering: the full pull yawed the ego ~40 deg
+            # across the lane line, which MetaDrive reports as off-lane.
+            limit = getattr(self, "_lc_steer_limit", None)
+            if limit:
+                steering = max(-float(limit), min(float(limit), float(steering)))
+            if os.environ.get("TRB_EXPERT_DEBUG"):
+                try:
+                    print("[EXPERT_LC_STEER] step=%d v=%.1f long=%.1f lat=%.2f lane_h=%.2f v_h=%.2f h_err=%.2f lat_term=%.2f steer=%.2f"
+                          % (int(getattr(self.engine, "episode_step", 0) or 0), float(ego.speed_km_h), float(long), float(lat),
+                             float(lane_heading), float(v_heading), float(wrap_to_pi(lane_heading - v_heading)), float(lat_term), float(steering)))
+                except Exception:
+                    pass
             return float(steering)
 
         def _begin_lane_change(self, target_lane_num):
@@ -301,6 +315,13 @@ class Kinematics:
                 self._lc_final_sumo_num = lane_index_num(self._lc_target_lane)
                 self._get_heading_pid().reset()
                 self._get_lateral_pid().reset()
+                if os.environ.get("TRB_EXPERT_DEBUG"):
+                    try:
+                        long, lat = target.local_coordinates(self.control_object.position)
+                        print("[EXPERT_LC] begin: cur=%s target=%s ref_by_num=%s lat_to_target=%.2f"
+                              % (cur, getattr(target, "index", None), sorted(self._ref_lanes_by_num()), float(lat)))
+                    except Exception:
+                        pass
 
         def _begin_lane_change_by_sumo_num(self, sumo_lane_num: int) -> bool:
             """Lane-change to the peer whose SUMO lane number equals ``sumo_lane_num``."""

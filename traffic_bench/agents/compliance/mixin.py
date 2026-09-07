@@ -85,7 +85,15 @@ class SignComplianceMixin(
     # sampled distance before the zone (engine RNG, so eval / recording /
     # replay agree); the constant is the fallback when the range is None.
     PREEMPT_RESTRICTED_LANE_M = 50.0
-    PREEMPT_RESTRICTED_LANE_RANGE_M = (20.0, 60.0)
+    # 40-60 m before the zone, i.e. within the first 20 m of the 60 m run-up:
+    # the merge then happens at spawn speed (18-22 km/h), where the lateral
+    # controller is stable; a merge begun at 36 km/h ran the ego off the road.
+    PREEMPT_RESTRICTED_LANE_RANGE_M = (40.0, 60.0)
+    # Speed held on the reserved lane during the run-up, and the run-up length
+    # over which it is held (the ego spawns 60 m before the plate).
+    RESTRICTED_LC_KMH = 24.0
+    RESTRICTED_APPROACH_M = 90.0
+    RESTRICTED_LC_STEER = 0.45
 
     def _get_heading_pid(self):
         raise NotImplementedError
@@ -100,6 +108,7 @@ class SignComplianceMixin(
         # than once per process.
         self._detour_preempt_cache = None
         self._restricted_preempt_cache = None
+        self._lc_steer_limit = None
         self._stop_states = {}
         self._speed_cap = None
         self._speed_floor = None
@@ -138,6 +147,7 @@ class SignComplianceMixin(
         self._lc_final_sumo_num = None
         self._detour_preempt_cache = None
         self._restricted_preempt_cache = None
+        self._lc_steer_limit = None
         self._has_priority = False
         self._no_overtaking_active = False
         self._lane_dirs_nav_locked = False

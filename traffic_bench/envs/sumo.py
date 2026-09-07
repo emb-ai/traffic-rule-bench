@@ -401,18 +401,59 @@ class TrafficSignSumoEnv(AutoSpawnMixin, BaseEnv):
         )
         return flag
 
+    @staticmethod
+    def _position_on_ref_lanes(vehicle, line_band_m: float = 0.25) -> bool:
+        """Is the vehicle centre inside (or within ``line_band_m`` of) one of the
+        navigation reference lanes of the current / next checkpoint?"""
+        nav = getattr(vehicle, "navigation", None)
+        if nav is None:
+            return False
+        lanes = list(getattr(nav, "current_ref_lanes", None) or []) + list(getattr(nav, "next_ref_lanes", None) or [])
+        if not lanes:
+            return False
+        pos = vehicle.position
+        for lane in lanes:
+            try:
+                if lane.point_on_lane(pos):
+                    return True
+                long, lat = lane.local_coordinates(pos)
+                width = float(getattr(lane, "width", 3.5) or 3.5)
+                if -1.0 <= float(long) <= float(lane.length) + 1.0 and abs(float(lat)) <= width / 2.0 + line_band_m:
+                    return True
+            except Exception:
+                continue
+        return False
+
     def _is_out_of_road(self, vehicle):
         # A specified function to determine whether this vehicle should be done.
         # Yellow-continuous contact is intentionally ignored in SUMO env: the axial divider
         # is a rendering hint, not a hard barrier, and some edge geometries place the
         # solid-yellow polyline close to valid driving surface (false positives).
         ret = not vehicle.on_lane
+        # `on_lane` is a vertical ray from the vehicle centre: on the line between
+        # two SUMO lanes it hits the line body instead of a lane, so a slow lane
+        # change reads as "off road" for a frame or two. Second opinion from the
+        # lane polygons of the navigation reference lanes (line band tolerated).
+        if ret and self._position_on_ref_lanes(vehicle):
+            ret = False
         if self.config["out_of_route_done"]:
             ret = ret or vehicle.out_of_route
         elif self.config["on_continuous_line_done"]:
             ret = ret or vehicle.on_white_continuous_line or vehicle.crash_sidewalk
         if self.config["on_broken_line_done"]:
             ret = ret or vehicle.on_broken_line
+        if ret and os.environ.get("TRB_EXPERT_DEBUG"):
+            try:
+                nav = getattr(vehicle, "navigation", None)
+                print("[OUT_OF_ROAD] on_lane=%s out_of_route=%s(cfg %s) white=%s sidewalk=%s broken=%s(cfg %s) cur_lane=%s ref=%s pos=%s"
+                      % (vehicle.on_lane, getattr(vehicle, "out_of_route", None), self.config["out_of_route_done"],
+                         getattr(vehicle, "on_white_continuous_line", None), getattr(vehicle, "crash_sidewalk", None),
+                         getattr(vehicle, "on_broken_line", None), self.config["on_broken_line_done"],
+                         getattr(getattr(nav, "current_lane", None), "index", None) if nav else None,
+                         [getattr(l, "index", None) for l in (getattr(nav, "current_ref_lanes", None) or [])] if nav else None,
+                         [round(float(x), 1) for x in vehicle.position]))
+            except Exception as exc:
+                print("[OUT_OF_ROAD] debug failed:", exc)
         return ret
 
     def reward_function(self, vehicle_id: str):

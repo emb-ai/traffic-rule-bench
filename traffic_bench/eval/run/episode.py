@@ -891,6 +891,15 @@ def run_one_episode(
                 route_length_source = "none"
 
         crashed_flag_raw = bool(last_info.get("crash", False)) if last_info else False
+        if os.environ.get("TRB_EXPERT_DEBUG") and last_info:
+            try:
+                _a = base_env.agent
+                print("[EPISODE_END] step=%s info_flags=%s agent_flags=%s"
+                      % (steps, {k: last_info.get(k) for k in ("crash", "crash_vehicle", "crash_object", "crash_sidewalk",
+                                                              "crash_human", "crash_building", "out_of_road", "arrive_dest")},
+                         {k: getattr(_a, k, None) for k in ("crash_vehicle", "crash_object", "crash_sidewalk", "crash_human", "on_lane")}))
+            except Exception:
+                pass
         crash_attribution = None
         if crashed_flag_raw or bool(getattr(base_env.agent, "crash_vehicle", False)):
             try:

@@ -64,6 +64,7 @@ class ReservedLaneAgentManager(BaseManager):
         self._opp_spacing = 50.0
         self._opp_exit_s = 1.0
         self._lat = 0.0
+        self._same_start = 1.0
 
     # ------------------------------------------------------------------ helpers
 
@@ -193,18 +194,23 @@ class ReservedLaneAgentManager(BaseManager):
         self._lat = self._away_from_neighbour_offset()
         flow = str(cfg.get("reserved_lane_flow", "same") or "same")
         user = str(cfg.get("reserved_lane_user", "bus") or "bus")
-        n = max(1, int(cfg.get("reserved_agents_n", 3) or 3))
+        n = int(cfg.get("reserved_agents_n", 0) or 0)
+        if n <= 0:
+            n = 3 if user == "bicycle" else 2
         direction = -1 if flow == "opposite" else 1
         base_v = BICYCLE_SPEED_MS if user == "bicycle" else BUS_SPEED_MS
         length = float(self._lane.length)
         ego_s = float(cfg.get("reserved_ego_s", -1.0))
 
         zone_start = float(cfg.get("reserved_zone_start", 0.0) or 0.0)
-        # Same flow: even spacing with a random phase; slots that would sit on
-        # top of the ego spawn (behind it within 60 m, ahead within 30 m) are
-        # pushed on. Counter flow: a stream from the far end, first user timed
-        # to meet a lane-keeping ego inside the zone.
-        spacing = length / n
+        # The lane is reserved from the plate on. Same flow: the users are
+        # spread over the stretch past the plate (random phase) and wrap back
+        # to the plate at the edge end; before the plate the lane is ordinary.
+        # Counter flow: a stream from the far end, first user timed to meet a
+        # lane-keeping ego inside the zone, turning off at the plate.
+        self._same_start = min(max(1.0, zone_start + 3.0), length - 2.0)
+        stretch = max(5.0, length - self._same_start)
+        spacing = stretch / n
         phase = float(self.np_random.uniform(0.0, spacing))
         if direction < 0 and ego_s >= 0.0:
             # The first user must be at meet_point when the ego gets there: it
@@ -220,13 +226,7 @@ class ReservedLaneAgentManager(BaseManager):
             if direction < 0 and ego_s >= 0.0:
                 s = first_s + k * self._opp_spacing
             else:
-                s = (phase + k * spacing) % length
-                if ego_s >= 0.0:
-                    for _ in range(3):
-                        if -EGO_CLEAR_BEHIND_M < s - ego_s < EGO_CLEAR_AHEAD_M:
-                            s = (s + EGO_CLEAR_AHEAD_M + EGO_CLEAR_BEHIND_M * 0.5) % length
-                        else:
-                            break
+                s = self._same_start + (phase + k * spacing) % stretch
             v = base_v * float(self.np_random.uniform(1.0 - SPEED_JITTER, 1.0 + SPEED_JITTER))
             heading = float(self._lane.heading_theta_at(s)) + (math.pi if direction < 0 else 0.0)
             try:
@@ -255,7 +255,7 @@ class ReservedLaneAgentManager(BaseManager):
         for agent in self._agents:
             agent["s"] += agent["dir"] * agent["v"] * self._dt
             if agent["dir"] > 0 and agent["s"] > length - 1.0:
-                agent["s"] = 1.0
+                agent["s"] = getattr(self, "_same_start", 1.0)
             elif agent["dir"] < 0 and agent["s"] < self._opp_exit_s:
                 # The counter-flow lane starts at the plate: at the plate the user
                 # turns off. Back into the stream one headway behind the last user.

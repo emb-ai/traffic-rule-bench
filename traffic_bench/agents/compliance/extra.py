@@ -137,9 +137,18 @@ class ExtraCompliance:
             sign_ln = lane_index_num(sign.lane)
             cur = self._cur_lane_num()
             if cur is None or sign_ln is None or cur != sign_ln:
+                if self._lc_target_lane is None:
+                    self._lc_steer_limit = None   # merge done: full steering again
                 return
             veh_long = self._veh_long(sign.lane)
             in_zone = sign.zone_start <= veh_long <= sign.zone_end
+            # On the reserved lane ahead of its zone the ego stays slow for the
+            # whole run-up: the lateral controller is stable for a lane change
+            # at 18-25 km/h and ran the ego off the road when one began at 36.
+            # The sampled pre-empt distance below only decides WHEN the change
+            # starts; the speed is already right when it does.
+            if veh_long < sign.zone_start and (sign.zone_start - veh_long) < self.RESTRICTED_APPROACH_M:
+                self._cap_speed(self.RESTRICTED_LC_KMH)
             # Preemptive: start lane change ~50 m before the restricted zone so
             # NN policies (CaRL/PlanT2) don't enter the bus/bike lane and trigger
             # a violation. Reactive case (already in zone) keeps the same logic.
@@ -154,16 +163,28 @@ class ExtraCompliance:
                     # 50 km/h car closing from 25 m; the time-to-close rule below
                     # refuses that. The approach cap stays at the slow-approach value:
                     # the lateral controller over-steers a merge at 30 km/h.
+                    to_zone = float(sign.zone_start) - float(veh_long)
+                    v_ms = max(0.0, float(self.control_object.speed_km_h)) / 3.6
+                    # Straight after spawn the ego is still slow: merging at 5 m/s
+                    # into 40 km/h traffic is what most expert crashes were.
+                    # Reach traffic speed first unless the zone is close.
+                    too_slow = v_ms < 5.5 and to_zone > 25.0
                     if (target is not None and self._lc_target_lane is None
-                            and not self._merge_gap_ok(target)):
-                        self._cap_speed(max(SLOW_APPROACH_MIN_KMH,
-                                            self.control_object.speed_km_h * SLOW_APPROACH_FACTOR))
+                            and (too_slow or not self._merge_gap_ok(target))):
+                        if to_zone < 8.0:
+                            self._cap_speed(0.0)      # never roll into the reserved zone
+                        elif to_zone < 20.0:
+                            self._cap_speed(8.0)
+                        elif not too_slow:
+                            self._cap_speed(max(SLOW_APPROACH_MIN_KMH,
+                                                self.control_object.speed_km_h * SLOW_APPROACH_FACTOR))
                         return
+                    self._lc_steer_limit = self.RESTRICTED_LC_STEER
                     self._begin_lane_change(safe)
                     self._cap_speed(max(SLOW_APPROACH_MIN_KMH,
                                         self.control_object.speed_km_h * SLOW_APPROACH_FACTOR))
 
-        def _merge_gap_ok(self, target_lane, ahead=15.0, behind=20.0, t_close=2.0, look_behind=40.0):
+        def _merge_gap_ok(self, target_lane, ahead=15.0, behind=20.0, t_close=3.5, look_behind=80.0):
             """Gap in ``target_lane`` for a merge: nothing within [-behind, ahead] m
             of the ego's projection, and no car further back that would close the
             gap in under ``t_close`` seconds at the current speed difference."""
