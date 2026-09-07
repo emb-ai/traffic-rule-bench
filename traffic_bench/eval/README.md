@@ -61,20 +61,28 @@ python -m traffic_bench.eval run policies=all sign=yield
 python -m traffic_bench.eval run policies=all sign=all
 ```
 
-### 3. Parallel multi-sign train eval (recommended on multi-GPU)
+### 3. Parallel multi-sign eval (recommended on multi-GPU)
 
 One process pool for CPU policies and one sign per GPU for CARL (same layout as `oracle/collect/collect.sh`):
 
 ```
+# train (default)
 CPU_WORKERS=2 GPUS=1,2,3,4,5,6,7 JOBS=16 JOBS_NN=32 \
+  bash traffic_bench/eval/run/run_signs_parallel.sh
+
+# test
+SPLIT=test SIGNS="main_road secondary yield stop roundabout" \
+CPU_WORKERS=4 GPUS=1,2,3,4,5,6,7 JOBS=16 JOBS_NN=16 \
   bash traffic_bench/eval/run/run_signs_parallel.sh
 ```
 
+- `SPLIT` — `train` (default) or `test`; manifests under `data/runs/<sign>/<SPLIT>/`
+- Ready manifests are scheduled first; missing ones stay pending until they appear (`WAIT_POLL=30`, `WAIT_TIMEOUT=0` = forever)
 - `CPU_WORKERS` — concurrent signs for CPU policies (`idm` / `idm_rule` / `ppo_lidar` / `ppo_rule`)
-- `GPUS` — physical GPU indices for `carl` / `carl_rule` (one sign per GPU; leave `0` free)
+- `GPUS` — physical GPU indices for `carl` / `carl_rule` / `plant2` / `plant2_rule` (one sign per GPU; leave `0` free)
 - `JOBS` / `JOBS_NN` — scene workers inside each sign (CPU vs NN)
-- defaults: `ego_variants=[default]`, manifests under `data/runs/<sign>/train/`
-- logs: `data/eval_parallel_logs/`
+- defaults: full **16 baselines** — `ego_variants=[default,s1,s2,s3,s4]` for IDM family + PPO/CaRL/PlanT2 base & rule
+- logs: `data/eval_parallel_logs/<SPLIT>/`
 
 Stop everything:
 

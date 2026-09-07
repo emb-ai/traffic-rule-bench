@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Track train-eval progress for run_signs_parallel.sh and estimate ETA.
+"""Track eval progress for run_signs_parallel.sh and estimate ETA.
 
-Counts episode lines under ``data/runs/<sign>/train/eval_out/.../policy_eval``.
-Default baselines match the parallel script (4 CPU + 2 GPU policies, ego=default).
+Counts episode lines under ``data/runs/<sign>/<split>/eval_out/.../policy_eval``.
+Default baselines match the parallel script (16 total):
+idm/idm_rule × {default,s1–s4} + ppo_lidar/ppo_rule + carl/carl_rule + plant2/plant2_rule.
 
 Usage (repo root)::
 
     python tools/eval_progress.py
-    python tools/eval_progress.py --watch 30
+    python tools/eval_progress.py --split test --watch 30
     python tools/eval_progress.py --policies carl,carl_rule --watch
     python tools/eval_progress.py --signs stop,yield,main_road,secondary --watch 30
 """
@@ -57,8 +58,12 @@ DEFAULT_POLICIES = [
     "ppo_rule",
     "carl",
     "carl_rule",
+    "plant2",
+    "plant2_rule",
 ]
-DEFAULT_EGO = "default"
+IDM_FAMILY = {"idm", "idm_rule"}
+DEFAULT_EGO_VARIANTS = ["default", "s1", "s2", "s3", "s4"]
+DEFAULT_EGO = ",".join(DEFAULT_EGO_VARIANTS)
 
 
 def _repo_root() -> Path:
@@ -120,15 +125,27 @@ class SignProgress:
         return 100.0 * self.done / self.total if self.total else 100.0
 
 
+def plan_baselines(policies: list[str], ego_variants: list[str]) -> list[tuple[str, str]]:
+    """Match ``traffic_bench.eval.run.policies.plan_baselines``: IDM gets all egos."""
+    out: list[tuple[str, str]] = []
+    for policy in policies:
+        if policy in IDM_FAMILY:
+            out.extend((policy, ego) for ego in ego_variants)
+        else:
+            out.append((policy, "default"))
+    return out
+
+
 def collect(
     root: Path,
     *,
     split: str,
     policies: list[str],
-    ego: str,
+    ego_variants: list[str],
     signs_filter: list[str] | None = None,
 ) -> list[SignProgress]:
     wanted = set(signs_filter) if signs_filter else None
+    planned = plan_baselines(policies, ego_variants)
     out: list[SignProgress] = []
     for sign, disk in SIGN_SPECS:
         if wanted is not None and sign not in wanted:
@@ -149,7 +166,7 @@ def collect(
             / "policy_eval"
         )
         baselines: list[BaselineProgress] = []
-        for policy in policies:
+        for policy, ego in planned:
             run_name = f"{policy}_{ego}"
             done = _run_done(pe / run_name, policy) if pe.is_dir() else 0
             baselines.append(
@@ -261,7 +278,14 @@ def main(argv: list[str] | None = None) -> int:
             "(e.g. stop,yield,main_road,secondary). Empty = all."
         ),
     )
-    p.add_argument("--ego", default=DEFAULT_EGO, help="Ego variant suffix (default: default)")
+    p.add_argument(
+        "--ego",
+        default=DEFAULT_EGO,
+        help=(
+            "Comma-separated ego variants for idm/idm_rule "
+            f"(default: {DEFAULT_EGO}); other policies always use default"
+        ),
+    )
     p.add_argument("--detail", action="store_true", help="Show every baseline per sign, not only incomplete")
     p.add_argument(
         "--watch",
@@ -281,6 +305,7 @@ def main(argv: list[str] | None = None) -> int:
 
     root = (args.root or _repo_root()).resolve()
     policies = _parse_list(args.policies)
+    ego_variants = _parse_list(args.ego) or list(DEFAULT_EGO_VARIANTS)
     signs_filter = _parse_list(args.signs) or None
     if not policies:
         print("no policies", file=sys.stderr)
@@ -300,7 +325,7 @@ def main(argv: list[str] | None = None) -> int:
             root,
             split=args.split,
             policies=policies,
-            ego=args.ego,
+            ego_variants=ego_variants,
             signs_filter=signs_filter,
         )
         if not signs:
