@@ -319,6 +319,19 @@ def _job_from_hydra(cfg: DictConfig, profile, scenes_dir: Path, output_dir: Path
         restricted_zone_m=float(
             getattr(cfg.simulation, "restricted_zone_m", 60.0) or 60.0
         ),
+        sign_jitter_m=float(getattr(cfg.simulation, "sign_jitter_m", 15.0) or 0.0),
+        restricted_zone_levels_m=tuple(
+            float(x) for x in (getattr(cfg.simulation, "restricted_zone_levels_m", None) or ())
+        ),
+        approach_levels_m=tuple(
+            float(x) for x in (getattr(cfg.simulation, "approach_levels_m", None) or ())
+        ),
+        reserved_agents_n_levels=tuple(
+            int(x) for x in (getattr(cfg.simulation, "reserved_agents_n_levels", None) or ())
+        ),
+        lc_planning_time_s=float(
+            getattr(cfg.simulation, "lc_planning_time_s", 6.0) or 0.0
+        ),
     )
     expert_cfg = ExpertConfig(
         stop_wait_steps=int(

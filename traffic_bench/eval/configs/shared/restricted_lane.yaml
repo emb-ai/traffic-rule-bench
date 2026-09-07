@@ -1,5 +1,11 @@
 # @package _global_
 # Shared knobs for bus_lane / bike_lane / bus_lane_road / bike_lane_road.
+#
+# Sampling = shared world grid (traffic_density_levels x spawn_velocity_levels_ms
+# x n_variations, inherited from config.yaml) x the family axes below. All
+# combinations that fit the edge are shuffled with a stable seed and the first
+# scenario.max_scenarios rows per map are built; the nominal row (no traffic,
+# nominal zone / approach, one lane user, spawn_velocity_ms) is always first.
 
 paths:
   scenes_dir: scenes
@@ -13,14 +19,27 @@ scenario:
   max_total: null
 
 simulation:
-  spawn_velocity_ms: 5.0
+  default_first_variant: true
+  spawn_velocity_ms: 5.0            # nominal ego spawn speed
   spawn_offset_from_start: 10.0
   spawn_distance_before_end: 80.0
   sign_distance_before_end: 12.0
-  # Ego starts this far before the plate (expert pre-empts 50 m ahead).
+  # Ego starts this far before the plate (nominal + family levels). The expert
+  # pre-empts 40-60 m ahead of the zone; a (spawn speed, approach) pair is used
+  # only when approach >= lc_planning_time_s * spawn speed.
   approach_before_sign_m: 60.0
-  # Reserved-lane zone after the plate; the finish lies past its end.
+  approach_levels_m: [60, 80, 100]
+  lc_planning_time_s: 6.0
+  # Reserved-lane zone after the plate (nominal + family levels); the finish
+  # lies past its end. Levels that do not fit the edge are skipped per map.
   restricted_zone_m: 60.0
+  restricted_zone_levels_m: [60, 80, 100]
   tail_after_sign_m: 10.0
-  max_path_length_m: 150.0
-  max_path_length_levels: [150]
+  # Buses / cyclists sharing the lane; [] = bus [1, 2], bicycle [1, 2, 3].
+  reserved_agents_n_levels: []
+  # Hidden upstream slide of the plate on sampled rows.
+  sign_jitter_m: 15.0
+  # Single route level: it must cover approach + zone + tail/2 for the largest
+  # family levels (100 + 100 + 5), so the shared [90, 120] budgets do not apply.
+  max_path_length_m: 220.0
+  max_path_length_levels: [220]

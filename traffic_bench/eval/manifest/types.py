@@ -76,6 +76,14 @@ class SimulationConfig:
     zone_min_m: float = 20.0
     # Reserved lane (5.14.x / 5.11.x): zone length after the plate.
     restricted_zone_m: float = 60.0
+    # Upstream slide of the plate on sampled rows (segment families).
+    sign_jitter_m: float = 15.0
+    # Reserved lane family axes; empty = the family's own defaults.
+    restricted_zone_levels_m: Tuple[float, ...] = ()
+    approach_levels_m: Tuple[float, ...] = ()
+    reserved_agents_n_levels: Tuple[int, ...] = ()
+    # Reserved lane: approach must give the ego this long at its spawn speed.
+    lc_planning_time_s: float = 6.0
 
 
 @dataclass
