@@ -603,20 +603,29 @@ def _reposition_ego_before_lane_end(env, distance_before_end: float) -> bool:
         lane_length = lane.length
         # spawn_longitude is from lane START, so: lane_length - distance_before_end
         spawn_long = max(1.0, min(lane_length - distance_before_end, lane_length - 0.1))
-        
+        return _reposition_ego_at_along(env, spawn_long)
+    except Exception as e:
+        print(f"[EgoReposition] Failed to reposition ego: {e}")
+        return False
+
+
+def _reposition_ego_at_along(env, spawn_along_m: float) -> bool:
+    """Place ego at an absolute along-lane mark (meters from lane start)."""
+    try:
+        vehicle = env.agent
+        if vehicle is None or vehicle.lane is None:
+            return False
+        lane = vehicle.lane
+        lane_length = float(lane.length)
+        spawn_long = max(1.0, min(float(spawn_along_m), lane_length - 0.1))
         pos = lane.position(spawn_long, 0.0)
         heading = lane.heading_theta_at(spawn_long)
-        
         vehicle.set_position(pos)
         vehicle.set_heading_theta(heading)
-        
-        # Update spawn_place so navigation uses the new position
         try:
             vehicle.spawn_place = pos.copy()
         except Exception:
             pass
-        
-        # Rebuild navigation from new position
         if hasattr(env, "_refresh_navigation_after_spawn"):
             env._refresh_navigation_after_spawn(lane)
         else:
@@ -624,10 +633,9 @@ def _reposition_ego_before_lane_end(env, distance_before_end: float) -> bool:
                 vehicle.reset_navigation(lane)
             except Exception:
                 pass
-        
         return True
     except Exception as e:
-        print(f"[EgoReposition] Failed to reposition ego: {e}")
+        print(f"[EgoReposition] Failed to reposition ego at along={spawn_along_m}: {e}")
         return False
 
 

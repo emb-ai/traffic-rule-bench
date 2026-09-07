@@ -52,7 +52,7 @@ DEFAULT_POSITIONS = ("middle",)
 
 @dataclass(frozen=True)
 class CrosswalkSimParams:
-    spawn_distance_before_end: float = 55.0
+    spawn_distance_before_end: float = 50.0  # match configs/shared/crosswalk.yaml
     sign_distance_before_end: float = 12.0
     spawn_velocity_ms: float = 2.5
     horizon: int = 600
@@ -221,6 +221,28 @@ def build_crosswalk_manifest_entry(
         max(20.0, approach_len - 8.0),
     )
 
+    # No-split maps: same edge before/after the zebra. Spawn/sign/dest are
+    # absolute along-edge marks; path length is capped in the manifest only.
+    try:
+        zebra_s = float(meta.get("crosswalk_position_m") or 0.0)
+    except (TypeError, ValueError):
+        zebra_s = 0.0
+    no_split = (
+        zebra_s > 0.0
+        and not meta.get("crosswalk_node_id")
+        and str(approach.approach_edge_id) == str(approach.depart_edge_id)
+    )
+    spawn_along_m = None
+    sign_from_start = None
+    dest_along_m = None
+    if no_split:
+        spawn_along_m = max(1.0, zebra_s - spawn_before_end)
+        sign_from_start = max(1.0, zebra_s - float(sim.sign_distance_before_end))
+        # Remaining travel after spawn, capped by route budget — applied as
+        # destination_max_along_m on the same continuous edge.
+        dest_along_m = float(spawn_along_m + path_budget_m)
+        dest_along_m = max(dest_along_m, zebra_s + 15.0)
+
     ped_mgr = pedestrian_manager_from_preset(
         preset,
         default_ego_spawn_distance_m=sim.ped_ego_spawn_distance_m,
@@ -283,8 +305,14 @@ def build_crosswalk_manifest_entry(
         "osm_way_id": meta.get("osm_way_id"),
         "crosswalk_width_m": meta.get("crosswalk_width_m", 4.0),
     }
+    if spawn_along_m is not None:
+        entry["spawn_along_m"] = float(spawn_along_m)
+    if sign_from_start is not None:
+        entry["sign_distance_from_start"] = float(sign_from_start)
+    if dest_along_m is not None:
+        entry["destination_max_along_m"] = float(dest_along_m)
     max_path_m = path_budget_m
-    if max_path_m > 0.0 and entry.get("destination_edge_id"):
+    if max_path_m > 0.0 and entry.get("destination_edge_id") and not no_split:
         entry = apply_route_budget(
             entry,
             net_path=scene_dir / net_file,
@@ -320,6 +348,7 @@ def expand_crosswalk_scene_entries(
         # require slightly less than spawn distance so those maps stay usable.
         min_approach_length=20.0,
         min_hops_after_depart=int(sim.min_hops_after_depart),
+        meta=meta,
     )
     # Prefer approaches that match the injected crosswalk when available.
     target_cw = _resolve_crosswalk_id(meta)
@@ -358,12 +387,21 @@ def expand_crosswalk_scene_entries(
     net_full = scene_dir / str(meta.get("net_file") or "map.net.xml")
     spawn_before_end = float(sim.spawn_distance_before_end)
     for approach in approaches:
+        no_split_approach = str(approach.approach_edge_id) == str(approach.depart_edge_id)
         available_route_m = measure_spawn_to_dest_length_m(
             net_path=net_full,
             spawn_edge=str(approach.approach_edge_id),
             spawn_lane=int(approach.approach_lane_num),
             dest_edge=str(approach.depart_edge_id),
-            spawn_distance_before_end=spawn_before_end,
+            spawn_along_m=(
+                max(1.0, float(approach.approach_lane_length) - spawn_before_end)
+                if no_split_approach
+                else None
+            ),
+            spawn_distance_before_end=(
+                None if no_split_approach else spawn_before_end
+            ),
+            dest_end_margin_m=5.0 if no_split_approach else 0.0,
         )
         route_levels, route_augment = select_route_length_levels(
             configured_route_levels, available_route_m

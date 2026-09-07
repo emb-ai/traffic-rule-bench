@@ -8,4 +8,11 @@
 python -m traffic_bench.scene_collection reject --sign yield --apply --refill --loop
 python -m traffic_bench.scene_collection reject --all --apply --refill --loop
 python -m traffic_bench.scene_collection review --scenes-dir data/scenes/yield
+
+# After fixing viability: put falsely-rejected maps back, then re-run reject
+python -m traffic_bench.scene_collection reject --sign crosswalk --restore-rejected
 ```
+
+Segment signs (`crosswalk`, `speed_*`, `detour_*`) use corridor viability
+(not junction T/X). See `manifest_viability._check_crosswalk_viability` /
+`_check_speed_zone_viability` / `_check_detour_viability`.

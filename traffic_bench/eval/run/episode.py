@@ -377,8 +377,13 @@ def run_one_episode(
         if _row_uses_dual_path_nav(row):
             row = resolve_row_for_policy(row, policy_type)
         _apply_manifest_ego_spawn_lane(base_env, row)
+        spawn_along = row.get("spawn_along_m")
         spawn_distance = float(row.get("spawn_distance_before_end", 0) or 0)
-        if spawn_distance > 0:
+        if spawn_along is not None:
+            from traffic_bench.eval.run.env import _reposition_ego_at_along
+
+            _reposition_ego_at_along(base_env, float(spawn_along))
+        elif spawn_distance > 0:
             _reposition_ego_before_lane_end(base_env, spawn_distance)
         if _row_is_speed(row):
             _apply_manifest_ego_spawn_velocity(base_env, row)
@@ -407,9 +412,19 @@ def run_one_episode(
         # Detour finishes on the same obstacle edge (along-cap), so skip this.
         nav = getattr(base_env.vehicle, "navigation", None)
         if nav is not None and not _row_is_detour(row) and not _row_is_speed(row):
+            # No-split crosswalk finishes on the same edge via along-cap.
+            same_edge_finish = (
+                _row_is_crosswalk(row)
+                and row.get("destination_max_along_m") is not None
+                and str(row.get("road_id") or "") == str(row.get("destination_edge_id") or "")
+            )
             checkpoints = getattr(nav, "checkpoints", [])
             spawn_lane_idx = getattr(base_env.vehicle.lane, "index", None)
-            if checkpoints and spawn_lane_idx:
+            if (
+                not same_edge_finish
+                and checkpoints
+                and spawn_lane_idx
+            ):
                 if len(checkpoints) <= 1 or checkpoints[-1] == spawn_lane_idx or checkpoints[0] == checkpoints[-1]:
                     scene_id = row.get("scene_id", "unknown")
                     dest = row.get("destination_lane_id", "unknown")

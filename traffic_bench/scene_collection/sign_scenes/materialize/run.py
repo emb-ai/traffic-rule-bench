@@ -900,7 +900,13 @@ def _run_prepare_if_needed(profile, dest: Path) -> None:
         return
     rc = prepare_sign(profile.id, scenes_dir=dest)
     if rc:
-        sys.exit(rc)
+        # Soft-fail: partial zebra injects must not abort refill/reject loops.
+        # Hard unknown-hook (rc=2) still aborts.
+        if rc >= 2:
+            sys.exit(rc)
+        print(
+            f"[materialize] warn: prepare for {profile.id} returned {rc}; continuing"
+        )
 
 
 def main() -> None:

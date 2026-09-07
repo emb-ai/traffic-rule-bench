@@ -5,7 +5,7 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from traffic_bench.eval.engine.map.lane_keys import lane_edge_id, make_lane_key
 from traffic_bench.eval.engine.map.sumo_utils import VehicleRouteIndex, is_vehicle_drivable_lane, load_vehicle_route_index
@@ -280,6 +280,133 @@ def enumerate_crosswalk_dest_candidates(
     return candidates
 
 
+def _collect_edge_lanes(root: ET.Element) -> dict[str, list[tuple[int, float]]]:
+    edge_lanes: dict[str, list[tuple[int, float]]] = {}
+    for edge in root.findall("edge"):
+        edge_id = edge.get("id", "")
+        if not edge_id or edge_id.startswith(":"):
+            continue
+        if edge.get("function") not in {None, "normal", ""}:
+            continue
+        lanes = _edge_lane_lengths(edge)
+        if lanes:
+            edge_lanes[edge_id] = lanes
+    return edge_lanes
+
+
+def _approaches_for_crossing(
+    *,
+    crossing_id: str,
+    junction_id: str,
+    crossed_edge_ids: tuple[str, ...],
+    endpoints: dict[str, tuple[str, str]],
+    edge_lanes: dict[str, list[tuple[int, float]]],
+    route_index: VehicleRouteIndex,
+    min_approach_length: float,
+    min_hops_after_depart: int,
+    max_destination_hops: int,
+    seen: set[tuple[str, str, int]],
+) -> list[CrosswalkApproach]:
+    approaches: list[CrosswalkApproach] = []
+    approach_edges = [
+        eid
+        for eid in crossed_edge_ids
+        if endpoints.get(eid, ("", ""))[1] == junction_id
+    ]
+    depart_edges = [
+        eid
+        for eid in crossed_edge_ids
+        if endpoints.get(eid, ("", ""))[0] == junction_id
+    ]
+    # Meta / split-node fallback: crossed list may be incomplete — use all
+    # edges that touch the zebra junction.
+    if not approach_edges or not depart_edges:
+        approach_edges = [
+            eid for eid, (_frm, to) in endpoints.items() if to == junction_id
+        ]
+        depart_edges = [
+            eid for eid, (frm, _to) in endpoints.items() if frm == junction_id
+        ]
+
+    for approach_edge_id in approach_edges:
+        depart_edge_id = _paired_depart_edge(approach_edge_id, depart_edges, endpoints)
+        if depart_edge_id is None:
+            continue
+
+        for lane_num, lane_length in edge_lanes.get(approach_edge_id, []):
+            if lane_length < min_approach_length:
+                continue
+
+            if not route_index.can_reach_edge(approach_edge_id, lane_num, depart_edge_id):
+                continue
+
+            dest_lane_id = resolve_destination_beyond_crosswalk(
+                route_index,
+                approach_edge_id,
+                lane_num,
+                depart_edge_id,
+                lane_num,
+                min_hops_after_depart=min_hops_after_depart,
+                max_hops=max_destination_hops,
+            )
+            key = (crossing_id, approach_edge_id, lane_num)
+            if key in seen:
+                continue
+            seen.add(key)
+            scenario_id = (
+                f"cw_{crossing_id.replace(':', '')}_"
+                f"{approach_edge_id.replace('#', 'h')}_ln{lane_num}"
+            )
+            approaches.append(
+                CrosswalkApproach(
+                    crosswalk_id=crossing_id,
+                    junction_id=junction_id,
+                    crossed_edge_ids=crossed_edge_ids or tuple(
+                        sorted(set(approach_edges) | set(depart_edges))
+                    ),
+                    approach_edge_id=approach_edge_id,
+                    depart_edge_id=depart_edge_id,
+                    approach_lane_num=lane_num,
+                    approach_lane_length=lane_length,
+                    destination_lane_id=dest_lane_id,
+                    scenario_id=scenario_id,
+                )
+            )
+    return approaches
+
+
+def _meta_crosswalk_node_id(meta: Mapping[str, Any] | None) -> str:
+    if not meta:
+        return ""
+    for key in ("crosswalk_node_id", "junction_id"):
+        raw = meta.get(key)
+        if raw is not None and str(raw).strip():
+            return str(raw).strip()
+    return ""
+
+
+def _meta_crossed_edge_ids(meta: Mapping[str, Any] | None) -> tuple[str, ...]:
+    if not meta:
+        return ()
+    raw = meta.get("crossed_edge_ids")
+    if isinstance(raw, (list, tuple)):
+        return tuple(str(e) for e in raw if e)
+    road_id = str(meta.get("road_id") or "").strip()
+    if not road_id:
+        return ()
+    reverse = f"-{road_id}" if not road_id.startswith("-") else road_id[1:]
+    return (road_id, reverse)
+
+
+def _junction_exists(root: ET.Element, junction_id: str) -> bool:
+    if not junction_id:
+        return False
+    for junction in root.findall("junction"):
+        if junction.get("id") == junction_id:
+            return True
+    return False
+
+
 def build_crosswalk_approaches(
     net_path: Path,
     *,
@@ -287,8 +414,14 @@ def build_crosswalk_approaches(
     min_hops_after_depart: int = 2,
     max_destination_hops: int = 8,
     route_index: Optional[VehicleRouteIndex] = None,
+    meta: Mapping[str, Any] | None = None,
 ) -> list[CrosswalkApproach]:
-    """Enumerate vehicle approach lanes that lead toward each SUMO crossing."""
+    """Enumerate vehicle approach lanes toward a mid-block zebra.
+
+    Prefers SUMO ``function=crossing`` edges. When netconvert dropped the
+    crossing edge but prepare left ``crosswalk_node_id`` in meta, falls back to
+    edges that enter/leave that split node.
+    """
     if not net_path.is_file():
         return []
 
@@ -296,18 +429,7 @@ def build_crosswalk_approaches(
     endpoints = _load_edge_endpoints(root)
     if route_index is None:
         route_index = load_vehicle_route_index(net_path)
-
-    edge_lanes: dict[str, list[tuple[int, float]]] = {}
-    for edge in root.findall("edge"):
-        edge_id = edge.get("id", "")
-        if not edge_id or edge.get("function") not in {None, "normal", ""}:
-            if edge.get("function") not in {None, "normal", ""}:
-                continue
-        if edge_id.startswith(":"):
-            continue
-        lanes = _edge_lane_lengths(edge)
-        if lanes:
-            edge_lanes[edge_id] = lanes
+    edge_lanes = _collect_edge_lanes(root)
 
     approaches: list[CrosswalkApproach] = []
     seen: set[tuple[str, str, int]] = set()
@@ -322,60 +444,108 @@ def build_crosswalk_approaches(
 
         junction_id = parse_crossing_junction_id(crossing_id) or ""
         crossed_edge_ids = tuple(e for e in crossed_raw.split() if e)
+        approaches.extend(
+            _approaches_for_crossing(
+                crossing_id=crossing_id,
+                junction_id=junction_id,
+                crossed_edge_ids=crossed_edge_ids,
+                endpoints=endpoints,
+                edge_lanes=edge_lanes,
+                route_index=route_index,
+                min_approach_length=min_approach_length,
+                min_hops_after_depart=min_hops_after_depart,
+                max_destination_hops=max_destination_hops,
+                seen=seen,
+            )
+        )
 
-        approach_edges = [
-            eid
-            for eid in crossed_edge_ids
-            if endpoints.get(eid, ("", ""))[1] == junction_id
-        ]
-        depart_edges = [
-            eid
-            for eid in crossed_edge_ids
-            if endpoints.get(eid, ("", ""))[0] == junction_id
-        ]
+    if approaches:
+        return approaches
 
-        for approach_edge_id in approach_edges:
-            depart_edge_id = _paired_depart_edge(approach_edge_id, depart_edges, endpoints)
-            if depart_edge_id is None:
-                continue
+    # Fallback: injected split node without a SUMO crossing edge.
+    node_id = _meta_crosswalk_node_id(meta)
+    if node_id and _junction_exists(root, node_id):
+        crossed = _meta_crossed_edge_ids(meta)
+        synthetic_id = str(
+            meta.get("crosswalk_edge_id") or meta.get("crosswalk_id") or f":{node_id}_c0"
+        )
+        return _approaches_for_crossing(
+            crossing_id=synthetic_id,
+            junction_id=node_id,
+            crossed_edge_ids=crossed,
+            endpoints=endpoints,
+            edge_lanes=edge_lanes,
+            route_index=route_index,
+            min_approach_length=min_approach_length,
+            min_hops_after_depart=min_hops_after_depart,
+            max_destination_hops=max_destination_hops,
+            seen=seen,
+        )
 
-            for lane_num, lane_length in edge_lanes.get(approach_edge_id, []):
-                if lane_length < min_approach_length:
-                    continue
+    # No-split prepare: continuous edge, zebra marked only in meta.
+    return _approaches_from_meta_position(
+        meta=meta,
+        edge_lanes=edge_lanes,
+        min_approach_length=min_approach_length,
+        seen=seen,
+    )
 
-                if not route_index.can_reach_edge(approach_edge_id, lane_num, depart_edge_id):
-                    continue
 
-                dest_lane_id = resolve_destination_beyond_crosswalk(
-                    route_index,
-                    approach_edge_id,
-                    lane_num,
-                    depart_edge_id,
-                    lane_num,
-                    min_hops_after_depart=min_hops_after_depart,
-                    max_hops=max_destination_hops,
-                )
-                key = (crossing_id, approach_edge_id, lane_num)
-                if key in seen:
-                    continue
+def _approaches_from_meta_position(
+    *,
+    meta: Mapping[str, Any] | None,
+    edge_lanes: dict[str, list[tuple[int, float]]],
+    min_approach_length: float,
+    seen: set[tuple[str, str, int]],
+) -> list[CrosswalkApproach]:
+    """Build approaches on a continuous edge using ``crosswalk_position_m``.
 
-                seen.add(key)
-                scenario_id = (
-                    f"cw_{crossing_id.replace(':', '')}_"
-                    f"{approach_edge_id.replace('#', 'h')}_ln{lane_num}"
-                )
-                approaches.append(
-                    CrosswalkApproach(
-                        crosswalk_id=crossing_id,
-                        junction_id=junction_id,
-                        crossed_edge_ids=crossed_edge_ids,
-                        approach_edge_id=approach_edge_id,
-                        depart_edge_id=depart_edge_id,
-                        approach_lane_num=lane_num,
-                        approach_lane_length=lane_length,
-                        destination_lane_id=dest_lane_id,
-                        scenario_id=scenario_id,
-                    )
-                )
+    Approach and depart share the same edge — no mid-block SUMO split. Spawn /
+    sign offsets and ``destination_max_along_m`` are applied relative to that
+    along-edge mark in expand / place.
+    """
+    if not meta:
+        return []
+    try:
+        pos_m = float(meta.get("crosswalk_position_m"))
+    except (TypeError, ValueError):
+        return []
+    if pos_m <= 0.0:
+        return []
 
+    edge_id = str(
+        meta.get("crosswalk_edge_id")
+        or meta.get("road_id")
+        or (list(meta.get("crossed_edge_ids") or [None])[0] or "")
+    ).strip()
+    if not edge_id or edge_id not in edge_lanes:
+        return []
+
+    crossed = tuple(
+        str(e) for e in (meta.get("crossed_edge_ids") or (edge_id,)) if e
+    ) or (edge_id,)
+    approaches: list[CrosswalkApproach] = []
+    for lane_num, lane_len in edge_lanes[edge_id]:
+        if float(lane_len) < float(min_approach_length):
+            continue
+        if pos_m < float(min_approach_length) or pos_m >= float(lane_len) - 5.0:
+            continue
+        key = (f"meta_cw_{edge_id}", edge_id, int(lane_num))
+        if key in seen:
+            continue
+        seen.add(key)
+        approaches.append(
+            CrosswalkApproach(
+                crosswalk_id=f"meta_cw_{edge_id}",
+                junction_id="",
+                crossed_edge_ids=crossed,
+                approach_edge_id=edge_id,
+                depart_edge_id=edge_id,
+                approach_lane_num=int(lane_num),
+                # Treat the zebra mark as the approach "end" for spawn clamps.
+                approach_lane_length=float(pos_m),
+                destination_lane_id=make_lane_key(edge_id, int(lane_num)),
+                scenario_id=f"{edge_id}_L{int(lane_num)}",
+            )
+        )
     return approaches
