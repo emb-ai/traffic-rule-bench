@@ -17,7 +17,7 @@ scenario:
 simulation:
   spawn_velocity_ms: 2.5
   sign_distance_before_end: 12.0
-  spawn_distance_before_end: 55.0
+  spawn_distance_before_end: 50.0
   min_hops_after_depart: 0
 
 gif:
@@ -28,5 +28,7 @@ pedestrian:
   default_speed_mean: 1.2
   default_speed_std: 0.2
   default_spawn_gap_s: 2.5
-  yield_distance: 5.0
+  # Expert rest line = max(yield_distance, no_stop_before) before the zebra.
+  # 3 m matches the no-stop band edge so NN rule agents stop before tip-in.
+  yield_distance: 3.0
   no_stop_before_crosswalk_m: 3.0

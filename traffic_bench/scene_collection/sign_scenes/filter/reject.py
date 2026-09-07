@@ -33,6 +33,7 @@ from traffic_bench.scene_collection.sign_scenes.filter.selection import (
     REJECTED_SUBDIR,
     apply_rejected_scenes,
     is_reserved_scene_dir,
+    restore_rejected_scenes,
     set_scene_reject,
 )
 from traffic_bench.eval.sign_registry import (
@@ -180,12 +181,27 @@ def _run_one_sign(
         elif apply and not rows:
             print("[reject-unusable] nothing to apply")
 
+        if apply and not dry_run:
+            from traffic_bench.scene_collection.paths import SIGN_ALLOCATIONS
+            from traffic_bench.scene_collection.sign_scenes.materialize.run import (
+                sync_allocations_with_live,
+            )
+
+            sync_allocations_with_live(
+                pdd_code=str(profile.pdd_code),
+                dest_scenes=scenes_root,
+                allocations_path=SIGN_ALLOCATIONS,
+            )
+
         if not refill:
             break
 
         rc = _run_refill(profile.id, scenes_dir_override)
         if rc != 0:
-            sys.exit(rc)
+            print(
+                f"[reject-unusable] warn: refill exited {rc}; "
+                "continuing reject loop anyway"
+            )
 
         if not loop or not rows:
             if not rows:
@@ -251,6 +267,14 @@ def main() -> None:
         help=f"Move rejected scene dirs to {REJECTED_SUBDIR}/",
     )
     ap.add_argument(
+        "--restore-rejected",
+        action="store_true",
+        help=(
+            f"Move {REJECTED_SUBDIR}/* back to live dirs and clear reject marks "
+            "(then exit; use before re-running reject with fixed viability)"
+        ),
+    )
+    ap.add_argument(
         "--refill",
         action="store_true",
         help="After apply, top up kept counts via materialize_scenes --refill",
@@ -280,6 +304,8 @@ def main() -> None:
         sys.exit("ERROR: --scenes-dir cannot be used with --all")
     if args.loop and not (args.apply and args.refill):
         sys.exit("ERROR: --loop requires both --apply and --refill")
+    if args.restore_rejected and (args.apply or args.refill or args.loop):
+        sys.exit("ERROR: --restore-rejected cannot be combined with --apply/--refill/--loop")
     if args.refill and not args.apply and not args.dry_run:
         print(
             "[warn] --refill without --apply: rejects stay live and refill "
@@ -290,7 +316,8 @@ def main() -> None:
         profiles = []
         for profile in list_profiles():
             root = profile_scenes_dir(profile)
-            if root.is_dir():
+            rejected_root = root / REJECTED_SUBDIR
+            if root.is_dir() or (args.restore_rejected and rejected_root.is_dir()):
                 profiles.append(profile)
             else:
                 print(f"[reject-unusable] skip {profile.id}: no scenes dir {root}")
@@ -302,6 +329,29 @@ def main() -> None:
         )
     else:
         profiles = [get_profile(args.sign)]
+
+    if args.restore_rejected:
+        total_restored = 0
+        total_found = 0
+        for profile in profiles:
+            scenes_root = (
+                args.scenes_dir.expanduser().resolve()
+                if args.scenes_dir is not None
+                else profile_scenes_dir(profile)
+            )
+            scenes_root.mkdir(parents=True, exist_ok=True)
+            print(
+                f"[restore-rejected] sign={profile.id} scenes={scenes_root}"
+                + (" (dry-run)" if args.dry_run else "")
+            )
+            restored, found = restore_rejected_scenes(
+                scenes_root, dry_run=bool(args.dry_run)
+            )
+            total_restored += restored
+            total_found += found
+            print(f"[restore-rejected] restored={restored}/{found}")
+        print(f"[restore-rejected] total restored={total_restored}/{total_found}")
+        return
 
     all_audit: list[dict] = []
     for i, profile in enumerate(profiles, 1):

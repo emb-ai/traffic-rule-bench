@@ -49,14 +49,6 @@ Single policy:
 python -m traffic_bench.eval run policy=idm sign=yield
 ```
 
-*or multiple policies:*
-
-```
-python -m traffic_bench.eval run \
-    policies=[idm,idm_rule,plant2_ft] \
-    sign=yield
-```
-
 *or all registered policies:*
 
 ```
@@ -69,11 +61,58 @@ python -m traffic_bench.eval run policies=all sign=yield
 python -m traffic_bench.eval run policies=all sign=all
 ```
 
+### 3. Parallel multi-sign eval (recommended on multi-GPU)
+
+One process pool for CPU policies and one sign per GPU for CARL (same layout as `oracle/collect/collect.sh`):
+
+```
+# train (default)
+CPU_WORKERS=2 GPUS=1,2,3,4,5,6,7 JOBS=16 JOBS_NN=32 \
+  bash traffic_bench/eval/run/run_signs_parallel.sh
+
+# test
+SPLIT=test SIGNS="main_road secondary yield stop roundabout" \
+CPU_WORKERS=4 GPUS=1,2,3,4,5,6,7 JOBS=16 JOBS_NN=16 \
+  bash traffic_bench/eval/run/run_signs_parallel.sh
+```
+
+- `SPLIT` — `train` (default) or `test`; manifests under `data/runs/<sign>/<SPLIT>/`
+- Ready manifests are scheduled first; missing ones stay pending until they appear (`WAIT_POLL=30`, `WAIT_TIMEOUT=0` = forever)
+- `CPU_WORKERS` — concurrent signs for CPU policies (`idm` / `idm_rule` / `ppo_lidar` / `ppo_rule`)
+- `GPUS` — physical GPU indices for `carl` / `carl_rule` / `plant2` / `plant2_rule` (one sign per GPU; leave `0` free)
+- `JOBS` / `JOBS_NN` — scene workers inside each sign (CPU vs NN)
+- defaults: full **16 baselines** — `ego_variants=[default,s1,s2,s3,s4]` for IDM family + PPO/CaRL/PlanT2 base & rule
+- logs: `data/eval_parallel_logs/<SPLIT>/`
+
+Stop everything:
+
+```
+pkill -f 'run_signs_parallel\.sh'
+pkill -f 'traffic_bench\.eval'
+```
+
+Progress + ETA:
+
+```
+python tools/eval_progress.py
+python tools/eval_progress.py --watch 30
+```
+
 ### 4. Compute metrics
 
 ```
 python -m traffic_bench.eval metrics combine sign=all
 ```
+
+### 5. Baseline comparison plots
+
+After per-sign reports exist under `data/runs/*/train/eval_out/reports/`:
+
+```
+python -m traffic_bench.eval metrics plot
+```
+
+Writes PNGs + `analysis.md` to `data/runs/_all/train/plots/benchmark/` — per-sign bar charts (base vs rule expert), family overviews, macro summary. See `traffic_bench/eval/metrics/README.md`.
 
 ## Evaluation workflow
 
@@ -140,8 +179,6 @@ episode JSONL → per-episode CSV → aggregate/report
 ```
 
 Use `metrics combine sign=all` for one overall report across signs.
-
-
 
 ## Run folders
 
@@ -223,7 +260,5 @@ Sign-specific logic lives under `signs/`.
 | `min_speed`                        | 4.6             | [speed](signs/speed/README.md)           | `min_speed`        |
 | `residential_zone`                 | 5.21            | [speed](signs/speed/README.md)           | `residential_zone` |
 | `zone_speed_limit`                 | 5.31            | [speed](signs/speed/README.md)           | `zone_speed_limit` |
-
-
 
 

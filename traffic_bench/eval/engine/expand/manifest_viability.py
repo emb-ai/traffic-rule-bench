@@ -52,6 +52,288 @@ def parse_spawn_lanes_for_viability(net_path: Path, min_length: float) -> list:
     return parse_intersection_approach_lanes(net_path, min_length=min_length)
 
 
+def _net_has_vehicle_edge(net_path: Path, edge_id: str) -> bool:
+    if not edge_id or not net_path.is_file():
+        return False
+    import xml.etree.ElementTree as ET
+
+    from traffic_bench.eval.engine.map.sumo_utils import is_vehicle_drivable_lane
+
+    root = ET.parse(net_path).getroot()
+    for edge in root.findall("edge"):
+        if edge.get("id") != edge_id:
+            continue
+        if edge.get("function") in {"internal", "crossing", "walkingarea"}:
+            return False
+        return any(is_vehicle_drivable_lane(lane) for lane in edge.findall("lane"))
+    return False
+
+
+def _check_segment_length_consistency(
+    net_path: Path,
+    meta: Optional[dict[str, Any]],
+) -> Optional[ManifestViabilityResult]:
+    """Reject corridor scenes with no usable harvest window on the cropped edge."""
+    from traffic_bench.eval.engine.map.segment_length import resolve_segment_corridor
+
+    corridor = resolve_segment_corridor(net_path, meta)
+    if corridor is None:
+        return ManifestViabilityResult(
+            viable=False,
+            reason="missing_or_zero_length",
+            detail="cannot resolve segment corridor (road_id / lengths)",
+        )
+    if corridor.usable_length_m < 40.0:
+        return ManifestViabilityResult(
+            viable=False,
+            reason="corridor_too_short",
+            detail=(
+                f"usable corridor {corridor.usable_length_m:.1f}m "
+                f"(s=[{corridor.corridor_s0:.1f}, {corridor.corridor_s1:.1f}] "
+                f"of net={corridor.net_length_m:.1f}m)"
+            ),
+        )
+    return None
+
+
+def _check_crosswalk_viability(
+    net_path: Path,
+    *,
+    meta: Optional[dict[str, Any]],
+    min_ego_lane_m: float,
+) -> ManifestViabilityResult:
+    """Corridor zebra: approaches via SUMO crossing or prepare split-node meta."""
+    length_fail = _check_segment_length_consistency(net_path, meta)
+    if length_fail is not None:
+        return length_fail
+
+    from traffic_bench.eval.signs.crosswalk.spec import build_crosswalk_approaches
+
+    meta = meta or {}
+    kind = str(meta.get("scene_kind") or "")
+    has_meta_cw = bool(
+        meta.get("crosswalk_edge_id")
+        or meta.get("crosswalk_id")
+        or meta.get("crosswalk_node_id")
+        or kind in {"segment_crosswalk", "crosswalk"}
+    )
+    approaches = build_crosswalk_approaches(
+        net_path,
+        min_approach_length=float(min_ego_lane_m),
+        min_hops_after_depart=0,
+        meta=meta,
+    )
+    if approaches:
+        return ManifestViabilityResult(
+            viable=True,
+            spawn_lane_count=len(approaches),
+            scenario_count=len(approaches),
+        )
+    if not has_meta_cw:
+        return ManifestViabilityResult(
+            viable=False,
+            reason="not_segment_crosswalk",
+            detail="scene is not a prepared segment_crosswalk and has no crossings",
+        )
+    if not meta.get("crosswalk_node_id"):
+        return ManifestViabilityResult(
+            viable=False,
+            reason="crosswalk_node_missing",
+            detail="prepare did not leave crosswalk_node_id and no SUMO crossing approaches",
+        )
+    return ManifestViabilityResult(
+        viable=False,
+        reason="no_crosswalk_approach",
+        detail=(
+            f"no approach lane >= {float(min_ego_lane_m):.0f}m toward "
+            f"{meta.get('crosswalk_node_id')}"
+        ),
+    )
+
+
+def _check_speed_zone_viability(
+    net_path: Path,
+    *,
+    meta: Optional[dict[str, Any]],
+    pdd_code: Optional[str],
+) -> ManifestViabilityResult:
+    """Same-edge speed corridor: dry-run one expand row for the PDD."""
+    from traffic_bench.eval.engine.map.segment_length import resolve_segment_corridor
+    from traffic_bench.eval.signs.speed.expand import SpeedSimParams, build_speed_manifest_entry
+    from traffic_bench.eval.signs.speed.spec import assign_limit_kmh, edge_speed_mps
+
+    length_fail = _check_segment_length_consistency(net_path, meta)
+    if length_fail is not None:
+        return length_fail
+
+    meta = dict(meta or {})
+    kind = str(meta.get("scene_kind") or "")
+    if kind != "segment":
+        return ManifestViabilityResult(
+            viable=False,
+            reason="not_segment",
+            detail=f"scene_kind={kind!r}; speed_zone requires 'segment'",
+        )
+    road_id = str(meta.get("road_id") or "").strip()
+    if not road_id:
+        return ManifestViabilityResult(viable=False, reason="missing_road_id")
+    if not _net_has_vehicle_edge(net_path, road_id):
+        return ManifestViabilityResult(
+            viable=False,
+            reason="road_id_not_in_net",
+            detail=f"road_id={road_id!r} missing or not vehicle-drivable",
+        )
+    corridor = resolve_segment_corridor(net_path, meta, road_id=road_id)
+    length_m = float(corridor.usable_length_m if corridor else 0.0)
+    if length_m <= 0.0:
+        return ManifestViabilityResult(
+            viable=False,
+            reason="missing_or_zero_length",
+            detail="usable corridor length must be > 0",
+        )
+    # Dry-run expand resolves the corridor itself from meta + net.
+    code = str(pdd_code or meta.get("pdd_code") or meta.get("sign_code") or "3.24").strip()
+    scene_dir = net_path.parent
+    scenes_root = scene_dir.parent
+    sim = SpeedSimParams()
+    # Match expand.py: 4.6 needs the real edge speed; road_speed=0 → None → drop.
+    road_kmh = edge_speed_mps(str(net_path), road_id) * 3.6
+    v_target = assign_limit_kmh(code, road_speed_kmh=road_kmh)
+    if v_target is None:
+        return ManifestViabilityResult(
+            viable=False,
+            reason="speed_zone_road_cannot_carry_plate",
+            detail=(
+                f"pdd={code} road={road_kmh:.0f} km/h cannot carry a plate "
+                f"(assign_limit_kmh returned None)"
+            ),
+        )
+    row = build_speed_manifest_entry(
+        scene_dir=scene_dir,
+        scenes_root=scenes_root,
+        meta=meta,
+        sim=sim,
+        pdd_code=code,
+        v_target_kmh=float(v_target),
+        spawn_lane_num=0,
+        variant=0,
+    )
+    if row is None:
+        return ManifestViabilityResult(
+            viable=False,
+            reason="speed_zone_geometry_too_short",
+            detail=(
+                f"pdd={code} length_m={length_m:.1f} cannot fit spawn+sign+zone "
+                f"(zone_min={sim.zone_min_m}m)"
+            ),
+        )
+    lane_count = max(1, int(meta.get("lane_count") or 1))
+    return ManifestViabilityResult(
+        viable=True,
+        spawn_lane_count=lane_count,
+        scenario_count=1,
+    )
+
+
+def _check_detour_viability(
+    net_path: Path,
+    *,
+    meta: Optional[dict[str, Any]],
+    pdd_code: Optional[str],
+) -> ManifestViabilityResult:
+    """Corridor obstacle: pass-side lanes + room for plate and manoeuvre."""
+    from traffic_bench.eval.engine.map.segment_length import resolve_segment_corridor
+    from traffic_bench.eval.signs.detour.expand import DetourSimParams, _obstacle_lane_index
+
+    length_fail = _check_segment_length_consistency(net_path, meta)
+    if length_fail is not None:
+        return length_fail
+
+    meta = meta or {}
+    kind = str(meta.get("scene_kind") or "")
+    if kind not in {"segment", "segment_detour"}:
+        return ManifestViabilityResult(
+            viable=False,
+            reason="not_segment",
+            detail=f"scene_kind={kind!r}; detour requires segment",
+        )
+    road_id = str(meta.get("road_id") or "").strip()
+    if not road_id:
+        return ManifestViabilityResult(viable=False, reason="missing_road_id")
+    if not _net_has_vehicle_edge(net_path, road_id):
+        return ManifestViabilityResult(
+            viable=False,
+            reason="road_id_not_in_net",
+            detail=f"road_id={road_id!r} missing or not vehicle-drivable",
+        )
+
+    code = str(pdd_code or meta.get("pdd_code") or meta.get("detour_code") or "4.2.3").strip()
+    indices = sorted(int(i) for i in (meta.get("vehicle_lane_indices") or []))
+    if not indices:
+        # Fall back to lane_count / single lane 0
+        n = max(1, int(meta.get("lane_count") or 1))
+        indices = list(range(n))
+    has_right = any(any(j < i for j in indices) for i in indices)
+    has_left = any(any(j > i for j in indices) for i in indices)
+    if code == "4.2.1":
+        if not (meta.get("pass_right_ok") or has_right):
+            return ManifestViabilityResult(
+                viable=False,
+                reason="no_pass_right",
+                detail="4.2.1 needs a lane to the right of the obstacle lane",
+            )
+    elif code == "4.2.2":
+        if not (meta.get("pass_left_ok") or has_left):
+            return ManifestViabilityResult(
+                viable=False,
+                reason="no_pass_left",
+                detail="4.2.2 needs a lane to the left of the obstacle lane",
+            )
+    elif code == "4.2.3":
+        if not (has_right or has_left or meta.get("pass_right_ok") or meta.get("pass_left_ok")):
+            if len(indices) < 2:
+                return ManifestViabilityResult(
+                    viable=False,
+                    reason="no_pass_either",
+                    detail="4.2.3 needs >=2 vehicle lanes to pass the obstacle",
+                )
+
+    try:
+        _obstacle_lane_index(meta, code)
+    except Exception as exc:  # noqa: BLE001
+        return ManifestViabilityResult(
+            viable=False,
+            reason="no_obstacle_lane",
+            detail=str(exc),
+        )
+
+    sim = DetourSimParams()
+    corridor = resolve_segment_corridor(net_path, meta, road_id=road_id)
+    edge_length = float(corridor.usable_length_m if corridor else 0.0)
+    min_needed = float(sim.approach_before_sign_m) + float(sim.tail_after_sign_m)
+    if edge_length > 0.0 and edge_length < min_needed:
+        return ManifestViabilityResult(
+            viable=False,
+            reason="edge_too_short_for_detour",
+            detail=f"length_m={edge_length:.1f} < approach+tail={min_needed:.0f}m",
+        )
+    if edge_length > 0.0 and edge_length < 20.0 + float(sim.tail_after_sign_m):
+        return ManifestViabilityResult(
+            viable=False,
+            reason="sign_tail_off_edge",
+            detail=(
+                f"cannot place plate with {sim.tail_after_sign_m:.0f}m "
+                f"tail on length_m={edge_length:.1f}"
+            ),
+        )
+
+    return ManifestViabilityResult(
+        viable=True,
+        spawn_lane_count=len(indices),
+        scenario_count=1,
+    )
+
+
 def _layout_kwargs_from_meta(
     meta: Optional[dict[str, Any]],
     *,
@@ -352,6 +634,16 @@ def check_manifest_viability(
     pdd_code: Optional[str] = None,
 ) -> ManifestViabilityResult:
     """Return whether a cropped scene would survive eval manifest filters."""
+    # Segment-family strategies: corridor checks, not junction T/X layout.
+    if strategy == "crosswalk":
+        return _check_crosswalk_viability(
+            net_path, meta=meta, min_ego_lane_m=min_ego_lane_m
+        )
+    if strategy == "speed_zone":
+        return _check_speed_zone_viability(net_path, meta=meta, pdd_code=pdd_code)
+    if strategy == "detour":
+        return _check_detour_viability(net_path, meta=meta, pdd_code=pdd_code)
+
     result = ManifestViabilityResult(viable=True, reason="", detail="")
     layout_mode = _layout_mode_for_strategy(strategy)
 

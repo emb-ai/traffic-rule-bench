@@ -263,7 +263,7 @@ def _job_from_hydra(cfg: DictConfig, profile, scenes_dir: Path, output_dir: Path
         ),
         n_variations=int(getattr(cfg.simulation, "n_variations", 3) or 3),
         default_first_variant=bool(
-            getattr(cfg.simulation, "default_first_variant", False)
+            getattr(cfg.simulation, "default_first_variant", True)
         ),
         profile_density_cap=float(
             getattr(cfg.simulation, "profile_density_cap", 1.0) or 1.0
@@ -284,13 +284,27 @@ def _job_from_hydra(cfg: DictConfig, profile, scenes_dir: Path, output_dir: Path
             getattr(cfg.simulation, "spawn_offset_from_start", 10.0) or 10.0
         ),
         max_path_length_m=float(
-            getattr(cfg.simulation, "max_path_length_m", 150.0) or 150.0
+            getattr(cfg.simulation, "max_path_length_m", 90.0) or 90.0
         ),
         max_path_length_levels=tuple(
             float(x)
             for x in (
                 getattr(cfg.simulation, "max_path_length_levels", None)
-                or (130.0, 150.0, 170.0)
+                or (90.0, 120.0)
+            )
+        ),
+        traffic_density_levels=tuple(
+            float(x)
+            for x in (
+                getattr(cfg.simulation, "traffic_density_levels", None)
+                or (0.1462, 0.2682, 0.6)
+            )
+        ),
+        spawn_velocity_levels_ms=tuple(
+            float(x)
+            for x in (
+                getattr(cfg.simulation, "spawn_velocity_levels_ms", None)
+                or (3.61, 7.75, 11.05)
             )
         ),
         approach_before_sign_m=float(

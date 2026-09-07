@@ -24,15 +24,19 @@ def _run_module_main(module, argv: List[str]) -> int:
 def cmd_collect(argv: List[str]) -> int:
     from traffic_bench.scene_collection.collect import build_net
     from traffic_bench.scene_collection.collect.enumerate import junctions as enum_j
-    from traffic_bench.scene_collection.collect.enumerate import segments as enum_s
     from traffic_bench.scene_collection.collect import make_split
     from traffic_bench.scene_collection.collect.junctions import crop as crop_j
     from traffic_bench.scene_collection.collect.dual_path import crop as crop_dp
+    from traffic_bench.scene_collection.collect.segments import enumerate as enum_s
+    from traffic_bench.scene_collection.collect.segments import select as select_s
     from traffic_bench.scene_collection.collect.segments import crop as crop_seg
 
     ap = argparse.ArgumentParser(
         prog="python -m traffic_bench.scene_collection collect",
-        description="OSM → net → enumerate → make_split → crop junction/dual_path/segment",
+        description=(
+            "OSM → net → enumerate → make_split → crop junction/dual_path; "
+            "segments: enumerate → diversity select → crop"
+        ),
     )
     ap.add_argument("--skip-download", action="store_true")
     ap.add_argument("--skip-netconvert", action="store_true")
@@ -105,6 +109,9 @@ def cmd_collect(argv: List[str]) -> int:
             rc = _run_module_main(enum_s, [])
             if rc:
                 return rc
+        rc = _run_module_main(select_s, [])
+        if rc:
+            return rc
         seg_argv = [
             "--max-scenes",
             "0",

@@ -16,7 +16,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from traffic_bench.eval.signs.crosswalk.spec import (
     CrosswalkApproach,
@@ -32,7 +32,23 @@ from traffic_bench.eval.engine.map.lane_keys import lane_edge_id, make_lane_key
 
 from traffic_bench.scene_collection.sign_scenes.filter.selection import is_reserved_scene_dir
 
-from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
+from traffic_bench.eval.engine.expand.manifest_config import (
+    DEFAULT_SPAWN_VELOCITY_LEVELS_MS,
+    DEFAULT_TRAFFIC_DENSITY_LEVELS,
+)
+from traffic_bench.eval.engine.expand.manifest_expansion import (
+    mark_nominal_row,
+    shuffle_cap,
+)
+from traffic_bench.eval.engine.expand.world_axes import (
+    DEFAULT_HORIZON_STEPS,
+    DEFAULT_MAX_PATH_LENGTH_M,
+    DEFAULT_ROUTE_LENGTH_LEVELS_M,
+    describe_world_axes,
+    iter_world_axis_cells,
+    sample_profile_for_cell,
+    stamp_world_axis_fields,
+)
 from traffic_bench.eval.engine.spawn.route_budget import (
     apply_route_budget,
     measure_spawn_to_dest_length_m,
@@ -42,7 +58,6 @@ from traffic_bench.eval.engine.spawn.route_length_levels import (
     select_route_length_levels,
     tag_entry_route_length,
 )
-from traffic_bench.eval.engine.traffic.agent_profile_bank import sample_one_profile
 from traffic_bench.eval.engine.traffic.npc_profile import embed_npc_profile
 from traffic_bench.eval.engine.traffic.stable_hash import stable_hash
 
@@ -52,16 +67,18 @@ DEFAULT_POSITIONS = ("middle",)
 
 @dataclass(frozen=True)
 class CrosswalkSimParams:
-    spawn_distance_before_end: float = 55.0
+    spawn_distance_before_end: float = 50.0  # match configs/shared/crosswalk.yaml
     sign_distance_before_end: float = 12.0
     spawn_velocity_ms: float = 2.5
-    horizon: int = 600
+    horizon: int = DEFAULT_HORIZON_STEPS
     traffic_density: float = 0.0
     n_variations: int = MAX_AXIS
     profile_density_cap: float = 1.0
+    traffic_density_levels: Tuple[float, ...] = DEFAULT_TRAFFIC_DENSITY_LEVELS
+    spawn_velocity_levels_ms: Tuple[float, ...] = DEFAULT_SPAWN_VELOCITY_LEVELS_MS
     min_hops_after_depart: int = 0
-    max_path_length_m: float = 150.0
-    max_path_length_levels: Tuple[float, ...] = (130.0, 150.0, 170.0)
+    max_path_length_m: float = DEFAULT_MAX_PATH_LENGTH_M
+    max_path_length_levels: Tuple[float, ...] = DEFAULT_ROUTE_LENGTH_LEVELS_M
     max_ego_lanes: int = MAX_AXIS
     max_pedestrian_presets: int = MAX_AXIS
     crosswalk_positions: Tuple[str, ...] = DEFAULT_POSITIONS
@@ -72,6 +89,7 @@ class CrosswalkSimParams:
     ped_spawn_gap_s: float = 2.5
     ped_yield_distance: float = 12.0
     ped_no_stop_before_crosswalk_m: float = 3.0
+    default_first_variant: bool = True
 
 
 @dataclass(frozen=True)
@@ -193,6 +211,9 @@ def build_crosswalk_manifest_entry(
     variant: int = 0,
     max_path_length_m: Optional[float] = None,
     route_length_augment: bool = False,
+    spawn_velocity_ms: Optional[float] = None,
+    traffic_density: Optional[float] = None,
+    scene_id_suffix: str = "",
 ) -> Dict[str, Any]:
     scene_name = str(meta.get("scene_name") or scene_dir.name)
     net_file = str(meta.get("net_file") or "map.net.xml")
@@ -204,9 +225,20 @@ def build_crosswalk_manifest_entry(
     path_budget_m = float(
         max_path_length_m if max_path_length_m is not None else sim.max_path_length_m
     )
-    if route_length_augment:
+    if scene_id_suffix:
+        seed_key = f"{seed_key}_{scene_id_suffix}"
+        if scene_id_suffix not in scene_id:
+            scene_id = f"{scene_id}_{scene_id_suffix}"
+    elif route_length_augment:
         seed_key += f"_rl{int(round(path_budget_m))}"
+        scene_id = f"{scene_id}_rl{int(round(path_budget_m))}"
     seed = _stable_seed(scene_name, variant, seed_key)
+    v0 = float(
+        spawn_velocity_ms if spawn_velocity_ms is not None else sim.spawn_velocity_ms
+    )
+    row_density = float(
+        traffic_density if traffic_density is not None else sim.traffic_density
+    )
     crosswalk_id = approach.crosswalk_id or _resolve_crosswalk_id(meta) or ""
     # Finish on the first edge past the crossing, not several hops downstream.
     dest_lane_id = make_lane_key(approach.depart_edge_id, approach.approach_lane_num)
@@ -220,6 +252,28 @@ def build_crosswalk_manifest_entry(
         float(sim.spawn_distance_before_end),
         max(20.0, approach_len - 8.0),
     )
+
+    # No-split maps: same edge before/after the zebra. Spawn/sign/dest are
+    # absolute along-edge marks; path length is capped in the manifest only.
+    try:
+        zebra_s = float(meta.get("crosswalk_position_m") or 0.0)
+    except (TypeError, ValueError):
+        zebra_s = 0.0
+    no_split = (
+        zebra_s > 0.0
+        and not meta.get("crosswalk_node_id")
+        and str(approach.approach_edge_id) == str(approach.depart_edge_id)
+    )
+    spawn_along_m = None
+    sign_from_start = None
+    dest_along_m = None
+    if no_split:
+        spawn_along_m = max(1.0, zebra_s - spawn_before_end)
+        sign_from_start = max(1.0, zebra_s - float(sim.sign_distance_before_end))
+        # Remaining travel after spawn, capped by route budget — applied as
+        # destination_max_along_m on the same continuous edge.
+        dest_along_m = float(spawn_along_m + path_budget_m)
+        dest_along_m = max(dest_along_m, zebra_s + 15.0)
 
     ped_mgr = pedestrian_manager_from_preset(
         preset,
@@ -266,8 +320,8 @@ def build_crosswalk_manifest_entry(
         "min_hops_after_depart": sim.min_hops_after_depart,
         "spawn_distance_before_end": spawn_before_end,
         "sign_distance_before_end": sim.sign_distance_before_end,
-        "spawn_velocity_ms": sim.spawn_velocity_ms,
-        "traffic_density": float(sim.traffic_density),
+        "spawn_velocity_ms": v0,
+        "traffic_density": row_density,
         "horizon": int(sim.horizon),
         "horizon_steps": int(sim.horizon),
         "use_pedestrian_manager": True,
@@ -283,8 +337,14 @@ def build_crosswalk_manifest_entry(
         "osm_way_id": meta.get("osm_way_id"),
         "crosswalk_width_m": meta.get("crosswalk_width_m", 4.0),
     }
+    if spawn_along_m is not None:
+        entry["spawn_along_m"] = float(spawn_along_m)
+    if sign_from_start is not None:
+        entry["sign_distance_from_start"] = float(sign_from_start)
+    if dest_along_m is not None:
+        entry["destination_max_along_m"] = float(dest_along_m)
     max_path_m = path_budget_m
-    if max_path_m > 0.0 and entry.get("destination_edge_id"):
+    if max_path_m > 0.0 and entry.get("destination_edge_id") and not no_split:
         entry = apply_route_budget(
             entry,
             net_path=scene_dir / net_file,
@@ -320,6 +380,7 @@ def expand_crosswalk_scene_entries(
         # require slightly less than spawn distance so those maps stay usable.
         min_approach_length=20.0,
         min_hops_after_depart=int(sim.min_hops_after_depart),
+        meta=meta,
     )
     # Prefer approaches that match the injected crosswalk when available.
     target_cw = _resolve_crosswalk_id(meta)
@@ -357,48 +418,80 @@ def expand_crosswalk_scene_entries(
     configured_route_levels = list_route_length_levels(sim)
     net_full = scene_dir / str(meta.get("net_file") or "map.net.xml")
     spawn_before_end = float(sim.spawn_distance_before_end)
+    scene_name = str(meta.get("scene_name") or scene_dir.name)
+
+    # One no-NPC reference row per map (first approach × first preset).
+    if bool(sim.default_first_variant) and approaches and presets:
+        nominal = build_crosswalk_manifest_entry(
+            scene_dir=scene_dir,
+            scenes_root=scenes_root,
+            meta=meta,
+            approach=approaches[0],
+            preset=presets[0],
+            npc_profile=None,
+            sim=sim,
+            pdd_code=pdd_code,
+            sign_type=sign_type,
+            variant=0,
+            max_path_length_m=float(sim.max_path_length_m),
+            route_length_augment=False,
+            spawn_velocity_ms=float(sim.spawn_velocity_ms),
+            traffic_density=0.0,
+        )
+        entries.append(mark_nominal_row(nominal))
+
     for approach in approaches:
+        no_split_approach = str(approach.approach_edge_id) == str(approach.depart_edge_id)
         available_route_m = measure_spawn_to_dest_length_m(
             net_path=net_full,
             spawn_edge=str(approach.approach_edge_id),
             spawn_lane=int(approach.approach_lane_num),
             dest_edge=str(approach.depart_edge_id),
-            spawn_distance_before_end=spawn_before_end,
+            spawn_along_m=(
+                max(1.0, float(approach.approach_lane_length) - spawn_before_end)
+                if no_split_approach
+                else None
+            ),
+            spawn_distance_before_end=(
+                None if no_split_approach else spawn_before_end
+            ),
+            dest_end_margin_m=5.0 if no_split_approach else 0.0,
         )
         route_levels, route_augment = select_route_length_levels(
             configured_route_levels, available_route_m
         )
         for preset in presets:
-            for npc_var in range(n_variations):
-                for path_len_m in route_levels:
-                    seed = stable_hash(
-                        str(meta.get("scene_name") or scene_dir.name),
-                        approach.scenario_id,
-                        preset.id,
-                        npc_var,
-                        int(round(float(path_len_m))),
-                    )
-                    npc_profile = sample_one_profile(
-                        int(seed),
-                        density_cap=float(sim.profile_density_cap),
-                        horizon_steps=int(sim.horizon),
-                    )
-                    entries.append(
-                        build_crosswalk_manifest_entry(
-                            scene_dir=scene_dir,
-                            scenes_root=scenes_root,
-                            meta=meta,
-                            approach=approach,
-                            preset=preset,
-                            npc_profile=npc_profile,
-                            sim=sim,
-                            pdd_code=pdd_code,
-                            sign_type=sign_type,
-                            variant=npc_var,
-                            max_path_length_m=float(path_len_m),
-                            route_length_augment=route_augment,
-                        )
-                    )
+            for cell in iter_world_axis_cells(
+                route_levels=route_levels,
+                sim=sim,
+                task_conditioned_spawn=False,
+            ):
+                suffix = cell.scene_suffix(route_augment=route_augment)
+                seed = stable_hash(
+                    scene_name,
+                    approach.scenario_id,
+                    preset.id,
+                    *cell.seed_tags(),
+                )
+                npc_profile = sample_profile_for_cell(cell, seed=int(seed), sim=sim)
+                row = build_crosswalk_manifest_entry(
+                    scene_dir=scene_dir,
+                    scenes_root=scenes_root,
+                    meta=meta,
+                    approach=approach,
+                    preset=preset,
+                    npc_profile=npc_profile,
+                    sim=sim,
+                    pdd_code=pdd_code,
+                    sign_type=sign_type,
+                    variant=cell.npc_var,
+                    max_path_length_m=float(cell.route_length_m),
+                    route_length_augment=route_augment,
+                    spawn_velocity_ms=cell.spawn_velocity_ms,
+                    traffic_density=float(cell.density.traffic_density),
+                    scene_id_suffix=suffix,
+                )
+                entries.append(stamp_world_axis_fields(row, cell))
 
     max_sc = expansion.max_scenarios
     pre_cap = len(entries)
@@ -407,14 +500,14 @@ def expand_crosswalk_scene_entries(
         max_sc,
         seed_key=(
             str(scene_dir.name),
-            "crosswalk_combo_cap",
+            "crosswalk_world_cap",
             int(max_sc) if max_sc is not None else 0,
         ),
     )
     if max_sc is not None and pre_cap > max_sc:
         print(
-            f"  Retained {len(entries)} of {pre_cap} manifest entries "
-            f"(shuffled, cap={max_sc})"
+            f"  Retained {len(entries)} of {pre_cap} world-grid variants "
+            f"(shuffled, cap={max_sc}; nominal preserved)"
         )
 
     return entries
@@ -462,9 +555,9 @@ def generate(cfg, scenes=None):
         all_scenes, scenes_dir=scenes_dir, split=split
     )
     print(
-        f"Augmentation axes (≤3 each): ego_lanes={max_ego_lanes}, "
-        f"n_variations={n_variations}, ped_presets={max_pedestrian_presets}, "
-        f"positions={list(positions)}, layout={expansion_cfg.layout_on}"
+        f"Augmentation axes: ego_lanes={max_ego_lanes}, "
+        f"ped_presets={max_pedestrian_presets}, positions={list(positions)}, "
+        f"layout={expansion_cfg.layout_on}, {describe_world_axes(sim_cfg)}"
     )
 
     ped = ped_cfg or {}
@@ -476,10 +569,25 @@ def generate(cfg, scenes=None):
         traffic_density=float(sim_cfg.traffic_density),
         n_variations=n_variations,
         profile_density_cap=float(getattr(sim_cfg, "profile_density_cap", 1.0) or 1.0),
+        traffic_density_levels=tuple(
+            float(x)
+            for x in (
+                getattr(sim_cfg, "traffic_density_levels", None)
+                or DEFAULT_TRAFFIC_DENSITY_LEVELS
+            )
+        ),
+        spawn_velocity_levels_ms=tuple(
+            float(x)
+            for x in (
+                getattr(sim_cfg, "spawn_velocity_levels_ms", None)
+                or DEFAULT_SPAWN_VELOCITY_LEVELS_MS
+            )
+        ),
         min_hops_after_depart=int(getattr(sim_cfg, "min_hops_after_depart", 0) or 0),
         max_path_length_m=float(sim_cfg.max_path_length_m),
         max_path_length_levels=tuple(
-            float(x) for x in getattr(sim_cfg, "max_path_length_levels", (130.0, 150.0, 170.0))
+            float(x)
+            for x in getattr(sim_cfg, "max_path_length_levels", DEFAULT_ROUTE_LENGTH_LEVELS_M)
         ),
         max_ego_lanes=int(max_ego_lanes),
         max_pedestrian_presets=int(max_pedestrian_presets),
@@ -490,6 +598,7 @@ def generate(cfg, scenes=None):
         ped_spawn_gap_s=float(ped.get("default_spawn_gap_s", 2.5)),
         ped_yield_distance=float(ped.get("yield_distance", 12.0)),
         ped_no_stop_before_crosswalk_m=float(ped.get("no_stop_before_crosswalk_m", 3.0)),
+        default_first_variant=bool(getattr(sim_cfg, "default_first_variant", True)),
     )
     cw_expansion = CrosswalkExpansionConfig(
         layout=expansion_cfg.layout_on,
@@ -564,7 +673,7 @@ def generate(cfg, scenes=None):
             "spawn_distance_before_end": sim_cfg.spawn_distance_before_end,
             "max_path_length_m": float(sim_cfg.max_path_length_m),
             "max_path_length_levels": list(
-                getattr(sim_cfg, "max_path_length_levels", (130.0, 150.0, 170.0))
+                getattr(sim_cfg, "max_path_length_levels", DEFAULT_ROUTE_LENGTH_LEVELS_M)
             ),
             "auxiliary_agent": False,
         },

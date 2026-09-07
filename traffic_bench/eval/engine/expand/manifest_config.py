@@ -11,9 +11,15 @@ from typing import Any
 DEFAULT_SPAWN_DISTANCE_BEFORE_END = 12.0
 DEFAULT_AUX_DISTANCE_FROM_INTERSECTION = 20.0
 DEFAULT_AUX_LANES_OCCUPIED_MAX = 4
-# Shared total-route budget (all sign families).
-DEFAULT_MAX_PATH_LENGTH_M = 150.0
-DEFAULT_MAX_PATH_LENGTH_LEVELS = (130.0, 150.0, 170.0)
+# Shared total-route budget (all sign families). Task-feasible horizons:
+# short ≈ approach+zone clearance; mid = +30 m (~3 s at 10 m/s).
+DEFAULT_MAX_PATH_LENGTH_M = 90.0
+DEFAULT_MAX_PATH_LENGTH_LEVELS = (90.0, 120.0)
+DEFAULT_HORIZON_STEPS = 600
+# nuPlan routes.initial_speed p25/p50/p75 (m/s). Speed plates opt out.
+DEFAULT_SPAWN_VELOCITY_LEVELS_MS = (3.61, 7.75, 11.05)
+# Calibrated MetaDrive densities at nuPlan count_moving_r150_per_lane p25/p50/p75.
+DEFAULT_TRAFFIC_DENSITY_LEVELS = (0.1462, 0.2682, 0.6)
 # Cap ego travel / visual finish mark along the destination lane (legacy fallback).
 DEFAULT_DESTINATION_MAX_ALONG_M = 100.0
 # Expert mandatory dwell at stop line after speed≈0 (sim steps; ×0.1 s ≈ seconds).

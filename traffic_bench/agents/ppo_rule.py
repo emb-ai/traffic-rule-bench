@@ -71,6 +71,14 @@ class RuleCompliantExpertPolicy(SignComplianceMixin, ExpertPolicy):
                     lane_steer = self._steering_control_for_lc(cur_lane)
                     steering = min(steering, lane_steer)
 
+        # Occupied crosswalk: hold lane center — do not swerve around pedestrians.
+        if self._pedestrian_yield_hold_steer and self._lc_target_lane is None:
+            cur_lane = self.control_object.lane
+            if cur_lane is not None:
+                steering = float(np.clip(
+                    self._steering_control_for_lc(cur_lane), -1.0, 1.0
+                ))
+
         # Apply speed constraints (reactive throttle clamp)
         throttle = self._apply_speed_constraints(
             throttle, self.control_object.speed_km_h

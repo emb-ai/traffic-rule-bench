@@ -80,7 +80,13 @@ def _get_sampler() -> "NuPlanSampler":
     return _sampler_cache
 
 
-def sample_one_profile(seed: int, density_cap: float = 1.0, horizon_steps: int = 600) -> dict:
+def sample_one_profile(
+    seed: int,
+    density_cap: float = 1.0,
+    horizon_steps: int = 600,
+    traffic_density: float | None = None,
+    nuplan_vehicles_per_frame: float | None = None,
+) -> dict:
     """Sample one NPC-driving profile from nuPlan distributions using a fixed seed.
 
     Reproducible: same seed always produces the same profile.
@@ -96,6 +102,11 @@ def sample_one_profile(seed: int, density_cap: float = 1.0, horizon_steps: int =
         density_cap: upper bound on traffic_density. 1.0 by default (raised
             from the old 0.3 for more traffic variety). Lower it if a specific
             map type exhibits unavoidable-collision artefacts.
+        traffic_density: when set (fixed augmentation probe), skip the density
+            draw and stamp this MetaDrive spawn fraction instead.
+        nuplan_vehicles_per_frame: optional companion count for aux credit /
+            reporting; defaults to density × META_DENSITY_SCALE when density is
+            fixed, else a raw nuPlan per-frame draw.
     """
     sampler = _get_sampler()
     np.random.seed(seed)
@@ -118,12 +129,21 @@ def sample_one_profile(seed: int, density_cap: float = 1.0, horizon_steps: int =
     # ever fixed its value. sample_traffic_density inverts the response
     # SumoTrafficManager was measured to produce on these scenes. raw_density is
     # still reported as nuplan_vehicles_per_frame so the manifest keeps the
-    # nuPlan figure the scene was matched against.
+    # nuPlan figure the scene was matched against. Fixed probes (world axes)
+    # pass traffic_density explicitly and skip the draw.
     from traffic_bench.eval.engine.traffic.traffic_density_levels import (
+        META_DENSITY_SCALE,
         sample_traffic_density,
     )
 
-    traffic_density = float(np.clip(sample_traffic_density(seed), 0.0, density_cap))
+    if traffic_density is None:
+        traffic_density = float(np.clip(sample_traffic_density(seed), 0.0, density_cap))
+        if nuplan_vehicles_per_frame is None:
+            nuplan_vehicles_per_frame = raw_density
+    else:
+        traffic_density = float(np.clip(float(traffic_density), 0.0, density_cap))
+        if nuplan_vehicles_per_frame is None:
+            nuplan_vehicles_per_frame = float(traffic_density) * META_DENSITY_SCALE
     # horizon_steps from caller (mini=600, full=1200)
     time_wanted = distance_wanted / max(normal_speed, 0.5)
 
@@ -136,9 +156,9 @@ def sample_one_profile(seed: int, density_cap: float = 1.0, horizon_steps: int =
         "DISTANCE_WANTED": round(distance_wanted, 4),
         "TIME_WANTED": round(min(time_wanted, 10.0), 4),
         "LANE_CHANGE_FREQ": round(lane_change_freq, 4),
-        # Raw nuPlan vehicles/frame before MetaDrive scale / aux credit.
-        "nuplan_vehicles_per_frame": round(raw_density, 4),
-        "traffic_density": round(traffic_density, 4),
+        # Raw / probe vehicles unit before MetaDrive aux credit.
+        "nuplan_vehicles_per_frame": round(float(nuplan_vehicles_per_frame), 4),
+        "traffic_density": round(float(traffic_density), 4),
         "horizon_steps": horizon_steps,
     }
 

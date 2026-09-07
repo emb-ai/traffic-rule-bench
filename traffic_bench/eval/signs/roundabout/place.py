@@ -23,6 +23,10 @@ from traffic_bench.eval.engine.map.roundabout_yield_zone import (
     collect_lanes_for_edge_ids,
     conflict_aux_ring_edge_ids,
     entry_conflict_ring_edges,
+    entry_xy_from_spoke_lane,
+    mean_lane_end_xy,
+    merge_unique_lanes,
+    ring_lanes_near_entry_xy,
 )
 from traffic_bench.eval.signs.roundabout.spawn import roundabout_meta_ring_kwargs
 from traffic_bench.signs.junction import RoundaboutSign, RoundaboutYieldSign
@@ -173,14 +177,39 @@ def place_roundabout_signs(
         layout,
         ego_edge,
         entry_junction_id=entry_junction,
+        max_upstream_hops=2,
     )
     ego_main_traffic_lanes = collect_lanes_for_edge_ids(
         env,
         layout,
         ego_main_traffic_edges,
     )
+    # Geometric fallback: SUMO often splits one physical entry across several
+    # topological nodes, so ring traffic near the spoke/ring XY may sit on
+    # edges that do not share ego's to_node. Union those lanes in.
+    spoke_xy = entry_xy_from_spoke_lane(getattr(env.agent, "lane", None))
+    geom_near_lanes = (
+        ring_lanes_near_entry_xy(ring_lanes, spoke_xy) if spoke_xy else []
+    )
+    topo_conflict_lanes = ego_main_traffic_lanes or entry_incoming_lanes
+    yield_conflict_lanes = merge_unique_lanes(topo_conflict_lanes, geom_near_lanes)
+    # Sticky release must use a RING-side point at the *entry*, not the mean of
+    # upstream-hop lane ends (that pulls the X mid-arc and clears sticky early).
+    conflict_xy = (
+        mean_lane_end_xy(entry_incoming_lanes)
+        or mean_lane_end_xy(geom_near_lanes)
+        or spoke_xy
+    )
     all_incoming_edges = all_entry_conflict_ring_edges(layout)
     all_entry_incoming_lanes = collect_all_entry_conflict_lanes(env, layout)
+    conflict_xy_str = (
+        f"({conflict_xy[0]:.1f},{conflict_xy[1]:.1f})"
+        if conflict_xy is not None
+        else "none"
+    )
+    spoke_xy_str = (
+        f"({spoke_xy[0]:.1f},{spoke_xy[1]:.1f})" if spoke_xy is not None else "none"
+    )
     print(
         f"[RoundaboutSigns] Yield conflict zone: "
         f"ego_entry={len(incoming_edges)} edge(s) "
@@ -188,6 +217,9 @@ def place_roundabout_signs(
         f"ego_main_traffic={len(ego_main_traffic_edges)} edge(s) "
         f"({', '.join(ego_main_traffic_edges) or 'none'}), "
         f"{len(ego_main_traffic_lanes)} lane(s), "
+        f"geom_near_entry={len(geom_near_lanes)} lane(s) @ spoke {spoke_xy_str}, "
+        f"yield_union={len(yield_conflict_lanes)} lane(s), "
+        f"conflict_xy={conflict_xy_str}, "
         f"all_entries={len(all_incoming_edges)} edge(s), "
         f"{len(all_entry_incoming_lanes)} lane(s)"
     )
@@ -238,8 +270,8 @@ def place_roundabout_signs(
                 use_random_lane=False,
                 intersection_name=junction_id,
                 ring_road_lanes=ring_lanes,
-                entry_incoming_lanes=ego_main_traffic_lanes or entry_incoming_lanes,
-                entry_junction_xy=None,
+                entry_incoming_lanes=yield_conflict_lanes,
+                entry_junction_xy=conflict_xy,
             )
             if tracker is not None:
                 tracker.is_priority_sign = False

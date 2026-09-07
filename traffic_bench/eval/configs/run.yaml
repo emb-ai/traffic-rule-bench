@@ -5,6 +5,9 @@
 
 defaults:
   - _self_
+  # Keep console logs; do not write cwd/${hydra.job.name}.log (main.log).
+  - override hydra/job_logging: stdout
+  - override hydra/hydra_logging: disabled
 
 policy: idm
 policies: null
@@ -25,7 +28,10 @@ scene_id: null
 scene_uid: null
 scene_line: null
 max_scenes: null
-jobs: 8
+jobs: 16
+jobs_nn: 16
+# Optional: pin NN to these physical GPUs (e.g. leave 0 free → "1,2,3,4,5,6,7").
+cuda_devices: null
 model_path: null
 model_paths: {}
 plant2_action_mode: pid

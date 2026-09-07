@@ -8,6 +8,9 @@ defaults:
   - _self_
   - sign: main_road
   # Shared knobs live in configs/shared/ and are pulled by sign yaml defaults.
+  # Console only — avoid ${hydra.job.name}.log (main.log) under the run dir.
+  - override hydra/job_logging: stdout
+  - override hydra/hydra_logging: disabled
 
 hydra:
   run:
@@ -42,19 +45,24 @@ auxiliary:
 simulation:
   spawn_velocity_ms: 2.5
   traffic_density: 0.0
+  # Episode timeout (steps @ 10 Hz). Sized for longest route at low urban speed.
   horizon: 600
   sign_distance_before_end: 0.0
   spawn_distance_before_end: 15.0
-  # NPC world: sample_one_profile this many times per geometry (all signs).
+  # Per fixed density probe: sample this many NPC IDM profiles.
   n_variations: 3
   profile_density_cap: 1.0
-  # true: variant 0 of every scene is the nominal row (no traffic, no NPC
-  # profile, plate unjittered, reference approach speed); variants 1..N-1
-  # sample everything. Speed and detour families honour it.
-  default_first_variant: false
-  # Ego route budgets (m). One value → fixed length; several → expand axis.
-  max_path_length_m: 100.0
-  max_path_length_levels: [90, 100, 110]
+  # true: first row of every scene is nominal — no background NPCs / no NPC
+  # profile; plate unjittered; reference approach where applicable. Auxiliary
+  # agents are NOT disabled. Always kept first under max_scenarios.
+  default_first_variant: true
+  # Shared world grid (all signs):
+  #   route × density(p25/p50/p75) × ego_speed(p25/p50/p75) × n_variations
+  # Speed plates keep task-conditioned approach speed (skip ego_speed axis).
+  max_path_length_m: 90.0
+  max_path_length_levels: [90, 120]
+  traffic_density_levels: [0.1462, 0.2682, 0.6]
+  spawn_velocity_levels_ms: [3.61, 7.75, 11.05]
   # Detour: meters before the plate where ego spawns (keep < shortest path level).
   approach_before_sign_m: 50.0
   # Detour: meters kept after the plate for cones / zone on the edge.

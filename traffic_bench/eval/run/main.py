@@ -283,6 +283,9 @@ def _scalar_policy_name(cfg: DictConfig) -> str:
 
 
 def run_one_policy(cfg: DictConfig) -> Path:
+    from traffic_bench.eval.run.policies import _apply_cuda_devices, print_run_plan
+
+    _apply_cuda_devices(cfg.get("cuda_devices"))
     rows, manifest_path = _load_rows(cfg)
     scenes_root = _scenes_root(cfg, manifest_path)
     policy = _scalar_policy_name(cfg)
@@ -294,7 +297,6 @@ def run_one_policy(cfg: DictConfig) -> Path:
     else:
         out_dir = Path("eval_out").resolve() / run_name
     gif_cfg = cfg.get("gif") or {}
-    from traffic_bench.eval.run.policies import print_run_plan
 
     print_run_plan(
         manifest_path=manifest_path,

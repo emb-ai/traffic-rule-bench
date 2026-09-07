@@ -80,12 +80,30 @@ class RoundaboutYieldSign(YieldSign):
         )
 
     def _conflict_longitudinal_range(self, lane) -> tuple[float, float]:
-        """Ring tail upstream of ego entry, plus a short downstream tail past lane end."""
+        """Arc around the ring-side entry, not always the raw lane end.
+
+        When ``entry_junction_xy`` is set, center the window on the closest
+        longitudinal sample to that point so long/split ring edges still count
+        when aux is near the physical entry mid-lane.
+        """
         before_m = self.ENTRY_CONFLICT_BEFORE_M
         after_m = self.ENTRY_CONFLICT_AFTER_M
+        length = float(getattr(lane, "length", 0.0) or 0.0)
+        anchor = length
+        if self._entry_junction_xy is not None and length > 1e-3:
+            try:
+                from traffic_bench.eval.engine.map.roundabout_yield_zone import (
+                    closest_long_on_lane,
+                )
+
+                closest = closest_long_on_lane(lane, self._entry_junction_xy)
+                if closest is not None:
+                    anchor = float(closest[0])
+            except Exception:
+                anchor = length
         return (
-            max(0.0, float(lane.length) - before_m),
-            float(lane.length) + after_m,
+            max(0.0, anchor - before_m),
+            anchor + after_m,
         )
 
     def _is_vehicle_in_main_road_conflict_zone(self, vehicle) -> bool:
@@ -166,7 +184,86 @@ class RoundaboutYieldSign(YieldSign):
         return (
             "Roundabout (4.3) — must not leave the approach zone "
             "while traffic is present on the ring within "
-            f"{self.ENTRY_CONFLICT_BEFORE_M:.0f} m upstream of the ego entry junction "
-            f"(plus {self.ENTRY_CONFLICT_AFTER_M:.0f} m past the lane end)"
+            f"{self.ENTRY_CONFLICT_BEFORE_M:.0f} m upstream of the ego entry "
+            f"(plus {self.ENTRY_CONFLICT_AFTER_M:.0f} m past the lane end). "
+            "Conflict lanes include topological entry arcs and ring pieces near "
+            "the geometric spoke/ring meeting point. "
+            "Yield is armed by presence in that arc (no path-crossing required); "
+            "cleared once the foe has passed the entry XY."
         )
+
+    def _entry_conflict_point(self) -> np.ndarray | None:
+        """Yield conflict for 4.3 is the ego entry junction, not a path cross."""
+        if self._entry_junction_xy is not None:
+            return np.asarray(self._entry_junction_xy, dtype=float)
+        for lane in self.main_road_lanes or []:
+            try:
+                long_at = (
+                    float(lane.length)
+                    if self._junction_at_lane_end(lane)
+                    else 0.0
+                )
+                p = lane.position(long_at, 0.0)
+                return np.asarray([float(p[0]), float(p[1])], dtype=float)
+            except Exception:
+                continue
+        return None
+
+    def _is_foe_blocking_ego(self, ego_vehicle, foe_vehicle) -> bool:
+        """4.3: presence in left entry-arc arms yield; release past entry junction.
+
+        Unlike plain YieldSign, parallel ring lanes need not geometrically cross.
+        Any circulating foe in the monitored conflict arc has priority at entry.
+        """
+        if self._is_waiting_gated_aux(foe_vehicle):
+            return False
+
+        foe_id = getattr(foe_vehicle, "id", None)
+        if foe_id is None:
+            return False
+
+        in_main = self._is_vehicle_in_main_road_conflict_zone(foe_vehicle)
+        if not in_main:
+            self._path_released_foes.discard(foe_id)
+
+        if foe_id in self._path_released_foes:
+            return False
+
+        sticky = self._path_sticky_foes.get(foe_id)
+        entry_pt = self._entry_conflict_point()
+
+        # Arm on first presence in the left-conflict arc (no path-cross gate).
+        if in_main and sticky is None:
+            if entry_pt is None:
+                return False
+            self._path_sticky_foes[foe_id] = {
+                "conflict_point": np.asarray(entry_pt, dtype=float)
+            }
+            sticky = self._path_sticky_foes[foe_id]
+
+        if sticky is None:
+            return False
+
+        if sticky.get("conflict_point") is None and entry_pt is not None:
+            sticky["conflict_point"] = np.asarray(entry_pt, dtype=float)
+
+        conflict_point = sticky.get("conflict_point")
+
+        def _release() -> bool:
+            self._path_sticky_foes.pop(foe_id, None)
+            self._path_released_foes.add(foe_id)
+            return False
+
+        if conflict_point is None:
+            return _release()
+
+        foe_path = self._route_polyline(foe_vehicle)
+        # Foe has driven past the entry junction → stop yielding to them.
+        if self._has_cleared_conflict_point(
+            foe_vehicle, conflict_point, remaining_path=foe_path
+        ):
+            return _release()
+
+        # Still sticky: do NOT release on missing path-cross (parallel ring lanes).
+        return True
 

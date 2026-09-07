@@ -21,11 +21,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from traffic_bench.scene_collection.assign.assign import (
+    _segment_subtype,
     counts_for_sign,
     load_signs_yaml,
     sample,
 )
 from traffic_bench.scene_collection.assign.refill_pick import pick_refill_ids_tiered
+from traffic_bench.scene_collection.assign.taxonomy import sign_taxonomy
+from traffic_bench.scene_collection.collect.segments.metrics import enrich_lane_fields
 from traffic_bench.scene_collection.sign_scenes.materialize.pool_index import (
     load_moscow_pool,
     save_moscow_pool,
@@ -546,6 +549,136 @@ def _kept_by_split(dest_scenes: Path) -> Dict[str, Set[str]]:
     return kept
 
 
+def _kept_subtype_counts(dest_scenes: Path, scene_ids: Set[str]) -> Dict[str, int]:
+    """Count live kept scenes by segment subtype ``straight|2`` / ``curved|3plus``."""
+    out: Dict[str, int] = {}
+    for sid in scene_ids:
+        meta_path = dest_scenes / sid / "meta.json"
+        if not meta_path.is_file():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        key = _segment_subtype(enrich_lane_fields(meta))
+        out[key] = int(out.get(key, 0)) + 1
+    return out
+
+
+def sync_allocations_with_live(
+    *,
+    pdd_code: str,
+    dest_scenes: Path,
+    allocations_path: Path,
+) -> Dict[str, int]:
+    """Drop rejected/missing IDs from ``sign_allocations.json`` for one sign.
+
+    After ``reject --apply`` / ``--refill``, allocation ``n`` can drift above the
+    live kept counts. Verify reads allocations, so prune to live train/test.
+    Returns ``{train, test}`` kept sizes written back.
+    """
+    alloc_doc = _load_json(allocations_path)
+    if pdd_code not in alloc_doc.get("signs", {}):
+        raise KeyError(f"Sign {pdd_code!r} not in {allocations_path}")
+    block = alloc_doc["signs"][pdd_code]
+    kept = _kept_by_split(dest_scenes)
+    pool = load_moscow_pool(dest_scenes) or {}
+    shape_of: Dict[str, str] = {}
+    seg_type_of: Dict[str, str] = {}
+    subtype_of: Dict[str, str] = {}
+    for rec in pool.get("scenes") or []:
+        sid = str(rec.get("scene_id") or "")
+        if not sid:
+            continue
+        if rec.get("shape"):
+            shape_of[sid] = str(rec["shape"])
+        if rec.get("segment_type"):
+            seg_type_of[sid] = str(rec["segment_type"])
+        if rec.get("subtype") or rec.get("lane_bucket") or rec.get("segment_type"):
+            subtype_of[sid] = _segment_subtype(enrich_lane_fields(dict(rec)))
+
+    out_counts: Dict[str, int] = {}
+    for half in ("train", "test"):
+        ids = sorted(kept[half])
+        half_block = block.setdefault(half, {})
+        before = list(half_block.get("scene_ids") or [])
+        half_block["scene_ids"] = ids
+        half_block["n"] = len(ids)
+        # Refresh topo counters from pool meta when possible.
+        by_shape: Dict[str, int] = {}
+        by_seg: Dict[str, int] = {}
+        by_subtype: Dict[str, int] = {}
+        for sid in ids:
+            sh = shape_of.get(sid)
+            if sh:
+                by_shape[sh] = by_shape.get(sh, 0) + 1
+            st = seg_type_of.get(sid)
+            if st:
+                by_seg[st] = by_seg.get(st, 0) + 1
+            sub = subtype_of.get(sid)
+            if not sub:
+                # Fall back to on-disk meta (pool may lag after reject).
+                meta_path = dest_scenes / sid / "meta.json"
+                if meta_path.is_file():
+                    try:
+                        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                        sub = _segment_subtype(enrich_lane_fields(meta))
+                    except (OSError, json.JSONDecodeError):
+                        sub = None
+            if sub:
+                by_subtype[sub] = by_subtype.get(sub, 0) + 1
+        if by_shape:
+            half_block["by_shape"] = by_shape
+        if by_seg:
+            half_block["by_segment_type"] = by_seg
+        if by_subtype:
+            half_block["by_subtype"] = by_subtype
+        dropped = sorted(set(before) - set(ids))
+        if dropped:
+            print(
+                f"  [sync-alloc] {pdd_code}/{half}: "
+                f"{len(before)} → {len(ids)} (dropped {len(dropped)})"
+            )
+        out_counts[half] = len(ids)
+
+    alloc_doc["signs"][pdd_code] = block
+    allocations_path.write_text(
+        json.dumps(alloc_doc, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    # Keep moscow_pool aligned with live dirs too.
+    if pool.get("scenes"):
+        live = _live_scene_ids(dest_scenes) - _rejected_history_ids(dest_scenes)
+        pool["scenes"] = [
+            r for r in pool["scenes"] if str(r.get("scene_id") or "") in live
+        ]
+        pool["n_ok"] = len(pool["scenes"])
+        save_moscow_pool(dest_scenes, pool)
+    return out_counts
+
+
+def sync_all_allocations_with_live(
+    *,
+    allocations_path: Path = SIGN_ALLOCATIONS,
+) -> None:
+    """Prune every sign block in allocations to live kept scenes."""
+    for profile in list_profiles():
+        dest = profile_scenes_dir(profile)
+        if not dest.is_dir():
+            continue
+        if profile.pdd_code not in _load_json(allocations_path).get("signs", {}):
+            continue
+        counts = sync_allocations_with_live(
+            pdd_code=str(profile.pdd_code),
+            dest_scenes=dest,
+            allocations_path=allocations_path,
+        )
+        print(
+            f"[sync-alloc] {profile.id} ({profile.pdd_code}): "
+            f"train={counts['train']} test={counts['test']}"
+        )
+
+
 def _excluded_ids(dest_scenes: Path, alloc_block: dict) -> Set[str]:
     """Never re-draw these for refill."""
     excluded = set(_rejected_history_ids(dest_scenes))
@@ -626,10 +759,14 @@ def refill(
     detour_index = _index_segment_detour_scenes(moscow_scenes)
     segment_index = _index_segment_scenes(moscow_scenes)
 
+    sign_spec = (signs_cfg.get("signs") or {}).get(sign) or {}
+    crop_kind = sign_taxonomy(str(sign), sign_spec).crop_kind
+
     print(
         f"[refill] targets train={n_train} test={n_test}; "
         f"kept train={len(kept['train'])} test={len(kept['test'])}; "
         f"policy=tiered_place_reuse"
+        + ("; subtype_deficit" if crop_kind == "segment" else "")
     )
 
     new_by_half: Dict[str, List[str]] = {"train": [], "test": []}
@@ -639,6 +776,15 @@ def refill(
             print(f"  [{half}] already at quota ({len(kept[half])})")
             continue
         print(f"  [{half}] need {need} more")
+        kept_by_subtype = None
+        half_quota = None
+        if crop_kind == "segment":
+            half_quota = int(targets[half])
+            kept_by_subtype = _kept_subtype_counts(dest_scenes, kept[half])
+            print(
+                f"  [{half}] kept subtypes="
+                f"{dict(sorted(kept_by_subtype.items()))}"
+            )
         picked, tiers = pick_refill_ids_tiered(
             pdd_code=str(sign),
             half=half,
@@ -649,6 +795,8 @@ def refill(
             train_ids_path=train_ids_path,
             test_ids_path=test_ids_path,
             seed=seed,
+            half_quota=half_quota,
+            kept_by_subtype=kept_by_subtype,
         )
         new_by_half[half] = picked
         print(f"  [{half}] picked {len(picked)} tiers={tiers}")
@@ -718,6 +866,12 @@ def refill(
     allocations_path.write_text(
         json.dumps(alloc_doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
+    # Drop any rejected/stale IDs that refill left behind in the JSON.
+    sync_allocations_with_live(
+        pdd_code=str(sign),
+        dest_scenes=dest_scenes,
+        allocations_path=allocations_path,
+    )
 
     kept_after = _kept_by_split(dest_scenes)
     print(
@@ -746,7 +900,13 @@ def _run_prepare_if_needed(profile, dest: Path) -> None:
         return
     rc = prepare_sign(profile.id, scenes_dir=dest)
     if rc:
-        sys.exit(rc)
+        # Soft-fail: partial zebra injects must not abort refill/reject loops.
+        # Hard unknown-hook (rc=2) still aborts.
+        if rc >= 2:
+            sys.exit(rc)
+        print(
+            f"[materialize] warn: prepare for {profile.id} returned {rc}; continuing"
+        )
 
 
 def main() -> None:
