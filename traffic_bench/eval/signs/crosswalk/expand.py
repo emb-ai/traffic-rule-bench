@@ -36,7 +36,10 @@ from traffic_bench.eval.engine.expand.manifest_config import (
     DEFAULT_SPAWN_VELOCITY_LEVELS_MS,
     DEFAULT_TRAFFIC_DENSITY_LEVELS,
 )
-from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
+from traffic_bench.eval.engine.expand.manifest_expansion import (
+    mark_nominal_row,
+    shuffle_cap,
+)
 from traffic_bench.eval.engine.expand.world_axes import (
     DEFAULT_HORIZON_STEPS,
     DEFAULT_MAX_PATH_LENGTH_M,
@@ -86,6 +89,7 @@ class CrosswalkSimParams:
     ped_spawn_gap_s: float = 2.5
     ped_yield_distance: float = 12.0
     ped_no_stop_before_crosswalk_m: float = 3.0
+    default_first_variant: bool = True
 
 
 @dataclass(frozen=True)
@@ -415,6 +419,27 @@ def expand_crosswalk_scene_entries(
     net_full = scene_dir / str(meta.get("net_file") or "map.net.xml")
     spawn_before_end = float(sim.spawn_distance_before_end)
     scene_name = str(meta.get("scene_name") or scene_dir.name)
+
+    # One no-NPC reference row per map (first approach × first preset).
+    if bool(sim.default_first_variant) and approaches and presets:
+        nominal = build_crosswalk_manifest_entry(
+            scene_dir=scene_dir,
+            scenes_root=scenes_root,
+            meta=meta,
+            approach=approaches[0],
+            preset=presets[0],
+            npc_profile=None,
+            sim=sim,
+            pdd_code=pdd_code,
+            sign_type=sign_type,
+            variant=0,
+            max_path_length_m=float(sim.max_path_length_m),
+            route_length_augment=False,
+            spawn_velocity_ms=float(sim.spawn_velocity_ms),
+            traffic_density=0.0,
+        )
+        entries.append(mark_nominal_row(nominal))
+
     for approach in approaches:
         no_split_approach = str(approach.approach_edge_id) == str(approach.depart_edge_id)
         available_route_m = measure_spawn_to_dest_length_m(
@@ -482,7 +507,7 @@ def expand_crosswalk_scene_entries(
     if max_sc is not None and pre_cap > max_sc:
         print(
             f"  Retained {len(entries)} of {pre_cap} world-grid variants "
-            f"(shuffled, cap={max_sc})"
+            f"(shuffled, cap={max_sc}; nominal preserved)"
         )
 
     return entries
@@ -573,6 +598,7 @@ def generate(cfg, scenes=None):
         ped_spawn_gap_s=float(ped.get("default_spawn_gap_s", 2.5)),
         ped_yield_distance=float(ped.get("yield_distance", 12.0)),
         ped_no_stop_before_crosswalk_m=float(ped.get("no_stop_before_crosswalk_m", 3.0)),
+        default_first_variant=bool(getattr(sim_cfg, "default_first_variant", True)),
     )
     cw_expansion = CrosswalkExpansionConfig(
         layout=expansion_cfg.layout_on,

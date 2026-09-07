@@ -10,7 +10,10 @@ from traffic_bench.eval.engine.expand.manifest_config import (
     DEFAULT_SPAWN_VELOCITY_LEVELS_MS,
     DEFAULT_TRAFFIC_DENSITY_LEVELS,
 )
-from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
+from traffic_bench.eval.engine.expand.manifest_expansion import (
+    mark_nominal_row,
+    shuffle_cap,
+)
 from traffic_bench.eval.engine.expand.world_axes import (
     DEFAULT_HORIZON_STEPS,
     DEFAULT_MAX_PATH_LENGTH_M,
@@ -57,6 +60,7 @@ class DualPathSimParams:
     min_ego_lane_m: float = 8.0
     max_path_length_m: float = DEFAULT_MAX_PATH_LENGTH_M
     max_path_length_levels: Tuple[float, ...] = DEFAULT_ROUTE_LENGTH_LEVELS_M
+    default_first_variant: bool = True
 
 
 @dataclass(frozen=True)
@@ -178,6 +182,33 @@ def expand_dual_path_scene_entries(
     configured_route_levels = list_route_length_levels(sim)
     spawn_before_end = float(sim.spawn_distance_before_end)
 
+    # One no-NPC reference row per map (first dual×lane geometry).
+    if bool(sim.default_first_variant) and geometries:
+        dual_i, dual, lane_num = geometries[0]
+        spawn_scenario = dual_path_to_spawn_scenario(dual, ego_lane_num=lane_num)
+        seed = stable_hash(
+            scene_name, spawn_scenario.scenario_id, lane_num, "nominal"
+        )
+        nominal = build_entry(
+            scene_dir=scene_dir,
+            scenes_root=scenes_root,
+            meta=meta,
+            layout_variant=dual_i,
+            var_idx=0,
+            seed=seed,
+            sim=sim,
+            spawn_scenario=spawn_scenario,
+            dual_path=dual,
+            spawn_lanes_cache=list(spawn_lanes),
+            junction_layout_cache=junction_layout,
+            npc_profile=None,
+            max_path_length_m=float(sim.max_path_length_m),
+            route_length_augment=False,
+            spawn_velocity_ms=float(sim.spawn_velocity_ms),
+            traffic_density=0.0,
+        )
+        scene_entries.append(mark_nominal_row(nominal))
+
     for dual_i, dual, lane_num in geometries:
         spawn_scenario = dual_path_to_spawn_scenario(dual, ego_lane_num=lane_num)
         net_full = scene_dir / str(meta.get("net_file") or "map.net.xml")
@@ -251,7 +282,8 @@ def expand_dual_path_scene_entries(
     if cap is not None and pre_cap > cap:
         print(
             f"  Retained {len(scene_entries)} of {pre_cap} world-grid variants "
-            f"(shuffled, cap={cap}; {n_lane_combos} dual×lane geometries)"
+            f"(shuffled, cap={cap}; nominal preserved; "
+            f"{n_lane_combos} dual×lane geometries)"
         )
     else:
         print(f"  Manifest entries for {scene_name}: {len(scene_entries)}")
@@ -271,7 +303,7 @@ def build_dual_path_manifest_entry(
     dual_path: Optional[DualPathScenario],
     spawn_lanes_cache: Optional[List[Any]],
     junction_layout_cache: Optional[dict],
-    npc_profile: Dict[str, Any],
+    npc_profile: Optional[Dict[str, Any]],
     pdd_code: str,
     sign_type: str = "",
     max_path_length_m: Optional[float] = None,
@@ -287,12 +319,15 @@ def build_dual_path_manifest_entry(
     net_file = meta.get("net_file", "map.net.xml")
     net_rel = scene_dir.relative_to(scenes_root) / net_file
 
-    row_density = float(
-        traffic_density
-        if traffic_density is not None
-        else npc_profile["traffic_density"]
+    if traffic_density is not None:
+        row_density = float(traffic_density)
+    elif npc_profile is not None:
+        row_density = float(npc_profile["traffic_density"])
+    else:
+        row_density = 0.0
+    horizon = int(
+        npc_profile.get("horizon_steps", sim.horizon) if npc_profile else sim.horizon
     )
-    horizon = int(npc_profile.get("horizon_steps", sim.horizon))
     scene_id = scene_name
     if scene_id_suffix and scene_id_suffix not in scene_id:
         scene_id = f"{scene_id}_{scene_id_suffix}"
@@ -351,11 +386,12 @@ def build_dual_path_manifest_entry(
     else:
         entry["forbidden_dirs"] = []
 
-    entry = embed_npc_profile(
-        entry,
-        npc_profile,
-        density_cap=float(sim.profile_density_cap),
-    )
+    if npc_profile is not None:
+        entry = embed_npc_profile(
+            entry,
+            npc_profile,
+            density_cap=float(sim.profile_density_cap),
+        )
 
     if spawn_scenario is not None:
         entry.update(spawn_scenario.to_manifest_fields())
@@ -561,6 +597,7 @@ def generate(cfg, scenes=None):
             float(x)
             for x in getattr(sim_cfg, "max_path_length_levels", DEFAULT_ROUTE_LENGTH_LEVELS_M)
         ),
+        default_first_variant=bool(getattr(sim_cfg, "default_first_variant", True)),
     )
 
     family = profile.sign_type

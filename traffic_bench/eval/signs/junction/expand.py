@@ -18,6 +18,7 @@ from traffic_bench.eval.engine.expand.manifest_expansion import (
     AuxiliaryParams,
     ExpansionConfig,
     entry_geometry_key,
+    mark_nominal_row,
     shuffle_cap,
     sizes_up_to,
 )
@@ -313,6 +314,61 @@ def expand_scene_entries(
     skipped_invalid_route = 0
     seen_geometries: set = set()
 
+    # One no-NPC reference row per map (first scenario × min aux axes).
+    if bool(getattr(sim_cfg, "default_first_variant", True)) and scenarios:
+        scenario0 = scenarios[0]
+        ego_edge0 = scenario0.ego_edge_id if scenario0 is not None else None
+        scene_aux_lanes0 = _scene_aux_lane_keys_for_lane_axis(
+            junction_layout=junction_layout,
+            spawn_strategy=spawn_strategy,
+            auxiliary_on=auxiliary_on,
+            aux=aux,
+            ego_edge=ego_edge0,
+        )
+        scene_lane_counts0 = sizes_up_to(
+            aux.lanes_occupied if aux is not None else 1,
+            auxiliary_enabled=auxiliary_on,
+            available=len(scene_aux_lanes0),
+        )
+        convoy_n = convoy_sizes[0]
+        lanes_n = scene_lane_counts0[0] if scene_lane_counts0 else 1
+        gap_m = gap_values[0]
+        aux_cfg_gap = replace(aux_cfg_for_entry, convoy_gap_m=gap_m)
+        scenario_id0 = scenario0.scenario_id if scenario0 else ""
+        seed0 = stable_hash(
+            scene_name,
+            scenario_id0,
+            0,
+            convoy_n,
+            lanes_n,
+            round(float(gap_m), 3),
+            "nominal",
+        )
+        nominal = build_entry(
+            scene_dir=scene_dir,
+            scenes_root=scenes_root,
+            meta=meta,
+            variant=0,
+            sim_cfg=sim_cfg,
+            aux_cfg=aux_cfg_gap,
+            aux_convoy_size=convoy_n,
+            aux_lanes_occupied=lanes_n,
+            spawn_lanes_cache=list(spawn_lanes),
+            junction_layout_cache=junction_layout,
+            spawn_scenario=scenario0,
+            max_path_length_m=float(
+                getattr(sim_cfg, "max_path_length_m", 90.0) or 90.0
+            ),
+            route_length_augment=False,
+            npc_profile=None,
+            npc_var_idx=0,
+            seed_override=int(seed0),
+            spawn_velocity_ms=float(sim_cfg.spawn_velocity_ms),
+            traffic_density=0.0,
+        )
+        if nominal.get("valid") is not False:
+            scene_entries.append(mark_nominal_row(nominal))
+
     for variant, scenario in enumerate(scenarios):
         ego_edge = scenario.ego_edge_id if scenario is not None else None
         prefer_aux = (
@@ -452,7 +508,7 @@ def expand_scene_entries(
     if cap is not None and pre_cap > cap:
         print(
             f"  Retained {len(scene_entries)} of {pre_cap} manifest entries "
-            f"for {scene_name} (shuffled, cap={cap})"
+            f"for {scene_name} (shuffled, cap={cap}; nominal preserved)"
         )
     elif cap is not None:
         print(

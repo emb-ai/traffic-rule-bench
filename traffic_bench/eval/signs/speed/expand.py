@@ -38,7 +38,10 @@ from traffic_bench.eval.engine.expand.manifest_config import (
     DEFAULT_SPAWN_VELOCITY_LEVELS_MS,
     DEFAULT_TRAFFIC_DENSITY_LEVELS,
 )
-from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
+from traffic_bench.eval.engine.expand.manifest_expansion import (
+    mark_nominal_row,
+    shuffle_cap,
+)
 from traffic_bench.eval.engine.expand.world_axes import (
     DEFAULT_HORIZON_STEPS,
     DEFAULT_MAX_PATH_LENGTH_M,
@@ -93,10 +96,8 @@ class SpeedSimParams:
     # the scene is built on, and shortening it would make the scene unsatisfiable
     # rather than varied.
     sign_jitter_max_m: float = 25.0
-    # Variant 0 built as the nominal scene -- no traffic, no NPC profile, no
-    # plate jitter, the reference v0 -- and only variants 1..N-1 sampled. Gives
-    # every scene one clean reference row next to its sampled ones.
-    default_first_variant: bool = False
+    # First row of every scene is nominal — no background NPCs / no NPC profile.
+    default_first_variant: bool = True
 
 
 @dataclass(frozen=True)
@@ -353,27 +354,29 @@ def expand_speed_scene_entries(
         configured_route_levels, available_route_m
     )
     scene_name = str(meta.get("scene_name") or scene_dir.name)
+    lanes = list(_lane_range(meta, sim.max_ego_lanes))
 
-    for lane_num in _lane_range(meta, sim.max_ego_lanes):
-        if bool(sim.default_first_variant):
-            row = build_speed_manifest_entry(
-                scene_dir=scene_dir,
-                scenes_root=scenes_root,
-                meta=meta,
-                sim=sim,
-                pdd_code=pdd_code,
-                v_target_kmh=v_target_kmh,
-                spawn_lane_num=lane_num,
-                variant=0,
-                npc_profile=None,
-                max_path_length_m=float(sim.max_path_length_m),
-                route_length_augment=False,
-                default_variant=True,
-                traffic_density=0.0,
-            )
-            if row is not None:
-                entries.append(row)
+    # One no-NPC reference row per map (first lane), always first in the list.
+    if bool(sim.default_first_variant) and lanes:
+        row = build_speed_manifest_entry(
+            scene_dir=scene_dir,
+            scenes_root=scenes_root,
+            meta=meta,
+            sim=sim,
+            pdd_code=pdd_code,
+            v_target_kmh=v_target_kmh,
+            spawn_lane_num=lanes[0],
+            variant=0,
+            npc_profile=None,
+            max_path_length_m=float(sim.max_path_length_m),
+            route_length_augment=False,
+            default_variant=True,
+            traffic_density=0.0,
+        )
+        if row is not None:
+            entries.append(mark_nominal_row(row))
 
+    for lane_num in lanes:
         for cell in iter_world_axis_cells(
             route_levels=route_levels,
             sim=sim,
@@ -415,7 +418,7 @@ def expand_speed_scene_entries(
     if max_sc is not None and pre_cap > max_sc:
         print(
             f"  Retained {len(entries)} of {pre_cap} world-grid variants "
-            f"(shuffled, cap={max_sc})"
+            f"(shuffled, cap={max_sc}; nominal preserved)"
         )
     return entries
 
@@ -490,7 +493,7 @@ def generate(cfg, scenes=None):
         zone_tail_m=float(sim_cfg.zone_tail_m),
         zone_min_m=float(sim_cfg.zone_min_m),
         sign_jitter_max_m=float(getattr(sim_cfg, "sign_jitter_max_m", 25.0) or 0.0),
-        default_first_variant=bool(getattr(sim_cfg, "default_first_variant", False)),
+        default_first_variant=bool(getattr(sim_cfg, "default_first_variant", True)),
     )
     speed_expansion = SpeedExpansionConfig(
         max_scenarios=scenario_cfg.max_scenarios,

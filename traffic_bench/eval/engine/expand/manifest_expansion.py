@@ -50,11 +50,18 @@ class ExpansionConfig:
         return bool(self.aux.enabled)
 
 
-def shuffle_cap(items: List, cap: Optional[int], *, seed_key: tuple) -> List:
+def shuffle_cap(
+    items: List,
+    cap: Optional[int],
+    *,
+    seed_key: tuple,
+    preserve_key: str = "is_nominal",
+) -> List:
     """Keep ``cap`` items after a deterministic shuffle.
 
-    Used by every sign after the full augmentation product: shuffle only when
-    ``len(items) > cap``. ``cap is None`` or ``cap < 0`` leaves the list as-is.
+    Dict rows marked with ``preserve_key`` (default ``is_nominal``) stay at the
+    front and are never dropped by the cap — background-NPC-off reference rows
+    must survive ``max_scenarios``. Aux fields on those rows are untouched.
     """
     if cap is None:
         return items
@@ -62,12 +69,47 @@ def shuffle_cap(items: List, cap: Optional[int], *, seed_key: tuple) -> List:
         cap_i = int(cap)
     except (TypeError, ValueError):
         return items
-    if cap_i < 0 or len(items) <= cap_i:
+    if cap_i < 0:
         return items
-    out = list(items)
+
+    preserved: List = []
+    rest: List = []
+    for item in items:
+        if isinstance(item, dict) and item.get(preserve_key):
+            preserved.append(item)
+        else:
+            rest.append(item)
+
+    if len(items) <= cap_i and not preserved:
+        return items
+
+    remaining = max(0, cap_i - len(preserved))
+    if remaining <= 0:
+        return list(preserved[:cap_i]) if cap_i < len(preserved) else list(preserved)
+    if len(rest) <= remaining:
+        return list(preserved) + list(rest)
+
+    out = list(rest)
     rng = random.Random(hash(tuple(seed_key)) & 0xFFFFFFFF)
     rng.shuffle(out)
-    return out[:cap_i]
+    return list(preserved) + out[:remaining]
+
+
+def mark_nominal_row(row: Dict, *, var_idx: int = 0) -> Dict:
+    """Tag a no-background-NPC reference row. Does not clear auxiliary_agent."""
+    out = dict(row)
+    out["is_nominal"] = True
+    out["default_variant"] = True
+    out["traffic_density"] = 0.0
+    out["var_idx"] = int(var_idx)
+    # Drop profile stamp if a caller passed one by mistake; aux stays.
+    for key in list(out):
+        if key.startswith("profile_"):
+            out.pop(key, None)
+    out.pop("nuplan_vehicles_per_frame", None)
+    out.pop("background_npc_count", None)
+    out.pop("profile_traffic_density", None)
+    return out
 
 
 def sizes_up_to(

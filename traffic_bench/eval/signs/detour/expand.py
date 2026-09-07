@@ -18,7 +18,10 @@ from traffic_bench.eval.engine.expand.manifest_config import (
     DEFAULT_SPAWN_VELOCITY_LEVELS_MS,
     DEFAULT_TRAFFIC_DENSITY_LEVELS,
 )
-from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
+from traffic_bench.eval.engine.expand.manifest_expansion import (
+    shuffle_cap,
+    mark_nominal_row,
+)
 from traffic_bench.eval.engine.expand.world_axes import (
     DEFAULT_HORIZON_STEPS,
     DEFAULT_MAX_PATH_LENGTH_M,
@@ -68,9 +71,9 @@ class DetourSimParams:
     # How far the plate may slide around its nominal position. The manoeuvre
     # lives after the plate, so tail_after_sign_m still bounds it.
     sign_jitter_m: float = 15.0
-    # Variant 0 built as the nominal scene -- no traffic, no NPC profile, the
-    # plate at its nominal position -- and only variants 1..N-1 sampled.
-    default_first_variant: bool = False
+    # First row of every scene is nominal — no background NPCs / no NPC profile.
+    # Aux (N/A for detour) unchanged. Always kept first under max_scenarios.
+    default_first_variant: bool = True
 
 
 @dataclass(frozen=True)
@@ -371,23 +374,24 @@ def expand_detour_scene_entries(
     )
 
     if bool(sim.default_first_variant):
-        entries.append(
-            build_detour_manifest_entry(
-                default_variant=True,
-                scene_dir=scene_dir,
-                scenes_root=scenes_root,
-                meta=meta,
-                sim=sim,
-                pdd_code=pdd_code,
-                sign_type=sign_type,
-                variant=0,
-                npc_profile=None,
-                max_path_length_m=float(sim.max_path_length_m),
-                route_length_augment=False,
-                spawn_velocity_ms=float(sim.spawn_velocity_ms),
-                traffic_density=0.0,
-            )
+        # One nominal reference row (no background traffic / profile) first.
+        nominal = build_detour_manifest_entry(
+            default_variant=True,
+            scene_dir=scene_dir,
+            scenes_root=scenes_root,
+            meta=meta,
+            sim=sim,
+            pdd_code=pdd_code,
+            sign_type=sign_type,
+            variant=0,
+            npc_profile=None,
+            max_path_length_m=float(sim.max_path_length_m),
+            route_length_augment=False,
+            spawn_velocity_ms=float(sim.spawn_velocity_ms),
+            traffic_density=0.0,
         )
+        if nominal:
+            entries.append(mark_nominal_row(nominal))
 
     for cell in iter_world_axis_cells(
         route_levels=route_levels,
@@ -511,7 +515,7 @@ def generate(cfg, scenes=None):
             )
         ),
         sign_jitter_m=float(getattr(sim_cfg, "sign_jitter_m", 15.0) or 0.0),
-        default_first_variant=bool(getattr(sim_cfg, "default_first_variant", False)),
+        default_first_variant=bool(getattr(sim_cfg, "default_first_variant", True)),
     )
     det_expansion = DetourExpansionConfig(
         max_scenarios=scenario_cfg.max_scenarios,

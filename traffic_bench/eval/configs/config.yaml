@@ -52,10 +52,10 @@ simulation:
   # Per fixed density probe: sample this many NPC IDM profiles.
   n_variations: 3
   profile_density_cap: 1.0
-  # true: variant 0 of every scene is the nominal row (no traffic, no NPC
-  # profile, plate unjittered, reference approach speed); variants 1..N-1
-  # sample everything. Speed and detour families honour it.
-  default_first_variant: false
+  # true: first row of every scene is nominal — no background NPCs / no NPC
+  # profile; plate unjittered; reference approach where applicable. Auxiliary
+  # agents are NOT disabled. Always kept first under max_scenarios.
+  default_first_variant: true
   # Shared world grid (all signs):
   #   route × density(p25/p50/p75) × ego_speed(p25/p50/p75) × n_variations
   # Speed plates keep task-conditioned approach speed (skip ego_speed axis).

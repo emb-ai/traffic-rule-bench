@@ -11,8 +11,8 @@ Policy: `tiered_place_reuse` · signs: 25
 
 ## Train↔test
 
-- train place union: 1784
-- test place union: 447
+- train place union: 1782
+- test place union: 445
 - global train∩test: 0
 - within-sign leaks: none
 
@@ -21,15 +21,15 @@ Policy: `tiered_place_reuse` · signs: 25
 | PDD | Behavioral family | Crop | Train scenes | Test scenes | Train places | Test places | Train topo | Test topo |
 | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- |
 | `3.2` | `access_road_direction` | `junction` | 80 | 20 | 80 | 20 | `{'X': 40, 'T': 40}` | `{'X': 10, 'T': 10}` |
-| `4.2.1` | `obstacle_avoidance` | `segment` | 80 | 20 | 80 | 20 | `{'curved': 40, 'straight': 40}` | `{'curved': 10, 'straight': 10}` |
-| `4.2.2` | `obstacle_avoidance` | `segment` | 80 | 20 | 80 | 20 | `{'curved': 40, 'straight': 40}` | `{'curved': 10, 'straight': 10}` |
-| `4.2.3` | `obstacle_avoidance` | `segment` | 80 | 20 | 80 | 20 | `{'curved': 40, 'straight': 40}` | `{'curved': 10, 'straight': 10}` |
+| `4.2.1` | `obstacle_avoidance` | `segment` | 80 | 20 | 80 | 20 | `{'curved': 40, 'straight': 40}` | `{'straight': 10, 'curved': 10}` |
+| `4.2.2` | `obstacle_avoidance` | `segment` | 80 | 20 | 80 | 20 | `{'curved': 40, 'straight': 40}` | `{'straight': 10, 'curved': 10}` |
+| `4.2.3` | `obstacle_avoidance` | `segment` | 80 | 20 | 80 | 20 | `{'straight': 40, 'curved': 40}` | `{'curved': 10, 'straight': 10}` |
 | `2.1` | `junction_priority` | `junction` | 80 | 20 | 80 | 20 | `{'X': 40, 'T': 40}` | `{'X': 10, 'T': 10}` |
 | `2.3` | `junction_priority` | `junction` | 80 | 20 | 80 | 20 | `{'X': 40, 'T': 40}` | `{'X': 10, 'T': 10}` |
 | `2.4` | `junction_priority` | `junction` | 80 | 20 | 80 | 20 | `{'X': 40, 'T': 40}` | `{'X': 10, 'T': 10}` |
 | `2.5` | `junction_priority` | `junction` | 80 | 20 | 80 | 20 | `{'X': 40, 'T': 40}` | `{'X': 10, 'T': 10}` |
 | `4.3` | `roundabout` | `junction` | 80 | 20 | 80 | 20 | `{'O': 80}` | `{'O': 20}` |
-| `5.19` | `pedestrian_crossing` | `segment` | 80 | 20 | 80 | 20 | `{'curved': 41, 'straight': 39}` | `{'curved': 11, 'straight': 9}` |
+| `5.19` | `pedestrian_crossing` | `segment` | 80 | 20 | 80 | 20 | `{'curved': 46, 'straight': 34}` | `{'straight': 9, 'curved': 11}` |
 | `3.1` | `access_road_direction` | `dual_path` | 80 | 20 | 80 | 20 | `{'T': 40, 'X': 40}` | `{'T': 10, 'X': 10}` |
 | `3.18.1` | `turn_restriction` | `dual_path` | 80 | 20 | 80 | 20 | `{'T': 40, 'X': 40}` | `{'T': 10, 'X': 10}` |
 | `3.18.2` | `turn_restriction` | `dual_path` | 80 | 20 | 80 | 20 | `{'T': 40, 'X': 40}` | `{'T': 10, 'X': 10}` |
