@@ -5,6 +5,9 @@
 
 defaults:
   - _self_
+  # Keep console logs; do not write cwd/${hydra.job.name}.log (main.log).
+  - override hydra/job_logging: stdout
+  - override hydra/hydra_logging: disabled
 
 policy: idm
 policies: null

@@ -8,6 +8,9 @@ defaults:
   - _self_
   - sign: main_road
   # Shared knobs live in configs/shared/ and are pulled by sign yaml defaults.
+  # Console only — avoid ${hydra.job.name}.log (main.log) under the run dir.
+  - override hydra/job_logging: stdout
+  - override hydra/hydra_logging: disabled
 
 hydra:
   run:
