@@ -48,7 +48,12 @@ PARK_OFFSET_M = 5000.0           # where a not-yet-released user waits
 # Lateral offset of the users towards the far side of their lane: a 2.3 m wide
 # body on a 3.2 m lane leaves 0.45 m to the line, and the IDM leader test of the
 # neighbouring lane fires on any corner that touches it.
-LATERAL_OFFSET_M = 0.45
+LATERAL_OFFSET_M = 0.6
+# Same flow: the first user waits this far past the plate, so a car that keeps
+# the lane enters the zone and is scored before it meets anyone.
+SAME_FLOW_START_AFTER_PLATE_M = 25.0
+# A user (re)enters the lane only where no vehicle is within this distance.
+RESPAWN_CLEAR_M = 20.0
 
 
 class ReservedLaneAgentManager(BaseManager):
@@ -152,6 +157,24 @@ class ReservedLaneAgentManager(BaseManager):
         obj.is_cyclist = True
         return obj
 
+    def _spot_clear(self, s: float) -> bool:
+        """No vehicle (background car or ego) within RESPAWN_CLEAR_M of lane point ``s``."""
+        try:
+            p = self._lane.position(min(max(s, 0.5), float(self._lane.length) - 0.5), self._lat)
+            px, py = float(p[0]), float(p[1])
+            others = []
+            tm = getattr(self.engine, "traffic_manager", None)
+            others += list(getattr(tm, "traffic_vehicles", None) or [])
+            agents = getattr(getattr(self.engine, "agent_manager", None), "active_agents", None) or {}
+            others += list(agents.values())
+            for v in others:
+                q = v.position
+                if (float(q[0]) - px) ** 2 + (float(q[1]) - py) ** 2 < RESPAWN_CLEAR_M ** 2:
+                    return False
+        except Exception:
+            return True
+        return True
+
     def _place(self, agent: dict) -> None:
         lane = self._lane
         if agent["s"] > float(lane.length) - 0.5:
@@ -208,7 +231,7 @@ class ReservedLaneAgentManager(BaseManager):
         # to the plate at the edge end; before the plate the lane is ordinary.
         # Counter flow: a stream from the far end, first user timed to meet a
         # lane-keeping ego inside the zone, turning off at the plate.
-        self._same_start = min(max(1.0, zone_start + 3.0), length - 2.0)
+        self._same_start = min(max(1.0, zone_start + SAME_FLOW_START_AFTER_PLATE_M), length - 2.0)
         stretch = max(5.0, length - self._same_start)
         spacing = stretch / n
         phase = float(self.np_random.uniform(0.0, spacing))
@@ -253,13 +276,21 @@ class ReservedLaneAgentManager(BaseManager):
             return {}
         length = float(self._lane.length)
         for agent in self._agents:
+            was_parked = agent["s"] > length - 0.5
             agent["s"] += agent["dir"] * agent["v"] * self._dt
             if agent["dir"] > 0 and agent["s"] > length - 1.0:
-                agent["s"] = getattr(self, "_same_start", 1.0)
+                # Back to the start of the reserved stretch, but only into a clear
+                # spot: a user teleported onto a car is a crash nobody caused.
+                if self._spot_clear(self._same_start):
+                    agent["s"] = self._same_start
+                else:
+                    agent["s"] = length - 1.0   # hold at the end until the spot clears
             elif agent["dir"] < 0 and agent["s"] < self._opp_exit_s:
                 # The counter-flow lane starts at the plate: at the plate the user
                 # turns off. Back into the stream one headway behind the last user.
                 agent["s"] = max(length + 1.0, max(a["s"] for a in self._agents) + getattr(self, "_opp_spacing", 50.0))
+            elif agent["dir"] < 0 and was_parked and agent["s"] <= length - 0.5 and not self._spot_clear(length - 0.5):
+                agent["s"] = length + 0.5      # release point occupied: wait one more step
             self._place(agent)
         return {}
 
