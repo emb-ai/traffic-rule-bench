@@ -92,3 +92,20 @@ plant2_stop_pipeline_*/2_5/
 plant2_stop_pipeline_*/__pycache__/
 PlanT/checkpoints/
 scripts/plant2_ft_pipeline/tools/outputs_debug/
+
+### plant2 fine-tuning work dirs: code, docs and curated results only.
+### Dumps, eval episodes, logs and gifs stay local; the reference model's
+### reports live in plant2_detour_pipeline/results/.
+plant2_pipeline/runs/*/dump
+plant2_pipeline/runs/*/plan
+plant2_pipeline/runs/*/split
+plant2_pipeline/runs/*/split_raw
+plant2_pipeline/runs/*/logs/
+plant2_pipeline/runs/*/eval/*/
+plant2_detour_pipeline/eval/
+plant2_detour_pipeline/logs/
+plant2_detour_pipeline/gifs/
+plant2_detour_pipeline/gifs_test/
+plant2_detour_pipeline/audit/
+plant2_detour_pipeline/detour_split_filtered/
+!plant2_detour_pipeline/results/**

@@ -1,0 +1,13 @@
+# 2.5-only tsfix cache, 2x LR background jobs (was preset_2p5_tsfix).
+defaults:
+  split: ${SHEPELEV}/plant2_l1_fv_experts_split_signs_2.5
+  ds_local: /tmp/plant2_ds_cache_2p5_tsfix
+  cache_size_gb: 400
+  augment: true
+  filter_routes: false
+  launch: bg
+  log_dir: ${TRB_ROOT}/scripts/plant2_ft_pipeline/logs_pipeline_2p5_tsfix
+
+jobs:
+  - {gpu: "0", lr: "1e-4", addon: fvexp30_spatial_2p5_tsfix_lr1e4}
+  - {gpu: "1", lr: "1e-5", addon: fvexp30_spatial_2p5_tsfix_lr1e5}

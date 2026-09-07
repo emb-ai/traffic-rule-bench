@@ -26,9 +26,8 @@ import re
 import subprocess
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from pathlib import Path
 
-from lib.paths import shepelev
+from lib.env import shepelev
 
 SHEPELEV = shepelev()
 SRCS = [
@@ -120,7 +119,8 @@ def route_is_ok(route_dir: Path) -> bool:
     try:
         with gzip.open(results_path, "rt", encoding="utf-8") as f:
             results = json.load(f)
-    except Exception:  # noqa: BLE001
+    except (OSError, gzip.BadGzipFile, json.JSONDecodeError, UnicodeDecodeError) as e:
+        print(f"  BAD results.json.gz {route_dir.name}: {type(e).__name__}: {e}", flush=True)
         return False
     status = results.get("status")
     if status in (

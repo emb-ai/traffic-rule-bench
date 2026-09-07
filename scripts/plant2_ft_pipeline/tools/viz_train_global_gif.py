@@ -32,6 +32,7 @@ TRB_ROOT = _ROOT.parents[1]
 PLAN_T = TRB_ROOT / "plant2" / "PlanT"
 sys.path.insert(0, str(PLAN_T))
 
+import lib_tools  # noqa: E402
 from plant_variables import PlanTVariables  # noqa: E402
 from util.sign_id import SIGN_CODES  # noqa: E402
 
@@ -74,19 +75,8 @@ def type_id_to_name(tid: float | None, raw_class: str) -> str:
     return name.replace("_", " ")
 
 
-CLASS_COLORS_BGR: dict[float, tuple[int, int, int]] = {
-    1.0: (0, 0, 220),
-    2.0: (0, 220, 220),
-    3.0: (180, 180, 180),
-    4.0: (220, 0, 220),
-    5.0: (0, 0, 255),
-    6.0: (0, 140, 255),
-}
-for i, code in enumerate(SIGN_CODES):
-    hue = int(180 * i / max(len(SIGN_CODES), 1))
-    hsv = np.uint8([[[hue, 200, 230]]])
-    bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0, 0]
-    CLASS_COLORS_BGR[float(7 + i)] = tuple(int(x) for x in bgr)
+# Shared with tools/validate_dump_sample.py via lib_tools.class_colors_bgr().
+CLASS_COLORS_BGR: dict[float, tuple[int, int, int]] = lib_tools.class_colors_bgr()
 
 
 def ego_carla_to_world(fwd_x: float, y_right: float, ego_matrix: np.ndarray) -> tuple[float, float]:

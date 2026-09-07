@@ -38,6 +38,34 @@ _SPEED_BINS = np.array(
     dtype=np.float32,
 )
 _WHEELBASE_M = 2.5
+# Lateral frame. The dump writes the route input, the path target and the
+# waypoint target with y=LEFT, while object boxes are y=RIGHT (plant2_frames
+# negates what MetaDrive returns for objects, and negates it twice for the
+# route). This adapter used to feed the route as y=right and both controllers
+# still read the model's output as y=right, so everything lateral was mirrored
+# with respect to training -- except the objects. Route following survived
+# (mirroring the input mirrors the output and the controller mirrors it back),
+# but every deviation the model inferred from the OBJECTS came out steering to
+# the wrong side of the obstacle. Measured on the 122-scene detour catalog,
+# matched scenes, honest compliance:
+#
+#     h26_last  0.000 -> 0.814      j3_last  0.000 -> 0.879
+#     j4_last   0.000 -> 0.832      crashes  ~0.95 -> ~0.42
+#
+# (h26_best is epoch 0, i.e. still essentially the CARLA pretrain checkpoint,
+# and is indifferent to the flip: 0.286 -> 0.316. That is the tell -- only
+# checkpoints actually fine-tuned on this dump adopted its convention.)
+# Set PLANT2_YLEFT=0 to restore the old, mismatched behaviour.
+_YLEFT = os.environ.get("PLANT2_YLEFT", "1").lower() in ("1", "true", "yes")
+
+
+def _flip_y(t):
+    """Negate the y column of a (..., 2) path/waypoint tensor."""
+    t = t.clone()
+    t[..., 1] = -t[..., 1]
+    return t
+
+
 _LOOKAHEAD_IDX = 1
 
 
@@ -93,6 +121,25 @@ def _maybe_log_speed_pred(
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except OSError:
         pass
+
+
+def _sign_present_in_batch(batch) -> bool:
+    """H3: is any sign-like class (id==4 "stop_sign" or id>=PDD_OBJECT_CLASS_START)
+    among this step's actual (non-padding) x_objs tokens?"""
+    try:
+        from plant_variables import PDD_OBJECT_CLASS_START
+    except Exception:
+        PDD_OBJECT_CLASS_START = 7
+    x_objs = batch["x_objs"].detach().cpu().numpy()
+    idxs = batch["idxs"].detach().cpu().numpy()[0]
+    for i in idxs:
+        i = int(i)
+        if i == 0 or i >= x_objs.shape[0]:
+            continue
+        cls_id = float(x_objs[i, 0])
+        if cls_id == 4.0 or cls_id >= PDD_OBJECT_CLASS_START:
+            return True
+    return False
 
 
 def _sign_class_num(code: str) -> float:
@@ -287,6 +334,11 @@ class PlanT2MetaDriveAdapter:
         # PLANT2_XOBJS_LOG_PATH trace only.
         self._frame_idx = 0
         self._last_desired_speed = None
+        # H3 (sign memory): rolling per-step "sign token present in x_objs"
+        # history, only used when the loaded checkpoint has sign_memory_emb
+        # weights (detected in _ensure_loaded). None = feature inactive.
+        self._sign_memory_lookback: int = 0
+        self._sign_recent_history = None
 
     def _ensure_loaded(self) -> None:
         if self._model is not None:
@@ -329,10 +381,18 @@ class PlanT2MetaDriveAdapter:
         _has_legacy_sign_emb: bool = any(k.startswith("sign_emb.") for k in _sd)
         _has_class_emb: bool = any(k.startswith("class_emb.") for k in _sd)
 
+        # H3/H5 experiment heads — detect from the checkpoint (not stale YAML)
+        # the same way input_ego_speed is, so eval reconstructs the exact
+        # architecture that was trained (strict=False would otherwise silently
+        # drop these weights and evaluate a different, untrained architecture).
+        _has_sign_memory_emb: bool = any(k.startswith("sign_memory_emb.") for k in _sd)
+        _has_sign_pool_token: bool = "sign_pool_no_sign_emb" in _sd
+
         print(
             f"[PlanT2Adapter] ckpt keys: speed_classifier={self._has_trained_speed_head}  "
             f"ego_speed_emb={_has_ego_speed_emb}  speed_token={_has_speed_token}  "
-            f"class_emb={_has_class_emb}  legacy_sign_emb={_has_legacy_sign_emb}"
+            f"class_emb={_has_class_emb}  legacy_sign_emb={_has_legacy_sign_emb}  "
+            f"sign_memory_emb={_has_sign_memory_emb}  sign_pool_token={_has_sign_pool_token}"
         )
         if _has_legacy_sign_emb and not _has_class_emb:
             print(
@@ -368,6 +428,22 @@ class PlanT2MetaDriveAdapter:
         config_all["model"]["training"]["input_ego_speed"] = _has_ego_speed_emb
         # Store for get_action() so it doesn't re-read the (now-correct) config
         self._input_ego_speed: bool = _has_ego_speed_emb
+
+        # H3: fixed inference-time lookback (frames = get_action() calls, not
+        # dump frames — see the rolling buffer in get_action()). The exact
+        # value only affects how fast the decay reaches 0, not correctness.
+        config_all["model"]["training"]["sign_memory_frames"] = 10 if _has_sign_memory_emb else 0
+        self._sign_memory_lookback = 10 if _has_sign_memory_emb else 0
+        if self._sign_memory_lookback > 0 and self._sign_recent_history is None:
+            from collections import deque
+            # +1: holds the current step plus `lookback` distinct past steps,
+            # matching dataset.py's _recent_sign_signal (current check is
+            # separate from its `back in range(1, lookback+1)` past-frame loop).
+            self._sign_recent_history = deque(maxlen=self._sign_memory_lookback + 1)
+
+        # H5: must match training exactly or the pooled-token branch (and its
+        # learned sign_pool_no_sign_emb placeholder) never runs at eval time.
+        config_all["model"]["training"]["sign_pool_token"] = _has_sign_pool_token
 
         # ── Step 3: instantiate HFLM with the corrected config ────────────────
         _model_py = self.plant_planT_dir / "model.py"
@@ -409,6 +485,8 @@ class PlanT2MetaDriveAdapter:
             self._lat_pid.error_history = []
         self._frame_idx = 0
         self._last_desired_speed = None
+        if self._sign_recent_history is not None:
+            self._sign_recent_history.clear()
 
     def get_action(self, vehicle, engine) -> np.ndarray:
         """Run one PlanT2 inference step → MetaDrive `[steering, throttle]` in [-1, 1]."""
@@ -429,11 +507,14 @@ class PlanT2MetaDriveAdapter:
         route_ego, _ = get_route_points_ego_frame(vehicle, num_points=20, step_m=self.route_step_m)
 
         import os as _os
-        if _os.environ.get("PLANT2_ROUTE_YFLIP"):
-            # A/B test: re-apply the pre-1300c1e route y-flip (route -> MetaDrive
-            # y=left). If this stops the pred_path oscillation, the checkpoint was
-            # trained expecting the route in y=left, and 1300c1e's route change is
-            # wrong for it. Temporary diagnostic toggle.
+        if _YLEFT:
+            # The dump writes the route with y=LEFT: plant2_frames.get_route()
+            # negates what get_route_points_ego_frame returns. The path and
+            # waypoint targets are y=left too (dataset.py builds them from
+            # ego_matrix, and fix_route_target.py uses left=[-sin,cos]). Only
+            # the object boxes are y=right, in the dump and here alike. So the
+            # route fed to a checkpoint trained on that dump must be y=left as
+            # well -- see _YLEFT.
             route_ego = route_ego.copy()
             route_ego[:, 1] = -route_ego[:, 1]
         if _os.environ.get("PLANT2_DEBUG_STEER"):
@@ -454,13 +535,59 @@ class PlanT2MetaDriveAdapter:
             range_factor_front=16.0,
             input_bev=True,
             input_ego_speed=input_ego_speed,
-            bev_resolution=128,
+            # Render at the DUMP resolution (256 over 64m = 4 px/m), NOT the
+            # model's input size. metadrive_obs_to_plant2_batch only applies
+            # PlanTDataset's [64:-64] centre crop when the render is 256x256;
+            # passing 128 here silently skipped that crop and fed the model a
+            # 128px BEV covering 64m (2 px/m) -- half the resolution and twice
+            # the field of view of every BEV it was trained on (training:
+            # 256px/64m PNG cropped to 128px/32m, dataset.py `bev[0,64:-64,64:-64]`).
+            bev_resolution=256,
             bev_size_meters=64.0,
             device=self.device,
         )
 
+        # The training dumps write route_original == route (the regression
+        # target) byte-for-byte, so "copy the route input" is EXACTLY optimal
+        # on that data and the model learned to do just that. PLANT2_ZERO_ROUTE
+        # zeroes the route at inference, the counterpart of training-time
+        # model.training.route_dropout_p, so a model trained to tolerate a
+        # missing route must plan from perception (x_objs/BEV) instead.
+        if os.environ.get("PLANT2_ZERO_ROUTE"):
+            batch["route_original"] = torch.zeros_like(batch["route_original"])
+
+        # H3: update the rolling sign-presence history with THIS step's x_objs,
+        # then feed the model the same decayed signal dataset.py computes
+        # offline from dump frames (1.0 now; else linear decay over lookback;
+        # 0.0 beyond it / episode start). No-op unless the checkpoint has
+        # sign_memory_emb weights (self._sign_memory_lookback == 0 otherwise).
+        if self._sign_memory_lookback > 0:
+            self._sign_recent_history.append(_sign_present_in_batch(batch))
+            if self._sign_recent_history[-1]:
+                sign_recent_signal = 1.0
+            else:
+                sign_recent_signal = 0.0
+                # index 0 = this step (already False); walk backwards from index 1
+                hist = list(self._sign_recent_history)
+                for back in range(1, len(hist)):
+                    if hist[len(hist) - 1 - back]:
+                        sign_recent_signal = max(0.0, 1.0 - back / self._sign_memory_lookback)
+                        break
+            batch["sign_recent_signal"] = torch.tensor(
+                [sign_recent_signal], dtype=torch.float32, device=self.device
+            )
+
         with torch.no_grad():
             _, _, pred_plan, _ = self._model(batch)
+
+        if _YLEFT:
+            # The model emits the path/waypoints in the frame its targets were
+            # written in (y=left); both controllers below assume y=right. Flip
+            # here so the convention change stays confined to this boundary.
+            pred_plan = tuple(
+                (None if t_ is None else _flip_y(t_)) if i < 2 else t_
+                for i, t_ in enumerate(pred_plan)
+            )
 
         # If the speed classifier head was not saved in the checkpoint its weights are
         # random — null out pred_speed so _wps_to_action falls back to waypoint spacing.

@@ -1154,6 +1154,23 @@ class StopSign(YieldSign):
 
     STOP_SPEED_THRESHOLD_MPS = 0.5
     STOP_LINE_PAST_MARGIN = 0.3
+    _audit_crossed = False
+    _audit_min_speed = None
+    _audit_yield_steps = 0
+    _audit_stopline_steps = 0
+    _audit_far = -1e9
+
+    @property
+    def stop_audit(self) -> dict:
+        """Did the ego actually reach the stop line, and how slow did it get?"""
+        return {"crossed": bool(self._audit_crossed),
+                "min_speed": (None if self._audit_min_speed is None
+                              else round(float(self._audit_min_speed), 3)),
+                "yield_steps": int(self._audit_yield_steps),
+                "stopline_steps": int(self._audit_stopline_steps),
+                "stop_line_long": round(float(self.stop_line_position), 1),
+                "zone": [round(float(self.zone_start), 1), round(float(self.zone_end), 1)],
+                "max_long": (None if self._audit_far < -1e8 else round(self._audit_far, 1))}
 
     def __init__(
         self,
@@ -1205,6 +1222,17 @@ class StopSign(YieldSign):
         except Exception:
             return False
 
+        # Audit trail: a run that never reaches the stop line records no
+        # violation, exactly as one that stops correctly. Track the approach so
+        # the two can be told apart afterwards.
+        if self.zone_start <= veh_long <= self.zone_end:
+            spd = float(getattr(vehicle, "speed", 0.0) or 0.0)
+            if veh_long < self.stop_line_position:
+                if self._audit_min_speed is None or spd < self._audit_min_speed:
+                    self._audit_min_speed = spd
+            elif veh_long >= self.stop_line_position + self.STOP_LINE_PAST_MARGIN:
+                self._audit_crossed = True
+
         vid = vehicle.id
         in_zone = self.zone_start <= veh_long <= self.zone_end
         if not in_zone:
@@ -1236,9 +1264,21 @@ class StopSign(YieldSign):
 
     def _is_violating(self, vehicle) -> bool:
         """Yield-zone traffic rule + mandatory stop before the sign line."""
+        # Which of the two sub-rules fires is recorded so `sign_compliance`
+        # can be attributed: 2.5 bundles "give way to main-road traffic" with
+        # "come to a full stop", and they fail for different reasons.
+        try:
+            self._audit_far = max(self._audit_far,
+                                  float(self.lane.local_coordinates(vehicle.position)[0]))
+        except Exception:
+            pass
         if super()._is_violating(vehicle):
+            self._audit_yield_steps += 1
             return True
-        return self._is_stop_line_violating(vehicle)
+        if self._is_stop_line_violating(vehicle):
+            self._audit_stopline_steps += 1
+            return True
+        return False
 
     def get_rule_description(self) -> str:
         return (

@@ -79,8 +79,11 @@ import argparse
 import sys
 from pathlib import Path as _PathForPath
 _PACKAGE_DIR = _PathForPath(__file__).resolve().parent
-if str(_PACKAGE_DIR) not in sys.path:
-    sys.path.insert(0, str(_PACKAGE_DIR))
+_PER_SIGN_DIR = _PACKAGE_DIR.parent
+_PDD_BENCH = _PER_SIGN_DIR.parent.parent
+for _p in (_PACKAGE_DIR, _PER_SIGN_DIR, _PDD_BENCH):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 from core.runtime.metadrive_sumo_patch import apply_metadrive_sumo_via_patch  # noqa: E402
 

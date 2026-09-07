@@ -3166,6 +3166,7 @@ def run_one_episode(
         crosswalk_violations = 0
         violations_by_class_step: dict[str, int] = {}
         in_zone_total_steps = 0
+        stop_audit: dict = {}
         in_zone_by_class_step: dict[str, int] = {}
         violations_event_count = 0
         violations_by_class_event: dict[str, int] = {}
@@ -3251,6 +3252,10 @@ def run_one_episode(
                         in_zone_by_class_step[cls] = in_zone_by_class_step.get(cls, 0) + 1
                 if step_in_any_zone:
                     in_zone_total_steps += 1
+                for _s in sign_mgr.signs:
+                    _sa = getattr(_s, "stop_audit", None)
+                    if _sa is not None:
+                        stop_audit = _sa
 
                 for sign in sign_mgr.signs:
                     if sign._is_violating(vehicle):
@@ -3546,6 +3551,8 @@ def run_one_episode(
                     },
                     "violations_by_class_step": dict(violations_by_class_step),
                     "in_zone_total_steps": int(in_zone_total_steps),
+            "stop_audit": dict(stop_audit),
+                    "stop_audit": dict(stop_audit),
                     "in_zone_by_class_step": dict(in_zone_by_class_step),
                     "violations_event_count": int(violations_event_count),
                     "violations_by_class_event": dict(violations_by_class_event),
@@ -3654,6 +3661,7 @@ def run_one_episode(
             "violations_by_class_event": dict(violations_by_class_event),
             "violations_timeline": list(violations_timeline),
             "in_zone_total_steps": int(in_zone_total_steps),
+            "stop_audit": dict(stop_audit),
             "in_zone_by_class_step": dict(in_zone_by_class_step),
             "pkl_path": pkl_path_str,
             "dump_error": dump_error,

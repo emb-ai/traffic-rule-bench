@@ -1,0 +1,61 @@
+# 2.5 tsfix cache, H1/H2/H1+H2/H5 hydra-override matrix (was preset_2p5_hyp).
+defaults:
+  split: ${SHEPELEV}/plant2_l1_fv_experts_split_signs_2.5
+  ds_local: /tmp/plant2_ds_cache_2p5_tsfix
+  cache_size_gb: 400
+  augment: true
+  filter_routes: false
+  launch: bg
+  log_dir: ${TRB_ROOT}/scripts/plant2_ft_pipeline/logs_pipeline_2p5_hyp
+
+jobs:
+  # H1: drop path/forecast loss, boost speed loss weight
+  - gpu: "0"
+    lr: "1e-4"
+    addon: fvexp30_2p5_h1_path0_sw5_lr1e4
+    extra_hydra:
+      - model.waypoints.path_weight=0
+      - model.pre_training.forecastLoss_weight=0
+      - model.waypoints.speed_weight=5
+
+  - gpu: "1"
+    lr: "1e-5"
+    addon: fvexp30_2p5_h1_path0_sw5_lr1e5
+    extra_hydra:
+      - model.waypoints.path_weight=0
+      - model.pre_training.forecastLoss_weight=0
+      - model.waypoints.speed_weight=5
+
+  # H2: upweight the stop speed-class bin
+  - gpu: "2"
+    lr: "1e-4"
+    addon: fvexp30_2p5_h2_cw15_lr1e4
+    extra_hydra: ["model.training.speed_class_weights=[15,1,1,1,1,1,1,1]"]
+
+  - gpu: "3"
+    lr: "1e-5"
+    addon: fvexp30_2p5_h2_cw15_lr1e5
+    extra_hydra: ["model.training.speed_class_weights=[15,1,1,1,1,1,1,1]"]
+
+  # H1+H2 combined
+  - gpu: "4"
+    lr: "1e-4"
+    addon: fvexp30_2p5_h1h2_path0_sw5_cw15_lr1e4
+    extra_hydra:
+      - model.waypoints.path_weight=0
+      - model.pre_training.forecastLoss_weight=0
+      - "model.training.speed_class_weights=[15,1,1,1,1,1,1,1]"
+
+  - gpu: "5"
+    lr: "1e-5"
+    addon: fvexp30_2p5_h1h2_path0_sw5_cw15_lr1e5
+    extra_hydra:
+      - model.waypoints.path_weight=0
+      - model.pre_training.forecastLoss_weight=0
+      - "model.training.speed_class_weights=[15,1,1,1,1,1,1,1]"
+
+  # H5: no augmentation (base cache keys only)
+  - gpu: "6"
+    lr: "1e-5"
+    addon: fvexp30_2p5_h5_noaug_lr1e5
+    augment: false

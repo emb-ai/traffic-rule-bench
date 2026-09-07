@@ -1,0 +1,18 @@
+# Full spatial split, 7x LR sweep on GPUs 0-6, tmux (was preset_spatial_lr).
+defaults:
+  split: ${SHEPELEV}/plant2_l1_fv_experts_split_signs
+  ds_local: /tmp/plant2_ds_cache_spatial_aug
+  cache_size_gb: 1800
+  augment: true
+  filter_routes: false
+  launch: tmux
+  tmux_prefix: arbelyaev-ft-spatial
+
+jobs:
+  - {gpu: "0", lr: "1e-6", addon: fvexp30_spatial_lr1e6}
+  - {gpu: "1", lr: "5e-6", addon: fvexp30_spatial_lr5e6}
+  - {gpu: "2", lr: "1e-5", addon: fvexp30_spatial_lr1e5}
+  - {gpu: "3", lr: "3e-5", addon: fvexp30_spatial_lr3e5}
+  - {gpu: "4", lr: "5e-5", addon: fvexp30_spatial_lr5e5}
+  - {gpu: "5", lr: "7e-5", addon: fvexp30_spatial_lr7e5}
+  - {gpu: "6", lr: "1e-4", addon: fvexp30_spatial_lr1e4}

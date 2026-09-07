@@ -6,15 +6,16 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
-from lib.env import bench_dir, metrics_root, plan_t, resolve_python, setup_eval_thread_env, shepelev, signs_dir, trb_root
+from lib.env import bench_dir, metrics_root, nfs2_root, plan_t, resolve_python, setup_eval_thread_env, shepelev, signs_dir, trb_root
 
-NFS2 = Path("/mnt/virtual_ai0001053-01202_SR006-nfs2/smirnova")
+NFS2 = nfs2_root() / "smirnova"
 DEFAULT_MANIFEST = NFS2 / "traffic-rule-bench/pdd-bench/benchmark_output_speed/balanced/run_v61_a6/catalog_fv_test20.jsonl"
 DEFAULT_SCENES = NFS2 / "traffic-rule-bench/pdd-bench/scenes_balanced"
 DEFAULT_MANIFEST_DETOUR = NFS2 / "traffic-rule-bench/pdd-bench/benchmark_output/detour_v1/catalog_fv_test20.jsonl"
@@ -369,15 +370,26 @@ def run_fv_fast(
     python: Path | None = None,
 ) -> int:
     setup_eval_thread_env()
-    py = resolve_python(str(python) if python else None)
+    # No --python CLI flag reaches eval_full.py's "fv" command, so without an
+    # explicit override, default to the interpreter actually running this
+    # process rather than resolve_python(None)'s generic system-python
+    # fallback chain -- that fallback has no idea which conda env (metadrive
+    # install, transformers pin, ...) the caller intended.
+    py = resolve_python(str(python)) if python else Path(sys.executable)
     repo = trb_root() / "pdd-bench"
     gpus = gpus or ["0", "1", "2", "3", "4", "5", "6"]
 
-    if "catalog_fv_test20.jsonl" not in str(manifest):
-        raise SystemExit(f"MANIFEST must be catalog_fv_test20.jsonl, got {manifest}")
-    rows = sum(1 for _ in manifest.open())
+    # Guard against pointing this at a training catalog by mistake. The check
+    # used to be on the file NAME ("must be catalog_fv_test20.jsonl"), which
+    # rejected every legitimately-named held-out manifest; the row count is
+    # what actually distinguishes a test set from a full catalog.
+    if not manifest.is_file():
+        raise SystemExit(f"MANIFEST not found: {manifest}")
+    rows = sum(1 for line in manifest.open() if line.strip())
+    if rows == 0:
+        raise SystemExit(f"MANIFEST is empty: {manifest}")
     if rows > 5000:
-        raise SystemExit(f"MANIFEST has {rows} rows (>5000)")
+        raise SystemExit(f"MANIFEST has {rows} rows (>5000): {manifest}")
 
     out.mkdir(parents=True, exist_ok=True)
     shard_dir = out / "shards"
@@ -434,7 +446,7 @@ def run_fv_fast(
         jobs.append((gpu, sf, sidx))
 
     fail = 0
-    with ProcessPoolExecutor(max_workers=concurrency) as ex:
+    with ThreadPoolExecutor(max_workers=concurrency) as ex:
         futs = [ex.submit(run_one, g, sf, i) for g, sf, i in jobs]
         for fut in as_completed(futs):
             if fut.result() != 0:
@@ -444,14 +456,21 @@ def run_fv_fast(
     empty.mkdir(exist_ok=True)
     comb = out / "metrics_per_episode.csv"
     comb.write_text("")
-    for pe in sorted(out.glob("parts/*/policy_eval")):
+    part_dirs = sorted(out.glob("parts/*/benchmark/policy_eval"))
+    if not part_dirs:
+        raise RuntimeError(f"no parts/*/benchmark/policy_eval dirs under {out} to aggregate")
+    for pe in part_dirs:
         tag = pe.parent.parent.name
         csv = out / "parts" / f"_csv_{tag}.csv"
-        subprocess.run(
+        cp = subprocess.run(
             [str(py), str(bench / "build_episode_metrics_csv.py"),
              "--episodes-root", str(pe), "--out", str(csv), "--manifests-root", str(empty)],
-            capture_output=True,
+            capture_output=True, text=True,
         )
+        if cp.returncode != 0:
+            raise RuntimeError(
+                f"build_episode_metrics_csv.py failed for {tag} (rc={cp.returncode}):\n{cp.stderr}"
+            )
         if csv.is_file() and csv.stat().st_size:
             text = csv.read_text()
             if comb.stat().st_size:

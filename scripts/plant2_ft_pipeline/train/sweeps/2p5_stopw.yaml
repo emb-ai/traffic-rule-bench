@@ -1,0 +1,17 @@
+# 2.5 tsfix cache, stop_speed_loss_weight x LR matrix (was preset_2p5_stopw).
+defaults:
+  split: ${SHEPELEV}/plant2_l1_fv_experts_split_signs_2.5
+  ds_local: /tmp/plant2_ds_cache_2p5_tsfix
+  cache_size_gb: 400
+  augment: true
+  filter_routes: false
+  launch: bg
+  log_dir: ${TRB_ROOT}/scripts/plant2_ft_pipeline/logs_pipeline_2p5_stopw
+
+jobs:
+  - {gpu: "0", lr: "1e-4", addon: fvexp30_2p5_stopw5_lr1e4,   stop_weight: 5}
+  - {gpu: "1", lr: "1e-5", addon: fvexp30_2p5_stopw5_lr1e5,   stop_weight: 5}
+  - {gpu: "2", lr: "1e-4", addon: fvexp30_2p5_stopw10_lr1e4,  stop_weight: 10}
+  - {gpu: "3", lr: "1e-5", addon: fvexp30_2p5_stopw10_lr1e5,  stop_weight: 10}
+  - {gpu: "4", lr: "1e-4", addon: fvexp30_2p5_stopw20_lr1e4,  stop_weight: 20}
+  - {gpu: "5", lr: "1e-5", addon: fvexp30_2p5_stopw20_lr1e5,  stop_weight: 20}

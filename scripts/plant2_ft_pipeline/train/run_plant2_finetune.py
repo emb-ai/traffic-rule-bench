@@ -10,7 +10,6 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 import argparse
-from pathlib import Path
 
 from lib.env import plan_t, resolve_python, shepelev
 from lib.finetune import FinetuneConfig, run_finetune

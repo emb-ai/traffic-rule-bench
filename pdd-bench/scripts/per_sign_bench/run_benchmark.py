@@ -102,6 +102,14 @@ class Rollout:
     # Steps ego was inside (or approaching) each sign's zone of effect.
     in_zone_total_steps: int = 0
     in_zone_by_class_step: dict = field(default_factory=dict)
+    # Per-sign-class: did ego ever actually get inside the zone of effect?
+    # `in_zone_*` above includes the approach lookahead, so it stays positive
+    # for a run that died before the zone -- such a run records zero violations
+    # and must not be read as compliance.
+    reached_zone_by_class: dict = field(default_factory=dict)
+    # Audit trail: how the obstacle was actually passed (see DetourSign).
+    pass_geometry: dict = field(default_factory=dict)
+    stop_audit: dict = field(default_factory=dict)
     hard_brake_count: int = 0
     hard_accel_count: int = 0
     distance_travelled_m: float = 0.0
@@ -187,6 +195,15 @@ def _run_rollout(env, base_env, policy_obj, *, max_steps: int,
                     r.in_zone_by_class_step[cls] = r.in_zone_by_class_step.get(cls, 0) + 1
             if step_in_any_zone:
                 r.in_zone_total_steps += 1
+            for _s in sign_mgr.signs:
+                if getattr(_s, "reached_zone", False):
+                    r.reached_zone_by_class[type(_s).__name__] = True
+                _pg = getattr(_s, "pass_geometry", None)
+                if _pg is not None and _pg.get("lat") is not None:
+                    r.pass_geometry = _pg
+                _sa = getattr(_s, "stop_audit", None)
+                if _sa is not None:
+                    r.stop_audit = _sa
 
             current_violations = sign_mgr.check_all_violations(vehicle)
             for _sign, violated in current_violations:
@@ -396,6 +413,9 @@ def build_sidecar_metrics(r: Rollout) -> dict:
         # Pair with violations_by_class_step → per-zone violation rate.
         "in_zone_total_steps": int(r.in_zone_total_steps),
         "in_zone_by_class_step": dict(r.in_zone_by_class_step),
+        "reached_zone_by_class": dict(r.reached_zone_by_class),
+        "pass_geometry": dict(r.pass_geometry),
+        "stop_audit": dict(r.stop_audit),
         # Edge-counts (expert_replay style — one event per class
         # transition not-violating → started-violating):
         "violations_event_count": int(r.violations_event_count),
@@ -586,6 +606,9 @@ def run_one_episode(
             # Per-class in-zone exposure (for per-zone violation rate)
             "in_zone_total_steps": int(r.in_zone_total_steps),
             "in_zone_by_class_step": dict(r.in_zone_by_class_step),
+            "reached_zone_by_class": dict(r.reached_zone_by_class),
+            "pass_geometry": dict(r.pass_geometry),
+            "stop_audit": dict(r.stop_audit),
         }
     finally:
         if save_gif is not None:

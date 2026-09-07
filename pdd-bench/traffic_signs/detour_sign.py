@@ -42,6 +42,17 @@ class DetourSign(BaseTrafficSign):
         super().__init__(lane, icon_path=icon_path, **kwargs)
         self._vehicle_states_detour = {}
         self._violation_events = 0
+        # Set once the ego is longitudinally inside the zone. An episode that
+        # ends before this (crash or off-road on the approach) records zero
+        # violation steps, which must not be read as compliance -- see
+        # `reached_zone`.
+        self._reached_zone = False
+        # Independent geometric record of HOW the obstacle was passed, so the
+        # compliance flag can be audited against the trajectory itself:
+        # signed lateral offset on the sign's own lane frame at the moment the
+        # ego first crosses the obstacle, plus the lane it was in.
+        self._pass_lat = None
+        self._pass_lane = None
 
         # Obstacle cones are placed ahead of the sign.
         self.obstacle_long = min(
@@ -155,12 +166,21 @@ class DetourSign(BaseTrafficSign):
             self._violation_events += 1
         return violating_now
 
+    @staticmethod
+    def _on_drivable_surface(vehicle) -> bool:
+        """Is the vehicle actually on a lane surface (MetaDrive ``on_lane``)?
+
+        This is the same primitive the SUMO env uses for ``out_of_road``. When
+        the attribute is missing we assume True rather than fabricate a
+        violation.
+        """
+        on_lane = getattr(vehicle, "on_lane", None)
+        return True if on_lane is None else bool(on_lane)
+
     def _is_violating(self, vehicle) -> bool:
         # An infeasible detour (no adjacent lane in the prescribed direction)
         # can never be satisfied, so it must not count as a violation.
         if not self._allowed_lane_indices:
-            return False
-        if not self.is_in_drivable_area(vehicle):
             return False
 
         try:
@@ -168,9 +188,21 @@ class DetourSign(BaseTrafficSign):
         except Exception:
             return False
 
-        # inside the zone
+        # Zone membership is decided FIRST, and purely geometrically: a vehicle
+        # that leaves the drivable surface inside the zone must stay under
+        # evaluation instead of silently dropping out of it. The old order ran
+        # is_in_drivable_area() before this check, so any departure from the
+        # sign's road -- including off the road entirely -- cleared the
+        # violation for the rest of the episode.
         if not (self.zone_start <= veh_long <= self.zone_end):
             return False
+        self._reached_zone = True
+        if self._pass_lat is None and veh_long >= self.obstacle_long:
+            try:
+                self._pass_lat = float(self.lane.local_coordinates(vehicle.position)[1])
+                self._pass_lane = str(self._get_vehicle_lane_index(vehicle))
+            except Exception:
+                pass
 
         vid = vehicle.id
         if vid not in self._vehicle_states_detour:
@@ -193,8 +225,14 @@ class DetourSign(BaseTrafficSign):
         if not state["entered_zone"] and veh_long >= self.zone_start:
             state["entered_zone"] = True
 
+        # Credit the manoeuvre only for a vehicle that is on the road AND in one
+        # of the prescribed adjacent lanes. Drifting off the sign lane onto the
+        # shoulder or over a kerb is not a detour: MetaDrive still reports the
+        # nearest lane in `vehicle.lane`, so without the on_lane guard a car
+        # that veers off the road on the correct side would be credited.
         if (
-            current_lane_index is not None
+            self._on_drivable_surface(vehicle)
+            and current_lane_index is not None
             and current_lane_index != sign_lane_index
             and self._allowed_lane_indices
             and current_lane_index in self._allowed_lane_indices
@@ -212,6 +250,26 @@ class DetourSign(BaseTrafficSign):
     @property
     def violation_events(self) -> int:
         return int(self._violation_events)
+
+    @property
+    def pass_geometry(self) -> dict:
+        """Lateral offset and lane at the obstacle, plus the prescribed lanes."""
+        return {
+            "lat": self._pass_lat,
+            "lane": self._pass_lane,
+            "sign_lane": str(getattr(self.lane, "index", None)),
+            "allowed": sorted(str(i) for i in self._allowed_lane_indices),
+            "dirs": sorted(self.allowed_directions),
+        }
+
+    @property
+    def reached_zone(self) -> bool:
+        """Did the ego ever get longitudinally inside the zone of effect?
+
+        False means the episode ended on the approach, so "no violations" says
+        nothing about whether the detour would have been performed.
+        """
+        return bool(self._reached_zone)
 
     @property
     def top_down_color(self):

@@ -46,9 +46,7 @@ import argparse
 import copy
 import os
 import subprocess
-import sys
 import time
-from pathlib import Path
 
 from lib.env import pipeline_dir, resolve_python, shepelev
 from lib.utils import count_plant2_samples, default_prefill_max_workers, iso_now

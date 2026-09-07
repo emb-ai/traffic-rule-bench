@@ -24,6 +24,7 @@ _PLAN_T = _ROOT.parents[1] / "plant2" / "PlanT"
 if str(_PLAN_T) not in sys.path:
     sys.path.insert(0, str(_PLAN_T))
 
+import lib_tools
 from plant_variables import PlanTVariables
 from util.sign_id import SIGN_CODES, sign_code_to_id
 
@@ -32,19 +33,9 @@ _BEV_CROP = 64
 _MODEL_BEV_SIDE = _RAW_BEV_RES - 2 * _BEV_CROP
 _MODEL_BEV_SPAN_M = 32.0
 
-# BGR colors keyed by x_objs type_id (matches viz_train_global_gif.py).
-_CLASS_COLORS_BGR: dict[float, tuple[int, int, int]] = {
-    1.0: (0, 0, 220),      # car
-    2.0: (0, 220, 220),    # walker
-    3.0: (180, 180, 180),  # static
-    4.0: (220, 0, 220),    # stop_sign
-    5.0: (0, 0, 255),      # traffic_light
-    6.0: (0, 140, 255),    # emergency
-}
-for _i, _code in enumerate(SIGN_CODES):
-    _hue = int(180 * _i / max(len(SIGN_CODES), 1))
-    _bgr = cv2.cvtColor(np.uint8([[[_hue, 200, 230]]]), cv2.COLOR_HSV2BGR)[0, 0]
-    _CLASS_COLORS_BGR[float(7 + _i)] = tuple(int(x) for x in _bgr)
+# BGR colors keyed by x_objs type_id (matches viz_train_global_gif.py); shared
+# via lib_tools.class_colors_bgr().
+_CLASS_COLORS_BGR = lib_tools.class_colors_bgr()
 
 
 def rad2deg(theta: float) -> float:
@@ -204,7 +195,15 @@ def draw_x_objs_on_bev(bev_rgb: np.ndarray, x_objs: list, *, upscale: int = 1) -
 
 
 def boxes_to_x_objs(boxes: list, *, range_m: float = 50.0, range_factor_front: float = 2.0) -> list:
-    """Mirror PlanTDataset filtering for dynamic + sign objects."""
+    """Mirror PlanTDataset filtering for dynamic + sign objects.
+
+    NOTE: the sign/traffic_light range check below (30m xy radius only) is
+    *not* identical to lib_tools.sign_survives_filter() (30m xy AND |z|<=30m
+    AND affects_ego) used by tools/print_plant_batch.py and
+    tools/hist_sign_planT_dataset.py -- this function omits the |z|<=30m
+    term. Left as-is rather than silently unified with that shared helper;
+    worth confirming whether the missing z-check here is intentional.
+    """
     type_nums = PlanTVariables.class_nums
     sign_like = {"stop_sign"} | set(SIGN_CODES)
     labels = boxes[1:]  # drop ego

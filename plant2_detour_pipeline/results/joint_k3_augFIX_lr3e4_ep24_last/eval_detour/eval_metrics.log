@@ -1,0 +1,22 @@
+[load] 366 episode rows from /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast/metrics_per_episode.csv
+[aggregate] computing 6 slices (4 base + 2 paired-group)...
+[write] /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast/aggregations/agg_per_baseline_var.csv  (1 rows)
+[write] /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast/aggregations/agg_per_sign_baseline_var.csv  (3 rows)
+[write] /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast/aggregations/agg_per_baseline.csv  (1 rows)
+[write] /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast/aggregations/agg_per_sign_baseline.csv  (3 rows)
+[write] /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast/aggregations/agg_per_signgroup_baseline.csv  (3 rows)
+[write] /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast/aggregations/agg_per_signgroup_baseline_var.csv  (3 rows)
+[write] /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast/aggregations/paired_view_baseline.csv
+[write] /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast/aggregations/paired_view_baseline_var.csv
+[write] /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast/reports/cumulative.json  (per_baseline=1, per_sign baselines=1)
+[write] /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast/reports/cumulative_2node.json
+
+Next steps:
+  python3 /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/pdd-bench/scripts/per_sign_bench/generate_cumulative_markdown_report.py \
+      --run-root /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast --cumulative /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast/reports/cumulative.json
+  python3 /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/pdd-bench/scripts/per_sign_bench/generate_category_aggregation_report.py \
+      --run-root /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast --cumulative /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast/reports/cumulative.json --preset task_oriented
+  python3 /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/pdd-bench/scripts/per_sign_bench/merge_and_report_2node.py \
+      --node1 /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast/reports/cumulative_2node.json --node2 /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast/reports/cumulative_2node.json --out-dir /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast
+/home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast/reports/report_cumulative.md
+REPORT: /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2_detour_pipeline/eval/joint_k3_augFIX_lr3e4_ep24_last/fv_fast/reports/report_cumulative.md

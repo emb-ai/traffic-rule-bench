@@ -1,0 +1,49 @@
+{
+  "chunks": [
+    "var_0"
+  ],
+  "per_baseline": {
+    "plant2_default": {
+      "n": 42,
+      "n_in_zone": 42,
+      "success_rate": 0.8571428571428571,
+      "dest_rate": 0.8571428571428571,
+      "sign_compliance_sr": 0.7380952380952381,
+      "sign_compliance_x": 0.7380952380952381,
+      "traffic_light_sr": 1.0,
+      "crosswalk_sr": 1.0,
+      "avg_driving_score": 0.0,
+      "avg_smoothness": 0.2394424689067547,
+      "avg_steps": 254.95238095238096,
+      "avg_route_length_m": 167.9842646155684,
+      "avg_distance_travelled_m": 94.40170413765149,
+      "avg_route_completion": 0.0,
+      "dest_x_comp_sr": 0.6190476190476191,
+      "dest_x_comp_x": 0.6190476190476191,
+      "avg_efficiency": 79.49221341664207
+    }
+  },
+  "per_sign": {
+    "plant2_default": {
+      "2.5": {
+        "n": 42,
+        "n_in_zone": 42,
+        "success_rate": 0.8571428571428571,
+        "dest_rate": 0.8571428571428571,
+        "sign_compliance_sr": 0.7380952380952381,
+        "sign_compliance_x": 0.7380952380952381,
+        "traffic_light_sr": 1.0,
+        "crosswalk_sr": 1.0,
+        "avg_driving_score": 0.0,
+        "avg_smoothness": 0.2394424689067547,
+        "avg_steps": 254.95238095238096,
+        "avg_route_length_m": 167.9842646155684,
+        "avg_distance_travelled_m": 94.40170413765149,
+        "avg_route_completion": 0.0,
+        "dest_x_comp_sr": 0.6190476190476191,
+        "dest_x_comp_x": 0.6190476190476191,
+        "avg_efficiency": 79.49221341664207
+      }
+    }
+  }
+}

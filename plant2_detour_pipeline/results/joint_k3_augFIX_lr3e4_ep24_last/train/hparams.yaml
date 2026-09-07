@@ -1,0 +1,87 @@
+cfg:
+  user:
+    working_dir: /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2
+  model:
+    name: PlanT
+    waypoints:
+      representation: path+wps
+      generator: linear
+      path_len: 20
+      wps_len: 8
+      bins_speed: 10
+      path_weight: 5
+      wps_weight: 1
+      speed_weight: 1
+      lateral_reweight_alpha: 0.0
+      gru_hidden_size: 64
+    training:
+      range: 50
+      range_factor_front: 2
+      input_ego_speed: false
+      input_bev: true
+      input_static_cars: true
+      oversample_cone_distance_min_m: 0.0
+      oversample_cone_distance_m: 0.0
+      oversample_factor: 1
+      route_dropout_p: 0.0
+      route_lateral_noise_m: 0.0
+      max_epochs: 24
+      batch_size: 512
+      learning_rate: 0.0003
+      betas:
+      - 0.9
+      - 0.95
+      grad_norm_clip: 1.0
+      weight_decay: 0.1
+      log_path: /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2/PlanT/log/ft_joint_k3_augFIX_lr3e4_ep24_1
+      num_workers: 4
+      seq_len: 1
+      augment: true
+      augment_parked: false
+      stop_speed_loss_weight: 1.0
+      speed_class_weights:
+      - 15
+      - 15
+      - 10
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+      sign_ignore_affects_ego: false
+      sign_range_m: 30
+      sign_memory_frames: 0
+      aux_sign_presence_weight: 0.0
+      sign_pool_token: false
+      filter_routes: false
+    pre_training:
+      forecastLoss_weight: 1
+      future_timestep: 1
+      quantize: true
+      precision_pos: 7
+      precision_speed: 5
+      precision_angle: 5
+    network:
+      hf_checkpoint: prajjwal1/bert-medium
+      use_dropout: true
+      embd_pdrop: 0.1
+  exp_folder_name: PlanT2_train
+  lrDecay_epoch: 29
+  lr_scheduler: cosine_warmup
+  warmup_ratio: 0.1
+  total_training_steps: 16656
+  warmup_steps: 1665
+  debug: false
+  visualize: false
+  overfit: 0
+  resume: true
+  resume_path: /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/stop_data/checkpoints/plant2_pretrain/epoch=029_final_3.ckpt
+  use_caching: true
+  custom_sampler: false
+  gpus: 1
+  expname: ft_joint_k3_augFIX_lr3e4_ep24
+  wandb_name: ft_joint_k3_augFIX_lr3e4_ep24_1
+  save_dir: /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2/PlanT/outputs/PlanT2_train/joint_k3_augFIX_lr3e4_ep24
+  data_dir: /home/simon/PlanT_2_cleanup/PlanT_2_2025_07_24/data

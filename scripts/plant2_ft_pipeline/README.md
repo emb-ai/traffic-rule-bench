@@ -35,7 +35,6 @@ plant2_ft_pipeline/
 ├── tools/        # debug, viz, overfit 1 traj
 ├── shims/        # Hydra entry (flash_attn off)
 ├── shell/        # bash env + оркестраторы
-├── wrappers/     # локальные обёртки (в .gitignore)
 ├── README.md
 └── README_MODEL_INPUTS.md
 ```
@@ -51,8 +50,9 @@ plant2_ft_pipeline/
 | `finetune.py`  | `FinetuneConfig`, `run_finetune()`, Hydra cmd builder                   |
 | `eval_core.py` | Sign SR, FV-fast, tag/ckpt resolution                                   |
 | `utils.py`     | parallel workers, sample counts, FV expert prep                         |
-| `paths.py`     | re-export path helpers                                                  |
-| `bootstrap.py` | `sys.path` для `python subdir/script.py`                                |
+
+`lib_tools.py` (package root, not `lib/`) holds debug-tool-only helpers (x_objs
+filter rule, class color table) shared across `tools/*.py`.
 
 
 Импорт из скриптов подпапок:
@@ -71,8 +71,8 @@ from lib.finetune import FinetuneConfig, run_finetune
 | ------------------------------------------ | ---------------------------------------------- |
 | `dump_plant2_l1.py`                        | L1 dumps (experts / fv / lane / rebuild-signs) |
 | `make_train_val_split_fv_experts_signs.py` | hardlink split `*_signs` → full split          |
-| `make_split_signs_2.5_subset.py`           | symlink subset только sign 2.5                 |
-| `extract_patch_2p5_cache.py`               | extract+patch ключей 2.5 из большого cache     |
+| `make_split_signs_subset.py`               | symlink subset для одного/нескольких sign (`--signs 2.5` или `--signs 4.2.1 4.2.2 4.2.3`) |
+| `extract_patch_2p5_cache.py`               | extract+patch ключей из большого cache (target_speed из measurements) |
 | `prefill_diskcache.py`                     | prefill / parallel / 2p5 subcommands           |
 
 
@@ -86,7 +86,8 @@ $PY data/dump_plant2_l1.py rebuild-signs --jobs exp:stop fv:3.24 --max-workers 3
 
 # Train/val split
 $PY data/make_train_val_split_fv_experts_signs.py
-$PY data/make_split_signs_2.5_subset.py
+$PY data/make_split_signs_subset.py --signs 2.5
+$PY data/make_split_signs_subset.py --signs 4.2.1 4.2.2 4.2.3
 
 # Prefill full spatial cache (~1.7T с augment)
 $PY data/prefill_diskcache.py parallel \
@@ -110,7 +111,8 @@ $PY data/prefill_diskcache.py 2p5 \
 
 | Скрипт                   | Назначение                                                |
 | ------------------------ | --------------------------------------------------------- |
-| `launch_ft.py`           | sweeps: `spatial-lr`, `2p5-tsfix`, `2p5-stopw`, `2p5-hyp` |
+| `launch_ft.py`           | sweep-spec-driven launcher — `--spec train/sweeps/*.yaml` |
+| `sweeps/*.yaml`          | sweep definitions (GPU × LR × hydra overrides), data not code |
 | `launch_ft.sh`           | thin wrapper → `launch_ft.py`                             |
 | `run_plant2_finetune.py` | один FT job (argparse)                                    |
 
@@ -118,19 +120,23 @@ $PY data/prefill_diskcache.py 2p5 \
 Чекпоинты: `$TRB_ROOT/plant2/PlanT/checkpoints_ft/<CHECKPOINT_ADDON>/`  
 Логи: `$TRB_ROOT/plant2/PlanT/log/ft_<ADDON>_1/`
 
+Новый эксперимент = новый (или скопированный и отредактированный) YAML в
+`train/sweeps/`, не новая функция в `.py`. Формат — см. docstring в
+`launch_ft.py` или любой существующий файл в `train/sweeps/`.
+
 ### Примеры
 
 ```bash
-# Sweep 7× LR на GPU 0–6 (full spatial)
-$PY train/launch_ft.py spatial-lr
+# Sweep 7× LR на GPU 0–6 (full spatial), tmux — не блокирует
+$PY train/launch_ft.py --spec train/sweeps/spatial_lr.yaml
 
 # 2.5 tsfix: 2 job в background (LR 1e-4 / 1e-5)
-$PY train/launch_ft.py 2p5-tsfix
-$PY train/launch_ft.py 2p5-tsfix --wait
+$PY train/launch_ft.py --spec train/sweeps/2p5_tsfix.yaml
+$PY train/launch_ft.py --spec train/sweeps/2p5_tsfix.yaml --wait
 
 # Stop-weight / hypothesis sweeps
-$PY train/launch_ft.py 2p5-stopw --wait
-$PY train/launch_ft.py 2p5-hyp --wait
+$PY train/launch_ft.py --spec train/sweeps/2p5_stopw.yaml --wait
+$PY train/launch_ft.py --spec train/sweeps/2p5_hyp.yaml --wait
 
 # Один job вручную
 $PY train/run_plant2_finetune.py \
@@ -153,7 +159,7 @@ $PY train/run_plant2_finetune.py \
 
 | Скрипт           | Назначение                            |
 | ---------------- | ------------------------------------- |
-| `eval_sign25.py` | Sign SR (по умолчанию `--only 2.5`)   |
+| `eval_sign.py` | Sign SR, `--only` обязателен (`2.5` или `4.2.1,4.2.2,4.2.3`) |
 | `eval_full.py`   | subcommands: `fv`, `queue`, `spatial` |
 | `eval_full.sh`   | wrapper → `eval_full.py`              |
 
@@ -164,18 +170,22 @@ $PY train/run_plant2_finetune.py \
 
 ```bash
 # Sign SR одного ckpt
-$PY eval/eval_sign25.py \
+$PY eval/eval_sign.py \
   --ckpt $TRB_ROOT/plant2/PlanT/checkpoints_ft/fvexp30_spatial_2p5_tsfix_lr1e5/best_023_….ckpt \
   --tag my_run_sign25 \
   --gpu 0 --only 2.5 --jobs 8 --scenes-per-job 20
 
 # По addon + slot
-$PY eval/eval_sign25.py \
-  --addon fvexp30_spatial_2p5_tsfix_lr1e5 --slot best --gpu 1
+$PY eval/eval_sign.py \
+  --addon fvexp30_spatial_2p5_tsfix_lr1e5 --slot best --gpu 1 --only 2.5
+
+# Мульти-знак eval (detour 4.2.1/4.2.2/4.2.3)
+$PY eval/eval_sign.py \
+  --ckpt /path/to.ckpt --tag my_detour_run --gpu 0 --only 4.2.1,4.2.2,4.2.3
 
 # Eval одной train-траектории + GIF + predictions
-$PY eval/eval_sign25.py \
-  --ckpt /path/to.ckpt --tag traj_eval --gpu 0 \
+$PY eval/eval_sign.py \
+  --ckpt /path/to.ckpt --tag traj_eval --gpu 0 --only 2.5 \
   --trajectory sign_100062_j0_lane0_seed1974118946_v0_default \
   --save-gifs --save-predictions
 
@@ -200,8 +210,7 @@ $PY eval/eval_full.py spatial \
 
 | Скрипт                       | Назначение                                   |
 | ---------------------------- | -------------------------------------------- |
-| `inspect_boxes.py`           | pretty-print `boxes/NNNN.json.gz`            |
-| `print_random_xobjs.py`      | random x_objs из dump                        |
+| `inspect_boxes.py`           | pretty-print `boxes/NNNN.json.gz` (`--route` explicit or `--random`/`--split`/`--all-frames`) |
 | `viz_train_global_gif.py`    | GIF из train route                           |
 | `overfit_1traj_sweep.py`     | train+eval на 1 traj, гиперпараметры из YAML |
 | `configs/overfit_1traj.yaml` | конфиг overfit (редактировать здесь)         |
@@ -256,10 +265,10 @@ $PY $SHIM resume=True resume_path=$CKPT0 gpus=1 use_caching=True \
 ```bash
 source $PIPELINE_DIR/shell/env.sh
 
-$PY train/launch_ft.py 2p5-tsfix --wait
+$PY train/launch_ft.py --spec train/sweeps/2p5_tsfix.yaml --wait
 
-$PY eval/eval_sign25.py \
-  --addon fvexp30_spatial_2p5_tsfix_lr1e5 --slot best --gpu 0
+$PY eval/eval_sign.py \
+  --addon fvexp30_spatial_2p5_tsfix_lr1e5 --slot best --gpu 0 --only 2.5
 ```
 
 ### Full spatial E2E
@@ -269,7 +278,7 @@ source $PIPELINE_DIR/shell/env.sh
 
 $PY data/dump_plant2_l1.py rebuild-signs
 $PY data/make_train_val_split_fv_experts_signs.py
-$PY data/make_split_signs_2.5_subset.py
+$PY data/make_split_signs_subset.py --signs 2.5
 
 $PY data/prefill_diskcache.py parallel \
   --ds $SHEPELEV/plant2_l1_fv_experts_split_signs/train \
@@ -277,8 +286,24 @@ $PY data/prefill_diskcache.py parallel \
   --ds-local /tmp/plant2_ds_cache_spatial_aug \
   --cache-size-gb 1800
 
-$PY train/launch_ft.py spatial-lr
+$PY train/launch_ft.py --spec train/sweeps/spatial_lr.yaml
 $PY eval/eval_full.py spatial
+```
+
+### Новый эксперимент (новый sign / гипотеза)
+
+```bash
+source $PIPELINE_DIR/shell/env.sh
+
+# 1. Split (если дампы/сплит уже есть у кого-то ещё — этот шаг можно пропустить)
+$PY data/make_split_signs_subset.py --signs 4.2.1 4.2.2 4.2.3
+
+# 2. Скопировать train/sweeps/2p5_tsfix.yaml -> train/sweeps/my_experiment.yaml,
+#    поправить split/ds_local/jobs (GPU, LR, addon, hydra overrides)
+$PY train/launch_ft.py --spec train/sweeps/my_experiment.yaml --wait
+
+# 3. Eval
+$PY eval/eval_sign.py --addon my_addon --slot best --gpu 0 --only 4.2.1,4.2.2,4.2.3
 ```
 
 ### Overfit одной траектории 2.5
@@ -303,5 +328,28 @@ $PY tools/overfit_1traj_sweep.py --config tools/configs/overfit_1traj.yaml --gpu
 | Metrics    | `$SHEPELEV/plant2_ft_metrics/`                        |
 | Full cache | `/tmp/plant2_ds_cache_spatial_aug`                    |
 | 2.5 cache  | `/tmp/plant2_ds_cache_2p5_tsfix`                      |
+
+---
+
+## Gotchas
+
+1. **Dump пропускает уже собранные routes.** `dump_plant2_l1.py` / `expert_replay_for_plant2.py`
+   не перезаписывают route, если `<out>/data/<uid>_<variant>/results.json.gz` уже есть.
+   После фикса измерений (`target_speed`, `brake`, …) нужно удалить route dir перед re-dump —
+   иначе diskcache и сам dump продолжат нести старые значения.
+2. **Diskcache печёт значения на момент prefill.** Если measurements поменялись задним числом,
+   старые записи в `DS_LOCAL` останутся с прежним `target_speed`, пока cache не пересобран
+   (`prefill_diskcache.py parallel --ds-local <new-or-cleared-dir>` или точечный `extract_patch_2p5_cache.py`).
+3. **Speed-limit знаки (3.24 / 4.6 / 5.21 / 5.31)** имеют собственную `v_target_*` семантику
+   в measurements (см. `expert_replay_for_plant2.py`) — не путать с priority/detour-знаками,
+   где `target_speed = expert ego_speed` (clamp ≤20 м/с).
+4. **`brake` в `lit_module.py` захардкожен в `False`** при обучении — стоп-супервизия идёт
+   исключительно через `target_speed≈0` (dataset обнуляет его при `measurements.brake`), плюс
+   опционально `model.training.stop_speed_loss_weight` / `speed_class_weights`. Не полагаться
+   на batch-поле `brake` в loss.
+5. **`model.training.augment=False`** читает только base-ключи cache (без `_aug`) — rebuild
+   cache не нужен, если он уже был прогрет с `augment=True`.
+6. **`+model.training.filter_routes=False`** обязателен на уже готовом (отфильтрованном) split —
+   иначе на каждый epoch идёт лишний I/O по `results.json.gz`/slurm логам по NFS.
 
 

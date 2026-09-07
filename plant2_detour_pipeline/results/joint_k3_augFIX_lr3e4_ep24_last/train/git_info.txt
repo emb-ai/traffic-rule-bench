@@ -1,0 +1,651 @@
+Run started at: 29/08/2026 22:31:35
+Git dir: /home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench/plant2
+Git state: 90d0c098d3fb84fd53981e67e926fe7cc0a5042e
+Git commit: commit 90d0c098d3fb84fd53981e67e926fe7cc0a5042e
+Author: NThunder <bukhtuev.ga@phystech.edu>
+Date:   Mon Aug 24 23:03:51 2026 +0300
+
+    Use shared class_emb for all object types including signs.
+    
+    Replace per-class Linear tok_emb and separate sign_id token with a single
+    nn.Embedding over class_ids; remove route-level sign_id from the dataset path.
+    
+    Co-authored-by: Cursor <cursoragent@cursor.com>
+Git branch: main
+* rebbutle-wip
+
+diff --git a/PlanT/config/model/PlanT.yaml b/PlanT/config/model/PlanT.yaml
+index 6792d3d..71539ec 100644
+--- a/PlanT/config/model/PlanT.yaml
++++ b/PlanT/config/model/PlanT.yaml
+@@ -11,6 +11,9 @@ waypoints:
+   path_weight: 5
+   wps_weight: 1
+   speed_weight: 1
++  # H2-detour: per-sample path-loss multiplier = 1 + alpha * max(|path_y|).
++  # 0 = disabled (exact prior uniform-mean L1 behaviour).
++  lateral_reweight_alpha: 0.0
+ 
+   gru_hidden_size: 64
+ 
+@@ -20,6 +23,15 @@ training:
+   input_ego_speed: False
+   input_bev: True
+   input_static_cars: True
++  # H5-detour: duplicate frames with a cone within this many meters (ego
++  # frame), oversample_factor times. 0 = disabled.
++  oversample_cone_distance_min_m: 0.0
++  oversample_cone_distance_m: 0.0
++  oversample_factor: 1
++  # H6/H7-detour: break the route-copying shortcut (see model.py
++  # _perturb_route). Training-time only. 0.0 = disabled.
++  route_dropout_p: 0.0
++  route_lateral_noise_m: 0.0
+ 
+   max_epochs: 30
+   batch_size: 128
+@@ -42,6 +54,26 @@ training:
+   # or env SPEED_CLASS_WEIGHTS=15,1,1,1,1,1,1,1
+   speed_class_weights: [15, 15, 10, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+ 
++  # --- Sign-compliance hypotheses (2.5 stop-sign FT experiments) ---
++  # H1: keep in-range PDD/stop-sign x_objs regardless of the simulator's
++  # affects_ego flag (which can flicker frame-to-frame). Default False keeps
++  # the original filtering behaviour.
++  sign_ignore_affects_ego: False
++  # H1: detection radius (m) for TL/stop/PDD sign x_objs objects (default 30
++  # matches original hardcoded behaviour).
++  sign_range_m: 30
++  # H3: extra scalar input token = decayed "sign seen in the last K frames"
++  # (dataset.py PlanTDataset._recent_sign_signal). 0 = disabled.
++  sign_memory_frames: 0
++  # H4: auxiliary BCE loss weight for a probe predicting whether a relevant
++  # sign is present in x_objs this frame (model.py sign_presence_head). 0 =
++  # disabled (no head constructed, no loss term added).
++  aux_sign_presence_weight: 0.0
++  # H5: pool current-frame sign-like object embeddings into one dedicated
++  # global conditioning token (model.py forward()), perception-derived
++  # (unlike the removed metadata-injected sign_id/sign_emb).
++  sign_pool_token: False
++
+ pre_training:
+   forecastLoss_weight: 1
+   future_timestep: 1
+diff --git a/PlanT/dataset.py b/PlanT/dataset.py
+index f52d225..4eba13a 100644
+--- a/PlanT/dataset.py
++++ b/PlanT/dataset.py
+@@ -166,9 +166,12 @@ class PlanTDataset(Dataset):
+                     label.append(labels_file)
+                     measurement.append(measurements_file)
+ 
+-                self.BEV.append(route_dir / "bev_no_car_semantics" / f"{seq + self.cfg_train.seq_len-1:04d}.png")
+-                self.labels.append(label)
+-                self.measurements.append(measurement)
++                bev_path = route_dir / "bev_no_car_semantics" / f"{seq + self.cfg_train.seq_len-1:04d}.png"
++                repeat = self._oversample_repeat(label[self.cfg_train.seq_len - 1])
++                for _ in range(repeat):
++                    self.BEV.append(bev_path)
++                    self.labels.append(label)
++                    self.measurements.append(measurement)
+ 
+         # There is a complex "memory leak"/performance issue when using Python objects like lists in a Dataloader that is loaded with multiprocessing, num_workers > 0
+         # A summary of that ongoing discussion can be found here https://github.com/pytorch/pytorch/issues/13246#issuecomment-905703662
+@@ -182,6 +185,57 @@ class PlanTDataset(Dataset):
+         print('Skipped routes:', skipped_routes)
+         print('Trainable routes:', trainable_routes)
+ 
++    def _oversample_repeat(self, labels_file) -> int:
++        """H5-detour: how many times to duplicate this frame in the dataset.
++
++        Obstacle-avoidance is a handful of frames per route needing a real
++        lateral swerve, drowned out by the rest of the route's near-straight
++        frames -- loss reweighting alone plateaus under Adam's per-parameter
++        gradient normalization (scaling one sample's loss doesn't scale the
++        actual step size nearly that much, since the running gradient-
++        magnitude estimate for the same parameters adapts alongside it).
++        Oversampling changes how often the pattern is seen at all, which
++        loss-scaling can't replicate.
++
++        Uses the frame's own ``boxes/*.json.gz`` (ego-frame object list,
++        cones are ``class=='static', type_id=='static.prop.constructioncone'``)
++        rather than the ground-truth path's lateral extent -- a first
++        attempt at the latter found ~59% of ALL frames exceed 0.5m lateral
++        deviation (ordinary turns/junctions have similar magnitude to an
++        obstacle swerve in this representation), so it can't distinguish
++        "near an obstacle" from "route has a bend in it". Cone proximity is
++        unambiguous.
++
++        Distances form a WINDOW ``[oversample_cone_distance_min_m,
++        oversample_cone_distance_m]``. The window matters: the expert starts
++        its lane change a median 51.5 m before the cone (77% of routes finish
++        it before the 30 m compliance zone even begins), so the frames that
++        actually teach the *decision* are the far ones. An earlier run
++        oversampled `<=5 m` -- frames where the maneuver is already over --
++        and unsurprisingly changed nothing.
++
++        ``oversample_cone_distance_m`` (default 0 disabled) /
++        ``oversample_factor`` (default 1, no duplication even if a distance is
++        set) gate this.
++        """
++        distance = float(self.cfg_train.get("oversample_cone_distance_m", 0.0))
++        if distance <= 0.0:
++            return 1
++        dist_min = float(self.cfg_train.get("oversample_cone_distance_min_m", 0.0))
++        factor = int(self.cfg_train.get("oversample_factor", 1))
++        if factor <= 1:
++            return 1
++        with gzip.open(labels_file, "rt", encoding="utf-8") as f:
++            boxes = json.load(f)
++        for obj in boxes:
++            if not isinstance(obj, dict) or obj.get("type_id") != "static.prop.constructioncone":
++                continue
++            x, y = obj["position"][0], obj["position"][1]
++            d = (x * x + y * y) ** 0.5
++            if dist_min <= d <= distance:
++                return factor
++        return 1
++
+     def __len__(self) -> int:
+         """Returns the length of the dataset."""
+         return len(self.measurements)
+@@ -202,6 +256,41 @@ class PlanTDataset(Dataset):
+             del sample["parked_cars"]
+             del sample["parked_cars_quant"]
+ 
++    @staticmethod
++    def _sign_in_range(objs, sign_like, sign_range) -> bool:
++        for x in objs:
++            cls = x.get("class")
++            cls_l = cls.lower() if isinstance(cls, str) else cls
++            if cls not in sign_like and cls_l not in sign_like:
++                continue
++            if not x.get("affects_ego") or "position" not in x:
++                continue
++            pos_x, pos_y, pos_z = x["position"]
++            if pos_x**2 + pos_y**2 <= sign_range**2 and abs(pos_z) <= 30:
++                return True
++        return False
++
++    def _recent_sign_signal(self, cur_boxes_path, cur_labels_data, sign_like, sign_range, lookback) -> float:
++        """H3: 1.0 if a relevant sign is in-frame now; else linearly-decayed
++        value based on how many frames ago it was last seen (0 beyond lookback)."""
++        if self._sign_in_range(cur_labels_data, sign_like, sign_range):
++            return 1.0
++
++        boxes_path = Path(cur_boxes_path)
++        boxes_dir = boxes_path.parent
++        seq = int(boxes_path.name.split(".")[0])
++        for back in range(1, lookback + 1):
++            prev_seq = seq - back
++            if prev_seq < 0:
++                break
++            prev_path = boxes_dir / f"{prev_seq:04d}.json.gz"
++            if not prev_path.is_file():
++                break
++            prev_boxes = json.load(gzip.open(prev_path))[1:]  # drop ego
++            if self._sign_in_range(prev_boxes, sign_like, sign_range):
++                return max(0.0, 1.0 - back / lookback)
++        return 0.0
++
+     def __getitem__(self, index):
+         """Returns the item at index idx."""
+ 
+@@ -214,24 +303,38 @@ class PlanTDataset(Dataset):
+ 
+         augment = self.transform is not None and np.random.rand() < self.aug_rate
+ 
+-        # See if we can use the cache
+-        if augment and self.data_cache is not None:
+-            if labels[0].decode()+"_aug" in self.data_cache:
+-                sample = self.data_cache[labels[0].decode()+"_aug"]
+-                return sample
+-
+-            elif labels[0].decode() in self.data_cache:
+-                sample = self.transform(self.data_cache[labels[0].decode()])
+-                sample.pop("BEV_aug", None)
+-                sample.pop("output_floating", None)
+-                self.data_cache[labels[0].decode()+"_aug"] = sample
+-                return sample
+-
+-        elif self.data_cache is not None and labels[0].decode() in self.data_cache:
+-                sample = self.data_cache[labels[0].decode()]
+-                sample.pop("BEV_aug", None)
+-                sample.pop("output_floating", None)
+-                return sample
++        # See if we can use the cache.
++        #
++        # Uses the atomic Cache.get() rather than `key in cache` followed by
++        # `cache[key]`. That check-then-read pattern is a TOCTOU race: when
++        # several trainings share one diskcache sitting at its size limit,
++        # another process can evict the key between the two calls, and the
++        # read then raises KeyError inside a DataLoader worker and kills the
++        # run mid-epoch (observed doing exactly that). get() returns None on a
++        # miss instead, and we simply fall through and reload from disk.
++        # NB: never assign to `sample` here -- it is already initialised to the
++        # dict built above, and the load-from-disk path below fills that dict
++        # in place. Binding a cache miss (None) to it breaks that fallthrough.
++        if self.data_cache is not None:
++            cache_key = labels[0].decode()
++            if augment:
++                cached_aug = self.data_cache.get(cache_key + "_aug")
++                if cached_aug is not None:
++                    return cached_aug
++
++                cached = self.data_cache.get(cache_key)
++                if cached is not None:
++                    transformed = self.transform(cached)
++                    transformed.pop("BEV_aug", None)
++                    transformed.pop("output_floating", None)
++                    self.data_cache[cache_key + "_aug"] = transformed
++                    return transformed
++            else:
++                cached = self.data_cache.get(cache_key)
++                if cached is not None:
++                    cached.pop("BEV_aug", None)
++                    cached.pop("output_floating", None)
++                    return cached
+ 
+         # Load new sample
+         loaded_labels = []
+@@ -303,14 +406,34 @@ class PlanTDataset(Dataset):
+         pdd_classes = set(SIGN_CODES)
+         sign_like = {"stop_sign"} | pdd_classes
+ 
++        # H1 (sign persistence): radius for TL/sign objects, overridable per
++        # experiment (default 30m matches original behaviour).
++        sign_range = self.cfg_train.get("sign_range_m", 30)
++
++        # H3 (sign memory): decayed "was a relevant sign seen in the last K
++        # frames" scalar, computed from raw (unmutated) labels_data before the
++        # in-place "too far" reclassification below. Off by default.
++        sign_memory_frames = int(self.cfg_train.get("sign_memory_frames", 0) or 0)
++        if sign_memory_frames > 0:
++            sample["sign_recent_signal"] = self._recent_sign_signal(
++                labels[0].decode(), labels_data, sign_like, sign_range, sign_memory_frames
++            )
++
++        # H4 (auxiliary sign-presence loss): ground truth for the presence
++        # probe added in model.py when aux_sign_presence_weight > 0.
++        if float(self.cfg_train.get("aux_sign_presence_weight", 0.0) or 0.0) > 0:
++            sample["sign_present_now"] = float(
++                self._sign_in_range(labels_data, sign_like, sign_range)
++            )
++
+         # Fix static extents and drop irrelevant objects
+         for x in labels_data:
+             if "position" in x:
+                 pos_x, pos_y, pos_z = x["position"]
+ 
+-                # 30m radius for TL / stop / PDD sign objects
++                # sign_range radius for TL / stop / PDD sign objects
+                 if x["class"] in (["traffic_light"] + list(sign_like)):
+-                    if pos_x**2 + pos_y**2 > 30**2 or abs(pos_z) > 30:
++                    if pos_x**2 + pos_y**2 > sign_range**2 or abs(pos_z) > 30:
+                         x["class"] = "too far"
+                 # ellipse for others
+                 else:
+@@ -361,6 +484,12 @@ class PlanTDataset(Dataset):
+                 if x["class"].lower() in self.car_types
+             ]
+ 
++        # H1 (sign persistence): the simulator's "affects_ego" flag can flicker
++        # frame-to-frame for sign-class objects even while in range, unlike the
++        # unconditional keep used for statics. Gate-able so default behaviour
++        # (require affects_ego) is unchanged unless the experiment opts in.
++        sign_ignore_affects_ego = self.cfg_train.get("sign_ignore_affects_ego", False)
++
+         # Add static cars, static objects, traffic lights, stop / PDD signs
+         def _keep_staticish(x) -> bool:
+             cls = x["class"].lower() if isinstance(x["class"], str) else x["class"]
+@@ -373,6 +502,8 @@ class PlanTDataset(Dataset):
+             if cls == "traffic_light":
+                 return x.get("state") in ["Red", "Yellow"] and x.get("affects_ego")
+             if cls_key in sign_like or cls in sign_like:
++                if sign_ignore_affects_ego:
++                    return True
+                 return bool(x.get("affects_ego"))
+             return True
+ 
+@@ -468,7 +599,19 @@ class PlanTDataset(Dataset):
+     def aug_sample(self, sample):
+         # Geometric augment using recorded augmentation_translation / rotation.
+         # Translation applied first (transfuser convention).
+-        translate = - np.array([0.0, sample["augmentation_translation"]])
++        #
++        # The two groups of fields live in MIRRORED lateral frames in this dump:
++        # object boxes (`input` / `output`) are y=RIGHT (plant2_frames._ego_xy
++        # negates what MetaDrive's convert_to_local_coordinates returns), while
++        # route / route_original / waypoints are y=LEFT. Applying one signed
++        # shift and one rotation to all of them -- correct upstream, where every
++        # field shares a frame -- moves the objects and the route in OPPOSITE
++        # physical directions, i.e. it teaches the wrong geometry. Mirroring a
++        # frame negates both the lateral shift and the rotation sense, so the
++        # y=right group takes +translation and R, the y=left group -translation
++        # and R.T.
++        translate_left = - np.array([0.0, sample["augmentation_translation"]])
++        translate_right = - translate_left
+         rot = np.deg2rad(sample["augmentation_rotation"])
+ 
+         if self.cfg_train.get("input_bev", False):
+@@ -486,29 +629,29 @@ class PlanTDataset(Dataset):
+ 
+         # Translation
+         if len(input) > 0:
+-            input[:, 1:3] += translate
++            input[:, 1:3] += translate_right
+         if len(output) > 0:
+-            output[:, :2] += translate
+-        waypoints += translate
+-        route += translate
+-        route_original += translate
++            output[:, :2] += translate_right
++        waypoints += translate_left
++        route += translate_left
++        route_original += translate_left
+ 
+         # Rotation
+         c, s = np.cos(rot), np.sin(rot)
+         R = np.array([[c, -s], [s, c]])
+ 
+         if len(input) > 0:
+-            input[:, 1:3] = (R.T @ input[:, 1:3].T).T
++            input[:, 1:3] = (R @ input[:, 1:3].T).T
+         if len(output) > 0:
+-            output[:, :2] = (R.T @ output[:, :2].T).T
++            output[:, :2] = (R @ output[:, :2].T).T
+         waypoints = (R.T @ waypoints.T).T
+         route = (R.T @ route.T).T
+         route_original = (R.T @ route_original.T).T
+ 
+         if len(input) > 0:
+-            input[:, 3] -= np.rad2deg(rot)
++            input[:, 3] += np.rad2deg(rot)
+         if len(output) > 0:
+-            output[:, 2] -= np.rad2deg(rot)
++            output[:, 2] += np.rad2deg(rot)
+ 
+         sample["input"] = input.tolist()
+         if "output" in sample:
+diff --git a/PlanT/lit_module.py b/PlanT/lit_module.py
+index ada2f09..b1373eb 100644
+--- a/PlanT/lit_module.py
++++ b/PlanT/lit_module.py
+@@ -105,7 +105,7 @@ class LitHFLM(pl.LightningModule):
+             losses["loss_wp"] = F.l1_loss(pred_wps, waypoints_batch)
+ 
+         if pred_path is not None:
+-            losses["loss_path"] = F.l1_loss(pred_path, path_batch)
++            losses["loss_path"] = self._path_loss(pred_path, path_batch)
+ 
+         if pred_speed is not None:
+             target_speeds = torch.tensor(self.plant_variables.target_speeds, device=targetspeed_batch.device)
+@@ -138,6 +138,10 @@ class LitHFLM(pl.LightningModule):
+                 losses_forecast.append(logits[i].new_zeros(()))
+         losses["loss_forecast"] = torch.mean(torch.stack(losses_forecast))
+ 
++        aux_loss = self._aux_sign_presence_loss(batch)
++        if aux_loss is not None:
++            losses["loss_sign_presence"] = aux_loss
++
+         for name, loss in losses.items():
+             self.log(
+                 f"train/{name}",
+@@ -150,10 +154,11 @@ class LitHFLM(pl.LightningModule):
+             )
+ 
+         weights = {
+-            "loss_wp": self.cfg.model.waypoints.get("wp_weight", 1), 
++            "loss_wp": self.cfg.model.waypoints.get("wp_weight", 1),
+             "loss_forecast": self.cfg.model.pre_training.get("forecastLoss_weight", 0),
+             "loss_path": self.cfg.model.waypoints.get("path_weight", 1),
+             "loss_egospeed": self.cfg.model.waypoints.get("speed_weight", 1),
++            "loss_sign_presence": self.cfg.model.training.get("aux_sign_presence_weight", 0.0),
+         }
+ 
+         loss_all = sum([loss*weights[name] for name, loss in losses.items()])
+@@ -215,7 +220,7 @@ class LitHFLM(pl.LightningModule):
+         if pred_wps is not None:
+             losses["loss_wp"] = F.l1_loss(pred_wps, waypoints_batch)
+         if pred_path is not None:
+-            losses["loss_path"] = F.l1_loss(pred_path, path_batch)
++            losses["loss_path"] = self._path_loss(pred_path, path_batch)
+         if pred_speed is not None:
+             target_speeds = torch.tensor(
+                 self.plant_variables.target_speeds, device=targetspeed_batch.device
+@@ -249,11 +254,16 @@ class LitHFLM(pl.LightningModule):
+                 losses_forecast.append(logits[i].new_zeros(()))
+         losses["loss_forecast"] = torch.mean(torch.stack(losses_forecast))
+ 
++        aux_loss = self._aux_sign_presence_loss(batch)
++        if aux_loss is not None:
++            losses["loss_sign_presence"] = aux_loss
++
+         weights = {
+             "loss_wp": self.cfg.model.waypoints.get("wp_weight", 1),
+             "loss_forecast": self.cfg.model.pre_training.get("forecastLoss_weight", 0),
+             "loss_path": self.cfg.model.waypoints.get("path_weight", 1),
+             "loss_egospeed": self.cfg.model.waypoints.get("speed_weight", 1),
++            "loss_sign_presence": self.cfg.model.training.get("aux_sign_presence_weight", 0.0),
+         }
+         loss_all = sum(loss * weights[name] for name, loss in losses.items())
+ 
+@@ -283,6 +293,37 @@ class LitHFLM(pl.LightningModule):
+             self.model.parameters(), self.cfg_train.grad_norm_clip
+         )
+ 
++    def _path_loss(self, pred_path, path_batch):
++        """L1 path loss, optionally up-weighted per-sample by how much lateral
++        deviation the ground-truth path itself requires (H2-detour: obstacle
++        avoidance is a handful of frames per route with a real 2-3m swerve,
++        drowned out by the ~96% of frames that are near-straight -- a uniform
++        global path_weight scales both equally and can't fix that imbalance).
++
++        ``model.waypoints.lateral_reweight_alpha`` (default 0 = disabled,
++        exact prior behaviour): per-sample weight is
++        ``1 + alpha * max(|path_y|)`` over the sample's path points, so a
++        route-segment with no lateral need keeps weight 1 and a segment
++        needing e.g. 3m of swerve gets ``1 + 3*alpha``.
++        """
++        alpha = float(self.cfg.model.waypoints.get("lateral_reweight_alpha", 0.0))
++        if alpha <= 0.0:
++            return F.l1_loss(pred_path, path_batch)
++        per_elem = F.l1_loss(pred_path, path_batch, reduction="none")  # (B, path_len, 2)
++        per_sample = per_elem.mean(dim=tuple(range(1, per_elem.dim())))  # (B,)
++        lateral_dev = path_batch[..., 1].abs().amax(dim=-1)  # (B,) max |y| over path points
++        sample_w = 1.0 + alpha * lateral_dev
++        return (per_sample * sample_w).sum() / sample_w.sum()
++
++    def _aux_sign_presence_loss(self, batch):
++        """H4: BCE for the auxiliary sign-presence probe (see model.py
++        aux_sign_presence / dataset.py sign_present_now). None when disabled."""
++        logit = getattr(self.model, "_last_aux_sign_logit", None)
++        if logit is None or "sign_present_now" not in batch:
++            return None
++        target = batch["sign_present_now"].reshape(-1).to(dtype=logit.dtype)
++        return F.binary_cross_entropy_with_logits(logit, target)
++
+     def _stop_speed_loss_weight(self) -> float:
+         """Per-sample multiplier for stop targets (target_speed≈0).
+ 
+diff --git a/PlanT/model.py b/PlanT/model.py
+index 25ede09..09b1ed0 100644
+--- a/PlanT/model.py
++++ b/PlanT/model.py
+@@ -11,7 +11,7 @@ from transformers import (
+ 
+ import timm
+ 
+-from plant_variables import PlanTVariables
++from plant_variables import PDD_OBJECT_CLASS_START, PlanTVariables
+ from util.sign_id import SIGN_CODES
+ 
+ logger = logging.getLogger(__name__)
+@@ -102,12 +102,51 @@ class HFLM(nn.Module):
+ 
+         self.route_emb = nn.Linear(20*2, self.n_embd)
+ 
++        # H6/H7-detour: break the "copy route_original into pred_path" shortcut.
++        # 0.0 = disabled (exact prior behaviour).
++        self.route_dropout_p = float(
++            self.config_all.model.training.get("route_dropout_p", 0.0)
++        )
++        self.route_lateral_noise_m = float(
++            self.config_all.model.training.get("route_lateral_noise_m", 0.0)
++        )
++
+         self.speed_emb = nn.Embedding(4, self.n_embd)
+ 
+         self.input_ego_speed = self.config_all.model.training.get("input_ego_speed", False)
+         if self.input_ego_speed:
+             self.ego_speed_emb = nn.Linear(1, self.n_embd)
+ 
++        # H3 (sign memory): decayed "sign seen in the last K frames" scalar,
++        # see dataset.py PlanTDataset._recent_sign_signal / sign_memory_frames.
++        self.input_sign_memory = int(self.config_all.model.training.get("sign_memory_frames", 0) or 0) > 0
++        if self.input_sign_memory:
++            self.sign_memory_emb = nn.Linear(1, self.n_embd)
++
++        # H4 (auxiliary sign-presence loss): small probe off the same trailing
++        # token the ego-speed head reads, trained (via lit_module) to predict
++        # whether a relevant sign is present in x_objs this frame — sharpens
++        # how strongly the shared class_emb representation drives that token.
++        # Not part of forward()'s public return (would require updating every
++        # caller that unpacks pred_plan, incl. the inference adapter); stashed
++        # on self._last_aux_sign_logit instead, read by lit_module.py.
++        self.aux_sign_presence = float(
++            self.config_all.model.training.get("aux_sign_presence_weight", 0.0) or 0.0
++        ) > 0
++        if self.aux_sign_presence:
++            self.sign_presence_head = nn.Linear(self.n_embd, 1)
++        self._last_aux_sign_logit = None
++
++        # H5 (dedicated sign-pool token): pool the *current frame's* sign-like
++        # object embeddings (class_emb(4)="stop_sign" or class_emb(id)>=
++        # PDD_OBJECT_CLASS_START) into one extra global token, prepended like
++        # route_tok/speed_tok — perception-derived (from x_objs each forward
++        # pass), not an injected route-level label like the old removed
++        # sign_emb. A learned placeholder stands in when no sign is present.
++        self.sign_pool_token = bool(self.config_all.model.training.get("sign_pool_token", False))
++        if self.sign_pool_token:
++            self.sign_pool_no_sign_emb = nn.Parameter(torch.randn(self.n_embd) * 0.02)
++
+         # # decoder head forecasting
+         self.heads = nn.ModuleList(
+             [
+@@ -221,10 +260,49 @@ class HFLM(nn.Module):
+         return optimizer
+ 
+ 
++    def _perturb_route(self, route_batch):
++        """H6/H7-detour: perturb the route input during TRAINING only.
++
++        ``route_original`` (the SUMO-planned route) is fed to the model as the
++        first token, but for 4.2.x detour scenes that route runs straight
++        *through* the obstacle while the ground-truth path swerves around it.
++        Copying the route into ``pred_path`` therefore scores near-optimal loss
++        on ~96% of frames, which is exactly what the model learned to do
++        (measured predicted lateral ~0.04m == "follow the route exactly", vs
++        the ~2-3m the label needs at the obstacle). Loss reweighting can't fix
++        a shortcut that is genuinely near-optimal on the training objective;
++        removing the shortcut's reliability can.
++
++        - ``route_dropout_p``: per-sample probability of zeroing the whole
++          route input, forcing the path to be derived from perception.
++        - ``route_lateral_noise_m``: per-sample Gaussian lateral offset (std,
++          meters) applied to the route, making it an unreliable guide that
++          perception must correct.
++
++        Not applied under ``eval()`` so validation loss stays comparable to
++        the other runs, and inference is untouched.
++        """
++        if not self.training:
++            return route_batch
++        if self.route_dropout_p > 0.0:
++            keep = torch.rand(
++                route_batch.shape[0], device=route_batch.device
++            ) >= self.route_dropout_p
++            route_batch = route_batch * keep[:, None, None].to(route_batch.dtype)
++        if self.route_lateral_noise_m > 0.0:
++            offset = torch.randn(
++                route_batch.shape[0],
++                device=route_batch.device,
++                dtype=route_batch.dtype,
++            ) * self.route_lateral_noise_m
++            route_batch = route_batch.clone()
++            route_batch[..., 1] = route_batch[..., 1] + offset[:, None]
++        return route_batch
++
+     def forward(self, batch):
+         batch_idxs = batch["idxs"]
+         x_batch_objs = batch["x_objs"]
+-        route_batch = batch["route_original"]
++        route_batch = self._perturb_route(batch["route_original"])
+         speed_limit_batch = batch["speed_limit"]
+         # Embed class_id via shared nn.Embedding; continuous attrs via Linear.
+         # Supports 2-D pool (pool, 7) or batched 3-D (B, pool, 7).
+@@ -237,20 +315,37 @@ class HFLM(nn.Module):
+         # 3-D pool  (B, pool, n_embd)   → per-row fancy index           gives (B, maxseq, n_embd)
+         if embedding.dim() == 2:
+             embedding = embedding[batch_idxs]
++            class_ids_batched = class_ids[batch_idxs]
+         else:
+             row = torch.arange(embedding.shape[0], device=embedding.device).unsqueeze(1)
+             embedding = embedding[row, batch_idxs]
++            class_ids_batched = class_ids[row, batch_idxs]
++
++        # H5: masked mean-pool sign-like object tokens (padding's class_id=0
++        # never matches) into one extra token; learned placeholder if none.
++        if self.sign_pool_token:
++            is_sign = (class_ids_batched == 4) | (class_ids_batched >= PDD_OBJECT_CLASS_START)
++            has_sign = is_sign.any(dim=1)
++            sign_mask = is_sign.unsqueeze(-1).to(embedding.dtype)
++            pooled = (embedding * sign_mask).sum(dim=1) / sign_mask.sum(dim=1).clamp(min=1.0)
++            no_sign = self.sign_pool_no_sign_emb.unsqueeze(0).expand(pooled.shape[0], -1)
++            sign_pool_tok = torch.where(has_sign.unsqueeze(-1), pooled, no_sign)[:, None]
+ 
+         # Add axis in second dim (B x 1 x 512)
+         route_tok = self.route_emb(route_batch.flatten(1))[:, None]
+         embedding = torch.cat((route_tok, embedding), dim=1) # Add route to front
+ 
++        if self.sign_pool_token:
++            embedding = torch.cat((sign_pool_tok, embedding), dim=1)
++
+         # Add speed
+         speed_tok = self.speed_emb(speed_limit_batch)[:, None]
+         embedding = torch.cat((speed_tok, embedding), dim=1) # Add speed limit to front
+ 
+         # How many tokens at the front before objects
+         remove_idxs = 2
++        if self.sign_pool_token:
++            remove_idxs += 1
+ 
+         # Add ego_speed:
+         if self.input_ego_speed:
+@@ -259,6 +354,13 @@ class HFLM(nn.Module):
+             embedding = torch.cat((ego_speed_tok, embedding), dim=1)
+             remove_idxs += 1
+ 
++        # H3: recent-sign-presence scalar (see dataset.py sign_memory_frames)
++        if self.input_sign_memory:
++            sign_mem_tok = self.sign_memory_emb(batch["sign_recent_signal"][:, None])
++            sign_mem_tok = sign_mem_tok[:, None]
++            embedding = torch.cat((sign_mem_tok, embedding), dim=1)
++            remove_idxs += 1
++
+         if self.input_bev:
+             bev_tok = self.bev_encoder(batch["BEV"])[:, None]
+             embedding = torch.cat((bev_tok, embedding), dim=1)
+@@ -326,6 +428,12 @@ class HFLM(nn.Module):
+         if pred_speed is None:
+             pred_speed = self.ego_speed_classifier(x[:, -1, :])
+ 
++        # H4: auxiliary sign-presence probe off the same trailing token.
++        if self.aux_sign_presence:
++            self._last_aux_sign_logit = self.sign_presence_head(x[:, -1, :]).squeeze(-1)
++        else:
++            self._last_aux_sign_logit = None
++
+         pred_plan = (pred_path, pred_wps, pred_speed)
+ 
+         return logits, targets, pred_plan, attn_map

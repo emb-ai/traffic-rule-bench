@@ -40,6 +40,7 @@ from typing import Any
 import torch
 from torch.utils.data import DataLoader, Subset
 
+import lib_tools
 from lib.env import plan_t, trb_root
 from util.sign_id import SIGN_CODES
 
@@ -61,7 +62,6 @@ for _i, _code in enumerate(SIGN_CODES):
 
 _XOBJ_COLS = ("type", "x", "y", "yaw_deg", "speed_kmh", "ext_y", "ext_x")
 _SIGN_LIKE = set(SIGN_CODES) | {"stop_sign"}
-_SIGN_RANGE_M = 30.0
 
 
 def type_name(t: float) -> str:
@@ -98,14 +98,8 @@ def boxes_has_class(path: str | Path, class_name: str) -> bool:
     for obj in boxes[1:]:
         if str(obj.get("class")) != want:
             continue
-        if sign_like:
-            pos = obj.get("position") or [0.0, 0.0, 0.0]
-            px, py = float(pos[0]), float(pos[1])
-            pz = float(pos[2]) if len(pos) > 2 else 0.0
-            if px * px + py * py > _SIGN_RANGE_M ** 2 or abs(pz) > _SIGN_RANGE_M:
-                continue
-            if not obj.get("affects_ego"):
-                continue
+        if sign_like and not lib_tools.sign_survives_filter(obj):
+            continue
         return True
     return False
 

@@ -23,14 +23,13 @@ import importlib.util
 import json
 import os
 import random
-import sys
+import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Callable
 
-from lib.env import shepelev, trb_root
+from lib.env import nfs2_root, shepelev, trb_root
 from lib.utils import default_dump_max_workers, prepare_fv_experts
 
 EXPERT_REPLAY_FOR_PLANT2 = (
@@ -42,11 +41,8 @@ EXPERT_REPLAY_FOR_PLANT2 = (
 )
 _expert_replay_mod: object | None = None
 
-SM_MNT = Path("/mnt/virtual_ai0001053-01202_SR006-nfs2/smirnova")
-ZINK_BENCH_DEFAULT = Path(
-    "/mnt/virtual_ai0001053-01202_SR006-nfs2/zinkovich/zinkovich/"
-    "traffic-rule-bench/pdd-bench/scripts/per_sign_bench"
-)
+SM_MNT = nfs2_root() / "smirnova"
+ZINK_BENCH_DEFAULT = nfs2_root() / "zinkovich/zinkovich/traffic-rule-bench/pdd-bench/scripts/per_sign_bench"
 DETOUR_SCENES_DEFAULT = SM_MNT / "sdc/pdd-bench/scenes"
 
 EXPERT_SIGNS: dict[str, tuple[str, str]] = {
@@ -208,6 +204,10 @@ def _run_replay_batch(
     if save_gifs:
         print(f"[warn] --save-gifs ignored ({EXPERT_REPLAY_FOR_PLANT2.name} has no gif export)")
     run_batch = _load_run_batch()
+    # One bad route must not kill a multi-hour parallel dump of hundreds of
+    # routes; isolate failures per shard but always log the full traceback
+    # (not just str(exc)) so real bugs stay visible instead of looking like
+    # ordinary per-route replay failures.
     try:
         if log_path is not None:
             log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -233,12 +233,14 @@ def _run_replay_batch(
             )
             print(json.dumps(summary, indent=2))
         return 0
-    except Exception as exc:
-        msg = f"ERROR: {exc}\n"
-        print(msg, end="" if log_path is None else "", file=sys.stderr)
+    except Exception:
+        tb = traceback.format_exc()
         if log_path is not None:
             log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_path.write_text(msg, encoding="utf-8")
+            with log_path.open("a", encoding="utf-8") as logf:
+                logf.write(tb)
+        else:
+            print(tb, file=sys.stderr)
         return 1
 
 
@@ -324,18 +326,13 @@ def _run_one(args: argparse.Namespace) -> int:
         }, indent=2))
         return 0
 
-    try:
-        result = mod.dump_plant2(
-            pkl_path,
-            sidecar_path,
-            scenes_root=scenes,
-            save_plant2_dir=args.out_dir,
-            max_steps=args.max_steps,
-        )
-    except Exception as exc:
-        print(json.dumps({"status": "fail", "error": str(exc), **plan}, indent=2), file=sys.stderr)
-        return 1
-
+    result = mod.dump_plant2(
+        pkl_path,
+        sidecar_path,
+        scenes_root=scenes,
+        save_plant2_dir=args.out_dir,
+        max_steps=args.max_steps,
+    )
     print(json.dumps({"status": "ok", **plan, "result": result}, indent=2))
     return 0
 
@@ -346,7 +343,6 @@ def _run_experts(args: argparse.Namespace) -> int:
     log_dir = args.out_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    experts_file = f"experts_scene_uid_{args.experts_rank}.jsonl"
     ok = fail = 0
 
     for sign in args.signs:
@@ -501,7 +497,6 @@ def _run_lane(args: argparse.Namespace) -> int:
 
 
 def _build_rebuild_jobs(args: argparse.Namespace) -> list[DumpJob]:
-    experts_file = f"experts_scene_uid_{args.experts_rank}.jsonl"
     jobs: list[DumpJob] = []
 
     def add(name: str, experts: Path, scenes: Path, out: Path, count_cap: int | None = None) -> None:

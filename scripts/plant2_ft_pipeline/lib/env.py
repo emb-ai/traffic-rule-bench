@@ -2,15 +2,32 @@
 from __future__ import annotations
 
 import os
-import shutil
+import sys
 from pathlib import Path
 
-_DEFAULT_SHEPELEV = "/home/jovyan/shares/SR006.nfs3/shepelev"
 _DEFAULT_TRB_ROOT = "/home/jovyan/shares/SR006.nfs2/belyaev/traffic-rule-bench"
+
+# SR006-nfs2 is bind-mounted at different paths on different pods.
+_NFS2_MOUNT_CANDIDATES = (
+    Path("/mnt/virtual_ai0001053-01202_SR006-nfs2"),
+    Path("/home/jovyan/shares/SR006.nfs2"),
+)
+
+
+def nfs2_root() -> Path:
+    """Live SR006-nfs2 mount point (first candidate that exists on this pod)."""
+    for c in _NFS2_MOUNT_CANDIDATES:
+        if c.is_dir():
+            return c
+    return _NFS2_MOUNT_CANDIDATES[0]
 
 
 def shepelev() -> Path:
-    return Path(os.environ.get("SHEPELEV", _DEFAULT_SHEPELEV))
+    # No single correct default — real runs always set $SHEPELEV explicitly
+    # (often a per-experiment work dir). Falling back to dirname($TRB_ROOT)
+    # matches shell/env.sh's own fallback instead of a separate, driftable path.
+    env_val = os.environ.get("SHEPELEV")
+    return Path(env_val) if env_val else trb_root().parent
 
 
 def trb_root() -> Path:
@@ -66,24 +83,27 @@ def metrics_root() -> Path:
 
 
 def resolve_python(explicit: str | None = None) -> Path:
-    """Pick python executable (arbelyaev-sdc preferred)."""
+    """Python executable to launch child processes with.
+
+    Explicit argument, then $PYTHON/$PY, then the interpreter running this
+    process -- never a guess. The previous version walked a list of candidate
+    conda environments and returned whichever existed first; on a pod where
+    none of them did it fell through to `which python3` and an eval ran to
+    completion against an unrelated interpreter without the model's
+    dependencies, producing metrics that looked ordinary and were wrong.
+    """
     if explicit:
-        return Path(explicit)
+        chosen = Path(explicit)
+        if not os.access(chosen, os.X_OK):
+            raise SystemExit(f"--python {chosen} is not an executable")
+        return chosen
     env_py = os.environ.get("PYTHON") or os.environ.get("PY")
     if env_py:
-        return Path(env_py)
-    candidates = [
-        shepelev() / "conda_envs" / "arbelyaev-sdc" / "bin" / "python",
-        Path("/home/user/conda/envs/zinkovich-sdc/bin/python"),
-        Path("/home/user/conda/bin/python"),
-    ]
-    for c in candidates:
-        if c.is_file() and os.access(c, os.X_OK):
-            return c
-    found = shutil.which("python3") or shutil.which("python")
-    if found:
-        return Path(found)
-    return Path("python3")
+        chosen = Path(env_py)
+        if not os.access(chosen, os.X_OK):
+            raise SystemExit(f"$PYTHON={chosen} is not an executable")
+        return chosen
+    return Path(sys.executable)
 
 
 def hydra_escape(value: str | Path) -> str:

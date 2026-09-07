@@ -34,11 +34,45 @@ _DUMP_DEBUG = os.environ.get("PLANT2_DUMP_DEBUG", "").lower() in ("1", "true", "
 # the env alongside the StopSign, but the stop benchmark must train on 2.5
 # alone. Set PLANT2_DUMP_SIGN_CLASSES to a comma-separated list of codes, or to
 # "all" to disable the filter.
+#
+# CONFIRMED (2026-08-25): flipping this default to "all" breaks the existing
+# stop_classemb_* checkpoints at eval time (junc_60663842 seed106390051_v1:
+# dist 104.8m/success=True -> dist 14.0m/success=False) because they were
+# fine-tuned with ONLY "2.5" ever visible in x_objs -- introducing
+# MainRoadSign/YieldSign tokens they never saw during fine-tuning derails
+# them. Do not change this default without re-verifying every existing
+# checkpoint family (or moving them to per-pipeline PLANT2_DUMP_SIGN_CLASSES
+# overrides set explicitly by each pipeline's own scripts).
 _DUMP_SIGN_CLASSES_ENV = os.environ.get("PLANT2_DUMP_SIGN_CLASSES", "2.5").strip()
 DUMP_SIGN_CLASS_ALLOWLIST = (
     None if _DUMP_SIGN_CLASSES_ENV.lower() == "all"
     else {c.strip() for c in _DUMP_SIGN_CLASSES_ENV.split(",") if c.strip()}
 )
+
+
+# Visibility radius (m) for PDD sign boxes. The historical 30 m is far too
+# short for 4.2.x detour: compliance requires the lane change to be COMPLETE
+# when the vehicle enters the zone 30 m before the obstacle, at which point
+# the sign is still ~26.5 m ahead -- i.e. it becomes visible only a fraction
+# of a second before the deadline. On scenes without cones the sign is the
+# ONLY cue, which makes them unsolvable from perception (the privileged
+# expert scores 18/18 there because it reads the scene config, not the sign).
+# Override with PLANT2_SIGN_RANGE_M for dumps and eval alike.
+SIGN_RANGE_M = float(os.environ.get("PLANT2_SIGN_RANGE_M", "30"))
+
+# Training-time pose augmentation recorded into the dump. PlanTDataset's
+# aug_sample() shifts objects/route/waypoints by `augmentation_translation`
+# and `augmentation_rotation` and swaps in the *_augmented BEV -- but this
+# dumper always wrote 0.0/0.0 and saved the augmented BEV as a copy of the
+# plain one, so `--augment` was a no-op and the model never saw itself off
+# the expert trajectory. That is the classic imitation-learning covariate
+# shift, and it shows up as 47-75% out_of_road in closed loop while
+# open-loop predictions match the expert to within centimetres.
+# 0 keeps the old (no-op) behaviour.
+AUG_TRANSLATION_M = float(os.environ.get("PLANT2_AUG_TRANSLATION_M", "0"))
+AUG_ROTATION_DEG = float(os.environ.get("PLANT2_AUG_ROTATION_DEG", "0"))
+
+_SIGN_RANGE_SQ = SIGN_RANGE_M * SIGN_RANGE_M
 
 
 def _dbg(msg: str) -> None:
@@ -355,8 +389,9 @@ def collect_boxes(engine, vehicle,
                  f"(not in DUMP_SIGN_CLASS_ALLOWLIST={sorted(DUMP_SIGN_CLASS_ALLOWLIST)})")
             continue
         x, y = _ego_xy(sign)
-        if x * x + y * y > 900.0:  # 30m, same as stop_sign / TL in PlanTDataset
-            _dbg(f"sign skip: pdd={pdd} id={sign_id} dist={math.hypot(x, y):.1f}m > 30m")
+        if x * x + y * y > _SIGN_RANGE_SQ:
+            _dbg(f"sign skip: pdd={pdd} id={sign_id} "
+                 f"dist={math.hypot(x, y):.1f}m > {SIGN_RANGE_M:.0f}m")
             continue
         if hasattr(sign, "_fallback_heading"):
             heading = float(sign._fallback_heading())
@@ -481,7 +516,9 @@ def plant2_route_dir(plant2_dir: Path, scene_uid: str, variant: str) -> Path:
 
 def render_bev_semantics(engine, vehicle,
                          resolution: int = _BEV_RESOLUTION,
-                         size_meters: float = _BEV_SIZE_METERS):
+                         size_meters: float = _BEV_SIZE_METERS,
+                         lateral_offset_m: float = 0.0,
+                         heading_offset_rad: float = 0.0):
     """Semantic BEV index map (H, W) uint8, or None if render fails."""
     try:
         from metadrive.policy.metadrive_obs_to_plant2 import render_bev_plant2
@@ -491,6 +528,8 @@ def render_bev_semantics(engine, vehicle,
             size_meters=size_meters,
             device="cpu",
             return_semantic_map=True,
+            lateral_offset_m=lateral_offset_m,
+            heading_offset_rad=heading_offset_rad,
         )
         if sem is None:
             return None
@@ -563,6 +602,16 @@ class Plant2FrameCollector:
             v_limit_raw_kmh = 80.0
         speed_limit_mps = v_limit_raw_kmh / 3.6
 
+        # Per-frame pose jitter (0 magnitudes -> exactly the old behaviour).
+        aug_translation = (
+            float(np.random.uniform(-AUG_TRANSLATION_M, AUG_TRANSLATION_M))
+            if AUG_TRANSLATION_M > 0 else 0.0
+        )
+        aug_rotation = (
+            float(np.random.uniform(-AUG_ROTATION_DEG, AUG_ROTATION_DEG))
+            if AUG_ROTATION_DEG > 0 else 0.0
+        )
+
         measurements = {
             "ego_matrix": ego_matrix,
             "pos_global": [float(pos[0]), float(pos[1])],
@@ -577,12 +626,25 @@ class Plant2FrameCollector:
             "route": route_pts.tolist(),
             "route_original": route_pts.tolist(),
             "brake": brake,
-            "augmentation_translation": 0.0,
-            "augmentation_rotation": 0.0,
+            "augmentation_translation": aug_translation,
+            "augmentation_rotation": aug_rotation,
         }
         sem_map = None
+        sem_map_aug = None
         if self.save_bev:
             sem_map = render_bev_semantics(engine, vehicle)
+            if aug_translation or aug_rotation:
+                # Second render from the jittered viewpoint. aug_sample() pairs
+                # THIS image with labels shifted by the same recorded amounts,
+                # which is what teaches the model to steer back to the expert
+                # trajectory from an off-nominal pose.
+                sem_map_aug = render_bev_semantics(
+                    engine, vehicle,
+                    lateral_offset_m=aug_translation,
+                    heading_offset_rad=math.radians(aug_rotation),
+                )
+            else:
+                sem_map_aug = sem_map
             if _DUMP_DEBUG and step_idx % 10 == 0:
                 if sem_map is None:
                     _dbg(f"step={step_idx}: BEV render returned None")
@@ -601,23 +663,23 @@ class Plant2FrameCollector:
                 _dbg(f"  sign box: class={s.get('class')} id={s.get('id')} "
                      f"pdd_code={s.get('pdd_code')} pos={s.get('position')[:2]}")
 
-        self.step_records.append((boxes, measurements, sem_map))
+        self.step_records.append((boxes, measurements, sem_map, sem_map_aug))
 
     def flush(self, route_dir: Path, success: bool) -> int:
         """Write boxes/measurements/BEV/results under ``route_dir``. Returns frame count."""
         route_dir = Path(route_dir)
         n_bev = 0
-        for idx, (bxs, meas, sem) in enumerate(self.step_records):
+        for idx, (bxs, meas, sem, sem_aug) in enumerate(self.step_records):
             fname = f"{idx:04d}.json.gz"
             write_gz_json(route_dir / "boxes" / fname, bxs)
             write_gz_json(route_dir / "measurements" / fname, meas)
             if sem is not None:
                 png = f"{idx:04d}.png"
-                # PlanTDataset with augment=True also opens the *_augmented path.
-                # Our aug offsets are 0 → same semantic map is a valid stand-in.
+                # PlanTDataset with augment=True opens the *_augmented path.
                 write_bev_png(route_dir / "bev_no_car_semantics" / png, sem)
                 write_bev_png(
-                    route_dir / "bev_no_car_semantics_augmented" / png, sem)
+                    route_dir / "bev_no_car_semantics_augmented" / png,
+                    sem_aug if sem_aug is not None else sem)
                 n_bev += 1
 
         score = 100.0 if success else 0.0

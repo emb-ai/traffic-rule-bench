@@ -23,14 +23,14 @@ import argparse
 import gzip
 import json
 import os
+import random
 import shutil
-import sys
+import subprocess
 import time
-from pathlib import Path
 
 from diskcache import Cache
 
-from lib.paths import shepelev
+from lib.env import shepelev
 
 SHEPELEV = shepelev()
 PLAN_T = SHEPELEV / "traffic-rule-bench/plant2/PlanT"
@@ -167,8 +167,6 @@ def materialize_missing(
 
 def verify_dst(dst: Cache, keys: list[str], n_probe: int = 40) -> int:
     """Return number of near-stop targets among probes; raise if all still 20."""
-    import random
-
     rng = random.Random(0)
     probe = keys if len(keys) <= n_probe else rng.sample(keys, n_probe)
     n_neq20 = n_low = n_miss = 0
@@ -215,8 +213,6 @@ def main() -> int:
     if args.reset_dst and args.dst.exists():
         print(f"RESET {args.dst}", flush=True)
         # Prefer shell rm -rf: more reliable on busy diskcache shard dirs.
-        import subprocess
-
         subprocess.run(["rm", "-rf", str(args.dst)], check=False)
         if args.dst.exists():
             shutil.rmtree(args.dst, ignore_errors=True)
@@ -314,13 +310,7 @@ def main() -> int:
         verify_dst(dst, base_keys)
 
     dst.close()
-    # size on disk
-    try:
-        import subprocess
-
-        du = subprocess.check_output(["du", "-sh", str(args.dst)], text=True).split()[0]
-    except Exception:
-        du = "?"
+    du = subprocess.check_output(["du", "-sh", str(args.dst)], text=True).split()[0]
     print(f"DONE dst={args.dst} size={du}", flush=True)
     return 0 if n_copy > 0 or n_skip > 0 else 1
 

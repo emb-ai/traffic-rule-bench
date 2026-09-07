@@ -19,9 +19,8 @@ import argparse
 import subprocess
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from pathlib import Path
 
-from lib.env import metrics_root, plan_t, shepelev, setup_eval_thread_env
+from lib.env import plan_t, setup_eval_thread_env, shepelev
 from lib.eval_core import (
     DEFAULT_MANIFEST,
     DEFAULT_MANIFEST_DETOUR,
@@ -51,11 +50,7 @@ def _build_queue_ckpts(ckpt_root: Path) -> list[Path]:
         ):
             d = ckpt_root / addon_suffix
             for stem in files:
-                if stem.startswith("epoch"):
-                    hits = list(d.glob(f"{stem}_*.ckpt"))
-                else:
-                    hits = list(d.glob(f"{stem}_*.ckpt"))
-                ckpts.extend(hits)
+                ckpts.extend(d.glob(f"{stem}_*.ckpt"))
     return ckpts
 
 

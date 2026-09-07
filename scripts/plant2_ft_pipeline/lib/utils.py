@@ -11,12 +11,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Sequence
 
+from lib.env import nfs2_root
+
 # PlanT.yaml: wps_len=8, seq_len=1; range(5, n - wps - seq - 2) → n-16 samples
 _PLANT2_SAMPLE_OVERHEAD = 16
 
 _FV_PATH_KEYS = ("pkl_path", "sidecar_path", "gif_path", "winning_pkl", "winning_sidecar")
-_FV_OLD_PREFIX = "/home/jovyan/shares/SR006.nfs2/smirnova/"
-_FV_NEW_PREFIX = "/mnt/virtual_ai0001053-01202_SR006-nfs2/smirnova/"
+# smirnova is bind-mounted at different paths on different pods; catalog rows
+# may have either baked in depending on where they were generated.
+_FV_MOUNT_CANDIDATES = (
+    "/home/jovyan/shares/SR006.nfs2/smirnova/",
+    "/mnt/virtual_ai0001053-01202_SR006-nfs2/smirnova/",
+)
 
 
 def iso_now() -> str:
@@ -44,7 +50,7 @@ def _count_route_samples(route: Path) -> int:
 
 def count_plant2_samples(ds_root: Path, max_workers: int | None = None) -> int:
     """Fast sample count mirroring PlanTDataset index without results/slurm I/O."""
-    data = Path(ds_root).rstrip("/") if isinstance(ds_root, str) else ds_root
+    data = Path(ds_root)
     data = data / "data" if (data / "data").is_dir() else data
     routes = [p for p in data.iterdir() if p.is_dir() and (p / "boxes").is_dir()]
     if not routes:
@@ -59,8 +65,10 @@ def count_plant2_samples(ds_root: Path, max_workers: int | None = None) -> int:
 
 
 def _remap_fv_path(value: str) -> str:
-    if value.startswith(_FV_OLD_PREFIX):
-        return _FV_NEW_PREFIX + value[len(_FV_OLD_PREFIX) :]
+    live = f"{nfs2_root()}/smirnova/"
+    for prefix in _FV_MOUNT_CANDIDATES:
+        if value.startswith(prefix) and prefix != live:
+            return live + value[len(prefix):]
     return value
 
 

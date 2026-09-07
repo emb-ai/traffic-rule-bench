@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Pretty-print objects from boxes/NNNN.json.gz dumps.
 
+No PlanTDataset / generate_batch — only what's on disk in the dump.
+
 Examples (from any cwd; source _env.sh first):
   source traffic-rule-bench/scripts/plant2_ft_pipeline/_env.sh
 
   ROUTE="$SHEPELEV/plant2_l1_fv_experts_split_signs_2.5/train/data/sign_100062_j2_lane0_seed1413785215_v0_default"
 
-  # one frame
+  # one frame, explicit route
   $PY $INSPECT_BOXES --route "$ROUTE" --frame 21
 
   # only sign 2.5
@@ -17,6 +19,15 @@ Examples (from any cwd; source _env.sh first):
 
   # direct file path
   $PY $INSPECT_BOXES --file "$ROUTE/boxes/0021.json.gz" --class 2.5 --json
+
+  # random route + random frame from a split
+  $PY $INSPECT_BOXES --random
+
+  # random route, all frames (compact)
+  $PY $INSPECT_BOXES --random --all-frames --stride 10
+
+  # random route from a fixed split, raw JSON
+  $PY $INSPECT_BOXES --random --split "$SHEPELEV/plant2_l1_fv_experts_split_signs_2.5/train" --json --seed 42
 """
 from __future__ import annotations
 
@@ -30,23 +41,41 @@ if str(_ROOT) not in sys.path:
 import argparse
 import gzip
 import json
-import sys
+import random
 from collections import Counter
-from pathlib import Path
+
+from lib.env import shepelev
 
 DEFAULT_ROUTE = (
     Path(__file__).resolve().parents[3]
     / "plant2_l1_fv_experts_split_signs_2.5/train/data/"
     "sign_100062_j2_lane0_seed1413785215_v0_default"
 )
+DEFAULT_SPLIT = shepelev() / "plant2_l1_fv_experts_split_signs_2.5" / "train"
 
 
-def load_boxes(path: Path) -> list[dict]:
-    with gzip.open(path, "rt", encoding="utf-8") as f:
-        data = json.load(f)
-    if not isinstance(data, list):
-        raise TypeError(f"{path}: expected list, got {type(data).__name__}")
-    return data
+# --------------------------------------------------------------------------
+# route / frame discovery
+# --------------------------------------------------------------------------
+
+
+def data_root_of(split: Path) -> Path:
+    return split / "data" if (split / "data").is_dir() else split
+
+
+def list_routes(data_root: Path) -> list[Path]:
+    return sorted(
+        p for p in data_root.iterdir()
+        if p.is_dir() and (p / "boxes").is_dir()
+    )
+
+
+def list_frames(route: Path) -> list[Path]:
+    return sorted(route.glob("boxes/*.json.gz"))
+
+
+def frame_num(path: Path) -> int:
+    return int(path.name.split(".")[0])
 
 
 def frame_path(route: Path, frame: int | str) -> Path:
@@ -55,6 +84,37 @@ def frame_path(route: Path, frame: int | str) -> Path:
     if not path.is_file():
         raise FileNotFoundError(path)
     return path
+
+
+def resolve_route(*, route: Path | None, random_: bool, split: Path, rng: random.Random) -> Path:
+    """Explicit --route always wins; --random picks from --split; else DEFAULT_ROUTE."""
+    if route is not None:
+        route = route.resolve()
+        if not route.is_dir():
+            raise FileNotFoundError(f"route not found: {route}")
+        return route
+    if random_:
+        data_root = data_root_of(split)
+        if not data_root.is_dir():
+            raise FileNotFoundError(f"split not found: {split}")
+        routes = list_routes(data_root)
+        if not routes:
+            raise FileNotFoundError(f"no routes under {data_root}")
+        return rng.choice(routes)
+    return DEFAULT_ROUTE
+
+
+# --------------------------------------------------------------------------
+# box loading / formatting
+# --------------------------------------------------------------------------
+
+
+def load_boxes(path: Path) -> list[dict]:
+    with gzip.open(path, "rt", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, list):
+        raise TypeError(f"{path}: expected list, got {type(data).__name__}")
+    return data
 
 
 def fmt_pos(pos: list[float]) -> str:
@@ -74,10 +134,8 @@ def print_object(idx: int, obj: dict, *, verbose: bool) -> None:
     cls = obj.get("class", "?")
     pos = obj.get("position", [0.0, 0.0, 0.0])
     ext = obj.get("extent", [0.0, 0.0, 0.0])
-    extra_keys = sorted(
-        k for k in obj
-        if k not in {"class", "position", "yaw", "speed", "extent", "id", "type_id"}
-    )
+    known = {"class", "position", "yaw", "speed", "extent", "id", "type_id"}
+    extra_keys = sorted(k for k in obj if k not in known)
     line = (
         f"[{idx:2d}] class={cls!r:14s} id={obj.get('id', '?'):3} "
         f"pos={fmt_pos(pos)} dist={dist_xy(obj):5.1f}m "
@@ -93,7 +151,13 @@ def print_object(idx: int, obj: dict, *, verbose: bool) -> None:
         print(f"      raw={json.dumps(obj, ensure_ascii=False)}")
 
 
-def print_frame(path: Path, *, class_filter: str | None, verbose: bool, as_json: bool) -> None:
+def print_boxes_file(
+    path: Path,
+    *,
+    as_json: bool,
+    verbose: bool,
+    class_filter: str | None,
+) -> None:
     boxes = load_boxes(path)
     if as_json:
         if class_filter is not None:
@@ -112,12 +176,25 @@ def print_frame(path: Path, *, class_filter: str | None, verbose: bool, as_json:
         print(f"--- matched {shown} / {len(boxes)} objects (class={class_filter!r}) ---")
 
 
+def print_frame_compact(path: Path, boxes: list[dict]) -> None:
+    frame = frame_num(path)
+    if not boxes:
+        print(f"frame {frame:04d}  {path.name}  (empty)")
+        return
+    parts = []
+    for obj in boxes:
+        cls = obj.get("class", "?")
+        pos = obj.get("position", [0, 0, 0])
+        spd = obj.get("speed", 0.0)
+        parts.append(f"{cls}@({pos[0]:.1f},{pos[1]:.1f},spd={spd:.1f})")
+    print(f"frame {frame:04d}  {path.name}  [{len(boxes)} objs]  {', '.join(parts)}")
+
+
 def print_summary(route: Path, *, class_filter: str | None) -> None:
     files = sorted(route.glob("boxes/*.json.gz"))
     if not files:
         raise FileNotFoundError(f"no boxes/*.json.gz under {route}")
 
-    per_frame_counts: Counter[str] = Counter()
     per_frame_total: list[tuple[str, int]] = []
     class_totals: Counter[str] = Counter()
     frames_with_class: Counter[str] = Counter()
@@ -128,7 +205,6 @@ def print_summary(route: Path, *, class_filter: str | None) -> None:
         per_frame_total.append((path.stem, len(boxes)))
         for cls, n in frame_classes.items():
             class_totals[cls] += n
-            per_frame_counts[cls] = max(per_frame_counts[cls], n)
             frames_with_class[cls] += 1
 
     print(f"=== summary: {route} ===")
@@ -160,20 +236,40 @@ def print_summary(route: Path, *, class_filter: str | None) -> None:
     print(f"\nbusiest frame: {busiest[0]} ({busiest[1]} objects)")
 
 
+# --------------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------------
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument(
         "--route",
         type=Path,
-        default=DEFAULT_ROUTE,
-        help=f"route directory with boxes/ (default: {DEFAULT_ROUTE.name})",
+        default=None,
+        help=f"route directory with boxes/ (default: DEFAULT_ROUTE={DEFAULT_ROUTE.name}, "
+        "or a random route under --split if --random is given)",
     )
+    p.add_argument(
+        "--random",
+        action="store_true",
+        help="pick a random route from --split (ignored if --route is given)",
+    )
+    p.add_argument("--split", type=Path, default=DEFAULT_SPLIT, help="split root to pick a random route from")
+    p.add_argument("--seed", type=int, default=None, help="RNG seed for --random / random-frame fallback")
     p.add_argument(
         "--frame",
         type=int,
         default=None,
-        help="frame index N → boxes/NNNN.json.gz (omit with --summary)",
+        help="frame index N -> boxes/NNNN.json.gz (omit with --summary/--all-frames for a random frame)",
     )
+    p.add_argument(
+        "--all-frames",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="loop all boxes/*.json.gz in the route",
+    )
+    p.add_argument("--stride", type=int, default=1, help="with --all-frames: every N-th file")
     p.add_argument(
         "--class",
         dest="class_filter",
@@ -200,7 +296,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--file",
         type=Path,
         default=None,
-        help="direct path to boxes/NNNN.json.gz (overrides --route/--frame)",
+        help="direct path to boxes/NNNN.json.gz (overrides --route/--random/--frame)",
     )
     return p.parse_args(argv)
 
@@ -209,24 +305,49 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
     if args.file is not None:
-        print_frame(args.file, class_filter=args.class_filter, verbose=args.verbose, as_json=args.json)
+        print_boxes_file(args.file, as_json=args.json, verbose=args.verbose, class_filter=args.class_filter)
         return 0
 
-    route = args.route.resolve()
-    if not route.is_dir():
-        print(f"route not found: {route}", file=sys.stderr)
-        return 1
+    rng = random.Random(args.seed)
+    route = resolve_route(route=args.route, random_=args.random, split=args.split, rng=rng)
 
     if args.summary:
         print_summary(route, class_filter=args.class_filter)
         return 0
 
-    if args.frame is None:
-        print("provide --frame N or --summary (or --file PATH)", file=sys.stderr)
-        return 2
+    frames = list_frames(route)
+    if not frames:
+        raise FileNotFoundError(f"no boxes/*.json.gz under {route}")
 
-    path = frame_path(route, args.frame)
-    print_frame(path, class_filter=args.class_filter, verbose=args.verbose, as_json=args.json)
+    if args.all_frames:
+        picked = frames[:: max(1, args.stride)]
+        print(f"route: {route}")
+        print(f"files: {len(picked)} / {len(frames)} (stride={args.stride})")
+        print("-" * 72)
+        for path in picked:
+            boxes = load_boxes(path)
+            if args.json:
+                print(json.dumps({"file": str(path), "boxes": boxes}, ensure_ascii=False))
+            elif args.verbose:
+                print()
+                print_boxes_file(path, as_json=False, verbose=True, class_filter=args.class_filter)
+                print("-" * 72)
+            else:
+                if args.class_filter is not None:
+                    boxes = [o for o in boxes if o.get("class") == args.class_filter]
+                print_frame_compact(path, boxes)
+        return 0
+
+    if args.frame is not None:
+        path = frame_path(route, args.frame)
+    else:
+        # No --frame / --all-frames / --summary: show one random frame from the route.
+        path = rng.choice(frames)
+
+    print(f"route: {route}")
+    print(f"file:  {path}")
+    print("-" * 72)
+    print_boxes_file(path, as_json=args.json, verbose=args.verbose, class_filter=args.class_filter)
     return 0
 
 
