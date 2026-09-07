@@ -18,6 +18,8 @@ Rollback: EGO_CURVE_AWARE=0 in the environment restores the raw IDMPolicy
 """
 from __future__ import annotations
 
+import os
+
 from metadrive.component.vehicle.PID_controller import PIDController
 from metadrive.policy.idm_policy import IDMPolicy
 
@@ -73,4 +75,15 @@ class CurveAwareIDMPolicy(IDMPolicy):
                     front_obj, dist_to_front = obj, dist
         except Exception:
             pass
+        if os.environ.get("TRB_IDM_DEBUG"):
+            # Per-step longitudinal state of the sign-unaware baseline. Off unless asked.
+            try:
+                print("[IDM_DEBUG] step=%d v=%.1f target=%.1f curv=%.1f front=%s dist=%s"
+                      % (int(getattr(self.engine, "episode_step", 0) or 0),
+                         float(self.control_object.speed_km_h), float(self.target_speed),
+                         float(self._curvature_target_speed()),
+                         type(front_obj).__name__ if front_obj is not None else None,
+                         "%.1f" % dist_to_front if dist_to_front is not None else None))
+            except Exception:
+                pass
         return super().acceleration(front_obj, dist_to_front)

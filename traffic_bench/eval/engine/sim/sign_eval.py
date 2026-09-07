@@ -126,7 +126,15 @@ def _extract_sign_info(env) -> list[dict]:
         return signs
     for s in sign_mgr.signs:
         lane = getattr(s, "lane", None)
-        lane_index = list(getattr(lane, "index", ())) if lane is not None else None
+        # SUMO lane keys are strings; list() on one splits it into characters,
+        # which is what every sidecar written so far carries.
+        idx = getattr(lane, "index", None) if lane is not None else None
+        if idx is None:
+            lane_index = None
+        elif isinstance(idx, (list, tuple)):
+            lane_index = list(idx)
+        else:
+            lane_index = str(idx)
         pos = None
         try:
             pos = [float(s.position[0]), float(s.position[1])]

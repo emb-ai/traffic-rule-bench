@@ -48,6 +48,10 @@ simulation:
   # NPC world: sample_one_profile this many times per geometry (all signs).
   n_variations: 3
   profile_density_cap: 1.0
+  # true: variant 0 of every scene is the nominal row (no traffic, no NPC
+  # profile, plate unjittered, reference approach speed); variants 1..N-1
+  # sample everything. Speed and detour families honour it.
+  default_first_variant: false
   # Ego route budgets (m). One value → fixed length; several → expand axis.
   max_path_length_m: 100.0
   max_path_length_levels: [90, 100, 110]
