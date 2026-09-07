@@ -3,8 +3,10 @@ Traffic manager for SUMO-based environments.
 Spawns TrajectoryIDM-controlled vehicles that follow PointLane trajectories
 built from the navigation route — the same approach used in ScenarioNet.
 """
+import json
 import logging
 import math
+import os
 
 # Suppress verbose NPC warnings (DRIFT, TRAJ_SHORT, SPAWN REPORT, RESPAWN, REMOVE).
 # All logging.warning() calls in this module use the root logger directly;
@@ -20,7 +22,36 @@ from traffic_bench.envs.npc_idm import SumoTrajectoryIDMPolicy
 
 
 class SumoTrafficManager(BaseManager):
-    EGO_SAFE_RADIUS = 50   # don't spawn near ego (metres)
+    # Point guard only: a spawn position this close to the ego is skipped so a
+    # car cannot materialise inside it. The 50 m radius this replaces was applied
+    # per LANE and blanked the whole road the ego was on, so no NPC was ever
+    # within reach: min_ttc_sec came back null in all 319 speed episodes and
+    # driving_efficiency had no support at all.
+    EGO_KEEP_CLEAR_M = 12.0
+    # On the ego's OWN lane the point guard is not enough. Slots are laid every
+    # 12 m from the lane start and each car gets a nuPlan spawn speed of up to
+    # 80 km/h with no regard to what is ahead of it, so a car placed one slot
+    # behind a freshly spawned ego closes the gap in under a second. In the
+    # 5-variant pilot 299 of 300 crashes were NPC-attributed and 236 of them
+    # happened within 20 m of the spawn, identically for all eight experts --
+    # the scene killed the ego before any policy had acted. Behind the ego on
+    # its lane nothing spawns within EGO_REAR_KEEP_CLEAR_M, and a car further
+    # back within EGO_REAR_SPEED_MATCH_M starts no faster than the ego does;
+    # ahead, EGO_FRONT_KEEP_CLEAR_M keeps the ego from being boxed in at once.
+    EGO_REAR_KEEP_CLEAR_M = 40.0
+    EGO_REAR_SPEED_MATCH_M = 80.0
+    # Ahead of the ego on its lane the clear distance scales with the ego's
+    # spawn speed: a car 28 m ahead crawling at 3 m/s in front of an ego doing
+    # 11.7 m/s is a collision at step 16 whatever the policy does (traced on
+    # min_speed seg_1278634838_0). Nothing spawns inside EGO_FRONT_HEADWAY_S
+    # seconds of travel, and a leader inside twice that starts no slower than
+    # the ego minus EGO_FRONT_SPEED_SLACK_MPS.
+    EGO_FRONT_KEEP_CLEAR_M = 20.0
+    EGO_FRONT_HEADWAY_S = 3.0
+    EGO_FRONT_SPEED_SLACK_MPS = 2.0
+    # Speed scenes only (config traffic_spawn_after_*): on the ego's edge no NPC
+    # spawns before the plate plus this margin, so nothing stands on the plate.
+    TRAFFIC_AFTER_SIGN_MARGIN_M = 5.0
     VEHICLE_MIN_GAP = 12   # metres between any two spawned vehicles
     VEHICLE_GAP_ON_LANE = 12  # metres between vehicles on the same lane
     MAX_PER_LANE = 6       # max vehicles per lane
@@ -75,16 +106,14 @@ class SumoTrafficManager(BaseManager):
         """
         if self._nuplan_sampler is None and not self._nuplan_sampler_failed:
             try:
-                from pathlib import Path
-                profiles = (
-                    Path(__file__).resolve().parent.parent
-                    / "bench"
-                    / "core" / "profiles"
-                )
+                # No stats_dir: the sampler's own default is the directory the
+                # statistics actually ship in. The path named here before,
+                # traffic_bench/bench/core/profiles/nuplan_statistics, exists in
+                # no checkout, so the constructor raised every time and the
+                # except below quietly turned every NPC spawn speed into the
+                # uniform [5, 10] fallback -- nuPlan was never consulted.
                 from traffic_bench.eval.engine.traffic.nuplan_sampler import NuPlanSampler
-                self._nuplan_sampler = NuPlanSampler(
-                    stats_dir=str(profiles / "nuplan_statistics")
-                )
+                self._nuplan_sampler = NuPlanSampler()
             except Exception:
                 self._nuplan_sampler_failed = True
         if self._nuplan_sampler is not None:
@@ -123,6 +152,189 @@ class SumoTrafficManager(BaseManager):
     def _random_vehicle_type(self):
         from metadrive.component.vehicle.vehicle_type import random_vehicle_type
         return random_vehicle_type(self.np_random, [0.2, 0.3, 0.3, 0.2, 0.0])
+
+    def _after_sign_start_lng(self) -> float:
+        """Longitude past which traffic may spawn on the ego's edge (speed
+        scenes): the plate plus the margin, or 0 when the rule is off."""
+        try:
+            after = float(self.engine.global_config.get("traffic_spawn_after_lng", -1.0))
+        except Exception:
+            return 0.0
+        return after + self.TRAFFIC_AFTER_SIGN_MARGIN_M if after >= 0.0 else 0.0
+
+    def _before_sign_on_ego_edge(self, lane, lng) -> bool:
+        """True when a slot lies on the ego's edge before the plate (speed
+        scenes), where background traffic is not allowed to spawn."""
+        try:
+            after = float(self.engine.global_config.get("traffic_spawn_after_lng", -1.0))
+            edge = str(self.engine.global_config.get("traffic_spawn_after_edge", "") or "")
+        except Exception:
+            return False
+        if after < 0.0 or not edge:
+            return False
+        if self._road_id_from_lane_index(lane.index) != edge:
+            return False
+        return float(lng) < after + self.TRAFFIC_AFTER_SIGN_MARGIN_M
+
+    def _plate_spawn_bounds(self, lane, lng):
+        """(cap_mps, floor_mps) for a car spawned on the ego's edge past a speed
+        plate: it starts inside the zone, so it starts at a speed the plate
+        allows. Spawning above a ceiling made every such car open its passage
+        with a second of overspeed no policy could prevent. None elsewhere."""
+        if self._after_sign_start_lng() <= 0.0:
+            return None
+        try:
+            cfg = self.engine.global_config
+            edge = str(cfg.get("traffic_spawn_after_edge", "") or "")
+            if not edge or self._road_id_from_lane_index(lane.index) != edge:
+                return None
+            if float(lng) < self._after_sign_start_lng():
+                return None
+            v_kmh = float(cfg.get("traffic_spawn_after_kmh", 0.0) or 0.0)
+            if v_kmh <= 0.0:
+                v_kmh = float(cfg.get("ego_v_target_kmh", 0.0) or 0.0)
+            code = str(cfg.get("sign_type", "") or "")
+        except Exception:
+            return None
+        if v_kmh <= 0.0:
+            return None
+        v = v_kmh / 3.6
+        if code == "4.6":
+            return (None, v)      # minimum: start no slower than the floor
+        return (v, None)          # 3.24 / 5.31 / 5.21: start no faster than the plate
+
+    def _ego_spawn_speed(self, ego) -> float:
+        """The speed the ego will be given at episode start, in m/s.
+
+        Traffic spawns in after_reset, before the episode runner applies the
+        manifest's spawn velocity, so ego.speed is still zero here. The value
+        is already in the vehicle config the env was built with.
+        """
+        try:
+            vc = self.engine.global_config.get("vehicle_config", {}) or {}
+            sv = vc.get("spawn_velocity")
+            if sv is not None:
+                v = float(sv[0]) if isinstance(sv, (list, tuple)) else float(sv)
+                if v > 0.0:
+                    return v
+        except Exception:
+            pass
+        try:
+            return max(0.0, float(ego.speed))
+        except Exception:
+            return 0.0
+
+    def _ego_slot_rule(self, lane, lng, ego):
+        """(allowed, speed_bounds) for a spawn slot at ``lng`` on ``lane``.
+
+        ``speed_bounds`` is None or ``(cap_mps, floor_mps)``, either of which
+        may be None. Only the ego's own lane (and the lanes feeding into it)
+        is treated specially: a slot inside the rear keep-clear or the
+        speed-scaled front keep-clear is refused; a slot further back within
+        the speed-match band starts no faster than the ego; a leader inside
+        twice the front headway starts no slower than the ego minus a slack.
+        Any other lane gets (True, None) and stays under the point guard alone.
+        """
+        if ego is None:
+            return True, None
+        v_ego = self._ego_spawn_speed(ego)
+        front_clear = max(self.EGO_FRONT_KEEP_CLEAR_M, self.EGO_FRONT_HEADWAY_S * v_ego)
+        gap = None
+        try:
+            ego_lng, ego_lat = lane.local_coordinates(ego.position)
+            half_w = float(getattr(lane, "width", 3.5)) / 2.0 + 1.0
+            if abs(float(ego_lat)) <= half_w and 0.0 <= float(ego_lng) <= float(lane.length):
+                gap = float(lng) - float(ego_lng)
+        except Exception:
+            pass
+        if gap is None:
+            # Not the ego's lane. The ego spawns a few metres past its lane
+            # start, so "40 m behind it on its own lane" is mostly the previous
+            # edge: walk the feeders of the ego's lane up to two hops and, if
+            # this lane is one of them, measure the gap along the road.
+            gap = self._upstream_gap(lane, lng, ego)
+            if gap is None:
+                return True, None
+        if -self.EGO_REAR_KEEP_CLEAR_M < gap < front_clear:
+            return False, None
+        if gap < 0 and -gap < self.EGO_REAR_SPEED_MATCH_M:
+            return True, (v_ego, None)
+        if gap > 0 and gap < 2.0 * front_clear:
+            return True, (None, max(0.0, v_ego - self.EGO_FRONT_SPEED_SLACK_MPS))
+        return True, None
+
+    @staticmethod
+    def _merge_bounds(a, b):
+        """Tightest of two (cap, floor) pairs: the lower cap, the higher floor."""
+        if a is None:
+            return b
+        if b is None:
+            return a
+        pc, pf = a
+        c, f = b
+        return (
+            c if pc is None else (pc if c is None else min(pc, c)),
+            f if pf is None else (pf if f is None else max(pf, f)),
+        )
+
+    def _assign_plate_compliance(self, vehicle) -> bool:
+        """Draw whether this car honours the speed plate, from the row's
+        npc_compliance_rate (1.0 everywhere but the sampled speed variants).
+        Read by SumoTrajectoryIDMPolicy.act and by the spawn-speed bounds."""
+        try:
+            rate = float(self.engine.global_config.get("traffic_npc_compliance_rate", 1.0))
+        except Exception:
+            rate = 1.0
+        compliant = True if rate >= 1.0 else bool(self.np_random.uniform() < rate)
+        vehicle._trb_sign_compliant = compliant
+        return compliant
+
+    @staticmethod
+    def _bound_spawn_speed(v_init, bounds):
+        if not bounds:
+            return v_init
+        cap, floor = bounds
+        if floor is not None:
+            v_init = max(v_init, float(floor))
+        if cap is not None:
+            v_init = min(v_init, float(cap))
+        return v_init
+
+    def _upstream_gap(self, lane, lng, ego):
+        """Signed distance from the ego back to a slot on a lane feeding into
+        the ego's lane (negative = behind), or None when ``lane`` does not lead
+        into the ego's lane within two hops."""
+        try:
+            ego_lane = ego.lane
+            if ego_lane is None:
+                return None
+            graph = self.engine.current_map.road_network.graph
+            ego_key = str(ego_lane.index)
+            ego_lng = float(ego_lane.local_coordinates(ego.position)[0])
+        except Exception:
+            return None
+        target = str(lane.index)
+        # (lane key, road distance from that lane's END to the ego)
+        frontier = [(ego_key, ego_lng)]
+        for _ in range(2):
+            nxt = []
+            for key, dist_to_ego in frontier:
+                info = graph.get(key)
+                if info is None:
+                    continue
+                for entry in info.entry_lanes or ():
+                    entry = str(entry)
+                    if entry == target:
+                        return -(dist_to_ego + (float(lane.length) - float(lng)))
+                    try:
+                        entry_len = float(self.engine.current_map.road_network.get_lane(entry).length)
+                    except Exception:
+                        continue
+                    nxt.append((entry, dist_to_ego + entry_len))
+            frontier = nxt
+            if not frontier:
+                break
+        return None
 
     def _too_close_to_existing(self, position):
         """Check if position is too close to any already-spawned traffic vehicle."""
@@ -253,6 +465,99 @@ class SumoTrafficManager(BaseManager):
             out[i] = pts[idx] + t * diffs[idx]
         return out
 
+    # Background traffic obeys a detour plate: a car on the cones' lane leaves
+    # it this far before the zone opens and rejoins this far past the cluster.
+    DETOUR_NPC_LEAD_M = 25.0
+    DETOUR_NPC_RETURN_M = 8.0
+    DETOUR_NPC_BLEND_M = 15.0
+
+    def rebuild_detour_trajectory(self, vehicle, sign, current_traj=None):
+        """A PointLane for ``vehicle`` that passes ``sign``'s cones on the
+        allowed adjacent lane: the stored route is re-sampled, and on the
+        plate's lane the points blend over to the target lane before the zone
+        and back after the cluster. None when the route cannot be rebuilt."""
+        route = getattr(vehicle, "_trb_route", None)
+        if not route:
+            return None
+        road_network = self.engine.current_map.road_network
+        sign_lane = sign.lane
+        target = None
+        for key in sorted(str(k) for k in (sign._allowed_lane_indices or ())):
+            try:
+                target = road_network.get_lane(key)
+                break
+            except Exception:
+                continue
+        if target is None:
+            return None
+        zone_start = float(sign.zone_start)
+        rejoin = float(sign.obstacle_long) + self.DETOUR_NPC_RETURN_M
+        try:
+            s_now = float(sign_lane.local_coordinates(vehicle.position)[0])
+        except Exception:
+            return None
+        leave_from = max(s_now + 1.0, zone_start - self.DETOUR_NPC_LEAD_M)
+        if leave_from >= zone_start - 2.0:
+            return None  # too close to blend a lane change in
+
+        def blended(lng, w):
+            p = sign_lane.position(lng, 0)
+            if w <= 0.0:
+                return [float(p[0]), float(p[1])]
+            try:
+                t_lng = float(target.local_coordinates(p)[0])
+                q = target.position(min(max(t_lng, 0.0), target.length), 0)
+            except Exception:
+                return [float(p[0]), float(p[1])]
+            return [float(p[0]) * (1 - w) + float(q[0]) * w,
+                    float(p[1]) * (1 - w) + float(q[1]) * w]
+
+        all_points = []
+        is_first = True
+        for ckpt in route:
+            try:
+                lane = road_network.get_lane(ckpt)
+            except Exception:
+                continue
+            if is_first:
+                start_lng, _ = lane.local_coordinates(vehicle.position)
+                start_lng = max(float(start_lng), 0.0)
+                is_first = False
+            else:
+                start_lng = 0.0
+            remaining = lane.length - start_lng
+            if remaining < 1.0:
+                continue
+            n_pts = max(int(remaining / 0.5), 2)
+            on_sign_lane = str(getattr(lane, "index", "")) == str(getattr(sign_lane, "index", ""))
+            for i in range(n_pts + 1):
+                lng = start_lng + (i / n_pts) * remaining
+                if not on_sign_lane:
+                    pt = lane.position(lng, 0)
+                    all_points.append([float(pt[0]), float(pt[1])])
+                    continue
+                if lng < leave_from:
+                    w = 0.0
+                elif lng < zone_start:
+                    w = (lng - leave_from) / max(1e-6, zone_start - leave_from)
+                elif lng <= rejoin:
+                    w = 1.0
+                elif lng <= rejoin + self.DETOUR_NPC_BLEND_M:
+                    w = 1.0 - (lng - rejoin) / self.DETOUR_NPC_BLEND_M
+                else:
+                    w = 0.0
+                all_points.append(blended(lng, w))
+        if len(all_points) < 4:
+            return None
+        filtered = [all_points[0]]
+        for pt in all_points[1:]:
+            if math.hypot(pt[0] - filtered[-1][0], pt[1] - filtered[-1][1]) >= 0.3:
+                filtered.append(pt)
+        arr = self._resample_equidistant(np.array(filtered), spacing=1.5)
+        if len(arr) < 4:
+            return None
+        return PointLane(arr, width=3.5)
+
     def _build_trajectory(self, vehicle):
         """Build a PointLane by walking the road graph forward from
         the vehicle's current lane.
@@ -261,7 +566,12 @@ class SumoTrafficManager(BaseManager):
         navigation checkpoints — this works on cyclic graphs where BFS
         fails to find terminal lanes.
         """
-        spawn_lane_index = vehicle.config.get("spawn_lane_index", None)
+        # config["spawn_lane_index"] carries the ROAD id, which is what
+        # BaseVehicle needs to place the car; the route builder below needs the
+        # LANE key instead, so the spawner stashes it on the object.
+        spawn_lane_index = getattr(vehicle, "_trb_lane_key", None)
+        if spawn_lane_index is None:
+            spawn_lane_index = vehicle.config.get("spawn_lane_index", None)
         if spawn_lane_index is None:
             self._reject_reason = "no_lane"
             return None
@@ -270,6 +580,9 @@ class SumoTrafficManager(BaseManager):
         if len(checkpoints) < self.MIN_ROUTE_CHECKPOINTS:
             self._reject_reason = f"checkpoints={len(checkpoints)}"
             return None
+        # Kept so the route can be re-sampled later around a detour plate,
+        # which is placed only after this manager has spawned its traffic.
+        vehicle._trb_route = list(checkpoints)
 
         road_network = self.engine.current_map.road_network
         all_points = []
@@ -376,26 +689,14 @@ class SumoTrafficManager(BaseManager):
         if not spawnable_lanes:
             return
 
-        # Filter lanes near ego and ego's own lane
+        # Ego's own lane and the ones beside it are spawnable; only the point
+        # guard below keeps a car from appearing inside the ego.
         ego_position = None
-        ego_lane_index = None
+        ego = None
         agents = self.engine.agent_manager.active_agents
         if agents:
             ego = list(agents.values())[0]
             ego_position = ego.position
-            if ego.lane is not None:
-                ego_lane_index = ego.lane.index
-        if ego_position is not None:
-            safe_lanes = []
-            for lane in spawnable_lanes:
-                # Skip ego's own lane entirely
-                if lane.index == ego_lane_index:
-                    continue
-                lng, lat = lane.local_coordinates(ego_position)
-                if 0 <= lng <= lane.length and abs(lat) < self.EGO_SAFE_RADIUS:
-                    continue
-                safe_lanes.append(lane)
-            spawnable_lanes = safe_lanes
 
         # Use ALL spawnable lanes, spawn multiple vehicles per lane based on density
         traffic_v_config = self.engine.global_config.get("traffic_vehicle_config", {})
@@ -416,19 +717,47 @@ class SumoTrafficManager(BaseManager):
             n_to_spawn = max(1, int(self.density * max_slots))
             n_to_spawn = min(n_to_spawn, self.MAX_PER_LANE)
 
-            # Generate spawn positions spread along the lane
+            # Generate spawn positions spread along the lane. The ladder starts
+            # at the lane start, except on the ego's edge of a speed scene,
+            # where it starts past the plate: with at most MAX_PER_LANE slots
+            # 12 m apart the ladder covers the first ~65 m of an edge, so on a
+            # 600 m edge "only after the plate" would otherwise mean no traffic
+            # on the ego's road at all -- the zone itself would be empty.
             positions = []
+            speed_caps = {}
+            plate_caps = {}
+            ladder_start = 5.0
+            if self._before_sign_on_ego_edge(lane, 5.0):
+                ladder_start = self._after_sign_start_lng() + 5.0
             for i in range(n_to_spawn):
-                lng = 5 + i * self.VEHICLE_GAP_ON_LANE
+                lng = ladder_start + i * self.VEHICLE_GAP_ON_LANE
                 if lng > lane.length - 5:
                     break
+                if self._before_sign_on_ego_edge(lane, lng):
+                    continue
+                if ego_position is not None:
+                    px, py = lane.position(lng, 0)
+                    dx = float(px) - float(ego_position[0])
+                    dy = float(py) - float(ego_position[1])
+                    if dx * dx + dy * dy < self.EGO_KEEP_CLEAR_M ** 2:
+                        continue
+                    allowed, cap = self._ego_slot_rule(lane, lng, ego)
+                    if not allowed:
+                        continue
+                    if cap is not None:
+                        speed_caps[lng] = cap
+                # Kept apart from the ego-slot bounds: a car that ignores the
+                # plate starts at its own sampled speed, the slot rule still holds.
+                plate = self._plate_spawn_bounds(lane, lng)
+                if plate is not None:
+                    plate_caps[lng] = plate
                 positions.append(lng)
 
             for lng in positions:
                 _n_attempted += 1
                 vehicle_type = self._random_vehicle_type()
                 cfg = {
-                    "spawn_lane_index": lane.index,
+                    "spawn_lane_index": self._road_id_from_lane_index(lane.index),
                     "spawn_longitude": lng,
                 }
                 cfg.update(traffic_v_config)
@@ -437,8 +766,20 @@ class SumoTrafficManager(BaseManager):
                 cfg["destination"] = None
                 try:
                     v = self.spawn_object(vehicle_type, vehicle_config=cfg)
-                except Exception:
+                except Exception as exc:
+                    # Was a bare `continue`: a failure here is invisible in the
+                    # SPAWN REPORT, which then shows attempted>0 with every
+                    # reject counter at zero and no way to tell why.
+                    _reject_details = getattr(self, "_reject_reasons_agg", {})
+                    key = "spawn_object:%s" % type(exc).__name__
+                    _reject_details[key] = _reject_details.get(key, 0) + 1
+                    self._reject_reasons_agg = _reject_details
+                    self._last_spawn_error = "%s: %s" % (type(exc).__name__, exc)
                     continue
+
+                v._trb_lane_key = lane.index
+
+                self._assign_plate_compliance(v)
 
                 # Fix position: EdgeRoadNetwork may place vehicle on wrong lane.
                 # Force vehicle to the intended lane position and heading.
@@ -452,10 +793,28 @@ class SumoTrafficManager(BaseManager):
                 # form stationary queues that all get removed by STUCK_TIMEOUT
                 # around step 40 (the "stuck cascade" effect).
                 try:
-                    v_init = self._sample_spawn_velocity()
+                    bounds = speed_caps.get(lng)
+                    if getattr(v, "_trb_sign_compliant", True):
+                        bounds = self._merge_bounds(bounds, plate_caps.get(lng))
+                    v_init = self._bound_spawn_speed(self._sample_spawn_velocity(), bounds)
                     v.set_velocity([v_init, 0.0], in_local_frame=True)
                 except Exception:
                     pass
+                if os.environ.get("TRB_SPAWN_DEBUG"):
+                    # Where every NPC lands relative to the ego at reset, with
+                    # the lane fix the keep-clear rule saw. Off unless asked.
+                    try:
+                        ego_lane_key = str(ego.lane.index) if ego is not None and ego.lane is not None else None
+                        dx = float(v.position[0]) - float(ego_position[0])
+                        dy = float(v.position[1]) - float(ego_position[1])
+                        up = self._upstream_gap(lane, lng, ego) if ego is not None else None
+                        print("[SPAWN_DEBUG] lane=%s lng=%.1f dist_to_ego=%.1f v_init=%.1f "
+                              "upstream_gap=%s ego_lane=%s cap=%s"
+                              % (lane.index, lng, (dx * dx + dy * dy) ** 0.5, v_init,
+                                 None if up is None else round(up, 1), ego_lane_key,
+                                 speed_caps.get(lng)))
+                    except Exception as exc:
+                        print("[SPAWN_DEBUG] failed: %r" % (exc,))
 
                 # Check overlap with existing vehicles
                 if self._too_close_to_existing(v.position):
@@ -509,6 +868,9 @@ class SumoTrafficManager(BaseManager):
             dict(_reject_details),
             len(self._traffic_vehicles),
         )
+        if _n_ok == 0 and _n_attempted:
+            _log.warning("SPAWN REPORT: last error: %s",
+                         getattr(self, "_last_spawn_error", "none recorded"))
 
     RESPAWN_INTERVAL = 30  # try to respawn every N steps
     RESPAWN_BATCH = 5      # max vehicles to try spawning per interval
@@ -530,23 +892,11 @@ class SumoTrafficManager(BaseManager):
                 return 0
 
         ego_position = None
-        ego_lane_index = None
+        ego = None
         agents = self.engine.agent_manager.active_agents
         if agents:
             ego = list(agents.values())[0]
             ego_position = ego.position
-            if ego.lane is not None:
-                ego_lane_index = ego.lane.index
-        if ego_position is not None:
-            safe_lanes = []
-            for lane in spawnable_lanes:
-                if lane.index == ego_lane_index:
-                    continue
-                lng, lat = lane.local_coordinates(ego_position)
-                if 0 <= lng <= lane.length and abs(lat) < self.EGO_SAFE_RADIUS:
-                    continue
-                safe_lanes.append(lane)
-            spawnable_lanes = safe_lanes
 
         if not spawnable_lanes:
             return 0
@@ -559,8 +909,14 @@ class SumoTrafficManager(BaseManager):
             if n_spawned >= n_to_spawn:
                 break
             lng = self.np_random.uniform(5, max(6, lane.length - 5))
+            if self._before_sign_on_ego_edge(lane, lng):
+                continue
+            slot_ok, slot_cap = self._ego_slot_rule(lane, lng, ego)
+            if not slot_ok:
+                continue
             vehicle_type = self._random_vehicle_type()
-            cfg = {"spawn_lane_index": lane.index, "spawn_longitude": lng}
+            cfg = {"spawn_lane_index": self._road_id_from_lane_index(lane.index),
+                   "spawn_longitude": lng}
             cfg.update(traffic_v_config)
             # Explicitly clear inherited destination: without this NPC gets
             # ego's destination via global_config["vehicle_config"] merge, and
@@ -573,6 +929,10 @@ class SumoTrafficManager(BaseManager):
             except Exception:
                 continue
 
+            v._trb_lane_key = lane.index
+
+            self._assign_plate_compliance(v)
+
             # Fix position: EdgeRoadNetwork may place vehicle on wrong lane
             correct_pos = lane.position(lng, 0)
             correct_heading = lane.heading_theta_at(lng)
@@ -582,7 +942,7 @@ class SumoTrafficManager(BaseManager):
             # Spawn with realistic non-zero velocity from nuPlan to avoid
             # stuck-cascade removals after STUCK_TIMEOUT.
             try:
-                v_init = self._sample_spawn_velocity()
+                v_init = self._bound_spawn_speed(self._sample_spawn_velocity(), slot_cap)
                 v.set_velocity([v_init, 0.0], in_local_frame=True)
             except Exception:
                 pass
@@ -593,7 +953,7 @@ class SumoTrafficManager(BaseManager):
             if ego_position is not None:
                 dx = v.position[0] - ego_position[0]
                 dy = v.position[1] - ego_position[1]
-                if dx * dx + dy * dy < self.EGO_SAFE_RADIUS ** 2:
+                if dx * dx + dy * dy < self.EGO_KEEP_CLEAR_M ** 2:
                     self.clear_objects([v.id])
                     continue
 
@@ -637,7 +997,86 @@ class SumoTrafficManager(BaseManager):
 
     MAX_LATERAL_DRIFT = 3.5  # metres off PointLane before forced removal (was 5.0 — tighter to remove drifters sooner)
 
+    # Calibration probe. With TRB_DENSITY_PROBE naming a file, append the count of
+    # moving NPCs within PROBE_RADIUS of the ego, divided by the lanes on the ego's
+    # road -- the same quantity nuPlan reports as count_moving_r150_per_lane. Off
+    # unless the variable is set, so production runs are untouched.
+    PROBE_RADIUS_M = 150.0
+    PROBE_MOVING_KMH = 1.8
+    PROBE_EVERY = 5
+
+    @staticmethod
+    def _road_id_from_lane_index(index):
+        """Bare SUMO edge id out of a lane index.
+
+        BaseVehicle resolves spawn_lane_index through
+        find_rightmost_lane_by_road_id, which parses lane keys as
+        'lane_<edge>_<n>' and matches on <edge>. Handing it the whole lane key
+        made every NPC spawn raise ValueError, and the bare `except Exception:
+        continue` around the spawn turned that into silently empty traffic --
+        which is why min_ttc_sec was null in every episode. The vehicle is
+        repositioned onto the intended lane right after spawning, so resolving
+        to the edge's rightmost lane here costs nothing.
+        """
+        s = str(index)
+        parts = s.split("_")
+        if s.startswith("lane_") and len(parts) >= 3:
+            return "_".join(parts[1:-1])
+        return s
+
+    @staticmethod
+    def _edge_key(index):
+        """Edge part of a lane index. SUMO lane keys are 'edge_<n>' strings here,
+        but PG networks use tuples, so handle both rather than assume."""
+        if isinstance(index, (tuple, list)):
+            return tuple(index[:-1])
+        s = str(index)
+        return s.rsplit("_", 1)[0] if "_" in s else s
+
+    def _lanes_on_ego_edge(self, ego) -> int:
+        """How many lanes the ego's own road has, counted off the road network."""
+        try:
+            if ego.lane is None:
+                return 1
+            key = self._edge_key(ego.lane.index)
+            n = sum(1 for lane in self._get_spawnable_lanes()
+                    if self._edge_key(lane.index) == key)
+            return max(1, n)
+        except Exception:
+            return 1
+
+    def _density_probe(self):
+        path = os.environ.get("TRB_DENSITY_PROBE")
+        if not path:
+            return
+        step = int(getattr(self.engine, "episode_step", 0) or 0)
+        if step % self.PROBE_EVERY:
+            return
+        agents = self.engine.agent_manager.active_agents
+        if not agents:
+            return
+        ego = list(agents.values())[0]
+        ex, ey = ego.position
+        n = 0
+        for v in self._traffic_vehicles:
+            dx = v.position[0] - ex
+            dy = v.position[1] - ey
+            if dx * dx + dy * dy <= self.PROBE_RADIUS_M ** 2 \
+                    and v.speed_km_h > self.PROBE_MOVING_KMH:
+                n += 1
+        lanes = self._lanes_on_ego_edge(ego)
+        try:
+            # One file per process: the eval runs 8 workers and NFS gives no
+            # atomicity guarantee for concurrent appends to one file.
+            with open("%s.%d" % (path, os.getpid()), "a") as fh:
+                fh.write(json.dumps({"density": float(self.density), "step": step,
+                                     "n": n, "lanes": lanes,
+                                     "per_lane": n / float(lanes)}) + "\n")
+        except OSError:
+            pass
+
     def after_step(self, *args, **kwargs):
+        self._density_probe()
         to_remove = []
         remove_reasons = {}          # vehicle_name → reason string
 

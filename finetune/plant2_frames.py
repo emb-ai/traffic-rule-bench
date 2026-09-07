@@ -57,11 +57,24 @@ _CLASS_TO_PDD = {
     "RightHandYieldSign": "2.4",
     "StopSign": "2.5",
     "NoEntrySign": "3.1",
+    "NoTrafficSign": "3.2",
+    "NoRightTurnSign": "3.18.1",
+    "NoLeftTurnSign": "3.18.2",
     "SpeedLimitSign": "3.24",
     "SpeedLimitSign20": "3.24",
     "SpeedLimitSign30": "3.24",
     "SpeedLimitSign40": "3.24",
     "SpeedLimitSign60": "3.24",
+    # The mandatory-direction plates carry their code in the class name, not in
+    # the icon file (those are named "direction_straight.png" and the like), so
+    # the icon regex cannot resolve them and every one of them was written as a
+    # nameless box: 875 dumped routes across six families carried no sign at all.
+    "LaneAllowedDirectionSign4_1_1": "4.1.1",
+    "LaneAllowedDirectionSign4_1_2": "4.1.2",
+    "LaneAllowedDirectionSign4_1_3": "4.1.3",
+    "LaneAllowedDirectionSign4_1_4": "4.1.4",
+    "LaneAllowedDirectionSign4_1_5": "4.1.5",
+    "LaneAllowedDirectionSign4_1_6": "4.1.6",
     "DetourRightSign": "4.2.1",
     "DetourLeftSign": "4.2.2",
     "DetourEitherSign": "4.2.3",

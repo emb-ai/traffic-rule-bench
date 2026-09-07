@@ -58,15 +58,24 @@ def embed_npc_profile(
         out[f"profile_{key}"] = value
 
     nuplan_target = _profile_nuplan_count(profile)
-    sampled_density = round(
-        float(np.clip(nuplan_target / META_DENSITY_SCALE, 0.0, density_cap)),
-        4,
-    )
+    # The profile already carries a density drawn from the curve measured on
+    # these scenes. Re-deriving it from nuplan_target / SCALE would discard that
+    # and hand every scene back to a divisor no measurement supports, so take
+    # what the profile sampled and only fall back to the scale when a profile
+    # was built without one.
+    raw_density = profile.get("traffic_density")
+    if raw_density is None:
+        raw_density = nuplan_target / META_DENSITY_SCALE
+    sampled_density = round(float(np.clip(float(raw_density), 0.0, density_cap)), 4)
+
     aux_credit = aux_traffic_vehicle_credit(out) if apply_aux_credit else 0
     remaining = max(0.0, nuplan_target - float(aux_credit))
+    # The convoy is reserved in vehicles while the spawn knob is a density, so
+    # the reservation is applied as the share of the target it consumes rather
+    # than converted through the scale a second time.
+    share = (remaining / nuplan_target) if nuplan_target > 0.0 else 1.0
     background_density = round(
-        float(np.clip(remaining / META_DENSITY_SCALE, 0.0, density_cap)),
-        4,
+        float(np.clip(sampled_density * share, 0.0, density_cap)), 4
     )
 
     # Raw sample — immutable for stats / nuPlan matching across all signs.

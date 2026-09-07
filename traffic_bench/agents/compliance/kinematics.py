@@ -41,6 +41,9 @@ BRAKE_PROP_GAIN = 0.05             # proportional gain for braking
 BRAKE_BIAS = 0.15                  # constant offset for braking
 FLOOR_PROP_GAIN = 0.08             # proportional gain for acceleration floor
 FLOOR_BIAS = 0.4                   # constant offset for acceleration floor
+FLOOR_PUSH_CLEAR_M = 25.0          # push to a 4.6 floor against the policy's own
+                                   # braking only with at least this much (or the
+                                   # braking distance) of free lane ahead
 FLOOR_OVERSHOOT_KMH = 3.0          # aim this far ABOVE the min so a policy's
                                    # pull-back (its own target is below the min)
                                    # doesn't dip below min - tolerance
@@ -902,6 +905,24 @@ class Kinematics:
                         return {"junction_type": jt, "priority": pri}
             return None
 
+        def _floor_road_clear(self, speed_kmh) -> bool:
+            """No vehicle or obstacle on the ego lane within the braking distance
+            (at least FLOOR_PUSH_CLEAR_M). Conservative: any failure = not clear."""
+            try:
+                from metadrive.policy.idm_policy import FrontBackObjects
+
+                ego = self.control_object
+                lane = getattr(self, "_lc_target_lane", None) or ego.lane
+                if lane is None:
+                    return False
+                look = max(FLOOR_PUSH_CLEAR_M, braking_distance(speed_kmh, 0.0))
+                objs = ego.lidar.get_surrounding_objects(ego)
+                fb = FrontBackObjects.get_find_front_back_objs_single_lane(
+                    objs, lane, ego.position, max_distance=look)
+                return fb.front_object() is None
+            except Exception:
+                return False
+
         def _apply_speed_constraints(self, throttle, speed_kmh):
             if self._speed_cap is not None:
                 if self._speed_cap < 1.0:
@@ -919,8 +940,24 @@ class Kinematics:
                 # is below the min doesn't keep dipping under min - tolerance. NN
                 # policies (carl/plant2) have no internal target to raise, so this
                 # firm throttle floor is their only lever to reach/hold the minimum.
+                #
+                # Never turn a braking request into acceleration. The target speed
+                # is already raised to the floor upstream, so a negative throttle
+                # arriving here means the controller is braking for something --
+                # a slower leader, a curve cap -- and the floor must yield to it.
+                # Overriding it drove every rule expert into the car ahead on the
+                # 4.6 scenes with traffic (20 of 24 rows, crash at step ~25, while
+                # the sign-unaware idm on the same rows arrived 24 of 24).
+                #
+                # The exception is a clear road: CaRL and PPO hold their own
+                # cruise (30 and 45 km/h) with a zero or slightly negative
+                # throttle, so under the rule above the push never engaged and
+                # both failed nearly every 50/60 plate even without traffic
+                # (v6 eval: carl_rule 98%, ppo_rule 60% of nominal episodes).
+                # With no leader within braking distance the negative throttle
+                # is a preference, not a safety brake, and the floor wins.
                 floor_target = self._speed_floor + FLOOR_OVERSHOOT_KMH
-                if speed_kmh < floor_target:
+                if speed_kmh < floor_target and (throttle >= 0.0 or self._floor_road_clear(speed_kmh)):
                     deficit = floor_target - speed_kmh
                     accel = min(FLOOR_PROP_GAIN * deficit + FLOOR_BIAS, 1.0)
                     throttle = max(throttle, accel)

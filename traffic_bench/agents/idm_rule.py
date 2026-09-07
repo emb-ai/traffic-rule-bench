@@ -34,6 +34,7 @@ which is used for surrounding traffic in SUMO maps):
 """
 
 import math
+import os
 
 import numpy as np
 
@@ -289,6 +290,60 @@ class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
 
         return best_obj, best_dist
 
+    def acceleration(self, front_obj, dist_to_front) -> float:
+        """IDM acceleration with the plate's bounds on the desired speed.
+
+        This is the only place the bounds can take effect: lane_change_policy(),
+        which IDMPolicy.act() runs first, resets target_speed to NORMAL_SPEED on
+        every step, so a floor or cap set before act() never reached the IDM
+        formula. Without it the controller cruised at NORMAL_SPEED (~30) under
+        a 4.6 plate and the only thing that ever lifted the ego to the minimum
+        was the reactive throttle floor -- which, now that it yields to braking,
+        is too little too late: with a 60 m run-up and no traffic the rule
+        expert still opened every 4.6 zone under the minimum. Raising the
+        desired speed here makes IDM accelerate to the floor through its own
+        car-following, so the floor never fights the car ahead. A floor never
+        exceeds the curvature-safe speed.
+        """
+        if self._speed_cap is not None:
+            self.target_speed = (0.0 if self._speed_cap < 1.0
+                                 else min(self.target_speed, self._speed_cap))
+        if self._speed_floor is not None:
+            # The cruise curvature cap uses CURVATURE_MU_SUMO = 0.03, which on
+            # a gentle OSM arc allows ~36 km/h -- below every 4.6 plate. Traced:
+            # the ego reached 37 km/h in 1.2 s and then oscillated at 34-37 for
+            # the whole run, IDM braking against a 40 floor on an empty road.
+            # A minimum plate is judged against a bound of its own: the same
+            # geometry at FLOOR_CURVATURE_MU (0.10 g lateral, still cautious),
+            # so gentle arcs honour the floor and only a genuinely tight curve
+            # holds it down.
+            self.target_speed = max(self.target_speed,
+                                    min(float(self._speed_floor), self._floor_curvature_speed()))
+        if os.environ.get("TRB_EXPERT_DEBUG"):
+            try:
+                print("[EXPERT_FRONT] step=%d v=%.1f target=%.1f front=%s dist=%s"
+                      % (int(getattr(self.engine, "episode_step", 0) or 0),
+                         float(self.control_object.speed_km_h), float(self.target_speed),
+                         type(front_obj).__name__ if front_obj is not None else None,
+                         "%.1f" % dist_to_front if dist_to_front is not None else None))
+            except Exception:
+                pass
+        return IDMPolicy.acceleration(self, front_obj, dist_to_front)
+
+    FLOOR_CURVATURE_MU = 0.10
+
+    def _floor_curvature_speed(self) -> float:
+        """Curvature-safe speed (km/h) for holding a minimum, at
+        FLOOR_CURVATURE_MU instead of the cruise mu; v scales with sqrt(mu)."""
+        try:
+            safe = float(self._curvature_target_speed())
+            mu = float(getattr(self, "CURVATURE_MU", 0.0) or 0.0)
+            if mu > 0.0 and safe < float(self.NORMAL_SPEED) - 1e-6:
+                return safe * math.sqrt(self.FLOOR_CURVATURE_MU / mu)
+            return max(safe, float(self._speed_floor or 0.0))
+        except Exception:
+            return float(self._speed_floor or 0.0)
+
     def act(self, *args, **kwargs):
         # Reset IDM target speed each step, capped by upcoming-curve limit.
         self.target_speed = min(self.NORMAL_SPEED, self._curvature_target_speed())
@@ -296,7 +351,8 @@ class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
         # Direction / no-entry replan must run before base IDM steering.
         self._process_signs()
 
-        # Base IDM action (car-following + PID steering + lane-change logic)
+        # Base IDM action (car-following + PID steering + lane-change logic).
+        # The plate's bounds are applied inside acceleration(), see below.
         action = IDMPolicy.act(self, *args, **kwargs)
         steering = float(action[0])
         throttle = float(action[1])
@@ -342,9 +398,24 @@ class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
             self.target_speed = max(self.target_speed, self._speed_floor)
 
         # Apply final speed constraints (braking / acceleration floor)
+        throttle_before = throttle
         throttle = self._apply_speed_constraints(
             throttle, self.control_object.speed_km_h
         )
+        if os.environ.get("TRB_EXPERT_DEBUG"):
+            # Per-step longitudinal state of the rule expert. Off unless asked.
+            try:
+                print("[EXPERT_DEBUG] step=%d v=%.1f floor=%s cap=%s target=%.1f "
+                      "curv=%.1f floor_curv=%.1f thr_idm=%.2f thr_out=%.2f lc=%s"
+                      % (int(getattr(self.engine, "episode_step", 0) or 0),
+                         float(self.control_object.speed_km_h),
+                         self._speed_floor, self._speed_cap, float(self.target_speed),
+                         float(self._curvature_target_speed()),
+                         float(self._floor_curvature_speed()) if self._speed_floor is not None else -1.0,
+                         float(throttle_before), float(throttle),
+                         getattr(self, "_lc_target_lane", None) is not None))
+            except Exception:
+                pass
 
         # Kick-start: if target speed is above walking speed but ego is near
         # stopped, give a firm throttle. Skip only if IDM actively wanted to

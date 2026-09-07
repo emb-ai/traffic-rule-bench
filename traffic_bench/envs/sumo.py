@@ -234,6 +234,17 @@ class TrafficSignSumoEnv(AutoSpawnMixin, BaseEnv):
         config["map_name"] = "map.net.xml"
         config["sign_type"] = "2.5"
         config["sign_spawn_distance"] = 0.0
+        # Speed scenes: background traffic spawns only PAST the plate on the
+        # ego's edge, so the approach the plate is judged on is clear of NPCs.
+        # -1 / "" disables it (every other family).
+        config["traffic_spawn_after_lng"] = -1.0
+        config["traffic_spawn_after_edge"] = ""
+        # The plate's value (km/h) for the same purpose: cars spawned past the
+        # plate start at a speed it allows. 0 = unknown.
+        config["traffic_spawn_after_kmh"] = 0.0
+        # Share of background cars that obey the plate (speed families; the
+        # manifest samples it per variant). 1.0 = every car, as before.
+        config["traffic_npc_compliance_rate"] = 1.0
         config["tl_speed_factor"] = 1.0
         # place ego onto a  parallel lane_num
         # sign's road_id after reset:  0 = rightmost

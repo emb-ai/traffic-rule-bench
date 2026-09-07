@@ -44,7 +44,10 @@ FOLLOW_MAX_GAP = 120.0   # m: longest longitudinal search for a leader
 FOLLOW_LAT_MAX = 1.9     # m: |lateral| of the leader in the follower frame (~half a lane)
 FOLLOW_HEADING_MAX = np.pi / 4   # 45 deg: heading mismatch within a pair
 EGO_LENGTH = 5.0         # m: ego length (Chrysler Pacifica) for bumper-to-bumper
-DENSITY_RADIUS = 50.0    # m: radius of count_r50 around the ego
+# m: the counting radius around the ego. 150 m is the benchmark's own scale --
+# a speed scene caps the route at 150 m -- so the statistic describes the
+# traffic a policy actually meets over one episode, not a city block.
+DENSITY_RADIUS = 150.0
 LANE_STRIDE = 5          # every 5th frame (4 Hz) for lane membership
 LANE_BRIDGE_S = 1.0      # s: longest gap a transition is bridged across
 LANE_MERGE_S = 3.0       # s: events of one track closer than this are one event
@@ -157,6 +160,13 @@ class CityLanes:
                 self.lane_ids.append(int(lane_fid))
                 self.group_ids.append(int(group_fid) if group_fid is not None else -1)
                 boxes.append((ux.min(), uy.min(), ux.max(), uy.max()))
+        # lanes per road: distinct lane_fid within one lane_group. A lane may
+        # contribute several rings, so count the set, not the rows.
+        _by_group: dict[int, set] = {}
+        for lane_fid, group_fid in zip(self.lane_ids, self.group_ids):
+            _by_group.setdefault(group_fid, set()).add(lane_fid)
+        self.lanes_in_group = {g: len(s) for g, s in _by_group.items()}
+
         # grid index: a 50 m cell -> the polygons whose bbox touches it
         self.cell = grid_cell
         self.grid: dict[tuple[int, int], list[int]] = {}
@@ -395,11 +405,17 @@ def ego_heading(log: dict) -> np.ndarray:
     return pd.Series(np.where(mask, yaw, np.nan)).ffill().bfill().fillna(0.0).to_numpy()
 
 
-def stats_per_frame(log: dict, tracks: list[dict], cnt: Counter):
+def stats_per_frame(log: dict, tracks: list[dict], cnt: Counter, lanes=None):
     """densities.csv and following.csv in one pass over the frames.
 
-    density (per frame): count = ALL annotated cars (compatible with the previous
-      version), count_moving, count_r50 (<=50 m from the ego), count_moving_r50.
+    density (per frame): everything is counted inside DENSITY_RADIUS of the ego and
+      nowhere else -- a count over the whole annotation window describes the city,
+      not the road the ego drives. ego_lanes is the number of lanes on the ego's
+      own road (distinct lane_fid in its lane_group), 0 where the ego is in a
+      junction or a car park, which the lane layer does not cover.
+      count_moving_per_lane is the quantity the simulator has to reproduce:
+      MetaDrive applies traffic_density to each lane separately, so a per-frame
+      total is not comparable to it, and a per-lane one is.
 
     following (every 2nd frame): for each MOVING follower the others are put into
       its own frame of reference (by the follower yaw); the leader is the nearest
@@ -423,14 +439,27 @@ def stats_per_frame(log: dict, tracks: list[dict], cnt: Counter):
 
     n_frames = len(log["t"])
     bounds = np.searchsorted(fi, np.arange(n_frames + 1))
+
+    # Lanes on the ego's road, per frame. One assign() for the whole log.
+    ego_lanes = np.zeros(n_frames, dtype=np.int64)
+    if lanes is not None:
+        _, groups = lanes.assign(log["ego_xy"][:, 0], log["ego_xy"][:, 1])
+        for f, g in enumerate(groups):
+            ego_lanes[f] = lanes.lanes_in_group.get(int(g), 0)
+        cnt["density_frames_with_lanes"] += int((ego_lanes > 0).sum())
+        cnt["density_frames_no_lane"] += int((ego_lanes == 0).sum())
+
     density_rows, gaps = [], []
     for f in range(n_frames):
         lo, hi = bounds[f], bounds[f + 1]
         ex, ey = log["ego_xy"][f]
         r = np.hypot(X[lo:hi] - ex, Y[lo:hi] - ey)
-        mv, in50 = MOV[lo:hi], r <= DENSITY_RADIUS
-        density_rows.append((int(log["ts_us"][f]), hi - lo, int(mv.sum()),
-                             int(in50.sum()), int((mv & in50).sum())))
+        mv, inr = MOV[lo:hi], r <= DENSITY_RADIUS
+        n_in = int(inr.sum())
+        n_mv = int((mv & inr).sum())
+        nl = int(ego_lanes[f])
+        density_rows.append((int(log["ts_us"][f]), nl, n_in, n_mv,
+                             (n_mv / nl) if nl > 0 else float("nan")))
 
         if f % FOLLOW_STRIDE or hi == lo:
             continue
@@ -498,7 +527,7 @@ def process_db(args_tuple):
             if lanes is not None:
                 out["lane_events"].extend(stat_lane_changes(tr, lanes, cnt))
 
-        out["density_rows"], out["following"] = stats_per_frame(log, tracks, cnt)
+        out["density_rows"], out["following"] = stats_per_frame(log, tracks, cnt, lanes)
         cnt["dbs_ok"] += 1
     except Exception as e:
         out["counters"]["dbs_failed"] += 1
@@ -566,7 +595,8 @@ def main():
     routes = pd.DataFrame(agg["routes"])
     routes.to_csv(outdir / "routes.csv", index=False)
     dens = pd.DataFrame(agg["density_rows"], columns=[
-        "timestamp", "count", "count_moving", "count_r50", "count_moving_r50"])
+        "timestamp", "ego_lanes", "count_r150", "count_moving_r150",
+        "count_moving_r150_per_lane"])
     dens.to_csv(outdir / "densities.csv", index=False)
     lc = pd.DataFrame(agg["lane_events"],
                       columns=["track_token", "timestamp", "lateral_shift"])
@@ -591,10 +621,15 @@ def write_reports(outdir, args, dbs, agg, speeds, acc_pos, acc_neg, following,
     accident_prob = cnt["frames_with_static"] / max(1, cnt["frames_total"])
 
     def pct(a, q):
+        # NaN-tolerant: the per-lane density column is NaN wherever the ego sat in
+        # a junction, and np.percentile would poison the whole row.
+        a = np.asarray(a, dtype=float)
+        a = a[np.isfinite(a)]
         return float(np.percentile(a, q)) if len(a) else float("nan")
 
     def block(a):
-        return {"mean": float(a.mean()), "median": pct(a, 50), "std": float(a.std())}
+        return {"mean": float(np.nanmean(a)), "median": pct(a, 50),
+                "std": float(np.nanstd(a))}
 
     config = {
         "INITIAL_SPEED": {"mean": float(routes["initial_speed"].mean())},
@@ -609,7 +644,14 @@ def write_reports(outdir, args, dbs, agg, speeds, acc_pos, acc_neg, following,
         "horizon": {"min": float(routes["duration"].min()),
                     "mean": float(routes["duration"].mean()),
                     "median": float(routes["duration"].median())},
-        "traffic_density": float(dens["count"].mean()),
+        # Per-lane moving traffic inside DENSITY_RADIUS: the quantity the
+        # simulator is calibrated to reproduce. Kept as the full distribution,
+        # not a tier, so a scene can sample its own value.
+        "traffic_density_per_lane": {
+            "mean": float(np.nanmean(dens["count_moving_r150_per_lane"])),
+            "percentiles": {str(q): pct(dens["count_moving_r150_per_lane"], q)
+                            for q in (5, 10, 25, 50, 75, 90, 95)},
+        },
         "accident_prob": accident_prob,
         "size_prob": {k: float(v) for k, v in
                       routes["size_class"].value_counts(normalize=True).items()},
@@ -637,8 +679,11 @@ def write_reports(outdir, args, dbs, agg, speeds, acc_pos, acc_neg, following,
                 "acc": "gradient of the 0.25 s smoothed speed; |a|<=8; deadband 0.05",
                 "following": "bumper-to-bumper to the nearest leader (cars + ego): "
                              "dx<=120, |dy|<=1.9, dyaw<=45deg; followers are tracks only",
-                "densities.count": "ALL annotated cars in the frame (as in the previous version)",
-                "densities.count_moving_r50": "moving cars within 50 m of the ego",
+                "densities.count_r150": "cars within 150 m of the ego -- one episode's worth of road",
+                "densities.count_moving_r150": "of those, the moving ones",
+                "densities.ego_lanes": "lanes on the ego's own road (lane_group), 0 in junctions",
+                "densities.count_moving_r150_per_lane": "count_moving_r150 / ego_lanes -- "
+                                                        "the quantity traffic_density is calibrated against",
                 "lane_changes": "1 row = 1 event: a lane_fid change within one lane_group",
                 "accident_prob": "share of frames with a static obstacle closer than 20 m to the ego",
                 "routes.distance": "track path INSIDE THE ANNOTATION WINDOW (~50-80 m), cut by observation",
@@ -663,7 +708,8 @@ def write_reports(outdir, args, dbs, agg, speeds, acc_pos, acc_neg, following,
         "traffic_density": {
             col: {"mean": float(dens[col].mean()),
                   "p25/50/75": [pct(dens[col], q) for q in (25, 50, 75)]}
-            for col in ("count", "count_moving", "count_r50", "count_moving_r50")},
+            for col in ("ego_lanes", "count_r150", "count_moving_r150",
+                        "count_moving_r150_per_lane")},
         "lane_changes": {"events": int(len(lc)), "total_km": total_km,
                          "rate_per_km": lane_rate},
         "ego_route_stats": {

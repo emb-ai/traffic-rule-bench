@@ -6,12 +6,14 @@ Layout on one edge (user constraints):
   - destination at min(edge_end, max_path_length_m)  (default cap 150 m)
   - paired end-of-limit sign just before dest (3.24/5.21/5.31)
 
-Axes: spawn_lane × traffic_density. Limit is one per map (round-robin).
+Axes: spawn_lane × profile. Each row samples its own traffic density and its
+own sign offset; the plate value stays one per map (round-robin).
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -23,13 +25,20 @@ from traffic_bench.eval.signs.speed.spec import (
     ZONE_MIN_M,
     ZONE_TAIL_M,
     accel_v0_mps,
+    sample_npc_compliance_rate,
     approach_m,
     assign_limit_kmh,
     braking_v0_mps,
+    edge_speed_mps,
+    new_limit_state,
     paired_end_code,
     spawn_mode_for,
 )
 from traffic_bench.eval.engine.expand.manifest_expansion import shuffle_cap
+from traffic_bench.eval.engine.traffic.traffic_density_levels import (
+    density_quantiles,
+    sample_traffic_density,
+)
 from traffic_bench.eval.engine.spawn.route_length_levels import (
     list_route_length_levels,
     select_route_length_levels,
@@ -63,11 +72,23 @@ class SpeedSimParams:
     max_path_length_levels: Tuple[float, ...] = (130.0, 150.0, 170.0)
     horizon: int = 400
     traffic_density: float = 0.0
+    # NPC/approach profiles per lane. The seed folds the variant in, so each one
+    # draws its own nuPlan spawn velocity -- and for the braking families that
+    # moves the approach distance and the plate with it.
     n_variations: int = MAX_AXIS
     profile_density_cap: float = 1.0
     max_ego_lanes: int = 8
     zone_tail_m: float = ZONE_TAIL_M
     zone_min_m: float = ZONE_MIN_M
+    # Extra metres the plate may slide DOWNSTREAM of its earliest legal position.
+    # Never upstream: the approach before it is the braking (or accel) distance
+    # the scene is built on, and shortening it would make the scene unsatisfiable
+    # rather than varied.
+    sign_jitter_max_m: float = 25.0
+    # Variant 0 built as the nominal scene -- no traffic, no NPC profile, no
+    # plate jitter, the reference v0 -- and only variants 1..N-1 sampled. Gives
+    # every scene one clean reference row next to its sampled ones.
+    default_first_variant: bool = False
 
 
 @dataclass(frozen=True)
@@ -139,6 +160,7 @@ def build_speed_manifest_entry(
     npc_profile: Optional[Dict[str, Any]] = None,
     max_path_length_m: Optional[float] = None,
     route_length_augment: bool = False,
+    default_variant: bool = False,
 ) -> Optional[Dict[str, Any]]:
     scene_name = str(meta.get("scene_name") or scene_dir.name)
     net_file = str(meta.get("net_file") or "map.net.xml")
@@ -166,23 +188,36 @@ def build_speed_manifest_entry(
         seed_key += f"_rl{int(round(path_budget_m))}"
         scene_id = f"{scene_id}_rl{int(round(path_budget_m))}"
     seed = _stable_seed(scene_name, variant, seed_key)
+    # The nominal row carries no traffic and the reference approach speed; the
+    # sampled rows draw both. Density here is the fallback for a row built
+    # without a profile -- embed_npc_profile overwrites it when one is passed.
+    traffic_density = 0.0 if default_variant else sample_traffic_density(seed)
+    npc_compliance_rate = 1.0 if default_variant else sample_npc_compliance_rate(seed)
 
     if spawn_mode == "accel":
-        v0 = accel_v0_mps(v_target_kmh)
+        v0 = accel_v0_mps(v_target_kmh, seed=None if default_variant else seed)
+    elif default_variant:
+        from traffic_bench.eval.signs.speed.spec import nominal_braking_v0_mps
+
+        v0 = nominal_braking_v0_mps(v_target_kmh)
     else:
         v0 = braking_v0_mps(seed, v_target_kmh)
     d_req = approach_m(pdd_code, v0, v_target_kmh)
     sign_s = spawn_offset + d_req
 
     end_code = paired_end_code(pdd_code)
-    if end_code:
-        s_end = dest_along - float(sim.zone_tail_m)
-        if s_end - sign_s < float(sim.zone_min_m):
-            return None
-    else:
-        s_end = dest_along
-        if dest_along - sign_s < float(sim.zone_min_m):
-            return None
+    s_end = dest_along - float(sim.zone_tail_m) if end_code else dest_along
+    if s_end - sign_s < float(sim.zone_min_m):
+        return None
+
+    # Slide the plate downstream within whatever room the zone can spare, so the
+    # profiles of one cell do not all put the sign at the same metre. The
+    # nominal row keeps the plate where the approach distance puts it.
+    room = (s_end - float(sim.zone_min_m)) - sign_s
+    if room > 0.0 and not default_variant:
+        jitter = random.Random(seed ^ 0x516E4A).random() * min(
+            float(sim.sign_jitter_max_m), room)
+        sign_s += jitter
 
     if sign_s <= spawn_offset + 0.5:
         return None
@@ -222,7 +257,14 @@ def build_speed_manifest_entry(
         "brake_decel_mps2": BRAKE_DECEL_MPS2_DEFAULT,
         "brake_delay_s": BRAKE_DELAY_S_DEFAULT,
         "brake_margin_m": BRAKE_MARGIN_M_DEFAULT,
-        "traffic_density": float(sim.traffic_density),
+        # Sampled per row; embed_npc_profile overwrites it when a profile is
+        # passed, which is the normal path. The config default is 0.0, so
+        # falling back to it would mean a scene with no traffic at all.
+        "traffic_density": float(traffic_density),
+        # Share of NPCs that obey the plate (1.0 = all). Read by the traffic
+        # manager at spawn; every other family leaves it at the default 1.0.
+        "npc_compliance_rate": float(npc_compliance_rate),
+        "sign_s_earliest": round(float(spawn_offset + d_req), 3),
         "horizon": int(sim.horizon),
         "horizon_steps": int(sim.horizon),
         "auxiliary_agent": False,
@@ -262,6 +304,7 @@ def expand_speed_scene_entries(
     v_target_kmh: float,
 ) -> List[Dict[str, Any]]:
     n_variations = max(1, int(sim.n_variations))
+
     entries: List[Dict[str, Any]] = []
     configured_route_levels = list_route_length_levels(sim)
     road_id = str(meta.get("road_id") or "")
@@ -281,14 +324,20 @@ def expand_speed_scene_entries(
     )
     for lane_num in _lane_range(meta, sim.max_ego_lanes):
         for npc_var in range(n_variations):
-            for path_len_m in route_levels:
+            # Variant 0 of a cell is the nominal scene when asked for: a single
+            # row at the configured budget, no profile, no traffic. The
+            # route-length axis stays on the sampled variants only, so the
+            # reference row is one row and not one per budget.
+            nominal = bool(sim.default_first_variant) and npc_var == 0
+            levels = [float(sim.max_path_length_m)] if nominal else route_levels
+            for path_len_m in levels:
                 seed = stable_hash(
                     str(meta.get("scene_name") or scene_dir.name),
                     lane_num,
                     npc_var,
                     int(round(float(path_len_m))),
                 )
-                npc_profile = sample_one_profile(
+                npc_profile = None if nominal else sample_one_profile(
                     int(seed),
                     density_cap=float(sim.profile_density_cap),
                     horizon_steps=int(sim.horizon),
@@ -304,7 +353,8 @@ def expand_speed_scene_entries(
                     variant=npc_var,
                     npc_profile=npc_profile,
                     max_path_length_m=float(path_len_m),
-                    route_length_augment=route_augment,
+                    route_length_augment=route_augment and not nominal,
+                    default_variant=nominal,
                 )
                 if row is not None:
                     entries.append(row)
@@ -366,7 +416,9 @@ def generate(cfg, scenes=None):
     )
     print(
         f"Augmentation axes: spawn_lane × n_variations={n_variations} "
-        f"× route_length={list(getattr(sim_cfg, 'max_path_length_levels', (130, 150, 170)))}"
+        f"× route_length={list(getattr(sim_cfg, 'max_path_length_levels', (130, 150, 170)))}; "
+        f"each row samples its own traffic density and sign offset "
+        f"(density quantiles {density_quantiles()})"
     )
 
     sim_params = SpeedSimParams(
@@ -382,6 +434,8 @@ def generate(cfg, scenes=None):
         max_ego_lanes=int(sim_cfg.max_ego_lanes),
         zone_tail_m=float(sim_cfg.zone_tail_m),
         zone_min_m=float(sim_cfg.zone_min_m),
+        sign_jitter_max_m=float(getattr(sim_cfg, "sign_jitter_max_m", 25.0) or 0.0),
+        default_first_variant=bool(getattr(sim_cfg, "default_first_variant", False)),
     )
     speed_expansion = SpeedExpansionConfig(
         max_scenarios=scenario_cfg.max_scenarios,
@@ -390,12 +444,24 @@ def generate(cfg, scenes=None):
     entries: List[Dict] = []
     used_scene_ids: List[str] = []
     skipped_short = 0
+    skipped_road = 0
+    limit_state = new_limit_state()
 
-    for scene_idx, scene_dir in enumerate(scenes):
+    for scene_dir in scenes:
         meta = load_scene_metadata(scene_dir)
         scene_name = meta.get("scene_name", scene_dir.name)
-        v_target_kmh = assign_limit_kmh(pdd_code, scene_idx)
-        print(f"\n=== {scene_name}  v_target={v_target_kmh:.0f} km/h ===")
+        net_abs = scene_dir / str(meta.get("net_file") or "map.net.xml")
+        road_kmh = edge_speed_mps(str(net_abs), str(meta.get("road_id") or "")) * 3.6
+        v_target_kmh = assign_limit_kmh(
+            pdd_code, road_speed_kmh=road_kmh, state=limit_state
+        )
+        if v_target_kmh is None:
+            skipped_road += 1
+            print(f"\n=== {scene_name}  skipped: road {road_kmh:.0f} km/h "
+                  f"cannot carry a {pdd_code} plate ===")
+            continue
+        print(f"\n=== {scene_name}  v_target={v_target_kmh:.0f} km/h "
+              f"(road {road_kmh:.0f} km/h) ===")
 
         scene_entries = expand_speed_scene_entries(
             scene_dir=scene_dir,
@@ -414,6 +480,12 @@ def generate(cfg, scenes=None):
             entries, used_scene_ids, scene_entries,
             scene_dir=scene_dir, meta=meta, split_by_id=split_by_id,
         )
+
+    print(f"\nDropped for road speed: {skipped_road}; for no room before the dest cap: {skipped_short}")
+    if pdd_code == "4.6":
+        buckets = ", ".join(f"{int(k)}:{v}" for k, v in
+                            sorted(limit_state["min_counts"].items()))
+        print(f"4.6 minimum split over reachable buckets: {buckets}")
 
     entries, used_scene_ids, pre_total = apply_max_total(
         entries, used_scene_ids,
@@ -446,6 +518,7 @@ def generate(cfg, scenes=None):
             "total_entries": len(entries),
             "total_entries_before_max_total": pre_total,
             "skipped_short_scenes": skipped_short,
+            "skipped_road_speed_scenes": skipped_road,
             "max_scenarios": scenario_cfg.max_scenarios,
             "max_total": scenario_cfg.max_total,
             "n_variations": n_variations,

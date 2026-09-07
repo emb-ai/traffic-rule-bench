@@ -262,6 +262,9 @@ def _job_from_hydra(cfg: DictConfig, profile, scenes_dir: Path, output_dir: Path
             getattr(cfg.simulation, "sign_distance_from_start", 10.0) or 10.0
         ),
         n_variations=int(getattr(cfg.simulation, "n_variations", 3) or 3),
+        default_first_variant=bool(
+            getattr(cfg.simulation, "default_first_variant", False)
+        ),
         profile_density_cap=float(
             getattr(cfg.simulation, "profile_density_cap", 1.0) or 1.0
         ),
