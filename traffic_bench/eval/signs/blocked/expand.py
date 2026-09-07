@@ -63,6 +63,10 @@ class BlockedRoadSimParams:
     max_path_length_m: float = DEFAULT_MAX_PATH_LENGTH_M
     max_path_length_levels: Tuple[float, ...] = DEFAULT_ROUTE_LENGTH_LEVELS_M
     default_first_variant: bool = True
+
+
+@dataclass(frozen=True)
+class BlockedRoadExpansionConfig:
     layout: bool = True
     max_scenarios: Optional[int] = None
     validate_metadrive_routes: bool = False
