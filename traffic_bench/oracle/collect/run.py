@@ -414,6 +414,19 @@ def run_collection(args: argparse.Namespace) -> int:
                     n_fail += 1
                     print(f"[skip] {uid} {args.policy}/{variant}: "
                           f"{type(exc).__name__}: {exc}", flush=True)
+                    # A row that dies mid-build leaves MetaDrive's engine
+                    # singleton alive, and every later row in this worker then
+                    # fails on "Can not call this API after engine
+                    # initialization!" -- one bad row cost 32 of the 50 rows in
+                    # a shard. Tear the engine down so the next row starts clean.
+                    try:
+                        from metadrive.engine.engine_utils import (
+                            close_engine, engine_initialized,
+                        )
+                        if engine_initialized():
+                            close_engine()
+                    except Exception:
+                        pass
                     continue
                 dt = time.time() - t0
                 # Refresh paths after write
