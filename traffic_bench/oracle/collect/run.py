@@ -103,6 +103,30 @@ def _ego_variants(policy: str, ego_variant: str, extra_samples: int) -> list[str
     return variants
 
 
+def _drop_engine() -> None:
+    """Make sure no MetaDrive engine survives this row.
+
+    run_one_episode closes its env in a finally block that swallows whatever
+    close() raises, so a teardown that fails leaves the singleton alive -- and
+    it fails after successful episodes too, not only after broken ones. The
+    next row then dies on "Can not call this API after engine initialization!"
+    and so does every row after it: one shard lost 187 of its 250 rows. Drop
+    the reference whatever close() does.
+    """
+    try:
+        from metadrive.engine.base_engine import BaseEngine
+    except ImportError:
+        return
+    eng = getattr(BaseEngine, "singleton", None)
+    if eng is None:
+        return
+    try:
+        eng.close()
+    except Exception:
+        pass
+    BaseEngine.singleton = None
+
+
 def _flat_all_runs_row(
     *,
     row: dict,
@@ -419,15 +443,9 @@ def run_collection(args: argparse.Namespace) -> int:
                     # fails on "Can not call this API after engine
                     # initialization!" -- one bad row cost 32 of the 50 rows in
                     # a shard. Tear the engine down so the next row starts clean.
-                    try:
-                        from metadrive.engine.engine_utils import (
-                            close_engine, engine_initialized,
-                        )
-                        if engine_initialized():
-                            close_engine()
-                    except Exception:
-                        pass
+                    _drop_engine()
                     continue
+                _drop_engine()
                 dt = time.time() - t0
                 # Refresh paths after write
                 if not sidecar.is_file():
