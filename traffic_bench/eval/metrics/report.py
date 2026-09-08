@@ -7,12 +7,21 @@ Every numeric cell shows both aggregations side by side:
 
 * per-episode — every episode weighs the same (the original aggregation;
   ``per_baseline`` / ``per_sign`` blocks of cumulative.json);
-* per-map — a map's episodes are collapsed first, then the mean is taken over
-  maps, so every map contributes exactly one number (``per_baseline_map`` /
-  ``per_sign_map`` blocks; see ``aggregate.aggregate_by_map``).
+* per-map — a map's episodes (its augmented variants) are collapsed first,
+  then the mean is taken over maps, so every map contributes exactly one
+  number (``per_baseline_map`` / ``per_sign_map`` blocks; see
+  ``aggregate.aggregate_by_map``).
+
+Each table is followed by a dispersion table over the per-map values:
+
+    <mean> ± <std over maps> [<ci_lo>, <ci_hi>]
+
+with the bootstrap CI of the mean (``per_baseline_map_ci`` / ``per_sign_map_ci``
+blocks, parameters in ``ci``).
 
 Old cumulative.json files without the ``*_map`` blocks render only the
-per-episode value.
+per-episode value; files without the ``*_map_ci`` blocks skip the
+dispersion tables.
 """
 from __future__ import annotations
 
@@ -92,6 +101,53 @@ def _table_row(policy: str, m_ep: dict, m_map: dict | None, with_map: bool) -> s
     return "| " + " | ".join(cells) + " |"
 
 
+def _ci_cell(block: dict | None, key: str) -> str:
+    """``mean ± std [lo, hi]`` for one metric of a ``*_map_ci`` block."""
+    d = (block or {}).get(key)
+    if not d:
+        return "—"
+    s = _fmt(d.get("mean"))
+    std = d.get("std")
+    if std not in (None, ""):
+        s += f" ± {float(std):.3f}"
+    lo, hi = d.get("ci_lo"), d.get("ci_hi")
+    if lo not in (None, "") and hi not in (None, ""):
+        s += f" [{float(lo):.3f}, {float(hi):.3f}]"
+    return s
+
+
+def _ci_table_header() -> list[str]:
+    cols = ["Policy", "Maps", "Episodes / map"] + [h for h, _ in METRIC_COLUMNS]
+    return [
+        "| " + " | ".join(cols) + " |",
+        "|---|" + "|".join(["---:"] * (len(cols) - 1)) + "|",
+    ]
+
+
+def _ci_table_row(policy: str, m_map: dict, m_ci: dict | None) -> str:
+    n_maps = m_map.get("n_maps")
+    lo, hi = m_map.get("episodes_per_map_min"), m_map.get("episodes_per_map_max")
+    if lo in (None, ""):
+        per_map = "—"
+    elif hi in (None, "") or int(lo) == int(hi):
+        per_map = str(int(lo))
+    else:
+        per_map = f"{int(lo)}–{int(hi)}"
+    cells = [f"`{_display(policy)}`",
+             str(int(n_maps)) if n_maps not in (None, "") else "—",
+             per_map]
+    cells += [_ci_cell(m_ci, key) for _, key in METRIC_COLUMNS]
+    return "| " + " | ".join(cells) + " |"
+
+
+def _ci_caption(ci_meta: dict) -> str:
+    level = ci_meta.get("level")
+    level_s = f"{float(level):.0%}" if level not in (None, "") else "bootstrap"
+    n_boot = ci_meta.get("n_boot")
+    boot_s = f"{int(n_boot)} resamples" if n_boot not in (None, "") else "bootstrap"
+    return f"per-map mean ± std, {level_s} CI ({boot_s})"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Generate markdown table from cumulative.json")
     ap.add_argument(
@@ -126,6 +182,12 @@ def main() -> None:
     per_baseline_map = data.get("per_baseline_map") or {}
     per_sign_by_baseline_map = data.get("per_sign_map") or {}
     with_map = bool(per_baseline_map)
+    # Dispersion over maps (absent in cumulative.json written before the
+    # bootstrap CI existed → no dispersion tables).
+    per_baseline_map_ci = data.get("per_baseline_map_ci") or {}
+    per_sign_by_baseline_map_ci = data.get("per_sign_map_ci") or {}
+    ci_meta = data.get("ci") or {}
+    with_ci = with_map and bool(per_baseline_map_ci)
 
     lines: list[str] = []
     lines.append("# Cumulative Benchmark Results")
@@ -147,6 +209,21 @@ def main() -> None:
             "sign obeyed AND destination reached, over all scored episodes."
         )
         lines.append("")
+    if with_ci:
+        level = ci_meta.get("level")
+        level_s = f"{float(level):.0%}" if level not in (None, "") else "bootstrap"
+        n_boot = ci_meta.get("n_boot")
+        lines.append(
+            "Dispersion tables (`mean ± std [lo, hi]`): every map is collapsed to one "
+            "value per metric (the mean over its augmented variants); `mean` is the "
+            "mean of those per-map values, `std` their sample standard deviation, "
+            f"`[lo, hi]` the {level_s} percentile-bootstrap CI of the mean"
+            + (f" ({int(n_boot)} resamples of the maps"
+               + (f", seed {int(ci_meta['seed'])}" if ci_meta.get("seed") not in (None, "") else "")
+               + ")" if n_boot not in (None, "") else "")
+            + ". `Episodes / map` = augmented variants per map (min–max when unbalanced)."
+        )
+        lines.append("")
     lines.append("## Overall (weighted by total_runs across chunks)")
     lines.append("")
     lines.extend(_table_header(with_map))
@@ -154,6 +231,13 @@ def main() -> None:
     for policy, m in sorted(per_baseline.items(), key=lambda kv: _display(kv[0])):
         lines.append(_table_row(policy, m, per_baseline_map.get(policy) if with_map else None,
                                 with_map))
+    if with_ci:
+        lines.append("")
+        lines.append(f"### Overall — {_ci_caption(ci_meta)}")
+        lines.append("")
+        lines.extend(_ci_table_header())
+        for policy, m_map in sorted(per_baseline_map.items(), key=lambda kv: _display(kv[0])):
+            lines.append(_ci_table_row(policy, m_map, per_baseline_map_ci.get(policy)))
 
     # Aggregate per-sign across baselines for a sign-centric table
     by_sign: dict[str, dict[str, dict]] = {}
@@ -170,6 +254,12 @@ def main() -> None:
             continue
         for sign, m in sign_map.items():
             by_sign_map.setdefault(sign, {})[policy] = m
+    by_sign_map_ci: dict[str, dict[str, dict]] = {}
+    for policy, sign_map in per_sign_by_baseline_map_ci.items():
+        if not isinstance(sign_map, dict):
+            continue
+        for sign, m in sign_map.items():
+            by_sign_map_ci.setdefault(sign, {})[policy] = m
 
     lines.append("")
     lines.append("## Per Sign (aggregated across chunks)")
@@ -182,6 +272,15 @@ def main() -> None:
             m_map = by_sign_map.get(sign, {}).get(policy) if with_map else None
             lines.append(_table_row(policy, m, m_map, with_map))
         lines.append("")
+        if with_ci and by_sign_map.get(sign):
+            lines.append(f"#### Sign `{sign}` — {_ci_caption(ci_meta)}")
+            lines.append("")
+            lines.extend(_ci_table_header())
+            for policy, m_map in sorted(by_sign_map[sign].items(),
+                                        key=lambda kv: _display(kv[0])):
+                lines.append(_ci_table_row(policy, m_map,
+                                           by_sign_map_ci.get(sign, {}).get(policy)))
+            lines.append("")
 
     out_path = Path(args.out) if args.out else (run_root / "reports" / "report_cumulative.md")
     out_path.parent.mkdir(parents=True, exist_ok=True)

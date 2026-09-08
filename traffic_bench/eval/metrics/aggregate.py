@@ -11,9 +11,13 @@ Slices produced:
 Every slice is produced under two aggregations (both are always written):
   * per-episode  — agg_per_*.csv           every episode weighs the same
                                           (the original aggregation);
-  * per-map      — agg_per_*_map.csv       each map's episodes are collapsed
-                                          first, then the mean is taken over
-                                          maps (see aggregate_by_map).
+  * per-map      — agg_per_*_map.csv       each map's episodes (its augmented
+                                          variants) are collapsed first, then
+                                          the mean is taken over maps (see
+                                          aggregate_by_map);
+                   agg_per_*_map_ci.csv    long table: per metric the per-map
+                                          mean, the std over maps and a
+                                          bootstrap CI of the mean.
 
 `sr_and_dest` (SR&Dest) = target sign obeyed AND destination reached, over
 every scored episode.
@@ -24,7 +28,9 @@ Plus, for backward compatibility with the existing MD-report scripts:
                                        generate_category_aggregation_report.py,
                                        plus per_baseline_map / per_sign_map with
                                        the map-level aggregation (report.py shows
-                                       both as `episode / map` in each cell)
+                                       both as `episode / map` in each cell) and
+                                       per_baseline_map_ci / per_sign_map_ci with
+                                       {mean, std, ci_lo, ci_hi, n_maps} per metric
   6. cumulative_2node.json          — {vars_processed, cumulative_through_latest,
                                        per_var} schema for merge_and_report_2node.py
 
@@ -43,9 +49,12 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+import numpy as np
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 from traffic_bench.agents.policy_names import canonical_policy_name
+from traffic_bench.eval.metrics.map_id import base_scene_id
 from traffic_bench.oracle.select.filter import (
     BETA_DEFAULT,
     HORIZON_DEFAULT,
@@ -191,6 +200,9 @@ def load_episode_csv(path: Path) -> list[dict]:
                 "is_no_entry_sign": _to_bool(r["is_no_entry_sign"]),
                 "scene_id": r["scene_id"],
                 "scene_uid": r["scene_uid"],
+                # CSVs written before the column existed: strip the variant /
+                # world-axis suffix from the scene id (metrics/map_id.py).
+                "map_id": (r.get("map_id") or "").strip() or base_scene_id(r["scene_id"]),
                 "manifest_source": r.get("manifest_source", ""),
                 "is_paired_scene": _to_bool(r.get("is_paired_scene", "")),
                 "pdd_code_start": r.get("pdd_code_start", ""),
@@ -422,10 +434,17 @@ def aggregate(rows: list[dict], beta: float = BETA_DEFAULT,
 # ---------------------------------------------------------------------------
 # Episode-level averages let a map with many variations outweigh a map with
 # few, so a policy can win by doing well where the catalog happens to be
-# dense. Here every map (scene_id) contributes exactly one number: aggregate()
-# runs on each map's episodes and the per-map values are averaged. Counts and
-# totals are summed instead, so both aggregations share one schema and can be
-# written side by side. Ported from the old map_level_metrics.py.
+# dense. Here every map contributes exactly one number: aggregate() runs on
+# each map's episodes — its augmented variants (manifest variant × route
+# length × density × spawn speed × NPC draw × lane × seed) — and the per-map
+# values are averaged. Counts and totals are summed instead, so both
+# aggregations share one schema and can be written side by side.
+#
+# The per-map values are also the unit of dispersion. For every averaged
+# metric, ``dispersion[metric]`` carries the sample std over maps and a
+# percentile bootstrap CI of the mean: the maps are resampled with
+# replacement ``n_boot`` times, the mean is taken each time, and the interval
+# is cut at the (1 - level) / 2 tails.
 MAP_SUM_FIELDS: set[str] = {
     "n", "n_in_zone", "n_passing", "n_with_class",
     "total_violation_steps", "total_violation_events", "total_in_zone_steps",
@@ -435,31 +454,98 @@ MAP_DICT_SUM_FIELDS: set[str] = {
     "violations_by_class_event_total",
     "in_zone_by_class_step_total",
 }
+# Keys only a map-level block carries.
+MAP_ONLY_FIELDS: tuple[str, ...] = (
+    "n_maps", "episodes_per_map_min", "episodes_per_map_max",
+)
+
+N_BOOT_DEFAULT = 10_000
+CI_LEVEL_DEFAULT = 0.95
+CI_SEED_DEFAULT = 0
 
 
 def map_key(row: dict) -> str:
     """A map is one net under one sign.
 
-    scene_id names the net; variations differ by lane/seed/var. The pool is
-    shared between signs (the same junction crop can serve yield and stop), and
-    the same net under another sign is another scenario, so the sign code is
-    part of the key. Within a per-sign slice this reduces to scene_id.
+    ``map_id`` names the net (the manifest's ``net_path`` directory, or the
+    scene id with its variant / world-axis suffix stripped — metrics/map_id.py);
+    a map's augmented variants differ by manifest variant, route length,
+    density, spawn speed, NPC draw, lane and seed. The pool is shared between
+    signs (the same junction crop can serve yield and stop), and the same net
+    under another sign is another scenario, so the sign code is part of the
+    key. Within a per-sign slice this reduces to ``map_id``.
     """
-    scene = str(row.get("scene_id") or row.get("scene_uid") or "?")
+    scene = str(row.get("map_id")
+                or base_scene_id(str(row.get("scene_id") or ""))
+                or row.get("scene_uid") or "?")
     pdd = str(row.get("pdd_code") or "")
     return f"{pdd}|{scene}" if pdd else scene
 
 
+def map_values(per_map: list[dict], field: str) -> list[float]:
+    """Per-map values of a metric, skipping maps where it is undefined."""
+    return [float(v) for v in (m.get(field) for m in per_map)
+            if v is not None and isinstance(v, (int, float)) and math.isfinite(v)]
+
+
 def mean_over_maps(per_map: list[dict], field: str) -> float | None:
     """Mean of a per-map value, skipping maps where it is undefined."""
-    vals = [m.get(field) for m in per_map]
-    vals = [v for v in vals if v is not None]
+    vals = map_values(per_map, field)
     return (sum(vals) / len(vals)) if vals else None
 
 
+def std_over_maps(vals: list[float]) -> float | None:
+    """Sample standard deviation (ddof=1) of the per-map values."""
+    if len(vals) < 2:
+        return None
+    return float(np.std(np.asarray(vals, dtype=float), ddof=1))
+
+
+def bootstrap_mean_ci(vals: list[float], *, n_boot: int = N_BOOT_DEFAULT,
+                      level: float = CI_LEVEL_DEFAULT,
+                      rng: "np.random.Generator | None" = None,
+                      idx_cache: "dict[int, np.ndarray] | None" = None,
+                      ) -> tuple[float, float] | None:
+    """Percentile bootstrap CI of the mean of ``vals``.
+
+    ``n_boot`` resamples of the same size are drawn with replacement, the mean
+    of each is taken, and the interval is cut at the (1 - level) / 2 tails.
+    The resample index matrix is cached per sample size, so every metric of a
+    slice defined on the same number of maps reuses the same draws. None when
+    fewer than two values or ``n_boot`` is 0.
+    """
+    n = len(vals)
+    if n < 2 or n_boot <= 0:
+        return None
+    if rng is None:
+        rng = np.random.default_rng(CI_SEED_DEFAULT)
+    idx = None if idx_cache is None else idx_cache.get(n)
+    if idx is None:
+        idx = rng.integers(0, n, size=(int(n_boot), n))
+        if idx_cache is not None:
+            idx_cache[n] = idx
+    means = np.asarray(vals, dtype=float)[idx].mean(axis=1)
+    alpha = (1.0 - float(level)) / 2.0
+    lo, hi = np.quantile(means, [alpha, 1.0 - alpha])
+    return float(lo), float(hi)
+
+
 def aggregate_by_map(rows: list[dict], beta: float = BETA_DEFAULT,
-                     horizon: int = HORIZON_DEFAULT) -> dict:
-    """Same keys as aggregate(), but averaged over maps (plus ``n_maps``)."""
+                     horizon: int = HORIZON_DEFAULT, *,
+                     n_boot: int = N_BOOT_DEFAULT,
+                     ci_level: float = CI_LEVEL_DEFAULT,
+                     ci_seed: int = CI_SEED_DEFAULT) -> dict:
+    """Same keys as aggregate(), but averaged over maps.
+
+    Extra keys: ``n_maps``; ``episodes_per_map_min`` / ``_max`` (a balanced
+    design has min == max == the number of augmentations per map); and
+    ``dispersion`` — ``{metric: {n_maps, std, ci_lo, ci_hi}}`` for every
+    averaged metric, where ``std`` is the sample std over maps and the CI is
+    ``bootstrap_mean_ci`` of the per-map values (``ci_lo`` / ``ci_hi`` are
+    None when ``n_boot`` is 0 or fewer than two maps define the metric). The
+    bootstrap generator is seeded per call, so a slice's CI does not depend
+    on which other slices were computed before it.
+    """
     if not rows:
         return {"n": 0, "n_maps": 0}
     by_map: dict[str, list[dict]] = defaultdict(list)
@@ -471,7 +557,10 @@ def aggregate_by_map(rows: list[dict], beta: float = BETA_DEFAULT,
         for k in m:
             if k not in keys:
                 keys.append(k)
+    rng = np.random.default_rng(int(ci_seed))
+    idx_cache: dict[int, np.ndarray] = {}
     out: dict = {}
+    dispersion: dict[str, dict] = {}
     for k in keys:
         if k in MAP_SUM_FIELDS:
             out[k] = sum(int(m.get(k) or 0) for m in per_map)
@@ -483,14 +572,28 @@ def aggregate_by_map(rows: list[dict], beta: float = BETA_DEFAULT,
         elif k == "in_zone_violation_rate_by_class":
             continue  # recomputed from the summed dicts below
         else:
-            out[k] = mean_over_maps(per_map, k)
+            vals = map_values(per_map, k)
+            out[k] = (sum(vals) / len(vals)) if vals else None
+            if vals:
+                ci = bootstrap_mean_ci(vals, n_boot=n_boot, level=ci_level,
+                                       rng=rng, idx_cache=idx_cache)
+                dispersion[k] = {
+                    "n_maps": len(vals),
+                    "std": std_over_maps(vals),
+                    "ci_lo": None if ci is None else ci[0],
+                    "ci_hi": None if ci is None else ci[1],
+                }
     by_class_step = out.get("violations_by_class_step_total") or {}
     in_zone = out.get("in_zone_by_class_step_total") or {}
     out["in_zone_violation_rate_by_class"] = {
         cls: round(by_class_step.get(cls, 0) / cnt, 4)
         for cls, cnt in in_zone.items() if cnt > 0
     }
+    sizes = [len(rs) for rs in by_map.values()]
     out["n_maps"] = len(per_map)
+    out["episodes_per_map_min"] = min(sizes)
+    out["episodes_per_map_max"] = max(sizes)
+    out["dispersion"] = dispersion
     return out
 
 
@@ -498,7 +601,8 @@ def aggregate_by_map(rows: list[dict], beta: float = BETA_DEFAULT,
 # CSV writers (flat tables)
 # ---------------------------------------------------------------------------
 FLAT_METRIC_COLUMNS = [
-    "n", "n_maps", "n_in_zone", "n_passing", "n_with_class",
+    "n", "n_maps", "episodes_per_map_min", "episodes_per_map_max",
+    "n_in_zone", "n_passing", "n_with_class",
     "success_rate", "dest_rate", "dest_rate_recomputed",
     "crash_rate", "out_of_road_rate", "pass_rate",
     "sign_compliance_sr", "sign_compliance_x",
@@ -661,11 +765,44 @@ def write_grouped_csv(path: Path, group_keys: list[str],
             w.writerow(row)
 
 
+CI_CSV_COLUMNS = ["metric", "n_maps", "mean", "std", "ci_lo", "ci_hi"]
+
+
+def write_ci_csv(path: Path, group_keys: list[str],
+                 grouped: dict[tuple, dict]) -> None:
+    """Long table: one row per (group, metric) with the per-map mean, the std
+    over maps and the bootstrap CI of the mean (see aggregate_by_map)."""
+    fieldnames = group_keys + CI_CSV_COLUMNS
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=fieldnames)
+        w.writeheader()
+        for key in sorted(grouped.keys(),
+                          key=lambda k: _grouped_sort_key(k, group_keys)):
+            metrics = grouped[key]
+            disp = metrics.get("dispersion") or {}
+            for metric in FLAT_METRIC_COLUMNS:
+                d = disp.get(metric)
+                if d is None:
+                    continue
+                row = dict(zip(group_keys, key))
+                row.update({
+                    "metric": metric,
+                    "n_maps": int(d.get("n_maps") or 0),
+                    "mean": _round_or_none(metrics.get(metric)),
+                    "std": _round_or_none(d.get("std")),
+                    "ci_lo": _round_or_none(d.get("ci_lo")),
+                    "ci_hi": _round_or_none(d.get("ci_hi")),
+                })
+                w.writerow({k: ("" if v is None else v) for k, v in row.items()})
+
+
 # ---------------------------------------------------------------------------
 # Legacy JSON emitters
 # ---------------------------------------------------------------------------
 LEGACY_CUMULATIVE_FIELDS = [
-    "n", "n_maps", "n_in_zone", "success_rate", "dest_rate",
+    "n", "n_maps", "episodes_per_map_min", "episodes_per_map_max",
+    "n_in_zone", "success_rate", "dest_rate",
     "target_compliance_rate_event", "sr_and_dest",
     "sign_compliance_sr", "sign_compliance_x",
     "traffic_light_sr", "crosswalk_sr",
@@ -687,8 +824,8 @@ def _emit_legacy_per_baseline_block(metrics: dict) -> dict:
     out = {}
     for f in LEGACY_CUMULATIVE_FIELDS:
         v = metrics.get(f)
-        if f == "n_maps":
-            # Only map-level blocks carry it; leave it out of episode blocks.
+        if f in MAP_ONLY_FIELDS:
+            # Only map-level blocks carry them; leave them out of episode blocks.
             if v is not None:
                 out[f] = int(v)
             continue
@@ -698,6 +835,27 @@ def _emit_legacy_per_baseline_block(metrics: dict) -> dict:
             out[f] = 0.0 if v is None else float(v)
     eff = metrics.get("avg_driving_efficiency")
     out["avg_efficiency"] = 0.0 if eff is None else float(eff)
+    return out
+
+
+def _emit_ci_block(metrics: dict) -> dict:
+    """``{metric: {mean, std, ci_lo, ci_hi, n_maps}}`` for the legacy metric
+    set of a map-level block (``avg_efficiency`` renamed as in the mean block).
+    Metrics undefined on every map are left out."""
+    disp = metrics.get("dispersion") or {}
+    out = {}
+    for f in LEGACY_CUMULATIVE_FIELDS + ["avg_driving_efficiency"]:
+        d = disp.get(f)
+        if d is None:
+            continue
+        name = "avg_efficiency" if f == "avg_driving_efficiency" else f
+        out[name] = {
+            "mean": _round_or_none(metrics.get(f)),
+            "std": _round_or_none(d.get("std")),
+            "ci_lo": _round_or_none(d.get("ci_lo")),
+            "ci_hi": _round_or_none(d.get("ci_hi")),
+            "n_maps": int(d.get("n_maps") or 0),
+        }
     return out
 
 
@@ -749,13 +907,17 @@ def write_legacy_cumulative_json(out_path: Path,
                                    per_sign_baseline_map: dict[tuple[str, str], dict]
                                        | None = None,
                                    per_signgroup_baseline_map: dict[tuple[str, str], dict]
-                                       | None = None) -> None:
+                                       | None = None,
+                                   ci_meta: dict | None = None) -> None:
     """Schema for generate_cumulative_markdown_report.py + category report.
 
     ``per_baseline`` / ``per_sign`` keep the per-episode aggregation. When the
     map-level dicts are given, ``per_baseline_map`` / ``per_sign_map`` are
-    added with the same block schema (plus ``n_maps``) and ``aggregations``
-    lists both kinds; report.py renders them as ``episode / map``.
+    added with the same block schema (plus ``n_maps``, ``episodes_per_map_*``)
+    and ``aggregations`` lists both kinds; report.py renders them as
+    ``episode / map``. ``per_baseline_map_ci`` / ``per_sign_map_ci`` carry
+    ``{metric: {mean, std, ci_lo, ci_hi, n_maps}}`` for the same slices and
+    ``ci`` describes how the interval was built (``ci_meta``).
 
     Per-sign tables get individual pdd_codes for ALL signs plus group keys
     (e.g. "2.1+2.2", "5.12.x") for paired groups — paired-zone scenes from
@@ -784,18 +946,26 @@ def write_legacy_cumulative_json(out_path: Path,
     }
     if per_baseline_map:
         per_sign_map: dict[str, dict[str, dict]] = defaultdict(dict)
+        per_sign_map_ci: dict[str, dict[str, dict]] = defaultdict(dict)
         for (sign, baseline), m in (per_sign_baseline_map or {}).items():
             per_sign_map[baseline][sign] = _emit_legacy_per_baseline_block(m)
+            per_sign_map_ci[baseline][sign] = _emit_ci_block(m)
         if per_signgroup_baseline_map and members_pgb is not None:
             for (group, baseline), m in per_signgroup_baseline_map.items():
                 members = members_pgb.get((group, baseline), set())
                 if not (_is_paired_group(group) or len(members) > 1):
                     continue
                 per_sign_map[baseline][group] = _emit_legacy_per_baseline_block(m)
+                per_sign_map_ci[baseline][group] = _emit_ci_block(m)
         out["per_baseline_map"] = {b: _emit_legacy_per_baseline_block(m)
                                    for b, m in sorted(per_baseline_map.items())}
         out["per_sign_map"] = {b: dict(sorted(s.items()))
                                for b, s in sorted(per_sign_map.items())}
+        out["per_baseline_map_ci"] = {b: _emit_ci_block(m)
+                                      for b, m in sorted(per_baseline_map.items())}
+        out["per_sign_map_ci"] = {b: dict(sorted(s.items()))
+                                  for b, s in sorted(per_sign_map_ci.items())}
+        out["ci"] = dict(ci_meta or {"unit": "map", "method": "bootstrap_percentile"})
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(out, indent=2, ensure_ascii=False),
                          encoding="utf-8")
@@ -833,6 +1003,13 @@ def main() -> None:
                     help="Output directory (will create aggregations/ and reports/ subdirs)")
     ap.add_argument("--beta", type=float, default=BETA_DEFAULT)
     ap.add_argument("--horizon", type=int, default=HORIZON_DEFAULT)
+    ap.add_argument("--n-boot", type=int, default=N_BOOT_DEFAULT,
+                    help="Bootstrap resamples of the per-map values for the CI of "
+                         f"the mean (default {N_BOOT_DEFAULT}; 0 = std only)")
+    ap.add_argument("--ci-level", type=float, default=CI_LEVEL_DEFAULT,
+                    help=f"Two-sided CI level (default {CI_LEVEL_DEFAULT})")
+    ap.add_argument("--ci-seed", type=int, default=CI_SEED_DEFAULT,
+                    help=f"Seed of the bootstrap generator (default {CI_SEED_DEFAULT})")
     args = ap.parse_args()
 
     csv_path = Path(args.csv).resolve()
@@ -892,13 +1069,28 @@ def main() -> None:
 
     # Map-level aggregation of the same slices (collapse each map, then mean
     # over maps). Written next to the per-episode files as *_map.csv.
-    print("[aggregate] map-level: collapse each map, then mean over maps...")
-    mag_pbv = {k: aggregate_by_map(rs, args.beta, args.horizon) for k, rs in by_baseline_var.items()}
-    mag_psbv = {k: aggregate_by_map(rs, args.beta, args.horizon) for k, rs in by_sign_baseline_var.items()}
-    mag_pb = {k: aggregate_by_map(rs, args.beta, args.horizon) for k, rs in by_baseline.items()}
-    mag_psb = {k: aggregate_by_map(rs, args.beta, args.horizon) for k, rs in by_sign_baseline.items()}
-    mag_pgb = {k: aggregate_by_map(rs, args.beta, args.horizon) for k, rs in by_signgroup_baseline.items()}
-    mag_pgbv = {k: aggregate_by_map(rs, args.beta, args.horizon) for k, rs in by_signgroup_baseline_var.items()}
+    print(f"[aggregate] map-level: collapse each map, then mean over maps; "
+          f"std over maps + {args.ci_level:.0%} bootstrap CI of the mean "
+          f"({args.n_boot} resamples, seed {args.ci_seed})...")
+
+    def by_map(rs: list[dict]) -> dict:
+        return aggregate_by_map(rs, args.beta, args.horizon, n_boot=args.n_boot,
+                                ci_level=args.ci_level, ci_seed=args.ci_seed)
+
+    mag_pbv = {k: by_map(rs) for k, rs in by_baseline_var.items()}
+    mag_psbv = {k: by_map(rs) for k, rs in by_sign_baseline_var.items()}
+    mag_pb = {k: by_map(rs) for k, rs in by_baseline.items()}
+    mag_psb = {k: by_map(rs) for k, rs in by_sign_baseline.items()}
+    mag_pgb = {k: by_map(rs) for k, rs in by_signgroup_baseline.items()}
+    mag_pgbv = {k: by_map(rs) for k, rs in by_signgroup_baseline_var.items()}
+    ci_meta = {
+        "unit": "map",
+        "method": "bootstrap_percentile",
+        "n_boot": int(args.n_boot),
+        "level": float(args.ci_level),
+        "seed": int(args.ci_seed),
+        "std": "sample std (ddof=1) over the per-map values",
+    }
 
     # Write flat CSVs
     aggregations_dir = out_dir / "aggregations"
@@ -935,6 +1127,19 @@ def main() -> None:
                        ["sign_group", "baseline", "var_name"], mag_pgbv)
     print(f"[write] {aggregations_dir}/agg_per_*_map.csv  (map-level: 6 files)")
 
+    # Per-map dispersion (std over maps + bootstrap CI) as long tables.
+    for name, keys, grouped in (
+        ("agg_per_baseline_var_map_ci.csv", ["baseline", "var_name"], mag_pbv),
+        ("agg_per_sign_baseline_var_map_ci.csv", ["pdd_code", "baseline", "var_name"], mag_psbv),
+        ("agg_per_baseline_map_ci.csv", ["baseline"], {(b,): m for b, m in mag_pb.items()}),
+        ("agg_per_sign_baseline_map_ci.csv", ["pdd_code", "baseline"], mag_psb),
+        ("agg_per_signgroup_baseline_map_ci.csv", ["sign_group", "baseline"], mag_pgb),
+        ("agg_per_signgroup_baseline_var_map_ci.csv", ["sign_group", "baseline", "var_name"], mag_pgbv),
+    ):
+        write_ci_csv(aggregations_dir / name, keys, grouped)
+    print(f"[write] {aggregations_dir}/agg_per_*_map_ci.csv  "
+          f"(per-map std + bootstrap CI: 6 files)")
+
     # Paired view: interleave group totals + member-sign breakdowns. Member
     # SIGN rows use within-group aggregations (agg_pgpb) so paired-zone metrics
     # don't mix with non-paired same-pdd_code rows.
@@ -955,10 +1160,11 @@ def main() -> None:
                                    members_pgb=members_pgb,
                                    per_baseline_map=mag_pb,
                                    per_sign_baseline_map=mag_psb,
-                                   per_signgroup_baseline_map=mag_pgb)
+                                   per_signgroup_baseline_map=mag_pgb,
+                                   ci_meta=ci_meta)
     print(f"[write] {cumulative_json}  (per_baseline={len(agg_pb)}, "
           f"per_sign baselines={len({b for _, b in agg_psb})}, "
-          f"aggregations=episode+map)")
+          f"aggregations=episode+map, +map_ci)")
 
     cumulative_2node = reports_dir / "cumulative_2node.json"
     write_2node_cumulative_json(cumulative_2node, agg_pb, agg_pbv, vars_processed)

@@ -41,9 +41,45 @@ Every slice is aggregated two ways and both are written:
 | Kind | Files / JSON blocks | Meaning |
 |---|---|---|
 | per-episode | `aggregations/agg_per_*.csv`, `per_baseline` / `per_sign` | every episode weighs the same (original) |
-| per-map | `aggregations/agg_per_*_map.csv`, `per_baseline_map` / `per_sign_map` | each map's episodes are collapsed first, then the mean is taken over maps (`n_maps`) |
+| per-map | `aggregations/agg_per_*_map.csv`, `per_baseline_map` / `per_sign_map` | each map's episodes are collapsed first, then the mean is taken over maps (`n_maps`, `episodes_per_map_min` / `_max`) |
+| per-map dispersion | `aggregations/agg_per_*_map_ci.csv`, `per_baseline_map_ci` / `per_sign_map_ci` | per metric: the per-map mean, the std over maps and a bootstrap CI of the mean (parameters in the `ci` block) |
 
-`report.py` prints both in every cell as `episode / map`.
+`report.py` prints `episode / map` in every cell and follows every table with a
+dispersion table (`mean ± std [lo, hi]`).
+
+### What a map is
+
+`map_id` (column in `metrics_per_episode.csv`) names the physical net: the
+directory of the manifest's `net_path` (`seg_1067603714/map.net.xml` →
+`seg_1067603714`). Every augmented variant of that net — manifest variant
+`_v<k>`, spawn lane `_l<n>`, world cell `_rl90_td50_sv1_v2` — shares the id,
+so a map with five variants contributes one number, not five. `metrics csv`
+takes the manifest from `chunks/var_*/var_*.jsonl`, else from the
+`real_manifest.jsonl` next to `eval_out/` (or `--manifests-root`); without one
+the suffix is stripped from `scene_id` (`map_id.py`), and CSVs written before
+the column existed get the same fallback on load. Within a per-baseline slice
+the key is `<pdd_code>|<map_id>`: the same net under another sign is another
+scenario.
+
+### mean, std, CI
+
+For every averaged metric of a slice (rates and `avg_*`):
+
+1. each map → the mean over its augmented variants (`aggregate()` on the map's
+   episodes);
+2. `mean` = the mean of the per-map values — the `map` number of
+   `episode / map` (with a balanced design it equals the per-episode mean);
+3. `std` = the sample standard deviation (ddof=1) of the per-map values;
+4. `[ci_lo, ci_hi]` = percentile bootstrap CI of the mean: the per-map values
+   are resampled with replacement `--n-boot` times (default 10000), the mean of
+   each resample is taken, and the interval is cut at the `(1 - level) / 2`
+   tails (`--ci-level`, default 0.95). The generator is seeded per slice
+   (`--ci-seed`, default 0), so an interval does not depend on which other
+   slices were computed, and all metrics of a slice share the same resample
+   draws. `--n-boot 0` skips the CI (std only).
+
+Counts (`n`, `n_in_zone`, violation totals) are summed over maps, not
+averaged, and get no interval.
 
 ## SR&Dest
 

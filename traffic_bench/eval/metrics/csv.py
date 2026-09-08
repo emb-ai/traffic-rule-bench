@@ -40,6 +40,7 @@ from traffic_bench.oracle.select.filter import (
     passes_filter,
 )
 from traffic_bench.agents.policy_names import canonical_policy_name
+from traffic_bench.eval.metrics.map_id import map_id_for
 
 
 # Display names for baselines recorded under legacy spellings. Baselines are
@@ -240,22 +241,25 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
     sign_type_start = ""
     sign_type_end = ""
     zone_length_m = ""
-    if manifest_lookup is not None:
-        mr = manifest_lookup.get((var_idx, scene_id))
-        if mr:
-            manifest_source = str(mr.get("source") or "")
-            is_paired_scene = ("paired" in manifest_source.lower())
-            if is_paired_scene:
-                pdd_code_start = str(mr.get("pdd_code_start") or "")
-                pdd_code_end = str(mr.get("pdd_code_end") or "")
-                # rewrite_speed_manifests.py drops `pdd_code` from paired rows
-                # and rarely sets `pdd_code_target` — fall back to `pdd_code_start`
-                # so target_class lookup works downstream.
-                pdd_code_target = str(mr.get("pdd_code_target") or pdd_code_start or pdd_code)
-                sign_type_start = str(mr.get("sign_type_start") or "")
-                sign_type_end = str(mr.get("sign_type_end") or "")
-                zl = mr.get("zone_length_m")
-                zone_length_m = "" if zl is None else float(zl)
+    mr = manifest_lookup.get((var_idx, scene_id)) if manifest_lookup is not None else None
+    if mr:
+        manifest_source = str(mr.get("source") or "")
+        is_paired_scene = ("paired" in manifest_source.lower())
+        if is_paired_scene:
+            pdd_code_start = str(mr.get("pdd_code_start") or "")
+            pdd_code_end = str(mr.get("pdd_code_end") or "")
+            # rewrite_speed_manifests.py drops `pdd_code` from paired rows
+            # and rarely sets `pdd_code_target` — fall back to `pdd_code_start`
+            # so target_class lookup works downstream.
+            pdd_code_target = str(mr.get("pdd_code_target") or pdd_code_start or pdd_code)
+            sign_type_start = str(mr.get("sign_type_start") or "")
+            sign_type_end = str(mr.get("sign_type_end") or "")
+            zl = mr.get("zone_length_m")
+            zone_length_m = "" if zl is None else float(zl)
+    # Physical map: the net named by the manifest row, else the scene id with
+    # its variant / world-axis suffix stripped (metrics/map_id.py). The
+    # aggregator collapses a map's augmented variants on this key.
+    map_id = map_id_for(str(scene_id), mr)
 
     # For paired scenes pdd_code is empty; pdd_code_target carries the target
     # (start) sign. For non-paired scenes pdd_code_target == pdd_code.
@@ -327,6 +331,7 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
         "is_no_entry_sign": is_no_entry,
         "scene_id": scene_id,
         "scene_uid": scene_uid,
+        "map_id": map_id,
         # Manifest-derived paired-scene fields (empty for non-paired scenes)
         "manifest_source": manifest_source,
         "is_paired_scene": is_paired_scene,
@@ -410,7 +415,7 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
 CSV_COLUMNS = [
     "var_name", "var_idx", "baseline", "policy", "variant", "display_policy",
     "backend", "pdd_code", "sign_slug", "target_sign_class", "is_no_entry_sign",
-    "scene_id", "scene_uid",
+    "scene_id", "scene_uid", "map_id",
     "manifest_source", "is_paired_scene",
     "pdd_code_start", "pdd_code_end", "pdd_code_target",
     "sign_type_start", "sign_type_end", "zone_length_m",
@@ -460,32 +465,60 @@ def _iter_jsonl(fp: Path):
 
 def _load_manifest_lookup(manifests_root: Path,
                             wanted_var_idxs: set[int]) -> dict[tuple[int, str], dict]:
-    """Load chunks/var_<i>/var_<i>.jsonl into a (var_idx, scene_id) -> manifest_row map.
+    """Manifest rows keyed by (var_idx, scene_id).
 
-    The chunks manifest carries paired-scene fields (pdd_code_start/_end/_target,
-    source=pgmap_paired, etc.) which the consolidated replay JSONL doesn't.
+    ``manifests_root`` is either the ``chunks/`` layout (``var_<i>/var_<i>.jsonl``)
+    or a flat ``real_manifest.jsonl`` — the file itself, or a directory holding
+    one. A flat manifest is registered under every wanted var index (the
+    episodes path scores everything as var_0). Manifest rows carry what the
+    episode JSONL lacks: ``net_path`` (the physical map behind ``map_id``) and
+    the paired-scene fields (pdd_code_start/_end/_target, source=pgmap_paired).
     """
     lookup: dict[tuple[int, str], dict] = {}
-    if not manifests_root.is_dir():
-        print(f"  [warn] manifests-root not found: {manifests_root}", file=sys.stderr)
+    sources: list[tuple[int | None, Path]] = []
+    if manifests_root.is_file():
+        sources.append((None, manifests_root))
+    elif manifests_root.is_dir():
+        for var_idx in sorted(wanted_var_idxs):
+            mp = manifests_root / f"var_{var_idx}" / f"var_{var_idx}.jsonl"
+            if mp.exists():
+                sources.append((var_idx, mp))
+        flat = manifests_root / "real_manifest.jsonl"
+        if not sources and flat.is_file():
+            sources.append((None, flat))
+    if not sources:
+        print(f"  [warn] no manifest under {manifests_root} (var_*/var_*.jsonl or "
+              f"real_manifest.jsonl): map_id falls back to the scene id, "
+              f"paired-scene fields stay empty", file=sys.stderr)
         return lookup
     n_loaded = 0
     n_paired = 0
-    for var_idx in sorted(wanted_var_idxs):
-        mp = manifests_root / f"var_{var_idx}" / f"var_{var_idx}.jsonl"
-        if not mp.exists():
-            continue
+    for var_idx, mp in sources:
+        idxs = [var_idx] if var_idx is not None else sorted(wanted_var_idxs)
         for _, r in _iter_jsonl(mp):
             sid = r.get("scene_id")
             if not sid:
                 continue
-            lookup[(var_idx, str(sid))] = r
+            for i in idxs:
+                lookup[(i, str(sid))] = r
             n_loaded += 1
             if "paired" in str(r.get("source") or "").lower():
                 n_paired += 1
     print(f"  [manifest] loaded {n_loaded} rows ({n_paired} paired) from "
-          f"{manifests_root}/var_*/var_*.jsonl")
+          + ", ".join(str(p) for _, p in sources))
     return lookup
+
+
+def _default_manifests_root(run_dir: Path) -> Path:
+    """``chunks/`` next to the run when present, else the run's own
+    ``real_manifest.jsonl`` (the layout ``eval run manifest=…`` writes)."""
+    chunks = run_dir / "chunks"
+    if chunks.is_dir():
+        return chunks.resolve()
+    flat = run_dir / "real_manifest.jsonl"
+    if flat.is_file():
+        return flat.resolve()
+    return chunks.resolve()
 
 
 def _write_csv(rows: list[dict], out_path: Path) -> None:
@@ -510,7 +543,7 @@ def _build_from_episodes(episodes_root: Path, out_path: Path,
         sys.exit(2)
 
     manifests_root = (Path(manifests_root_arg).resolve() if manifests_root_arg
-                      else (episodes_root.parent / "chunks").resolve())
+                      else _default_manifests_root(episodes_root.parent))
     manifest_lookup = _load_manifest_lookup(manifests_root, wanted_var_idxs={0})
 
     seen: dict[tuple[int, str, str], dict] = {}
@@ -562,8 +595,10 @@ def main() -> None:
                     help="Comma-separated var indices (e.g. '0,1,2') or 'all' (default). "
                          "Only used with --runs-root.")
     ap.add_argument("--manifests-root", default=None,
-                    help="Directory with var_<i>/var_<i>.jsonl manifests (for paired-scene "
-                         "info: pdd_code_start/end/target). Default: <runs-root>/../chunks")
+                    help="Manifests: a chunks/ dir (var_<i>/var_<i>.jsonl) or a flat "
+                         "real_manifest.jsonl (file or its dir). Gives net_path → map_id "
+                         "and the paired-scene fields (pdd_code_start/end/target). "
+                         "Default: <root>/../chunks, else <root>/../real_manifest.jsonl")
     args = ap.parse_args()
 
     out_path = Path(args.out).resolve()
