@@ -9,6 +9,7 @@ from metadrive.manager.sumo_map_manager import SumoMapManager
 from metadrive.manager.base_manager import BaseManager
 from metadrive.constants import DEFAULT_AGENT, TerminationState
 from metadrive.component.navigation_module.edge_network_navigation import EdgeNetworkNavigation
+from traffic_bench.envs.navigation import GeometricEdgeNavigation
 from metadrive.obs.top_down_obs_multi_channel import TopDownMultiChannel
 from metadrive.utils import clip, Config
 from traffic_bench.envs.auto_spawn import AutoSpawnMixin
@@ -169,7 +170,9 @@ SUMO_DEFAULT_CONFIG = dict(
     crash_object_done=True,
     crash_human_done=True,
     vehicle_config=dict(
-        navigation_module=EdgeNetworkNavigation,
+        # Geometry-first current-lane test: MetaDrive's ray localization misses
+        # the lane under the vehicle at mesh seams of long SUMO lanes.
+        navigation_module=GeometricEdgeNavigation,
                max_steering=50,
     ),
 
