@@ -65,6 +65,15 @@ _CLASS_TO_PDD = {
     "SpeedLimitSign30": "3.24",
     "SpeedLimitSign40": "3.24",
     "SpeedLimitSign60": "3.24",
+    # 5.19 is a plate with an icon the PDD regex cannot read ("crosswalk.png")
+    # and no code attribute, so it resolved to None and every crosswalk dump
+    # went out without the sign the scene is built around.
+    "PedestrianCrossingSign": "5.19",
+    # Reserved-lane plates: same story, icons are "bus_lane.png" and friends.
+    "BusLaneSign": "5.14.1",
+    "BikeLaneSign": "5.14.2",
+    "BusLaneRoadSign": "5.11.1",
+    "BikeLaneRoadSign": "5.11.2",
     # The mandatory-direction plates carry their code in the class name, not in
     # the icon file (those are named "direction_straight.png" and the like), so
     # the icon regex cannot resolve them and every one of them was written as a

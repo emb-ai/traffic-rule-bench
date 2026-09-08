@@ -143,6 +143,53 @@ def _apply_state(live_obj, state) -> bool:
         return False
 
 
+def _rec_class(state: dict):
+    """Class of a recorded object (RecordManager stores the type itself)."""
+    cls = state.get("type") if isinstance(state, dict) else None
+    return cls if isinstance(cls, type) else None
+
+
+def _same_kind(state: dict, live_obj) -> bool:
+    """A recorded pedestrian must not be replayed onto a car.
+
+    max_dist is effectively unlimited so parked bodies can be reused, which
+    without this gate let a recorded Pedestrian bind to whatever vehicle
+    happened to be free: the walker then showed up in the dump as a car, and
+    on a crosswalk scene with no spare vehicle it vanished altogether.
+    """
+    cls = _rec_class(state)
+    if cls is None:
+        return True
+    return type(live_obj) is cls or isinstance(live_obj, cls)
+
+
+def _spawn_recorded_participant(engine, state: dict):
+    """Body for a recorded participant that has no live counterpart.
+
+    Crosswalk pedestrians are spawned by their manager on ego proximity, i.e.
+    from after_step -- which the dump no-ops so live traffic cannot fight the
+    recorded teleports. Nothing then exists to carry the recorded pedestrian,
+    so it silently dropped out of every dumped frame. Spawning it here keeps
+    the replay exactly as recorded and needs no live manager at all.
+    """
+    from metadrive.component.traffic_participants.base_traffic_participant import (
+        BaseTrafficParticipant,
+    )
+    cls = _rec_class(state)
+    if cls is None or not issubclass(cls, BaseTrafficParticipant):
+        return None
+    try:
+        pos = _xy(state["position"])
+        return engine.spawn_object(
+            cls,
+            position=[float(pos[0]), float(pos[1])],
+            heading_theta=float(state.get("heading_theta", 0.0) or 0.0),
+            force_spawn=True,
+        )
+    except Exception:
+        return None
+
+
 def _match_recorded_to_live(
     frame_data: dict,
     live_objs: dict,
@@ -203,6 +250,8 @@ def _match_recorded_to_live(
         best_dist = max_dist
         for lid, lobj, lpos in candidates:
             if lid in used_live:
+                continue
+            if not _same_kind(state, lobj):
                 continue
             d = float(np.linalg.norm(rpos - lpos))
             if d < best_dist:
@@ -482,6 +531,15 @@ def replay_in_our_env(
             live_objs = dict(env.engine.get_objects())
             obj_map, _, n_unmatched = _match_recorded_to_live(
                 frame_data, live_objs, env.vehicle, ego_rec_id)
+            if n_unmatched:
+                for rid, state in frame_data.items():
+                    if rid in obj_map or rid == ego_rec_id:
+                        continue
+                    born = _spawn_recorded_participant(env.engine, state)
+                    if born is not None:
+                        obj_map[rid] = born
+                        live_objs[getattr(born, "id", id(born))] = born
+                        n_unmatched -= 1
             n_updated = 0
             ego_err = None
             for rid, live_obj in obj_map.items():
