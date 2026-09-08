@@ -87,6 +87,9 @@ DEFAULT_REPORT_DIR = REPO_ROOT / "reports" / "restricted_lane_scenes_v3"
 DEFAULT_ARCHIVE_DIR = REPO_ROOT / "data" / "scenes_archive"
 BOX_CLEARANCE_M = 10.0
 DETOUR_PREFIX = "4.2"
+# A cropped map is usable when the corridor projected onto the reserved lane
+# fits the nominal geometry (10 + approach 60 + zone 60 + tail 10) with margin.
+DEFAULT_MIN_USABLE_M = 150.0
 
 # Relaxation ladder: (geo cap per sign, geo cap per family, centre factor).
 LEVELS: Tuple[Tuple[Optional[int], Optional[int], float], ...] = (
@@ -264,6 +267,55 @@ def load_official(
     return off
 
 
+# --------------------------------------------------------------- validation
+
+def validate_crops(
+    assignment: Dict[str, Any], *, crops_root: Path, min_usable_m: float
+) -> List[Tuple[str, str, str, str]]:
+    """(sign, split, scene_id, reason) for cropped maps the family cannot use.
+
+    Mirrors the checks of ``eval/signs/restricted_lane/expand.py``: two or more
+    vehicle lanes with lane 0 drivable, and a corridor (``resolve_segment_corridor``
+    on the cropped net) long enough for the nominal plate / approach / zone.
+    """
+    from traffic_bench.eval.engine.map.segment_length import resolve_segment_corridor
+
+    bad: List[Tuple[str, str, str, str]] = []
+    for sign, split, e in _iter_picks(assignment):
+        sid = e["scene_id"]
+        scene_dir = crops_root / sid
+        net = scene_dir / "map.net.xml"
+        meta_path = scene_dir / "meta.json"
+        if not net.is_file() or not meta_path.is_file():
+            bad.append((sign, split, sid, "missing crop"))
+            continue
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        lanes = sorted(int(i) for i in (meta.get("vehicle_lane_indices") or []))
+        if len(lanes) < 2 or lanes[0] != 0:
+            bad.append((sign, split, sid, f"vehicle lanes {lanes}"))
+            continue
+        try:
+            corridor = resolve_segment_corridor(net, meta, road_id=str(meta.get("road_id") or ""))
+        except Exception as exc:  # noqa: BLE001
+            bad.append((sign, split, sid, f"corridor error {exc!r}"))
+            continue
+        if corridor is None:
+            bad.append((sign, split, sid, "no corridor"))
+            continue
+        if float(corridor.usable_length_m) < float(min_usable_m):
+            bad.append((sign, split, sid, f"usable {corridor.usable_length_m:.0f} m < {min_usable_m:.0f}"))
+    return bad
+
+
+def _load_exclude_ids(path: Optional[Path]) -> Set[str]:
+    if path is None or not Path(path).is_file():
+        return set()
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(data, dict):
+        data = data.get("exclude") or []
+    return {str(x) for x in data}
+
+
 # ---------------------------------------------------------------- selection
 
 @dataclass
@@ -438,6 +490,11 @@ def run_select(args: argparse.Namespace) -> Dict[str, Any]:
     for c in cands:
         c.split = splits.get(c.way)
     cands = [c for c in cands if c.split in ("train", "test")]
+    exclude = _load_exclude_ids(getattr(args, "exclude_ids", None))
+    if exclude:
+        n0 = len(cands)
+        cands = [c for c in cands if c.scene_id not in exclude]
+        print(f"[select] excluded {n0 - len(cands)} of {len(exclude)} listed scene id(s)")
     print(f"[select] multi-lane candidates {len(cands)} "
           f"(train {sum(c.split == 'train' for c in cands)} / test {sum(c.split == 'test' for c in cands)})")
 
@@ -475,6 +532,7 @@ def run_select(args: argparse.Namespace) -> Dict[str, Any]:
         "box_clearance_m": BOX_CLEARANCE_M,
         "crop_margin_m": CROP_MARGIN_M,
         "index": _rel(Path(args.index)),
+        "excluded_scene_ids": sorted(exclude),
         "signs": {},
         "shortfalls": {},
     }
@@ -573,6 +631,18 @@ def run_crop(args: argparse.Namespace) -> None:
         print(f"  FAIL {sid}: {info}")
     if fails:
         raise SystemExit(f"[crop] {len(fails)} crop(s) failed; fix or re-select before materializing")
+    bad = validate_crops(assignment, crops_root=crops_root, min_usable_m=float(args.min_usable_m))
+    bad_path = Path(args.assignment).with_suffix(".invalid.json")
+    prev = _load_exclude_ids(getattr(args, "exclude_ids", None))
+    all_bad = sorted(prev | {sid for _s, _sp, sid, _r in bad})
+    bad_path.write_text(json.dumps({"exclude": all_bad, "last_round": [list(b) for b in bad]}, indent=1), encoding="utf-8")
+    for sign, split, sid, reason in bad:
+        print(f"  INVALID {sign}/{split} {sid}: {reason}")
+    print(f"[crop] validation: {len(bad)} unusable map(s) this round, {len(all_bad)} total -> {_rel(bad_path)}")
+    if bad:
+        raise SystemExit(
+            f"[crop] {len(bad)} map(s) unusable; re-run `select --exclude-ids {_rel(bad_path)}` (or `all`, which loops)"
+        )
 
 
 # -------------------------------------------------------------- materialize
@@ -798,11 +868,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--reuse-policy", choices=("unique", "detour", "any"), default="unique")
     s.add_argument("--min-center-m", type=float, default=500.0)
     s.add_argument("--min-official-m", type=float, default=300.0)
+    s.add_argument("--exclude-ids", type=Path, default=None, help="json list of scene ids to skip")
 
-    c = sp.add_parser("crop", help="netconvert the selected maps")
+    c = sp.add_parser("crop", help="netconvert the selected maps and validate the corridors")
     _add_common(c)
     c.add_argument("--jobs", type=int, default=16)
     c.add_argument("--force", action="store_true")
+    c.add_argument("--min-usable-m", type=float, default=DEFAULT_MIN_USABLE_M)
+    c.add_argument("--exclude-ids", type=Path, default=None)
 
     m = sp.add_parser("materialize", help="data/scenes/<sign>/ + moscow_pool.json")
     _add_common(m)
@@ -825,8 +898,11 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--reuse-policy", choices=("unique", "detour", "any"), default="unique")
     a.add_argument("--min-center-m", type=float, default=500.0)
     a.add_argument("--min-official-m", type=float, default=300.0)
+    a.add_argument("--exclude-ids", type=Path, default=None)
     a.add_argument("--jobs", type=int, default=16)
     a.add_argument("--force", action="store_true")
+    a.add_argument("--min-usable-m", type=float, default=DEFAULT_MIN_USABLE_M)
+    a.add_argument("--max-rounds", type=int, default=4)
     a.add_argument("--mode", choices=("copy", "symlink"), default="copy")
     a.add_argument("--archive-dir", type=Path, default=DEFAULT_ARCHIVE_DIR)
     a.add_argument("--report-dir", type=Path, default=DEFAULT_REPORT_DIR)
@@ -844,9 +920,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     elif args.cmd == "report":
         run_report(args)
     elif args.cmd == "all":
-        run_select(args)
         args.assignment = args.out
-        run_crop(args)
+        for rnd in range(1, int(args.max_rounds) + 1):
+            print(f"[all] round {rnd}: select + crop + validate")
+            run_select(args)
+            try:
+                run_crop(args)
+            except SystemExit as exc:
+                bad_path = Path(args.assignment).with_suffix(".invalid.json")
+                if "unusable" in str(exc) and bad_path.is_file() and rnd < int(args.max_rounds):
+                    args.exclude_ids = bad_path
+                    continue
+                raise
+            break
         run_materialize(args)
         args.out = args.report_dir
         run_report(args)
