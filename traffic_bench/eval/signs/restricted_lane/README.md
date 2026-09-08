@@ -9,7 +9,9 @@ lane 0). One lane becomes the reserved lane from the plate on:
 
 The ego spawns on that lane `approach_before_sign_m` before the plate and has to
 move to a neighbouring lane before the zone: every zone step spent on the
-reserved lane is a violation (`RestrictedLaneSign._is_violating`), so a
+reserved lane is a violation (`RestrictedLaneSign._is_violating`; the vehicle centre has to be
+inside the reserved lane's width, which filters MetaDrive's lane-attribution
+flicker at polygon seams of long curved lanes), so a
 lane-keeping baseline fails the row and the rule expert, which pre-empts
 40–60 m ahead of the zone (`SignComplianceMixin._handle_restricted_lane`),
 passes it.
@@ -72,6 +74,8 @@ the ego-edge ladder starts `max(30, 3 s × spawn speed + 10)` m past the ego.
 index, split inherited from the global by-`osm_way_id` split, lane counts
 balanced 2 / 3 / 4+, places not used by any official sign, crop windows
 disjoint, centres ≥ 500 m apart inside the family and ≥ 300 m from other-split
-official maps, one-way streets (`collect/segments/oneway.py`) for 5.11.x.
+official maps, one-way streets (`collect/segments/oneway.py`) for 5.11.x. After
+cropping, every map's corridor (`resolve_segment_corridor`) must be ≥ 150 m; the
+`all` command re-selects without the failed ids until the set is clean.
 `moscow_pool.json` carries the split; `reports/restricted_lane_scenes_v3/`
 the histograms and distances.
