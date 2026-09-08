@@ -421,6 +421,17 @@ def replay_in_our_env(
         # sidecar re-add path below stays for the non-SUMO backends.
         if backend == "sumo":
             from traffic_bench.eval.run.place import place_signs_for_row
+            from traffic_bench.eval.signs.crosswalk.place import (
+                install_segment_crosswalk_geometry,
+            )
+
+            # The zebra is synthesised at episode build time (episode.py does this
+            # before placing the plates) and lives only in map.crosswalks -- it is
+            # in no map feature and no recorded frame. The dump built its own env
+            # and never called this, so it replayed crosswalk scenes on a road
+            # with no crossing painted on it: no crosswalk geometry, and the
+            # pedestrian manager had no crossing to work from either.
+            install_segment_crosswalk_geometry(env, row)
 
             placed = place_signs_for_row(
                 env, row, scenes_root=Path(scenes_root or "."),

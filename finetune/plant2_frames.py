@@ -329,6 +329,48 @@ def collect_boxes(engine, vehicle,
         boxes.append(entry)
         obj_id += 1
 
+    # The zebra itself. It is synthesised curb-to-curb when the 5.19 plate is
+    # placed and lives only in ``map.crosswalks`` -- it is in no map_feature, so
+    # it reaches neither the recorded map data nor the BEV semantic map, whose
+    # classes stop at lanes and lane lines. The plate alone says "a crossing is
+    # somewhere here" from the kerb; this carries where it actually lies across
+    # the road and how wide it is. Marked with ``crosswalk`` so the two 5.19
+    # tokens stay tellable apart.
+    crosswalks = getattr(getattr(engine, "current_map", None), "crosswalks", None) or {}
+    for feat in crosswalks.values():
+        try:
+            poly = np.asarray(feat.get("polygon", []), dtype=np.float64)[:, :2]
+        except Exception:
+            continue
+        if poly.shape[0] < 4:
+            continue
+        centre = poly.mean(axis=0)
+        local = vehicle.convert_to_local_coordinates(centre - ego_pos, 0.0)
+        x = float(local[0])
+        y = -float(local[1])
+        if x * x + y * y > _SIGN_RADIUS_M ** 2:
+            continue
+        centred = poly - centre
+        try:
+            axis = np.linalg.svd(centred, full_matrices=False)[2][0]
+        except Exception:
+            axis = np.array([1.0, 0.0])
+        perp = np.array([-axis[1], axis[0]])
+        boxes.append({
+            "class": "5.19",
+            "position": [x, y, 0.0],
+            "yaw": float(wrap_to_pi(float(np.arctan2(axis[1], axis[0])) - ego_heading)),
+            "speed": 0.0,
+            "extent": [max(float(np.abs(centred @ axis).max()), 0.2),
+                       max(float(np.abs(centred @ perp).max()), 0.2), 0.1],
+            "id": obj_id,
+            "type_id": "traffic.sign.5.19",
+            "pdd_code": "5.19",
+            "affects_ego": True,
+            "crosswalk": True,
+        })
+        obj_id += 1
+
     return boxes
 
 
