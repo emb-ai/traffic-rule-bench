@@ -61,7 +61,8 @@ class LaneStream:
         speed_jitter: float = 0.15,
         rng: Optional[np.random.RandomState] = None,
     ) -> None:
-        self.n = max(1, int(n))
+        # n == 0 is the empty-lane counterfactual: the plate stands, nobody drives.
+        self.n = max(0, int(n))
         rng = rng if rng is not None else np.random.RandomState(0)
         self.body_len_m = float(max(0.1, body_len_m))
         self.min_gap_m = float(max(0.0, min_gap_m))
@@ -84,6 +85,8 @@ class LaneStream:
 
     def init_spread(self, rng: np.random.RandomState) -> None:
         """Same flow: users evenly spread over the ring with one random phase."""
+        if self.n == 0:
+            return
         spacing = self.circ_m / float(self.n)
         phase = float(rng.uniform(0.0, spacing))
         self.r = np.asarray(

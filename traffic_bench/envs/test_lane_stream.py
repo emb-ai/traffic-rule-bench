@@ -86,3 +86,17 @@ def test_ego_travel_time_monotone_in_v0():
     ts = [ego_travel_time_s(90.0, v) for v in (3.61, 5.0, 7.75, 11.05)]
     assert all(a > b for a, b in zip(ts, ts[1:]))
     assert 7.0 < ts[0] < 12.0
+
+
+def test_empty_lane_counterfactual():
+    """n = 0 keeps the plate and empties the lane: no users, no crash, no motion."""
+    stream = LaneStream(
+        n=0, v_nom_ms=8.5, headway_m=51.0, min_gap_m=8.0, body_len_m=5.8, stretch_m=120.0
+    )
+    rng = np.random.RandomState(0)
+    stream.init_spread(rng)
+    assert stream.active_indices() == []
+    assert stream.min_active_gap_m() is None
+    for _ in range(200):
+        stream.step(0.1)
+    assert stream.entries == 0

@@ -176,6 +176,11 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
     reserved_cfg: dict = {}
     if _row_is_restricted_lane(row) and row.get("road_id"):
         code = str(row.get("pdd_code") or row.get("sign_code") or "")
+        # An explicit 0 means "the reserved lane is empty": the counterfactual that
+        # tells reading the plate apart from reacting to the bus ahead. A row without
+        # the column keeps the old default of one user.
+        n_users = row.get("reserved_agents_n")
+        n_users = 1 if n_users is None else max(0, int(n_users))
         reserved_cfg = dict(
             reserved_lane_edge=str(row["road_id"]),
             reserved_lane_index=int(row.get("reserved_lane_index", row.get("sign_lane_index", 0)) or 0),
@@ -184,7 +189,7 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
             reserved_zone_start=float(row.get("sign_s") or 0.0),
             reserved_zone_end=float(row.get("zone_end_s") or 0.0),
             reserved_ego_s=float(row.get("spawn_offset_from_start") or -1.0),
-            reserved_agents_n=int(row.get("reserved_agents_n") or 1),
+            reserved_agents_n=n_users,
             reserved_ego_v0_ms=float(row.get("spawn_velocity_ms") or 0.0),
             reserved_sumo_edge_length_m=float(row_sumo_edge_length_m(row) or 0.0),
             traffic_ego_edge_max_per_lane=2,

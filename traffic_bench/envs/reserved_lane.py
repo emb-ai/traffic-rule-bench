@@ -287,7 +287,10 @@ class ReservedLaneAgentManager(BaseManager):
         if user not in USER_SPEED_MS:
             user = "bus"
         self._user = user
-        n = int(cfg.get("reserved_agents_n", 0) or 0) or 1
+        # 0 is a legitimate value here: the counterfactual scene keeps the plate and
+        # empties the lane. Only a missing key falls back to one user.
+        raw_n = cfg.get("reserved_agents_n", None)
+        n = 1 if raw_n is None else max(0, int(raw_n))
         self._dir = -1 if flow == "opposite" else 1
 
         # Manifest longitudes are SUMO-edge metres; the MetaDrive lane may carry
