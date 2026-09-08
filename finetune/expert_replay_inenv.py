@@ -576,6 +576,23 @@ def replay_in_our_env(
             _park_unmatched_live(live_objs, obj_map, env.vehicle)
             return n_updated, n_unmatched, ego_err
 
+        # The recorder captures its first frame before the manifest ego spawn is
+        # applied, so frame 0 sits 70-160 m from frame 1 on every family that
+        # places the ego by distance (reserved lane, crosswalk; the v6 families
+        # spawn in place and show no jump). Dropping that frame keeps the dumped
+        # route continuous -- with it, the realised-future path label of the first
+        # sample spans the teleport.
+        skip_first_frame = False
+        if npc_mode == "recorded" and ego_rec_id is not None and len(npc_frames) > 1:
+            try:
+                p0 = _xy(npc_frames[0][ego_rec_id]["position"])
+                p1 = _xy(npc_frames[1][ego_rec_id]["position"])
+                skip_first_frame = float(np.linalg.norm(p1 - p0)) > 5.0
+            except Exception:
+                skip_first_frame = False
+        if skip_first_frame:
+            print("[replay] frame 0 is the pre-spawn pose, not dumping it")
+
         for step in range(min(max_steps, n_replay_frames)):
             # 1. Rematch + teleport ALL objects from pkl BEFORE env.step
             #    (IDs churn across frames in SUMO dumps — fixed obj_map breaks).
@@ -613,7 +630,7 @@ def replay_in_our_env(
             # PlanT2: capture AFTER teleporting ego+NPC to this frame's recorded
             # positions and BEFORE env.step. Matches PlanTDataset pre-step
             # convention with objects at the recorded frame (training fidelity).
-            if plant2_collector is not None:
+            if plant2_collector is not None and not (step == 0 and skip_first_frame):
                 plant2_collector.on_step(env, row)
 
             # 2. Step env (for rendering + sign checks). Action from recording.
