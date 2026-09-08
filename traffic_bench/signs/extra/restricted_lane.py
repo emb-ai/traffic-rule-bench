@@ -157,6 +157,11 @@ def _is_max_lane_index_for(lane_idx, engine):
     return True  # fail-open
 
 
+# A vehicle is "on" the reserved lane when its centre is within the lane width
+# plus this margin (a lane change counts until the centre crosses the line).
+LATERAL_TOLERANCE_M = 0.3
+
+
 def _get_vehicle_lane_index(vehicle):
     """Best-effort lane index fetch from vehicle."""
     lane = getattr(vehicle, "lane", None)
@@ -390,15 +395,32 @@ class RestrictedLaneSign(BaseTrafficSign):
         ):
             return False
 
-        if current_lane == sign_lane:
-            try:
-                veh_long = self.lane.local_coordinates(vehicle.position)[0]
-            except Exception:
-                return False
-            if not (self.zone_start <= veh_long <= self.zone_end):
-                return False
+        # MetaDrive's ray localization can report the neighbouring lane for a
+        # few steps at polygon seams of long curved lanes (the ego centred in
+        # lane 1 came back as lane 0 with a 3.2 m lateral offset). The plate
+        # judges the lane the vehicle is physically in: its centre has to lie
+        # inside the reserved lane's width.
+        lane_obj = self.lane if current_lane == sign_lane else self._lane_by_index(current_lane)
+        if lane_obj is None:
+            return False
+        try:
+            veh_long, veh_lat = lane_obj.local_coordinates(vehicle.position)
+        except Exception:
+            return False
+        half_width = float(getattr(lane_obj, "width", 3.5) or 3.5) / 2.0 + LATERAL_TOLERANCE_M
+        if abs(float(veh_lat)) > half_width:
+            return False
+        if current_lane == sign_lane and not (self.zone_start <= veh_long <= self.zone_end):
+            return False
 
         return True
+
+    def _lane_by_index(self, lane_index):
+        engine = getattr(self, "engine", None)
+        try:
+            return engine.current_map.road_network.get_lane(lane_index)
+        except Exception:
+            return None
 
     def get_rule_description(self) -> str:
         return _SIGN_DESCRIPTIONS.get(self.SIGN_CODE, f"Sign {self.SIGN_CODE}")
