@@ -217,6 +217,10 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         background_excluded_edges=list(background_excluded_edges),
         background_spawn_edges=list(background_spawn_edges),
         skip_auto_signs=True,
+        # Detour scenes without the cone cluster: the plate still opens its zone
+        # and the rule still requires the lane change, but nothing physical
+        # blocks the lane. Separates reading the sign from avoiding an obstacle.
+        spawn_detour_cones=bool(row.get("spawn_detour_cones", True)),
         use_pedestrian_manager=use_ped,
         use_pedestrian_yield_rule=use_yield,
         enforce_pedestrian_yield_for_traffic=False,

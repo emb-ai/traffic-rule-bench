@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import pickle
 import random
 import sys
@@ -366,6 +367,13 @@ def replay_in_our_env(
     from traffic_bench.eval.engine.traffic.ego_defaults import apply_ego_defaults
 
     row = sidecar["source_row"]
+    # Counterfactual detour demonstrations: replay the recorded manoeuvre with the
+    # cone cluster removed, so the frames show the plate and the lane change with
+    # nothing physical to react to. The ego track is replayed, not re-planned, so
+    # the manoeuvre is unchanged -- only the obstacle leaves the observation.
+    if os.environ.get("DUMP_NO_DETOUR_CONES") == "1":
+        row = dict(row)
+        row["spawn_detour_cones"] = False
     backend = sidecar["backend"]
 
     # Mirror the RECORDING's relocate mode. NN policies are recorded with ego
