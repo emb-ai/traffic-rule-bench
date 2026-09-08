@@ -53,8 +53,6 @@ OPPOSITE_FIRST_MEET_IN_ZONE_M = 30.0
 OPPOSITE_EGO_ACCEL_MS2 = 1.5      # ego pace model for the release timing:
 OPPOSITE_EGO_CRUISE_MS = 10.0     # spawn speed -> cruise at this acceleration
 DEFAULT_EGO_V0_MS = 5.0
-PARK_OFFSET_M = 5000.0            # where a parked user waits
-PARK_SPACING_M = 15.0             # one parking spot per user (no stacked bodies)
 # Lateral offset of the users towards the far side of their lane: a 2.3 m wide
 # body on a 3.2 m lane leaves 0.45 m to the line, and the IDM leader test of the
 # neighbouring lane fires on any corner that touches it.
@@ -215,18 +213,9 @@ class ReservedLaneAgentManager(BaseManager):
         lane = self._lane
         k = int(agent["k"])
         obj = agent["obj"]
-        length = float(lane.length)
-        if not self._stream.is_active(k):
-            # Parked off-scene, standing still, one spot per user.
-            pos = lane.position(length - 0.5, 0.0)
-            try:
-                obj.set_position(
-                    [float(pos[0]) + PARK_OFFSET_M + k * PARK_SPACING_M, float(pos[1]) + PARK_OFFSET_M]
-                )
-                obj.set_velocity([0.0, 0.0], in_local_frame=True)
-            except Exception:
-                pass
+        if obj is None:
             return
+        length = float(lane.length)
         s = min(max(self._lane_s(k), 0.5), length - 0.5)
         pos = lane.position(s, self._lat)
         heading = float(lane.heading_theta_at(s))
@@ -238,6 +227,42 @@ class ReservedLaneAgentManager(BaseManager):
             obj.set_velocity([float(self._stream.v[k]), 0.0], in_local_frame=True)
         except Exception:
             pass
+
+    def _ensure_body(self, agent: dict) -> None:
+        """One body per user *while it is on the stretch*, none otherwise.
+
+        A user outside ``[entry_s, exit_s]`` is not in the scene: giving it a
+        parked body would put a standing bus into every recorded trajectory and
+        turn each re-entry into a teleport. Spawning on entry and clearing on
+        exit keeps the recording (and the BEV of any policy) honest; the ring
+        model in ``LaneStream`` carries the state across the gap.
+        """
+        k = int(agent["k"])
+        active = self._stream.is_active(k)
+        obj = agent["obj"]
+        if active and obj is None:
+            lane = self._lane
+            length = float(lane.length)
+            s = min(max(self._lane_s(k), 0.5), length - 0.5)
+            heading = float(lane.heading_theta_at(s)) + (math.pi if self._dir < 0 else 0.0)
+            try:
+                if self._user == "bicycle":
+                    obj = self._spawn_cyclist(lane.position(s, 0.0), heading)
+                else:
+                    obj = self._spawn_bus(s, heading, f"{self._user}{k}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[ReservedLane] spawn failed: {exc!r}")
+                return
+            obj._trb_reserved_agent = True
+            obj._trb_reserved_lane_key = str(getattr(lane, "index", ""))
+            agent["obj"] = obj
+            agent["spawns"] = int(agent.get("spawns", 0)) + 1
+        elif not active and obj is not None:
+            try:
+                self.clear_objects([obj.id])
+            except Exception:
+                pass
+            agent["obj"] = None
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -319,20 +344,9 @@ class ReservedLaneAgentManager(BaseManager):
 
         spawned = 0
         for k in range(n):
-            s = min(max(self._lane_s(k), 0.5), length - 0.5)
-            heading = float(lane.heading_theta_at(s)) + (math.pi if self._dir < 0 else 0.0)
-            try:
-                if user == "bicycle":
-                    obj = self._spawn_cyclist(lane.position(s, 0.0), heading)
-                else:
-                    obj = self._spawn_bus(s, heading, f"bus{k}")
-            except Exception as exc:  # noqa: BLE001
-                print(f"[ReservedLane] spawn failed: {exc!r}")
-                continue
-            obj._trb_reserved_agent = True
-            obj._trb_reserved_lane_key = str(getattr(lane, "index", ""))
-            agent = {"obj": obj, "k": k}
+            agent = {"obj": None, "k": k, "spawns": 0}
             self._agents.append(agent)
+            self._ensure_body(agent)
             self._place(agent)
             spawned += 1
         print(
@@ -348,13 +362,16 @@ class ReservedLaneAgentManager(BaseManager):
             return {}
         self._stream.step(self._dt, entry_clear=lambda: self._spot_clear(self._entry_s))
         for agent in self._agents:
+            self._ensure_body(agent)
             self._place(agent)
         return {}
 
     def _clear(self):
         if self._agents:
             try:
-                self.clear_objects([a["obj"].id for a in self._agents])
+                self.clear_objects(
+                    [a["obj"].id for a in self._agents if a.get("obj") is not None]
+                )
             except Exception:
                 pass
         self._agents = []
