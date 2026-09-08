@@ -544,6 +544,9 @@ export PER_SIGN_COMPLIANT_NPC EGO_SAMPLER EGO_CURVE_AWARE EGO_HOLD_V0 CARL_LONGI
 : "${GPUS_PLANT2:=}"
 : "${JOBS_PER_GPU:=1}"
 : "${NN_CHUNKS:=1}"
+# 0 = finish CPU policies before starting carl/plant2 (avoids MetaDrive CPU
+# contention when N_WORKERS/IDM_CHUNKS is high). 1 = old overlap behavior.
+: "${OVERLAP_CPU_GPU:=0}"
 
 # Default checkpoints under the repo root.
 : "${CARL_CKPT:=$REPO_ROOT/checkpoints/carl/nuplan_51479_1B/model_best.pth}"
@@ -886,13 +889,24 @@ run_one() {
 # Launch one CPU policy, optionally sharded across IDM_CHUNKS processes.
 _run_cpu_policy() {
     local policy="$1"
+    # Gate on alive worker pids (not `jobs -rp`) so the progress dashboard
+    # background job does not steal a slot from N_WORKERS.
+    _cpu_slots_busy() {
+        local n=0 p
+        for p in ${pids[@]+"${pids[@]}"}; do
+            if kill -0 "$p" 2>/dev/null; then
+                n=$((n + 1))
+            fi
+        done
+        echo "$n"
+    }
     # GIF / ShowBase: one process only (Panda3D is not multi-process safe).
     # COUNT/ROWS_LIMIT still shard via N_USE when IDM_CHUNKS>1 and no GIFs.
     if [ "${SAVE_GIFS:-0}" = "1" ] || [ "${IDM_CHUNKS:-1}" -le 1 ]; then
         if [ "${SAVE_GIFS:-0}" = "1" ] && [ "${IDM_CHUNKS:-1}" -gt 1 ]; then
             echo "[shard] $policy: SAVE_GIFS=1 → single process (no IDM_CHUNKS)"
         fi
-        while [ "$(jobs -rp | wc -l)" -ge "$N_WORKERS" ]; do
+        while [ "$(_cpu_slots_busy)" -ge "$N_WORKERS" ]; do
             sleep 1
         done
         run_one "$policy" &
@@ -931,7 +945,7 @@ _run_cpu_policy() {
         if [ $((start + count)) -gt "$n_rows" ]; then
             count=$((n_rows - start))
         fi
-        while [ "$(jobs -rp | wc -l)" -ge "$N_WORKERS" ]; do
+        while [ "$(_cpu_slots_busy)" -ge "$N_WORKERS" ]; do
             sleep 1
         done
         run_one "$policy" --start "$start" --count "$count" --worker-id "$i" &
@@ -942,55 +956,8 @@ _run_cpu_policy() {
 fail=0
 pids=()
 
-if [ "$SKIP_CPU" != "1" ]; then
-    for policy in $POLICIES_CPU; do
-        _run_cpu_policy "$policy"
-    done
-fi
-
-_run_gpu_pool() {
-    local policies="$1" gpus="$2" ckpt="$3"
-    shift 3
-    local extra=("$@")
-    IFS=',' read -ra gpu_list <<< "$gpus"
-    local gi=0
-    local running=0
-    local max_parallel=$(( ${#gpu_list[@]} * JOBS_PER_GPU ))
-    [ "$max_parallel" -lt 1 ] && max_parallel=1
-    for policy in $policies; do
-        while [ "$running" -ge "$max_parallel" ]; do
-            wait -n 2>/dev/null || true
-            running=$(jobs -rp | wc -l)
-        done
-        local gpu="${gpu_list[$((gi % ${#gpu_list[@]}))]}"
-        gi=$((gi + 1))
-        CUDA_VISIBLE_DEVICES="$gpu" run_one "$policy" --model-path "$ckpt" "${extra[@]}" &
-        pids+=("$!")
-        running=$((running + 1))
-    done
-}
-
-if [ "$SKIP_CARL" != "1" ]; then
-    if [ -z "$CARL_CKPT" ]; then
-        echo "[FAIL] CARL pool enabled but CARL_CKPT unset"
-        fail=$((fail + 1))
-    else
-        _run_gpu_pool "$POLICIES_CARL" "$GPUS_CARL" "$CARL_CKPT"
-    fi
-fi
-
-if [ "$SKIP_PLANT2" != "1" ]; then
-    if [ -z "$PLANT2_CKPT" ]; then
-        echo "[FAIL] PLANT2 pool enabled but PLANT2_CKPT unset"
-        fail=$((fail + 1))
-    else
-        _run_gpu_pool "$POLICIES_PLANT2" "$GPUS_PLANT2" "$PLANT2_CKPT" \
-            --plant2-action-mode "$PLANT2_ACTION_MODE"
-    fi
-fi
-
-# Live dashboard while policies run in parallel (progress is otherwise only in
-# $LOG_DIR/<policy>.log — easy to miss from the main terminal).
+# Live dashboard — defined before launch so we can print while workers are
+# still being queued (IDM may fill N_WORKERS before PPO/GPU join).
 _print_collect_progress() {
     # Pass N_USE so COUNT/ROWS_LIMIT caps the denominator (not full manifest size).
     "$PYTHON_BIN" - "$OUT_BASE" "$MANIFEST" "$EXTRA_SAMPLES_COMPREHENSIVE" "$LOG_DIR" "${N_USE:-}" <<'PY'
@@ -1091,27 +1058,151 @@ print("--------------------", flush=True)
 PY
 }
 
-echo
-echo "[progress] live dashboard every ${PROGRESS_EVERY_S}s  (per-policy detail: $LOG_DIR/<policy>.log)"
-_print_collect_progress
+# Background dashboard from the first worker onward (not after the full queue).
+_PROGRESS_PID=""
+_start_progress_dashboard() {
+    if [ -n "$_PROGRESS_PID" ]; then
+        return 0
+    fi
+    echo
+    echo "[progress] live dashboard every ${PROGRESS_EVERY_S}s  (per-policy detail: $LOG_DIR/<policy>.log)"
+    (
+        # Stop when parent writes the sentinel or we get killed.
+        while [ ! -f "$LOG_DIR/_progress_stop" ]; do
+            _print_collect_progress
+            sleep "$PROGRESS_EVERY_S"
+        done
+    ) &
+    _PROGRESS_PID=$!
+}
 
-while true; do
-    alive=0
-    for pid in ${pids[@]+"${pids[@]}"}; do
-        if kill -0 "$pid" 2>/dev/null; then
-            alive=1
-            break
-        fi
+_stop_progress_dashboard() {
+    mkdir -p "$LOG_DIR"
+    : > "$LOG_DIR/_progress_stop"
+    if [ -n "$_PROGRESS_PID" ] && kill -0 "$_PROGRESS_PID" 2>/dev/null; then
+        kill "$_PROGRESS_PID" 2>/dev/null || true
+        wait "$_PROGRESS_PID" 2>/dev/null || true
+    fi
+    rm -f "$LOG_DIR/_progress_stop"
+    _PROGRESS_PID=""
+}
+
+_run_gpu_pool() {
+    local policies="$1" gpus="$2" ckpt="$3"
+    shift 3
+    local extra=("$@")
+    IFS=',' read -ra gpu_list <<< "$gpus"
+    local gi=0
+    local -a pool_pids=()
+    local max_parallel=$(( ${#gpu_list[@]} * JOBS_PER_GPU ))
+    [ "$max_parallel" -lt 1 ] && max_parallel=1
+
+    # Reap only THIS pool's pids — never gate on CPU jobs via `jobs -rp`.
+    _gpu_pool_reap() {
+        local -a alive=()
+        local p
+        for p in ${pool_pids[@]+"${pool_pids[@]}"}; do
+            if kill -0 "$p" 2>/dev/null; then
+                alive+=("$p")
+            else
+                wait "$p" 2>/dev/null || true
+            fi
+        done
+        pool_pids=("${alive[@]}")
+    }
+
+    for policy in $policies; do
+        _gpu_pool_reap
+        while [ "${#pool_pids[@]}" -ge "$max_parallel" ]; do
+            wait -n 2>/dev/null || true
+            _gpu_pool_reap
+            sleep 0.2
+        done
+        local gpu="${gpu_list[$((gi % ${#gpu_list[@]}))]}"
+        gi=$((gi + 1))
+        CUDA_VISIBLE_DEVICES="$gpu" run_one "$policy" --model-path "$ckpt" "${extra[@]}" &
+        pool_pids+=("$!")
+        pids+=("$!")
     done
-    [ "$alive" -eq 0 ] && break
-    sleep "$PROGRESS_EVERY_S"
-    _print_collect_progress
-done
+}
 
-for pid in ${pids[@]+"${pids[@]}"}; do
-    wait "$pid" || fail=$((fail + 1))
-done
-_print_collect_progress
+# Wait until every pid in pids[] has exited; refresh progress while waiting.
+_wait_phase_pids() {
+    local phase_label="$1"
+    echo
+    echo "[progress] phase=$phase_label  waiting  (detail: $LOG_DIR/<policy>.log)"
+    _print_collect_progress
+    while true; do
+        local alive=0
+        local pid
+        for pid in ${pids[@]+"${pids[@]}"}; do
+            if kill -0 "$pid" 2>/dev/null; then
+                alive=1
+                break
+            fi
+        done
+        [ "$alive" -eq 0 ] && break
+        sleep "$PROGRESS_EVERY_S"
+        _print_collect_progress
+    done
+    local pid
+    for pid in ${pids[@]+"${pids[@]}"}; do
+        wait "$pid" || fail=$((fail + 1))
+    done
+    _print_collect_progress
+}
+
+rm -f "$LOG_DIR/_progress_stop"
+_start_progress_dashboard
+
+# Phase 1: CPU policies to completion, then Phase 2: GPU.
+# (No overlap — MetaDrive CPU contention was starving carl/plant2.)
+if [ "$SKIP_CPU" != "1" ]; then
+    echo
+    echo "======== phase CPU ========"
+    pids=()
+    for policy in $POLICIES_CPU; do
+        _run_cpu_policy "$policy"
+    done
+    _stop_progress_dashboard
+    _wait_phase_pids "CPU"
+    rm -f "$LOG_DIR/_progress_stop"
+    _start_progress_dashboard
+fi
+
+pids=()
+if [ "$SKIP_CARL" != "1" ]; then
+    if [ -z "$CARL_CKPT" ]; then
+        echo "[FAIL] CARL pool enabled but CARL_CKPT unset"
+        fail=$((fail + 1))
+    else
+        echo
+        echo "======== phase GPU (CARL) ========"
+        pids=()
+        _run_gpu_pool "$POLICIES_CARL" "$GPUS_CARL" "$CARL_CKPT"
+        _stop_progress_dashboard
+        _wait_phase_pids "GPU-CARL"
+        rm -f "$LOG_DIR/_progress_stop"
+        _start_progress_dashboard
+    fi
+fi
+
+if [ "$SKIP_PLANT2" != "1" ]; then
+    if [ -z "$PLANT2_CKPT" ]; then
+        echo "[FAIL] PLANT2 pool enabled but PLANT2_CKPT unset"
+        fail=$((fail + 1))
+    else
+        echo
+        echo "======== phase GPU (PLANT2) ========"
+        pids=()
+        _run_gpu_pool "$POLICIES_PLANT2" "$GPUS_PLANT2" "$PLANT2_CKPT" \
+            --plant2-action-mode "$PLANT2_ACTION_MODE"
+        _stop_progress_dashboard
+        _wait_phase_pids "GPU-PLANT2"
+    fi
+fi
+
+_stop_progress_dashboard
 
 echo "=== Collection finished. failures=$fail ==="
 

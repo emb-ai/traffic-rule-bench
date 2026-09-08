@@ -148,6 +148,8 @@ would only use **2** CPU processes even if `N_WORKERS=8`.
   `GPUS_PLANT2` pin cards. Multi-GPU **across signs** is what the multi-sign
   orchestrator parallelizes (see above). Within one sign, extra GPUs for a single
   `carl_rule` are still unused unless you add more policy names.
+- **CPU then GPU:** within each sign, `idm`/`ppo` finish first; then `carl`,
+  then `plant2` (no CPU↔GPU overlap). Progress bars refresh during each phase.
 - **Live progress:** every `PROGRESS_EVERY_S` seconds (default 30) the shell
 prints a per-policy bar (`done/target`) and the last `[i/N]` line from each
 worker log. Detail: `tail -f $OUT_BASE/_logs/.../<policy>.wXX.log`.

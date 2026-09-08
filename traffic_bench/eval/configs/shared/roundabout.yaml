@@ -7,6 +7,8 @@ augmentation:
 
 auxiliary:
   enabled: true
+  # Shorter conflict arcs than junction approaches — cap convoy at 2 (root is 3).
+  convoy_size: 2
 
 simulation:
   spawn_velocity_levels_ms: [3.61]
