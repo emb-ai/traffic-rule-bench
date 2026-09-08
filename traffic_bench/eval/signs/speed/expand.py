@@ -40,7 +40,9 @@ from traffic_bench.eval.engine.expand.manifest_config import (
 )
 from traffic_bench.eval.engine.expand.manifest_expansion import (
     mark_nominal_row,
+    non_nominal_budget,
     shuffle_cap,
+    shuffled_copy,
 )
 from traffic_bench.eval.engine.expand.world_axes import (
     DEFAULT_HORIZON_STEPS,
@@ -376,35 +378,53 @@ def expand_speed_scene_entries(
         if row is not None:
             entries.append(mark_nominal_row(row))
 
+    combos = []
     for lane_num in lanes:
         for cell in iter_world_axis_cells(
             route_levels=route_levels,
             sim=sim,
             task_conditioned_spawn=True,
         ):
-            suffix = cell.scene_suffix(route_augment=route_augment)
-            seed = stable_hash(scene_name, lane_num, *cell.seed_tags())
-            npc_profile = sample_profile_for_cell(cell, seed=int(seed), sim=sim)
-            row = build_speed_manifest_entry(
-                scene_dir=scene_dir,
-                scenes_root=scenes_root,
-                meta=meta,
-                sim=sim,
-                pdd_code=pdd_code,
-                v_target_kmh=v_target_kmh,
-                spawn_lane_num=lane_num,
-                variant=cell.npc_var,
-                npc_profile=npc_profile,
-                max_path_length_m=float(cell.route_length_m),
-                route_length_augment=route_augment,
-                default_variant=False,
-                traffic_density=float(cell.density.traffic_density),
-                scene_id_suffix=suffix,
-            )
-            if row is not None:
-                entries.append(stamp_world_axis_fields(row, cell))
+            combos.append((lane_num, cell))
 
     max_sc = expansion.max_scenarios
+    budget = non_nominal_budget(max_sc, len(entries))
+    ordered = shuffled_copy(
+        combos,
+        seed_key=(
+            str(scene_dir.name),
+            "speed_world_cap",
+            int(max_sc) if max_sc is not None else 0,
+        ),
+    )
+    pre_pool = len(ordered)
+    built = 0
+    for lane_num, cell in ordered:
+        if budget is not None and built >= budget:
+            break
+        suffix = cell.scene_suffix(route_augment=route_augment)
+        seed = stable_hash(scene_name, lane_num, *cell.seed_tags())
+        npc_profile = sample_profile_for_cell(cell, seed=int(seed), sim=sim)
+        row = build_speed_manifest_entry(
+            scene_dir=scene_dir,
+            scenes_root=scenes_root,
+            meta=meta,
+            sim=sim,
+            pdd_code=pdd_code,
+            v_target_kmh=v_target_kmh,
+            spawn_lane_num=lane_num,
+            variant=cell.npc_var,
+            npc_profile=npc_profile,
+            max_path_length_m=float(cell.route_length_m),
+            route_length_augment=route_augment,
+            default_variant=False,
+            traffic_density=float(cell.density.traffic_density),
+            scene_id_suffix=suffix,
+        )
+        if row is not None:
+            entries.append(stamp_world_axis_fields(row, cell))
+            built += 1
+
     pre_cap = len(entries)
     entries = shuffle_cap(
         entries,
@@ -415,12 +435,18 @@ def expand_speed_scene_entries(
             int(max_sc) if max_sc is not None else 0,
         ),
     )
-    if max_sc is not None and pre_cap > max_sc:
+    if max_sc is not None and pre_pool > (budget if budget is not None else pre_pool):
+        print(
+            f"  Early-sampled {built} of {pre_pool} combos "
+            f"(cap={max_sc}; nominal preserved)"
+        )
+    elif max_sc is not None and pre_cap > max_sc:
         print(
             f"  Retained {len(entries)} of {pre_cap} world-grid variants "
             f"(shuffled, cap={max_sc}; nominal preserved)"
         )
     return entries
+
 
 from traffic_bench.eval.manifest.io import (
     append_scene_entries,

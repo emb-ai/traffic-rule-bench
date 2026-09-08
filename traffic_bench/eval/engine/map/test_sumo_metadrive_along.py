@@ -42,3 +42,26 @@ def test_row_sumo_edge_length_prefers_edge_length_m():
     assert row_sumo_edge_length_m({"length_m": 100}) == 100.0
     assert row_sumo_edge_length_m({"approach_lane_length_m": 80}) == 80.0
     assert row_sumo_edge_length_m({}) is None
+
+
+def test_row_sumo_edge_length_skips_crosswalk_zebra_mark_as_edge():
+    # No-split expand stores approach_lane_length_m == crosswalk_position_m.
+    assert (
+        row_sumo_edge_length_m(
+            {
+                "approach_lane_length_m": 125.0,
+                "crosswalk_position_m": 125.0,
+            }
+        )
+        is None
+    )
+    assert (
+        row_sumo_edge_length_m(
+            {
+                "edge_length_m": 310.7,
+                "approach_lane_length_m": 125.0,
+                "crosswalk_position_m": 125.0,
+            }
+        )
+        == 310.7
+    )

@@ -19,8 +19,10 @@ from traffic_bench.eval.engine.expand.manifest_config import (
     DEFAULT_TRAFFIC_DENSITY_LEVELS,
 )
 from traffic_bench.eval.engine.expand.manifest_expansion import (
-    shuffle_cap,
     mark_nominal_row,
+    non_nominal_budget,
+    shuffle_cap,
+    shuffled_copy,
 )
 from traffic_bench.eval.engine.expand.world_axes import (
     DEFAULT_HORIZON_STEPS,
@@ -393,11 +395,28 @@ def expand_detour_scene_entries(
         if nominal:
             entries.append(mark_nominal_row(nominal))
 
-    for cell in iter_world_axis_cells(
-        route_levels=route_levels,
-        sim=sim,
-        task_conditioned_spawn=False,
-    ):
+    combos = list(
+        iter_world_axis_cells(
+            route_levels=route_levels,
+            sim=sim,
+            task_conditioned_spawn=False,
+        )
+    )
+    max_sc = expansion.max_scenarios
+    budget = non_nominal_budget(max_sc, len(entries))
+    ordered = shuffled_copy(
+        combos,
+        seed_key=(
+            str(scene_dir.name),
+            "detour_world_cap",
+            int(max_sc) if max_sc is not None else 0,
+        ),
+    )
+    pre_pool = len(ordered)
+    built = 0
+    for cell in ordered:
+        if budget is not None and built >= budget:
+            break
         suffix = cell.scene_suffix(route_augment=route_augment)
         seed = stable_hash(
             str(meta.get("scene_name") or scene_dir.name),
@@ -422,8 +441,8 @@ def expand_detour_scene_entries(
         )
         if row:
             entries.append(stamp_world_axis_fields(row, cell))
+            built += 1
 
-    max_sc = expansion.max_scenarios
     pre_cap = len(entries)
     entries = shuffle_cap(
         entries,
@@ -434,12 +453,18 @@ def expand_detour_scene_entries(
             int(max_sc) if max_sc is not None else 0,
         ),
     )
-    if max_sc is not None and pre_cap > max_sc:
+    if max_sc is not None and pre_pool > (budget if budget is not None else pre_pool):
+        print(
+            f"  Early-sampled {built} of {pre_pool} combos "
+            f"(cap={max_sc}; nominal preserved)"
+        )
+    elif max_sc is not None and pre_cap > max_sc:
         print(
             f"  Retained {len(entries)} of {pre_cap} world-grid variants "
             f"(shuffled, cap={max_sc})"
         )
     return entries
+
 
 from traffic_bench.eval.manifest.io import (
     append_scene_entries,

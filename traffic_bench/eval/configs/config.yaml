@@ -39,7 +39,7 @@ auxiliary:
   distance_from_intersection: 20.0
   convoy_size: 3
   lanes_occupied: 4
-  convoy_gap_m: [5.0, 8.0]
+  convoy_gap_m: [5.0]
   release_when_ego_within_m: 15.0
 
 simulation:
@@ -59,6 +59,7 @@ simulation:
   # Shared world grid (all signs):
   #   route × density(p25/p50/p75) × ego_speed(p25/p50/p75) × n_variations
   # Speed plates keep task-conditioned approach speed (skip ego_speed axis).
+  # Priority signs (shared/junction + shared/roundabout) override to [3.61] only.
   max_path_length_m: 90.0
   max_path_length_levels: [90, 120]
   traffic_density_levels: [0.1462, 0.2682, 0.6]

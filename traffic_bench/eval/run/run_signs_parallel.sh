@@ -131,8 +131,14 @@ order_ready_first() {
       waiting+=("$s")
     fi
   done
-  ((${#ready[@]})) && _dst+=("${ready[@]}")
-  ((${#waiting[@]})) && _dst+=("${waiting[@]}")
+  # Prefer if/then over ((n)) && … — with set -e an empty waiting[] makes
+  # ((0)) the function's last status and aborts the whole script.
+  if ((${#ready[@]})); then
+    _dst+=("${ready[@]}")
+  fi
+  if ((${#waiting[@]})); then
+    _dst+=("${waiting[@]}")
+  fi
 }
 
 run_cpu_sign() {

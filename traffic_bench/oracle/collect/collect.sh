@@ -568,7 +568,8 @@ fi
 # Live dashboard while policies run in parallel (progress is otherwise only in
 # $LOG_DIR/<policy>.log — easy to miss from the main terminal).
 _print_collect_progress() {
-    "$PYTHON_BIN" - "$OUT_BASE" "$MANIFEST" "$EXTRA_SAMPLES_COMPREHENSIVE" "$LOG_DIR" <<'PY'
+    # Pass N_USE so COUNT/ROWS_LIMIT caps the denominator (not full manifest size).
+    "$PYTHON_BIN" - "$OUT_BASE" "$MANIFEST" "$EXTRA_SAMPLES_COMPREHENSIVE" "$LOG_DIR" "${N_USE:-}" <<'PY'
 import os, re, sys, json
 from pathlib import Path
 
@@ -576,6 +577,7 @@ out_base = Path(sys.argv[1])
 manifest = Path(sys.argv[2])
 extra = int(sys.argv[3] or 0)
 log_dir = Path(sys.argv[4])
+n_use_raw = (sys.argv[5] if len(sys.argv) > 5 else "").strip()
 
 n_rows = 0
 if manifest.is_file():
@@ -592,6 +594,15 @@ if manifest.is_file():
             if row.get("valid") is False:
                 continue
             n_rows += 1
+
+# COUNT / ROWS_LIMIT already folded into N_USE by the shell plan.
+if n_use_raw:
+    try:
+        n_use = int(n_use_raw)
+        if n_use > 0:
+            n_rows = min(n_rows, n_use) if n_rows else n_use
+    except ValueError:
+        pass
 
 idm = {"idm", "idm_rule"}
 print("----- progress -----", flush=True)

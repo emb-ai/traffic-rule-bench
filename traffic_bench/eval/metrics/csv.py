@@ -65,12 +65,21 @@ POLICY_DISPLAY_NAME: dict[str, str] = {
 # Priority plates 2.1 / 2.3.x are informational and never violate; SIGN_CLASS_MAP
 # already points those PDDs at RightHandYieldSign / YieldSign (the classes that
 # own the approach zone and emit violations).
+#
+# 5.19: the plate (PedestrianCrossingSign) owns the approach *zone* counters in
+# episode logs; PedestrianYieldRule owns *violations*. Zone lookup must include
+# the plate or Target SR / n_in_zone stay empty while the plate was clearly hit.
 TARGET_CLASS_SUBCLASSES: dict[str, list[str]] = {
     "SpeedLimitSign":         ["SpeedLimitSign20", "SpeedLimitSign30", "SpeedLimitSign40", "SpeedLimitSign60"],
     "EndOfSpeedLimitSign":    ["EndOfSpeedLimitSign20", "EndOfSpeedLimitSign30", "EndOfSpeedLimitSign40", "EndOfSpeedLimitSign60"],
     "ZoneSpeedLimitSign":     ["ZoneSpeedLimitSign20", "ZoneSpeedLimitSign30", "ZoneSpeedLimitSign40", "ZoneSpeedLimitSign60"],
     "EndOfZoneSpeedLimitSign":["EndOfZoneSpeedLimitSign20", "EndOfZoneSpeedLimitSign30", "EndOfZoneSpeedLimitSign40", "EndOfZoneSpeedLimitSign60"],
     "MinimumSpeedLimitSign":  ["MinimumSpeedLimit30", "MinimumSpeedLimit40", "MinimumSpeedLimit50", "MinimumSpeedLimit60"],
+}
+
+# Extra class names that count toward target_in_zone only (not violations).
+TARGET_CLASS_ZONE_ALIASES: dict[str, list[str]] = {
+    "PedestrianYieldRule": ["PedestrianCrossingSign"],
 }
 
 
@@ -80,7 +89,28 @@ def _resolve_target_classes(base_class: str | None) -> list[str]:
         return []
     out = [base_class]
     out.extend(TARGET_CLASS_SUBCLASSES.get(base_class, []))
-    return out
+    # de-dupe, preserve order
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for name in out:
+        if name not in seen:
+            seen.add(name)
+            uniq.append(name)
+    return uniq
+
+
+def _resolve_target_zone_classes(base_class: str | None) -> list[str]:
+    """Classes whose in_zone steps count for target_in_zone (may exceed viol set)."""
+    classes = _resolve_target_classes(base_class)
+    if not base_class:
+        return classes
+    extra = TARGET_CLASS_ZONE_ALIASES.get(base_class, [])
+    seen = set(classes)
+    for name in extra:
+        if name not in seen:
+            classes.append(name)
+            seen.add(name)
+    return classes
 
 
 def _sum_class_keys(d: dict, classes: list[str]) -> int:
@@ -278,9 +308,12 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
     # see TARGET_CLASS_SUBCLASSES). For non-speed PDDs this collapses to
     # [target_class] and behavior is unchanged.
     target_classes = _resolve_target_classes(target_class)
+    target_zone_classes = _resolve_target_zone_classes(target_class)
     target_violations_step = _sum_class_keys(vbc_step, target_classes) if target_class else None
     target_violations_event = _sum_class_keys(vbc_event, target_classes) if target_class else None
-    target_in_zone_steps = _sum_class_keys(in_zone_by_class, target_classes) if target_class else None
+    target_in_zone_steps = (
+        _sum_class_keys(in_zone_by_class, target_zone_classes) if target_class else None
+    )
     target_in_zone = (target_in_zone_steps is not None and target_in_zone_steps > 0)
     target_compliant_event = (target_violations_event == 0) if target_class else None
     target_compliant_step = (target_violations_step == 0) if target_class else None
@@ -392,6 +425,7 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
         ),
         # High-level compliance
         "sign_compliant_high": (
+            # 5.19 plate never violates; compliance comes from PedestrianYieldRule.
             bool(target_compliant_event)
             if target_class == "PedestrianYieldRule" and target_compliant_event is not None
             else (viol_high_sign == 0)

@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from traffic_bench.eval.engine.map.junction_priority_layout import right_arm_edge_id
 from traffic_bench.eval.engine.expand.manifest_config import DEFAULT_STOP_WAIT_STEPS
@@ -19,7 +19,9 @@ from traffic_bench.eval.engine.expand.manifest_expansion import (
     ExpansionConfig,
     entry_geometry_key,
     mark_nominal_row,
+    non_nominal_budget,
     shuffle_cap,
+    shuffled_copy,
     sizes_up_to,
 )
 from traffic_bench.eval.engine.expand.world_axes import (
@@ -369,6 +371,9 @@ def expand_scene_entries(
         if nominal.get("valid") is not False:
             scene_entries.append(mark_nominal_row(nominal))
 
+    # Cheap combo descriptors first; shuffle and build only until max_scenarios.
+    # Refill from the shuffled pool when a combo is invalid / duplicate.
+    combos: List[Tuple] = []
     for variant, scenario in enumerate(scenarios):
         ego_edge = scenario.ego_edge_id if scenario is not None else None
         prefer_aux = (
@@ -425,57 +430,83 @@ def expand_scene_entries(
                         if len(fit_lanes) < lanes_n:
                             skipped_short_aux += 1
                             continue
-                    aux_cfg_gap = replace(aux_cfg_for_entry, convoy_gap_m=gap_m)
-                    scenario_id = scenario.scenario_id if scenario else ""
                     for cell in iter_world_axis_cells(
                         route_levels=route_levels,
                         sim=sim_cfg,
                         task_conditioned_spawn=False,
                     ):
-                        suffix = cell.scene_suffix(route_augment=route_augment)
-                        seed = stable_hash(
-                            scene_name,
-                            scenario_id,
-                            variant,
-                            convoy_n,
-                            lanes_n,
-                            round(float(gap_m), 3),
-                            *cell.seed_tags(),
+                        combos.append(
+                            (
+                                variant,
+                                scenario,
+                                convoy_n,
+                                lanes_n,
+                                float(gap_m),
+                                cell,
+                                bool(route_augment),
+                            )
                         )
-                        npc_profile = sample_profile_for_cell(
-                            cell, seed=int(seed), sim=sim_cfg
-                        )
-                        entry = build_entry(
-                            scene_dir=scene_dir,
-                            scenes_root=scenes_root,
-                            meta=meta,
-                            variant=variant,
-                            sim_cfg=sim_cfg,
-                            aux_cfg=aux_cfg_gap,
-                            aux_convoy_size=convoy_n,
-                            aux_lanes_occupied=lanes_n,
-                            spawn_lanes_cache=list(spawn_lanes),
-                            junction_layout_cache=junction_layout,
-                            spawn_scenario=scenario,
-                            max_path_length_m=float(cell.route_length_m),
-                            route_length_augment=route_augment,
-                            npc_profile=npc_profile,
-                            npc_var_idx=cell.npc_var,
-                            seed_override=int(seed),
-                            spawn_velocity_ms=cell.spawn_velocity_ms,
-                            traffic_density=float(cell.density.traffic_density),
-                            scene_id_suffix=suffix,
-                        )
-                        if entry.get("valid") is False:
-                            skipped_invalid_route += 1
-                            continue
-                        entry = stamp_world_axis_fields(entry, cell)
-                        geom_key = entry_geometry_key(entry)
-                        if geom_key in seen_geometries:
-                            skipped_dup_geometry += 1
-                            continue
-                        seen_geometries.add(geom_key)
-                        scene_entries.append(entry)
+
+    cap = expansion.max_scenarios
+    budget = non_nominal_budget(cap, len(scene_entries))
+    ordered = shuffled_copy(
+        combos,
+        seed_key=(
+            scene_name,
+            "max_scenarios_shuffle",
+            int(cap) if cap is not None else 0,
+        ),
+    )
+    pre_pool = len(ordered)
+    built_non_nominal = 0
+    for variant, scenario, convoy_n, lanes_n, gap_m, cell, route_augment in ordered:
+        if budget is not None and built_non_nominal >= budget:
+            break
+        aux_cfg_gap = replace(aux_cfg_for_entry, convoy_gap_m=gap_m)
+        scenario_id = scenario.scenario_id if scenario else ""
+        suffix = cell.scene_suffix(route_augment=route_augment)
+        seed = stable_hash(
+            scene_name,
+            scenario_id,
+            variant,
+            convoy_n,
+            lanes_n,
+            round(float(gap_m), 3),
+            *cell.seed_tags(),
+        )
+        npc_profile = sample_profile_for_cell(cell, seed=int(seed), sim=sim_cfg)
+        entry = build_entry(
+            scene_dir=scene_dir,
+            scenes_root=scenes_root,
+            meta=meta,
+            variant=variant,
+            sim_cfg=sim_cfg,
+            aux_cfg=aux_cfg_gap,
+            aux_convoy_size=convoy_n,
+            aux_lanes_occupied=lanes_n,
+            spawn_lanes_cache=list(spawn_lanes),
+            junction_layout_cache=junction_layout,
+            spawn_scenario=scenario,
+            max_path_length_m=float(cell.route_length_m),
+            route_length_augment=route_augment,
+            npc_profile=npc_profile,
+            npc_var_idx=cell.npc_var,
+            seed_override=int(seed),
+            spawn_velocity_ms=cell.spawn_velocity_ms,
+            traffic_density=float(cell.density.traffic_density),
+            scene_id_suffix=suffix,
+        )
+        if entry.get("valid") is False:
+            skipped_invalid_route += 1
+            continue
+        entry = stamp_world_axis_fields(entry, cell)
+        geom_key = entry_geometry_key(entry)
+        if geom_key in seen_geometries:
+            skipped_dup_geometry += 1
+            continue
+        seen_geometries.add(geom_key)
+        scene_entries.append(entry)
+        built_non_nominal += 1
 
     if skipped_short_aux:
         print(
@@ -498,14 +529,18 @@ def expand_scene_entries(
             f"(same ego path + occupied aux lanes + convoy + gap)"
         )
 
-    cap = expansion.max_scenarios
     pre_cap = len(scene_entries)
     scene_entries = shuffle_cap(
         scene_entries,
         cap,
         seed_key=(scene_name, "max_scenarios_shuffle", int(cap) if cap is not None else 0),
     )
-    if cap is not None and pre_cap > cap:
+    if cap is not None and pre_pool > (budget if budget is not None else pre_pool):
+        print(
+            f"  Early-sampled {built_non_nominal} of {pre_pool} combos "
+            f"(cap={cap}; nominal preserved); built {len(scene_entries)} rows"
+        )
+    elif cap is not None and pre_cap > cap:
         print(
             f"  Retained {len(scene_entries)} of {pre_cap} manifest entries "
             f"for {scene_name} (shuffled, cap={cap}; nominal preserved)"
@@ -519,6 +554,7 @@ def expand_scene_entries(
         print(f"  Manifest entries for {scene_name}: {len(scene_entries)}")
 
     return scene_entries
+
 
 
 def build_manifest_entry(

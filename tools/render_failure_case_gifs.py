@@ -89,6 +89,7 @@ def render_one(
     force: bool,
     gif_window_m: float,
     gif_name: str = "replay.gif",
+    spawn_velocity_ms: float | None = None,
 ) -> str:
     gif_path = replay_path.parent / gif_name
     if gif_path.exists() and not force:
@@ -107,6 +108,11 @@ def render_one(
     scenes_root = SIGN_GROUP_TO_SCENES[sign_group]
     if not scenes_root.is_dir():
         return "missing_scenes_root"
+
+    if spawn_velocity_ms is not None:
+        row = dict(row)
+        row["spawn_velocity_ms"] = float(spawn_velocity_ms)
+        row["spawn_velocity_level_id"] = 0
 
     from traffic_bench.eval.run.episode import run_one_episode
 
@@ -164,6 +170,13 @@ def main() -> None:
              "(use e.g. replay_v2.gif to keep older GIFs)",
     )
     parser.add_argument("--gif-window-m", type=float, default=60.0)
+    parser.add_argument(
+        "--spawn-velocity-ms",
+        type=float,
+        default=None,
+        help="Override source_row spawn_velocity_ms for this render "
+             "(e.g. 3.61 for priority v2 probes)",
+    )
     args = parser.parse_args()
 
     gif_name = args.gif_name
@@ -179,7 +192,12 @@ def main() -> None:
     if args.limit is not None:
         replays = replays[: args.limit]
 
-    print(f"Writing GIFs as {gif_name!r} under {args.root}")
+    override = (
+        f" spawn_v={args.spawn_velocity_ms:.2f}m/s"
+        if args.spawn_velocity_ms is not None
+        else ""
+    )
+    print(f"Writing GIFs as {gif_name!r} under {args.root}{override}")
     stats: dict[str, int] = {}
     for i, replay_path in enumerate(replays, start=1):
         rel = replay_path.relative_to(args.root.resolve())
@@ -189,6 +207,7 @@ def main() -> None:
                 force=args.force,
                 gif_window_m=args.gif_window_m,
                 gif_name=gif_name,
+                spawn_velocity_ms=args.spawn_velocity_ms,
             )
         except Exception:
             status = "error"

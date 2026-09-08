@@ -693,6 +693,7 @@ def run_one_episode(
                         step_in_any_zone = True
                         cls = type(_s).__name__
                         in_zone_by_class_step[cls] = in_zone_by_class_step.get(cls, 0) + 1
+                yield_zone_this_step = False
                 for rule in getattr(sign_mgr, "rules", []):
                     if type(rule).__name__ != "PedestrianYieldRule":
                         continue
@@ -705,10 +706,24 @@ def run_one_episode(
                         or ped_status.get("in_crosswalk")
                         or ped_status.get("in_no_stop_zone")
                     ):
-                        step_in_any_zone = True
-                        in_zone_by_class_step["PedestrianYieldRule"] = (
-                            in_zone_by_class_step.get("PedestrianYieldRule", 0) + 1
-                        )
+                        yield_zone_this_step = True
+                # 5.19: plate approach zone counts toward the yield-rule target
+                # when the geometric zebra verifier did not fire this step.
+                if not yield_zone_this_step and any(
+                    type(rule).__name__ == "PedestrianYieldRule"
+                    for rule in (getattr(sign_mgr, "rules", []) or [])
+                ):
+                    for _s in sign_mgr.signs:
+                        if type(_s).__name__ == "PedestrianCrossingSign" and _ego_in_sign_zone(
+                            _s, vehicle
+                        ):
+                            yield_zone_this_step = True
+                            break
+                if yield_zone_this_step:
+                    step_in_any_zone = True
+                    in_zone_by_class_step["PedestrianYieldRule"] = (
+                        in_zone_by_class_step.get("PedestrianYieldRule", 0) + 1
+                    )
                 if step_in_any_zone:
                     in_zone_total_steps += 1
 
@@ -866,10 +881,22 @@ def run_one_episode(
                         dest_cap_m = float(stored)
                     except (TypeError, ValueError):
                         pass
+            # No-split crosswalk (and detour/speed) finish via along-cap on the
+            # same edge as spawn — without allow_same_lane the checker always
+            # returns False for degenerate same-lane checkpoint routes.
+            same_edge_crosswalk = (
+                _row_is_crosswalk(row)
+                and str(row.get("road_id") or "")
+                == str(row.get("destination_edge_id") or "")
+            )
             capped_arrive = capped_arrive or _ego_reached_capped_destination(
                 vehicle,
                 max_along_m=dest_cap_m,
-                allow_same_lane=_row_is_detour(row) or _row_is_speed(row),
+                allow_same_lane=(
+                    _row_is_detour(row)
+                    or _row_is_speed(row)
+                    or same_edge_crosswalk
+                ),
             )
             natural_done = bool(terminated or truncated)
 

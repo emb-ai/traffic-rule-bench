@@ -1,4 +1,5 @@
 # @package _global_
+# Roundabout (4.3) is scored with priority signs; same ego-spawn probe as junction.
 
 augmentation:
   layout: true
@@ -6,3 +7,6 @@ augmentation:
 
 auxiliary:
   enabled: true
+
+simulation:
+  spawn_velocity_levels_ms: [3.61]

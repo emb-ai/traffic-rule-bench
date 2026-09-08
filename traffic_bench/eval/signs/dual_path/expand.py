@@ -12,7 +12,9 @@ from traffic_bench.eval.engine.expand.manifest_config import (
 )
 from traffic_bench.eval.engine.expand.manifest_expansion import (
     mark_nominal_row,
+    non_nominal_budget,
     shuffle_cap,
+    shuffled_copy,
 )
 from traffic_bench.eval.engine.expand.world_axes import (
     DEFAULT_HORIZON_STEPS,
@@ -209,6 +211,7 @@ def expand_dual_path_scene_entries(
         )
         scene_entries.append(mark_nominal_row(nominal))
 
+    combos = []
     for dual_i, dual, lane_num in geometries:
         spawn_scenario = dual_path_to_spawn_scenario(dual, ego_lane_num=lane_num)
         net_full = scene_dir / str(meta.get("net_file") or "map.net.xml")
@@ -234,41 +237,58 @@ def expand_dual_path_scene_entries(
             sim=sim,
             task_conditioned_spawn=False,
         ):
-            suffix = cell.scene_suffix(route_augment=route_augment)
-            seed = stable_hash(
-                scene_name,
-                spawn_scenario.scenario_id,
-                lane_num,
-                *cell.seed_tags(),
-            )
-            profile = sample_profile_for_cell(cell, seed=int(seed), sim=sim)
-            entry = build_entry(
-                scene_dir=scene_dir,
-                scenes_root=scenes_root,
-                meta=meta,
-                layout_variant=dual_i,
-                var_idx=cell.npc_var,
-                seed=seed,
-                sim=sim,
-                spawn_scenario=spawn_scenario,
-                dual_path=dual,
-                spawn_lanes_cache=list(spawn_lanes),
-                junction_layout_cache=junction_layout,
-                npc_profile=profile,
-                max_path_length_m=float(cell.route_length_m),
-                route_length_augment=route_augment,
-                spawn_velocity_ms=cell.spawn_velocity_ms,
-                traffic_density=float(cell.density.traffic_density),
-                scene_id_suffix=suffix,
-            )
-            entry = stamp_world_axis_fields(entry, cell)
-            key = dual_path_geometry_key(entry)
-            if key in seen:
-                continue
-            seen.add(key)
-            scene_entries.append(entry)
+            combos.append((dual_i, dual, lane_num, spawn_scenario, cell, bool(route_augment)))
 
     cap = expansion.max_scenarios
+    budget = non_nominal_budget(cap, len(scene_entries))
+    ordered = shuffled_copy(
+        combos,
+        seed_key=(
+            scene_name,
+            f"{spec.family}_world_cap",
+            int(cap) if cap is not None else 0,
+        ),
+    )
+    pre_pool = len(ordered)
+    built = 0
+    for dual_i, dual, lane_num, spawn_scenario, cell, route_augment in ordered:
+        if budget is not None and built >= budget:
+            break
+        suffix = cell.scene_suffix(route_augment=route_augment)
+        seed = stable_hash(
+            scene_name,
+            spawn_scenario.scenario_id,
+            lane_num,
+            *cell.seed_tags(),
+        )
+        profile = sample_profile_for_cell(cell, seed=int(seed), sim=sim)
+        entry = build_entry(
+            scene_dir=scene_dir,
+            scenes_root=scenes_root,
+            meta=meta,
+            layout_variant=dual_i,
+            var_idx=cell.npc_var,
+            seed=seed,
+            sim=sim,
+            spawn_scenario=spawn_scenario,
+            dual_path=dual,
+            spawn_lanes_cache=list(spawn_lanes),
+            junction_layout_cache=junction_layout,
+            npc_profile=profile,
+            max_path_length_m=float(cell.route_length_m),
+            route_length_augment=route_augment,
+            spawn_velocity_ms=cell.spawn_velocity_ms,
+            traffic_density=float(cell.density.traffic_density),
+            scene_id_suffix=suffix,
+        )
+        entry = stamp_world_axis_fields(entry, cell)
+        key = dual_path_geometry_key(entry)
+        if key in seen:
+            continue
+        seen.add(key)
+        scene_entries.append(entry)
+        built += 1
+
     pre_cap = len(scene_entries)
     scene_entries = shuffle_cap(
         scene_entries,
@@ -279,7 +299,13 @@ def expand_dual_path_scene_entries(
             int(cap) if cap is not None else 0,
         ),
     )
-    if cap is not None and pre_cap > cap:
+    if cap is not None and pre_pool > (budget if budget is not None else pre_pool):
+        print(
+            f"  Early-sampled {built} of {pre_pool} combos "
+            f"(cap={cap}; nominal preserved; "
+            f"{n_lane_combos} dual×lane geometries)"
+        )
+    elif cap is not None and pre_cap > cap:
         print(
             f"  Retained {len(scene_entries)} of {pre_cap} world-grid variants "
             f"(shuffled, cap={cap}; nominal preserved; "
@@ -288,6 +314,8 @@ def expand_dual_path_scene_entries(
     else:
         print(f"  Manifest entries for {scene_name}: {len(scene_entries)}")
     return scene_entries
+
+
 
 
 def build_dual_path_manifest_entry(

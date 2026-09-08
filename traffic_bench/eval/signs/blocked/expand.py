@@ -18,7 +18,9 @@ from traffic_bench.eval.engine.expand.manifest_config import (
 )
 from traffic_bench.eval.engine.expand.manifest_expansion import (
     mark_nominal_row,
+    non_nominal_budget,
     shuffle_cap,
+    shuffled_copy,
 )
 from traffic_bench.eval.engine.expand.world_axes import (
     DEFAULT_HORIZON_STEPS,
@@ -175,6 +177,7 @@ def expand_blocked_road_scene_entries(
         )
         scene_entries.append(mark_nominal_row(nominal))
 
+    combos = []
     for layout_i, scenario in layout_kept:
         scenario_id = scenario.scenario_id if scenario is not None else ""
         available_route_m = None
@@ -194,42 +197,61 @@ def expand_blocked_road_scene_entries(
             sim=sim,
             task_conditioned_spawn=False,
         ):
-            suffix = cell.scene_suffix(route_augment=route_augment)
-            seed = stable_hash(scene_name, scenario_id, *cell.seed_tags())
-            profile = sample_profile_for_cell(cell, seed=int(seed), sim=sim)
-            entry = build_entry(
-                scene_dir=scene_dir,
-                scenes_root=scenes_root,
-                meta=meta,
-                layout_variant=layout_i,
-                var_idx=cell.npc_var,
-                seed=seed,
-                sim=sim,
-                spawn_scenario=scenario,
-                spawn_lanes_cache=list(spawn_lanes),
-                junction_layout_cache=junction_layout,
-                npc_profile=profile,
-                max_path_length_m=float(cell.route_length_m),
-                route_length_augment=route_augment,
-                spawn_velocity_ms=cell.spawn_velocity_ms,
-                traffic_density=float(cell.density.traffic_density),
-                scene_id_suffix=suffix,
-            )
-            entry = stamp_world_axis_fields(entry, cell)
-            key = blocked_road_geometry_key(entry)
-            if key in seen:
-                continue
-            seen.add(key)
-            scene_entries.append(entry)
+            combos.append((layout_i, scenario, cell, bool(route_augment)))
 
     cap = expansion.max_scenarios
+    budget = non_nominal_budget(cap, len(scene_entries))
+    ordered = shuffled_copy(
+        combos,
+        seed_key=(scene_name, "blocked_road_world_cap", int(cap) if cap is not None else 0),
+    )
+    pre_pool = len(ordered)
+    built = 0
+    for layout_i, scenario, cell, route_augment in ordered:
+        if budget is not None and built >= budget:
+            break
+        scenario_id = scenario.scenario_id if scenario is not None else ""
+        suffix = cell.scene_suffix(route_augment=route_augment)
+        seed = stable_hash(scene_name, scenario_id, *cell.seed_tags())
+        profile = sample_profile_for_cell(cell, seed=int(seed), sim=sim)
+        entry = build_entry(
+            scene_dir=scene_dir,
+            scenes_root=scenes_root,
+            meta=meta,
+            layout_variant=layout_i,
+            var_idx=cell.npc_var,
+            seed=seed,
+            sim=sim,
+            spawn_scenario=scenario,
+            spawn_lanes_cache=list(spawn_lanes),
+            junction_layout_cache=junction_layout,
+            npc_profile=profile,
+            max_path_length_m=float(cell.route_length_m),
+            route_length_augment=route_augment,
+            spawn_velocity_ms=cell.spawn_velocity_ms,
+            traffic_density=float(cell.density.traffic_density),
+            scene_id_suffix=suffix,
+        )
+        entry = stamp_world_axis_fields(entry, cell)
+        key = blocked_road_geometry_key(entry)
+        if key in seen:
+            continue
+        seen.add(key)
+        scene_entries.append(entry)
+        built += 1
+
     pre_cap = len(scene_entries)
     scene_entries = shuffle_cap(
         scene_entries,
         cap,
         seed_key=(scene_name, "blocked_road_world_cap", int(cap) if cap is not None else 0),
     )
-    if cap is not None and pre_cap > cap:
+    if cap is not None and pre_pool > (budget if budget is not None else pre_pool):
+        print(
+            f"  Early-sampled {built} of {pre_pool} combos "
+            f"(cap={cap}; nominal preserved; {len(layout_kept)} layouts)"
+        )
+    elif cap is not None and pre_cap > cap:
         print(
             f"  Retained {len(scene_entries)} of {pre_cap} world-grid variants "
             f"(shuffled, cap={cap}; nominal preserved; {len(layout_kept)} layouts)"
@@ -240,6 +262,8 @@ def expand_blocked_road_scene_entries(
             f"({len(layout_kept)} layouts × world grid)"
         )
     return scene_entries
+
+
 
 
 def build_blocked_road_manifest_entry(

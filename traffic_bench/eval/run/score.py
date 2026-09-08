@@ -66,6 +66,11 @@ def _safe_float(v, default: float = 0.0) -> float:
 
 
 def _route_completion_percent(info: dict, reached_dest: bool) -> float:
+    # Capped same-edge finishes (crosswalk/detour/speed) set arrive via along-cap
+    # while MetaDrive's route_completion is still vs the full final lane — treat
+    # our arrive flag as complete.
+    if reached_dest:
+        return 100.0
     candidates = (
         "route_completion",
         "route_completion_rate",
@@ -78,7 +83,7 @@ def _route_completion_percent(info: dict, reached_dest: bool) -> float:
             if v <= 1.0:
                 v *= 100.0
             return max(0.0, min(100.0, v))
-    return 100.0 if reached_dest else 0.0
+    return 0.0
 
 
 def _route_length_m(info: dict) -> float | None:

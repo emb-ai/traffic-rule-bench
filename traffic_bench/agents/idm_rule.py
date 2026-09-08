@@ -304,10 +304,16 @@ class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
         desired speed here makes IDM accelerate to the floor through its own
         car-following, so the floor never fights the car ahead. A floor never
         exceeds the curvature-safe speed.
+
+        Full-stop caps (yield / stop, ``_speed_cap < 1``) must *not* push
+        ``target_speed`` to 0 here: MetaDrive's IDM does
+        ``speed / not_zero(target_speed, 0)``, and ``not_zero(0, 0)`` is still
+        zero → ZeroDivisionError. Hard stops stay in
+        ``_apply_speed_constraints`` (``BRAKE_ACTION``) after ``act()``.
         """
-        if self._speed_cap is not None:
-            self.target_speed = (0.0 if self._speed_cap < 1.0
-                                 else min(self.target_speed, self._speed_cap))
+        # Positive caps only (plates). Zero-cap full stops: see docstring.
+        if self._speed_cap is not None and self._speed_cap >= 1.0:
+            self.target_speed = min(self.target_speed, self._speed_cap)
         if self._speed_floor is not None:
             # The cruise curvature cap uses CURVATURE_MU_SUMO = 0.03, which on
             # a gentle OSM arc allows ~36 km/h -- below every 4.6 plate. Traced:

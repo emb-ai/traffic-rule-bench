@@ -210,7 +210,21 @@ def render_scene_first_frame(
         spawn_along = row.get("spawn_along_m")
         spawn_before = float(row.get("spawn_distance_before_end") or 0.0)
         if spawn_along is not None:
-            _reposition_ego_at_along(base_env, float(spawn_along))
+            # Match eval episode: SUMO-edge marks → MetaDrive lane along.
+            from traffic_bench.eval.engine.map.sumo_metadrive_along import (
+                remap_sumo_along_to_metadrive,
+                row_sumo_edge_length_m,
+            )
+
+            lane = getattr(base_env.vehicle, "lane", None)
+            along_m = float(spawn_along)
+            if lane is not None:
+                along_m = remap_sumo_along_to_metadrive(
+                    along_m,
+                    sumo_edge_length_m=row_sumo_edge_length_m(row),
+                    metadrive_lane_length_m=float(lane.length),
+                )
+            _reposition_ego_at_along(base_env, along_m)
         elif spawn_before > 0:
             _reposition_ego_before_lane_end(base_env, spawn_before)
         _apply_manifest_ego_destination(base_env, row)

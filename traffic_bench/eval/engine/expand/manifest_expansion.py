@@ -2,13 +2,18 @@
 
 Junction / roundabout cartesian product lives in
 ``traffic_bench.eval.signs.junction.expand``.
+
+``max_scenarios`` is applied *before* expensive ``build_entry`` calls: expanders
+collect cheap combo descriptors, ``shuffled_copy`` them, then build until the
+non-nominal budget is filled (invalid/dup rows refill from the remaining pool).
+``shuffle_cap`` still runs on the built rows to keep ``is_nominal`` first.
 """
 
 from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 
 @dataclass(frozen=True)
@@ -93,6 +98,51 @@ def shuffle_cap(
     rng = random.Random(hash(tuple(seed_key)) & 0xFFFFFFFF)
     rng.shuffle(out)
     return list(preserved) + out[:remaining]
+
+
+def shuffled_copy(items: Sequence, *, seed_key: tuple) -> List:
+    """Deterministic shuffle of ``items`` (does not mutate the input)."""
+    out = list(items)
+    rng = random.Random(hash(tuple(seed_key)) & 0xFFFFFFFF)
+    rng.shuffle(out)
+    return out
+
+
+def non_nominal_budget(cap: Optional[int], n_preserved: int) -> Optional[int]:
+    """How many non-preserved rows may still be built under ``cap``."""
+    if cap is None:
+        return None
+    try:
+        cap_i = int(cap)
+    except (TypeError, ValueError):
+        return None
+    if cap_i < 0:
+        return None
+    return max(0, cap_i - max(0, int(n_preserved)))
+
+
+def sample_cap(
+    items: Sequence,
+    cap: Optional[int],
+    *,
+    seed_key: tuple,
+) -> List:
+    """Pre-build sample: shuffle then keep at most ``cap`` combo descriptors.
+
+    Prefer ``shuffled_copy`` + build-until-budget when invalid/dup filtering
+    can reject rows (so the pool can refill). Use this when every combo is
+    expected to materialize.
+    """
+    items_list = list(items)
+    if cap is None:
+        return items_list
+    try:
+        cap_i = int(cap)
+    except (TypeError, ValueError):
+        return items_list
+    if cap_i < 0 or len(items_list) <= cap_i:
+        return items_list
+    return shuffled_copy(items_list, seed_key=seed_key)[:cap_i]
 
 
 def mark_nominal_row(row: Dict, *, var_idx: int = 0) -> Dict:
