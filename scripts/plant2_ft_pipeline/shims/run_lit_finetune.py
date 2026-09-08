@@ -23,9 +23,12 @@ cwd = os.getcwd()
 if cwd not in sys.path:
     sys.path.insert(0, cwd)
 
-lit = os.path.join(cwd, "lit_finetune.py")
-if not os.path.isfile(lit):
-    raise FileNotFoundError(f"expected lit_finetune.py in cwd={cwd!r}")
+# Guarded so that a DataLoader worker (spawn) or the forkserver, which import
+# this file as __mp_main__, do not start a second training.
+if __name__ == "__main__":
+    lit = os.path.join(cwd, "lit_finetune.py")
+    if not os.path.isfile(lit):
+        raise FileNotFoundError(f"expected lit_finetune.py in cwd={cwd!r}")
 
-sys.argv[0] = lit
-runpy.run_path(lit, run_name="__main__")
+    sys.argv[0] = lit
+    runpy.run_path(lit, run_name="__main__")

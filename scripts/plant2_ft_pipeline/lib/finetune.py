@@ -57,7 +57,13 @@ class FinetuneConfig:
         self.split = Path(self.split)
         self.ds = Path(self.ds or self.split / "train")
         self.ds_val = Path(self.ds_val or self.split / "val")
-        self.ds_local = Path(self.ds_local or Path(f"/tmp/plant2_ds_cache_{self.seed}"))
+        # DS_LOCAL=none disables the diskcache: on a network share its sqlite
+        # index serialises the loader workers on file locks, and every sample
+        # is then read from the dump on each epoch instead.
+        if self.ds_local is not None and str(self.ds_local).strip().lower() in ("", "none", "0"):
+            self.ds_local = None
+        else:
+            self.ds_local = Path(self.ds_local or Path(f"/tmp/plant2_ds_cache_{self.seed}"))
         self.resume_ckpt = Path(self.resume_ckpt or default_ckpt0())
         self.python = Path(self.python or resolve_python())
         self.shim = Path(self.shim or shim_path())
@@ -86,7 +92,8 @@ class FinetuneConfig:
 
 def build_finetune_cmd(cfg: FinetuneConfig) -> list[str]:
     pt = plan_t()
-    cfg.ds_local.mkdir(parents=True, exist_ok=True)
+    if cfg.ds_local is not None:
+        cfg.ds_local.mkdir(parents=True, exist_ok=True)
     (pt / "log").mkdir(parents=True, exist_ok=True)
     (pt / "checkpoints_ft").mkdir(parents=True, exist_ok=True)
 
@@ -95,7 +102,7 @@ def build_finetune_cmd(cfg: FinetuneConfig) -> list[str]:
     os.environ["CHECKPOINT_ADDON"] = cfg.checkpoint_addon
     os.environ["DS"] = str(cfg.ds)
     os.environ["DS_VAL"] = str(cfg.ds_val)
-    os.environ["DS_LOCAL"] = str(cfg.ds_local)
+    os.environ["DS_LOCAL"] = "" if cfg.ds_local is None else str(cfg.ds_local)
     os.environ["CACHE_SIZE_GB"] = str(cfg.cache_size_gb)
     os.environ["CKPT_EVERY_N_EPOCHS"] = str(cfg.ckpt_every_n_epochs)
     os.environ["WANDB_MODE"] = cfg.wandb_mode
@@ -149,7 +156,7 @@ def run_finetune(cfg: FinetuneConfig, *, cwd: Path | None = None, log_path: Path
     print("PlanT2 fine-tune")
     print(f"  SPLIT    = {cfg.split}")
     print(f"  CKPT     = {cfg.resume_ckpt}")
-    print(f"  DS_LOCAL = {cfg.ds_local}")
+    print(f"  DS_LOCAL = {cfg.ds_local or 'none (no diskcache)'}")
     print(f"  GPU      = {cfg.cuda_device} (gpus={cfg.gpus}, {cfg.ddp_strategy})")
     print(f"  LR       = {cfg.learning_rate}")
     print(f"  SCHED    = {cfg.lr_scheduler} (warmup_ratio={cfg.warmup_ratio})")
