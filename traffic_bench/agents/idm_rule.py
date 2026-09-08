@@ -44,6 +44,13 @@ from metadrive.utils.math import wrap_to_pi
 from traffic_bench.agents.compliance.mixin import SignComplianceMixin
 
 
+# "Stop" as an IDM desired speed. MetaDrive's IDMPolicy.acceleration divides by
+# not_zero(target_speed, 0), which returns -0.0 for an exact 0.0 and raised
+# ZeroDivisionError whenever a cap asked for a full stop; a tiny positive
+# target gives the same full braking (1 - (v / 0.1)^delta) without the crash.
+STOP_TARGET_KMH = 0.1
+
+
 class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
     """IDM-based expert policy with comprehensive traffic-sign compliance."""
 
@@ -321,7 +328,7 @@ class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
         """
         front_obj, dist_to_front = self._drop_reserved_leader(front_obj, dist_to_front)
         if self._speed_cap is not None:
-            self.target_speed = (0.0 if self._speed_cap < 1.0
+            self.target_speed = (STOP_TARGET_KMH if self._speed_cap < 1.0
                                  else min(self.target_speed, self._speed_cap))
         if self._speed_floor is not None:
             # The cruise curvature cap uses CURVATURE_MU_SUMO = 0.03, which on
@@ -404,7 +411,7 @@ class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
         # Sync IDM target_speed with sign constraints
         if self._speed_cap is not None:
             if self._speed_cap < 1.0:
-                self.target_speed = 0.0
+                self.target_speed = STOP_TARGET_KMH
             else:
                 self.target_speed = min(self.target_speed, self._speed_cap)
 
