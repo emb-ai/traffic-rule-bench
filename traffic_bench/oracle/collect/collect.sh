@@ -65,6 +65,209 @@ print(f"SIGN_TYPE={profile.sign_type}")
 PY
 }
 
+_data_subdir_for_sign() {
+    "$PYTHON_BIN" - "$1" <<'PY'
+import sys
+from traffic_bench.eval.sign_registry import resolve_sign_token
+print(resolve_sign_token(sys.argv[1]).data_subdir)
+PY
+}
+
+# Exit 0 if stored collection is a continuation of current_manifest.
+# Rule: every scene_uid in stored ⊆ current; optional by_scene evidence
+# under out_base must also ⊆ current (guards a reused folder from another run).
+_manifests_compatible() {
+    local stored="$1" current="$2" out_base="${3:-}"
+    "$PYTHON_BIN" - "$stored" "$current" "$out_base" <<'PY'
+import json, sys
+from pathlib import Path
+
+def scene_uid(row: dict):
+    if row.get("scene_uid"):
+        return str(row["scene_uid"])
+    sid = row.get("scene_id")
+    if sid is None:
+        return None
+    # Match traffic_bench.oracle.collect.run._scene_uid
+    seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
+    return (
+        f"{sid}_lane{int(row.get('spawn_lane_num', 0) or 0)}"
+        f"_seed{seed}_v{int(row.get('var_idx', 0) or 0)}"
+    )
+
+def uids(path: Path) -> set:
+    out = set()
+    if not path.is_file():
+        return out
+    for ln in path.read_text(encoding="utf-8").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            row = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        if row.get("valid") is False:
+            continue
+        uid = scene_uid(row)
+        if uid:
+            out.add(uid)
+    return out
+
+def log(msg: str) -> None:
+    print(msg, file=sys.stderr, flush=True)
+
+stored_p, curr_p, out_base = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+stored = uids(stored_p)
+current = uids(curr_p)
+if not current:
+    log("[final] FAIL: current manifest has no valid rows")
+    sys.exit(1)
+if stored:
+    extra = stored - current
+    if extra:
+        sample = ", ".join(sorted(extra)[:3])
+        log(
+            f"[final] FAIL: {len(extra)} UID(s) in stored manifest not in current "
+            f"(e.g. {sample})"
+        )
+        sys.exit(1)
+
+evidence = set()
+if out_base:
+    root = Path(out_base)
+    disk = set()
+    for p in root.glob("*/by_scene/*"):
+        if p.is_dir():
+            disk.add(p.name)
+    stray = disk - current
+    if stray:
+        sample = ", ".join(sorted(stray)[:3])
+        log(
+            f"[final] FAIL: {len(stray)} by_scene UID(s) not in current manifest "
+            f"(e.g. {sample})"
+        )
+        sys.exit(1)
+    evidence = disk & current
+    if not stored and disk and not evidence:
+        log("[final] FAIL: on-disk scenes do not overlap current manifest")
+        sys.exit(1)
+
+overlap = stored & current if stored else evidence
+log(
+    f"[final] OK: stored={len(stored)} current={len(current)} "
+    f"overlap={len(overlap)} on_disk={len(evidence)}"
+)
+sys.exit(0)
+PY
+}
+
+# Resolve MANIFEST path for a sign (echo absolute path). Uses env SPLIT / SMOKE.
+_resolve_manifest_for_sign() {
+    local sid="$1" data_subdir="$2" user_manifest="${3:-}"
+    local data_runs="$REPO_ROOT/data/runs/$data_subdir"
+    local m="" split_use="${SPLIT:-train}"
+    if [ "${SMOKE:-0}" = "1" ]; then
+        split_use=debug
+    fi
+    if [ -n "$user_manifest" ]; then
+        m="$user_manifest"
+        m="${m//\{sign\}/$sid}"
+        m="${m//\{id\}/$sid}"
+        if [[ "$user_manifest" != *"{sign}"* ]] && [[ "$user_manifest" != *"{id}"* ]]; then
+            # Shared path without placeholders — only valid for single-sign.
+            m="$user_manifest"
+        fi
+    else
+        if [ "$split_use" = "debug" ]; then
+            m="$data_runs/debug"
+        else
+            m="$data_runs/$split_use/real_manifest.jsonl"
+        fi
+    fi
+    if [[ "$m" != /* ]]; then
+        if [ -e "$REPO_ROOT/$m" ]; then
+            m="$REPO_ROOT/$m"
+        elif [ -e "$m" ]; then
+            m="$(cd -- "$(dirname -- "$m")" && pwd)/$(basename -- "$m")"
+        fi
+    fi
+    if [ -d "$m" ]; then
+        if [ -s "$m/real_manifest.jsonl" ]; then
+            m="$m/real_manifest.jsonl"
+        elif [ -e "$m/latest/real_manifest.jsonl" ]; then
+            m="$(cd -- "$m/latest" && pwd)/real_manifest.jsonl"
+        else
+            local _last
+            _last=$(ls -1d "$m"/[0-9][0-9][0-9][0-9]-* 2>/dev/null | sort | tail -1 || true)
+            if [ -n "$_last" ] && [ -s "$_last/real_manifest.jsonl" ]; then
+                m="$_last/real_manifest.jsonl"
+            else
+                echo "[FAIL] MANIFEST dir has no real_manifest.jsonl: $m" >&2
+                return 1
+            fi
+        fi
+    fi
+    if [ ! -s "$m" ]; then
+        echo "[FAIL] MANIFEST missing/empty: $m" >&2
+        return 1
+    fi
+    echo "$m"
+}
+
+# Decide OUT_BASE for a sign. Echoes: OUT_BASE|RESUME(0|1)
+# Prefer data/trajectories/<sign>/final when present and compatible.
+_resolve_out_base_for_sign() {
+    local sid="$1" data_subdir="$2" manifest="$3" user_out="${4:-}" ts="$5"
+    local data_traj="$REPO_ROOT/data/trajectories/$data_subdir"
+    local out resume=0
+
+    if [ -n "$user_out" ]; then
+        out="$user_out"
+        if [[ "$out" != /* ]]; then
+            out="$REPO_ROOT/$out"
+        fi
+        # Multi-sign caller may already append /<sid>; single shared root gets /sid.
+        if [ -n "${_MULTI_SIGN:-}" ] && [[ "$out" != *"/$sid" ]] && [[ "$out" != *"/$sid/"* ]]; then
+            # If user_out is the multi root, caller passes already-joined path.
+            :
+        fi
+        echo "${out}|${resume}"
+        return 0
+    fi
+
+    local final="$data_traj/final"
+    if [ "${USE_FINAL:-1}" = "1" ] && [ -d "$final" ]; then
+        local stored="$final/_manifests/real_manifest.jsonl"
+        if [ -s "$stored" ]; then
+            if ! _manifests_compatible "$stored" "$manifest" "$final"; then
+                echo "[FAIL] SIGN=$sid refusing final/ — manifest mismatch" >&2
+                echo "       final=$final" >&2
+                echo "       current=$manifest" >&2
+                return 1
+            fi
+            echo "[final] SIGN=$sid → $final (RESUME=1)" >&2
+            echo "${final}|1"
+            return 0
+        fi
+        # Non-empty final without _manifests: still require disk ⊆ current.
+        if [ -n "$(ls -A "$final" 2>/dev/null || true)" ]; then
+            if ! _manifests_compatible "/dev/null" "$manifest" "$final"; then
+                echo "[FAIL] SIGN=$sid final/ has data but no _manifests/ and disk UIDs mismatch" >&2
+                return 1
+            fi
+            echo "[final] SIGN=$sid using existing final/ without stored manifest (RESUME=1)" >&2
+            echo "${final}|1"
+            return 0
+        fi
+        echo "[final] SIGN=$sid empty final/ → fresh collection there" >&2
+        echo "${final}|0"
+        return 0
+    fi
+
+    echo "${data_traj}/trajectories_${ts}|0"
+}
+
 if [ "$_COLLECT_INNER" != "1" ]; then
     if ! _SIGN_LIST="$(_list_sign_ids "$SIGN")"; then
         echo "[FAIL] unknown SIGN='$SIGN'"
@@ -79,33 +282,221 @@ if [ "$_COLLECT_INNER" != "1" ]; then
         TS="${TS:-$(date +%Y%m%d_%H%M%S)}"
         _user_out="${OUT_BASE-}"
         _user_manifest="${MANIFEST-}"
-        fail=0
-        echo "=== collect ${_SIGN_IDS[*]}  ts=$TS ==="
-        for sid in "${_SIGN_IDS[@]}"; do
-            echo
-            echo "######## SIGN=$sid ########"
-            if ! (
-                export _COLLECT_INNER=1 SIGN="$sid" TS="$TS"
-                if [ -n "${_user_out}" ]; then
-                    export OUT_BASE="${_user_out}/${sid}"
-                else
-                    unset OUT_BASE
-                fi
-                if [ -n "${_user_manifest}" ]; then
-                    _m="$_user_manifest"
-                    _m="${_m//\{sign\}/$sid}"
-                    _m="${_m//\{id\}/$sid}"
-                    if [[ "$_user_manifest" == *"{sign}"* ]] || [[ "$_user_manifest" == *"{id}"* ]]; then
-                        export MANIFEST="$_m"
+        : "${MULTI_SIGN_PARALLEL:=1}"
+
+        # Legacy / safe mode: one sign at a time (full CPU+GPU+merge per sign).
+        if [ "$MULTI_SIGN_PARALLEL" = "0" ]; then
+            fail=0
+            echo "=== multi-sign collect (SEQUENTIAL)  signs=${#_SIGN_IDS[@]}  ts=$TS ==="
+            echo "  MULTI_SIGN_PARALLEL=0  (one sign fully finishes before the next)"
+            for sid in "${_SIGN_IDS[@]}"; do
+                echo
+                echo "######## SIGN=$sid ########"
+                if ! (
+                    export _COLLECT_INNER=1 SIGN="$sid" TS="$TS"
+                    if [ -n "${_user_out}" ]; then
+                        export OUT_BASE="${_user_out}/${sid}"
                     else
-                        unset MANIFEST
+                        unset OUT_BASE
                     fi
+                    if [ -n "${_user_manifest}" ]; then
+                        _m="$_user_manifest"
+                        _m="${_m//\{sign\}/$sid}"
+                        _m="${_m//\{id\}/$sid}"
+                        if [[ "$_user_manifest" == *"{sign}"* ]] || [[ "$_user_manifest" == *"{id}"* ]]; then
+                            export MANIFEST="$_m"
+                        else
+                            unset MANIFEST
+                        fi
+                    fi
+                    bash "$0"
+                ); then
+                    fail=$((fail + 1))
                 fi
-                bash "$0"
-            ); then
-                fail=$((fail + 1))
+            done
+            echo "=== multi-sign done. failures=$fail ==="
+            exit "$fail"
+        fi
+
+        # -----------------------------------------------------------------
+        # Multi-sign orchestrator (MULTI_SIGN_PARALLEL=1, default):
+        #   1) GPU policies for all signs in parallel (1 job ↔ 1 GPU slot)
+        #   2) CPU policies one sign at a time (N_WORKERS still shards within)
+        #   3) merge/consolidate per sign after its CPU phase
+        # -----------------------------------------------------------------
+        : "${GPU_IDS:=0}"
+        : "${JOBS_PER_GPU:=1}"
+        : "${SKIP_CPU:=0}"
+        : "${SKIP_CARL:=}"
+        : "${SKIP_PLANT2:=}"
+        : "${SMOKE:=0}"
+
+        # Smoke forces CPU-only (same as single-sign).
+        if [ "$SMOKE" = "1" ]; then
+            SKIP_CARL=1
+            SKIP_PLANT2=1
+        fi
+
+        # Resolve default skip from ckpt presence when unset (mirrors inner).
+        _carl_ckpt="${CARL_CKPT:-$REPO_ROOT/checkpoints/carl/nuplan_51479_1B/model_best.pth}"
+        _plant2_ckpt="${PLANT2_CKPT:-$REPO_ROOT/checkpoints/plant2_pretrain/epoch=029_final_3.ckpt}"
+        if [ -z "${SKIP_CARL}" ]; then
+            if [ -f "$_carl_ckpt" ]; then SKIP_CARL=0; else SKIP_CARL=1; fi
+        fi
+        if [ -z "${SKIP_PLANT2}" ]; then
+            if [ -f "$_plant2_ckpt" ] || [ -f "$REPO_ROOT/checkpoints/plant2_pretrain/epoch%3D029_final_3.ckpt" ]; then
+                SKIP_PLANT2=0
+            else
+                SKIP_PLANT2=1
             fi
+        fi
+
+        IFS=',' read -ra _GPU_LIST <<< "$GPU_IDS"
+        _max_gpu=$(( ${#_GPU_LIST[@]} * JOBS_PER_GPU ))
+        [ "$_max_gpu" -lt 1 ] && _max_gpu=1
+
+        declare -a _SIGN_OUT=()
+        declare -a _SIGN_MAN=()
+        declare -a _SIGN_RESUME=()
+        fail=0
+        echo "=== multi-sign collect  signs=${#_SIGN_IDS[@]}  ts=$TS ==="
+        echo "  GPU_IDS=$GPU_IDS  JOBS_PER_GPU=$JOBS_PER_GPU  max_parallel_gpu=$_max_gpu"
+        echo "  SKIP_CPU=$SKIP_CPU SKIP_CARL=$SKIP_CARL SKIP_PLANT2=$SKIP_PLANT2"
+        echo "  phase1=GPU(all signs parallel)  phase2=CPU(sequential per sign)"
+        echo "  tip: MULTI_SIGN_PARALLEL=0 for one-sign-at-a-time"
+
+        for sid in "${_SIGN_IDS[@]}"; do
+            _sub="$(_data_subdir_for_sign "$sid")" || { fail=$((fail + 1)); continue; }
+            if [ -n "${_user_out}" ]; then
+                _out_arg="${_user_out}/${sid}"
+            else
+                _out_arg=""
+            fi
+            if [ -n "${_user_manifest}" ]; then
+                if [[ "$_user_manifest" == *"{sign}"* ]] || [[ "$_user_manifest" == *"{id}"* ]]; then
+                    _man_arg="$_user_manifest"
+                else
+                    # No placeholders — auto per-sign manifests.
+                    _man_arg=""
+                fi
+            else
+                _man_arg=""
+            fi
+            if ! _man="$(_resolve_manifest_for_sign "$sid" "$_sub" "$_man_arg")"; then
+                fail=$((fail + 1))
+                continue
+            fi
+            if ! _resolved="$(_resolve_out_base_for_sign "$sid" "$_sub" "$_man" "$_out_arg" "$TS")"; then
+                fail=$((fail + 1))
+                continue
+            fi
+            _out="${_resolved%%|*}"
+            _res="${_resolved##*|}"
+            _SIGN_OUT+=("$_out")
+            _SIGN_MAN+=("$_man")
+            _SIGN_RESUME+=("$_res")
+            echo "  plan SIGN=$sid  OUT=$_out  RESUME=$_res  MANIFEST=$_man"
         done
+        if [ "${#_SIGN_OUT[@]}" -ne "${#_SIGN_IDS[@]}" ]; then
+            echo "[FAIL] multi-sign setup incomplete (failures=$fail)"
+            exit 1
+        fi
+
+        # ---- Phase 1: GPU jobs across signs ----
+        declare -a _GPU_JOBS=()  # sid_idx|family
+        _idx=0
+        for sid in "${_SIGN_IDS[@]}"; do
+            if [ "$SKIP_CARL" != "1" ]; then
+                _GPU_JOBS+=("${_idx}|carl")
+            fi
+            if [ "$SKIP_PLANT2" != "1" ]; then
+                _GPU_JOBS+=("${_idx}|plant2")
+            fi
+            _idx=$((_idx + 1))
+        done
+
+        _gpu_fail=0
+        if [ "${#_GPU_JOBS[@]}" -gt 0 ]; then
+            echo
+            echo "######## phase1 GPU: ${#_GPU_JOBS[@]} jobs on ${#_GPU_LIST[@]} GPU(s) ########"
+            _gi=0
+            _gpids=()
+            for _job in "${_GPU_JOBS[@]}"; do
+                while [ "$(jobs -rp | wc -l)" -ge "$_max_gpu" ]; do
+                    wait -n 2>/dev/null || true
+                done
+                _jidx="${_job%%|*}"
+                _fam="${_job##*|}"
+                _sid="${_SIGN_IDS[$_jidx]}"
+                _out="${_SIGN_OUT[$_jidx]}"
+                _man="${_SIGN_MAN[$_jidx]}"
+                _res="${_SIGN_RESUME[$_jidx]}"
+                _gpu="${_GPU_LIST[$((_gi % ${#_GPU_LIST[@]}))]}"
+                _gi=$((_gi + 1))
+                echo "[gpu$_gpu] START SIGN=$_sid family=$_fam → $_out"
+                (
+                    export _COLLECT_INNER=1 SIGN="$_sid" TS="$TS"
+                    export OUT_BASE="$_out" MANIFEST="$_man"
+                    export RESUME="$_res"
+                    export SKIP_CPU=1 SKIP_MERGE=1
+                    export GPU_IDS="$_gpu"
+                    if [ "$_fam" = "carl" ]; then
+                        export SKIP_CARL=0 SKIP_PLANT2=1
+                        export GPUS_CARL="$_gpu"
+                        unset GPUS_PLANT2 || true
+                    else
+                        export SKIP_CARL=1 SKIP_PLANT2=0
+                        export GPUS_PLANT2="$_gpu"
+                        unset GPUS_CARL || true
+                    fi
+                    bash "$0"
+                ) &
+                _gpids+=("$!")
+            done
+            for _p in ${_gpids[@]+"${_gpids[@]}"}; do
+                if ! wait "$_p"; then
+                    _gpu_fail=$((_gpu_fail + 1))
+                fi
+            done
+            echo "######## phase1 GPU done. failures=$_gpu_fail ########"
+            fail=$((fail + _gpu_fail))
+        else
+            echo "######## phase1 GPU: skipped ########"
+        fi
+
+        # ---- Phase 2: CPU (+ merge) sequential per sign ----
+        _idx=0
+        for sid in "${_SIGN_IDS[@]}"; do
+            _out="${_SIGN_OUT[$_idx]}"
+            _man="${_SIGN_MAN[$_idx]}"
+            _res="${_SIGN_RESUME[$_idx]}"
+            echo
+            echo "######## phase2 CPU SIGN=$sid → $_out ########"
+            if [ "$SKIP_CPU" = "1" ]; then
+                # Still merge GPU outputs for this sign.
+                if ! (
+                    export _COLLECT_INNER=1 SIGN="$sid" TS="$TS"
+                    export OUT_BASE="$_out" MANIFEST="$_man" RESUME="$_res"
+                    export SKIP_CPU=1 SKIP_CARL=1 SKIP_PLANT2=1 SKIP_MERGE=0
+                    bash "$0"
+                ); then
+                    fail=$((fail + 1))
+                fi
+            else
+                if ! (
+                    export _COLLECT_INNER=1 SIGN="$sid" TS="$TS"
+                    export OUT_BASE="$_out" MANIFEST="$_man" RESUME="$_res"
+                    export SKIP_CARL=1 SKIP_PLANT2=1 SKIP_MERGE=0
+                    # leave SKIP_CPU unset/0
+                    unset SKIP_CPU || true
+                    bash "$0"
+                ); then
+                    fail=$((fail + 1))
+                fi
+            fi
+            _idx=$((_idx + 1))
+        done
+
         echo "=== multi-sign done. failures=$fail ==="
         exit "$fail"
     fi
@@ -210,19 +601,21 @@ fi
 
 : "${TS:=$(date +%Y%m%d_%H%M%S)}"
 : "${NODE_ID:=$(hostname -s 2>/dev/null || echo local)}"
-# Per-sign storage: data/trajectories/<sign>/...
-: "${OUT_BASE:=$DATA_TRAJ/trajectories_$TS}"
-if [[ "$OUT_BASE" != /* ]]; then
-    OUT_BASE="$REPO_ROOT/$OUT_BASE"
+
+# Remember whether the caller fixed OUT_BASE (multi-sign / resume into final).
+_OUT_BASE_FROM_USER=0
+if [ -n "${OUT_BASE+x}" ] && [ -n "${OUT_BASE}" ]; then
+    _OUT_BASE_FROM_USER=1
+    if [[ "$OUT_BASE" != /* ]]; then
+        OUT_BASE="$REPO_ROOT/$OUT_BASE"
+    fi
 fi
-: "${LOG_DIR:=$OUT_BASE/_logs/run_node${NODE_ID}_${TS}}"
-MERGED_DIR="$OUT_BASE/_merged"
-MANIFESTS_DIR="$OUT_BASE/_manifests"
 
 # Auto-split GPUs between carl / plant2 if not set.
+: "${GPU_IDS:=0}"
 IFS=',' read -ra _GPU_LIST <<< "$GPU_IDS"
 _NUM_GPUS=${#_GPU_LIST[@]}
-if [ -z "$GPUS_CARL" ] && [ -z "$GPUS_PLANT2" ]; then
+if [ -z "${GPUS_CARL:-}" ] && [ -z "${GPUS_PLANT2:-}" ]; then
     if [ "$_NUM_GPUS" -le 1 ]; then
         GPUS_CARL="$GPU_IDS"
         GPUS_PLANT2="$GPU_IDS"
@@ -232,9 +625,9 @@ if [ -z "$GPUS_CARL" ] && [ -z "$GPUS_PLANT2" ]; then
         GPUS_CARL=$(IFS=, ; echo "${_GPU_LIST[*]:0:$_half}")
         GPUS_PLANT2=$(IFS=, ; echo "${_GPU_LIST[*]:$_half}")
     fi
-elif [ -z "$GPUS_CARL" ]; then
+elif [ -z "${GPUS_CARL:-}" ]; then
     GPUS_CARL="$GPU_IDS"
-elif [ -z "$GPUS_PLANT2" ]; then
+elif [ -z "${GPUS_PLANT2:-}" ]; then
     GPUS_PLANT2="$GPU_IDS"
 fi
 
@@ -260,9 +653,7 @@ fi
 POLICIES_CPU="${POLICIES_CPU//comprehensive_rule_expert/idm_rule}"
 POLICIES_CPU="${POLICIES_CPU//rule_compliant/ppo_rule}"
 
-mkdir -p "$OUT_BASE" "$LOG_DIR" "$MERGED_DIR" "$MANIFESTS_DIR"
-exec > >(tee -a "$LOG_DIR/progress.log") 2>&1
-
+# Resolve MANIFEST before OUT_BASE so final/ can be checked against it.
 if [ -z "$MANIFEST" ]; then
     if [ "$SPLIT" = "debug" ]; then
         MANIFEST="$DATA_RUNS/debug"
@@ -300,8 +691,37 @@ if [ ! -s "$MANIFEST" ]; then
     exit 1
 fi
 
-cp -f "$MANIFEST" "$MANIFESTS_DIR/real_manifest.jsonl"
-echo "[manifests] $MANIFESTS_DIR/real_manifest.jsonl"
+# Per-sign storage: prefer data/trajectories/<sign>/final when compatible.
+if [ "$_OUT_BASE_FROM_USER" = "0" ]; then
+    if ! _resolved="$(_resolve_out_base_for_sign "$SIGN" "$DATA_SUBDIR" "$MANIFEST" "" "$TS")"; then
+        exit 1
+    fi
+    OUT_BASE="${_resolved%%|*}"
+    _final_resume="${_resolved##*|}"
+    if [ "$_final_resume" = "1" ]; then
+        RESUME=1
+    fi
+fi
+: "${LOG_DIR:=$OUT_BASE/_logs/run_node${NODE_ID}_${TS}}"
+MERGED_DIR="$OUT_BASE/_merged"
+MANIFESTS_DIR="$OUT_BASE/_manifests"
+
+mkdir -p "$OUT_BASE" "$LOG_DIR" "$MERGED_DIR" "$MANIFESTS_DIR"
+exec > >(tee -a "$LOG_DIR/progress.log") 2>&1
+
+# When resuming final/, verify stored manifest ⊆ current, then refresh
+# _manifests to the current file (allows growing the scene set).
+if [ -s "$MANIFESTS_DIR/real_manifest.jsonl" ] && [ "$RESUME" = "1" ]; then
+    if ! _manifests_compatible "$MANIFESTS_DIR/real_manifest.jsonl" "$MANIFEST" "$OUT_BASE"; then
+        echo "[FAIL] existing _manifests/ incompatible with MANIFEST=$MANIFEST"
+        exit 1
+    fi
+    cp -f "$MANIFEST" "$MANIFESTS_DIR/real_manifest.jsonl"
+    echo "[manifests] resume OK — refreshed $MANIFESTS_DIR/real_manifest.jsonl"
+else
+    cp -f "$MANIFEST" "$MANIFESTS_DIR/real_manifest.jsonl"
+    echo "[manifests] $MANIFESTS_DIR/real_manifest.jsonl"
+fi
 
 CATALOG="$OUT_BASE/catalog.jsonl"
 
@@ -466,8 +886,12 @@ run_one() {
 # Launch one CPU policy, optionally sharded across IDM_CHUNKS processes.
 _run_cpu_policy() {
     local policy="$1"
-    # Smoke / tiny COUNT: keep single process.
-    if [ -n "$COUNT" ] || [ "${IDM_CHUNKS:-1}" -le 1 ]; then
+    # GIF / ShowBase: one process only (Panda3D is not multi-process safe).
+    # COUNT/ROWS_LIMIT still shard via N_USE when IDM_CHUNKS>1 and no GIFs.
+    if [ "${SAVE_GIFS:-0}" = "1" ] || [ "${IDM_CHUNKS:-1}" -le 1 ]; then
+        if [ "${SAVE_GIFS:-0}" = "1" ] && [ "${IDM_CHUNKS:-1}" -gt 1 ]; then
+            echo "[shard] $policy: SAVE_GIFS=1 → single process (no IDM_CHUNKS)"
+        fi
         while [ "$(jobs -rp | wc -l)" -ge "$N_WORKERS" ]; do
             sleep 1
         done
@@ -476,11 +900,11 @@ _run_cpu_policy() {
         return 0
     fi
 
-    # Shard over the rows that will actually be used. ROWS_LIMIT is already
-    # folded into N_USE above; sharding over the whole manifest collected every
-    # row while the banner still printed the limit -- measured as 240 of 240
-    # scenes under ROWS_LIMIT=192. A limit that prints but does not bind is
-    # worse than no limit at all.
+    # Shard over the rows that will actually be used. ROWS_LIMIT/COUNT are
+    # already folded into N_USE above; sharding over the whole manifest
+    # collected every row while the banner still printed the limit -- measured
+    # as 240 of 240 scenes under ROWS_LIMIT=192. A limit that prints but does
+    # not bind is worse than no limit at all.
     local n_rows
     n_rows="${N_USE:-}"
     if [ -z "$n_rows" ] || [ "$n_rows" -le 0 ]; then

@@ -67,11 +67,54 @@ SMOKE_EXTRA_SAMPLES=0 \
 ./collect.sh
 ```
 
-Several signs in one invocation (each writes its own `data/trajectories/<sign>/trajectories_<ts>/`):
+Several signs in one invocation:
 
 ```bash
 SIGN=yield,stop,direction/right SMOKE=1 ./collect.sh
 SIGN=all SMOKE=1 ./collect.sh
+```
+
+**Multi-sign scheduling** (not sequential full runs anymore):
+
+1. **GPU phase** — `carl*` / `plant2*` for all signs run in parallel across
+   `GPU_IDS` (round-robin, up to `#GPUs × JOBS_PER_GPU` concurrent jobs).
+2. **CPU phase** — `idm*` / `ppo*` run **one sign at a time** (within a sign,
+   `IDM_CHUNKS` / `N_WORKERS` still shard). Merge runs after each sign's CPU.
+
+```bash
+SIGN=yield,stop,crosswalk \
+GPU_IDS=0,1,2,3,4,5,6,7 JOBS_PER_GPU=1 \
+N_WORKERS=8 IDM_CHUNKS=8 \
+./collect.sh
+```
+
+Disable cross-sign GPU parallelism (old behavior: finish one sign
+completely, then the next):
+
+```bash
+MULTI_SIGN_PARALLEL=0 SIGN=yield,stop,crosswalk GPU_IDS=0 ./collect.sh
+```
+
+### Resuming `final/`
+
+If `data/trajectories/<sign>/final/` exists, collect uses it as `OUT_BASE` with
+`RESUME=1` instead of creating `trajectories_<ts>/`.
+
+Safety check before resume:
+
+- UIDs in `final/_manifests/real_manifest.jsonl` must be ⊆ current manifest
+  (same `scene_uid` formula as `run.py`)
+- any `*/by_scene/<uid>/` already on disk must also belong to the current manifest
+
+Mismatch → hard fail (won't write into the wrong folder). Disable with `USE_FINAL=0`.
+
+```bash
+# after a good run:
+mv data/trajectories/yield/trajectories_YYYYMMDD_HHMMSS \
+   data/trajectories/yield/final
+
+# later — continues missing episodes only:
+SIGN=yield ./collect.sh
 ```
 
 ## 2. Full collection
@@ -85,8 +128,7 @@ POLICIES_CPU="idm_rule ppo_rule" \
 POLICIES_CARL="carl_rule" POLICIES_PLANT2="plant2_rule" \
 PLANT2_ACTION_MODE=pid \
 GPU_IDS=0,1,2,3,4,5,6,7 \
-GPUS_CARL=0,1,2,3 GPUS_PLANT2=4,5,6,7 \
-JOBS_PER_GPU=2 \
+JOBS_PER_GPU=1 \
 N_WORKERS=32 IDM_CHUNKS=8 \
 EXTRA_SAMPLES_COMPREHENSIVE=4 IDM_SEED_BASE=42 \
 MAX_STEPS=1500 RESUME=1 \
@@ -99,11 +141,17 @@ Notes:
 - **CPU parallelism:** `N_WORKERS` = max concurrent CPU processes (default 8).
 IDM-family policies (`idm_rule`, …) are sharded into
 `IDM_CHUNKS` workers (default 8) via `--start/--count/--worker-id`.
+Sharding is skipped only when `SAVE_GIFS=1` (Panda3D) or `IDM_CHUNKS=1`.
 Without sharding, `POLICIES_CPU="idm_rule ppo_rule"`
 would only use **2** CPU processes even if `N_WORKERS=8`.
+- **GPU (single sign):** one process per NN policy name; `GPU_IDS` / `GPUS_CARL` /
+  `GPUS_PLANT2` pin cards. Multi-GPU **across signs** is what the multi-sign
+  orchestrator parallelizes (see above). Within one sign, extra GPUs for a single
+  `carl_rule` are still unused unless you add more policy names.
 - **Live progress:** every `PROGRESS_EVERY_S` seconds (default 30) the shell
 prints a per-policy bar (`done/target`) and the last `[i/N]` line from each
 worker log. Detail: `tail -f $OUT_BASE/_logs/.../<policy>.wXX.log`.
+  Cross-sign dashboard (ETA): `python tools/collect_progress.py --watch 30`.
 - Default ckpts (relative to repo root):
   - `CARL_CKPT=checkpoints/carl/nuplan_51479_1B/model_best.pth`
   - `PLANT2_CKPT=checkpoints/plant2_pretrain/epoch=029_final_3.ckpt`

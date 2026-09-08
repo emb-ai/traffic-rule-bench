@@ -41,6 +41,28 @@ python -m traffic_bench.eval manifest sign=yield paths.split=test    # generate 
 python -m traffic_bench.eval manifest sign=yield paths.split=train   # generate train
 ```
 
+`manifest` is **one sign per invocation**. Loop over signs:
+
+```bash
+# Hydra sign ids (same set as run_signs_parallel.sh). Nested: direction/right, …
+SIGNS=(
+  main_road secondary yield stop roundabout blocked_road no_entry
+  no_turn/right no_turn/left
+  direction/straight direction/right direction/left
+  direction/straight_right direction/straight_left direction/left_right
+  one_way/right one_way/left
+  detour/right detour/left detour/either
+  speed_limit min_speed residential_zone zone_speed_limit crosswalk
+)
+SPLIT=test   # or train
+
+for s in "${SIGNS[@]}"; do
+  echo "======== manifest $s ($SPLIT) ========"
+  python -m traffic_bench.eval manifest "sign=$s" "paths.split=$SPLIT" \
+    || echo "[FAIL] $s"
+done
+```
+
 ### 2. Run closed-loop evaluation
 
 Single policy:
