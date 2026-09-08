@@ -79,3 +79,10 @@ cropping, every map's corridor (`resolve_segment_corridor`) must be ≥ 150 m; t
 `all` command re-selects without the failed ids until the set is clean.
 `moscow_pool.json` carries the split; `reports/restricted_lane_scenes_v3/`
 the histograms and distances.
+
+The set is fixed at 100 maps per sign (80 train / 20 test) and every map keeps
+its 10 manifest rows. The eval report (`reports/restricted_lane_eval_v3/`)
+labels a map GOOD when the sign-blind baselines fail it (mean compliance over
+zone-reaching episodes <= 0.15) and the rule experts pass it (mean success
+> 0.5), but that label is **diagnostic only**: no map is dropped from the
+dataset and the GIF selection does not use it either.
