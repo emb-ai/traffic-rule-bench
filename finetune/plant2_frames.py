@@ -112,6 +112,19 @@ _PDD_ICON_RE = re.compile(r"^(\d+(?:\.\d+)*)")
 # is also symmetric, so a sign behind the ego is still the reason it is slowing.
 _SIGN_RADIUS_M = float(os.environ.get("PLANT2_SIGN_RADIUS_M", 120.0))
 
+# Training-time pose augmentation recorded into the dump. PlanTDataset's
+# aug_sample() shifts objects / route / waypoints by ``augmentation_translation``
+# and ``augmentation_rotation`` and swaps in the *_augmented BEV -- but this
+# dumper always wrote 0.0 / 0.0 and saved the augmented BEV as a copy of the
+# plain one, so ``--augment`` was a silent no-op and the model never saw itself
+# off the expert trajectory. That is textbook imitation-learning covariate
+# shift, and it shows up as a high out-of-road rate in closed loop while
+# open-loop predictions still match the expert to within centimetres.
+# 0 keeps the old (no-op) behaviour, so this changes nothing until a re-dump
+# sets them.
+_AUG_TRANSLATION_M = float(os.environ.get("PLANT2_AUG_TRANSLATION_M", "0"))
+_AUG_ROTATION_DEG = float(os.environ.get("PLANT2_AUG_ROTATION_DEG", "0"))
+
 # Codes whose plate carries a number, and the attribute holding it (km/h).
 # Restricted by code on purpose: reading any `speed_limit` attribute that
 # happened to exist would put a road speed on plates that prescribe nothing.
@@ -431,7 +444,9 @@ def plant2_route_dir(plant2_dir: Path, scene_uid: str, variant: str) -> Path:
 
 def render_bev_semantics(engine, vehicle,
                          resolution: int = _BEV_RESOLUTION,
-                         size_meters: float = _BEV_SIZE_METERS):
+                         size_meters: float = _BEV_SIZE_METERS,
+                         lateral_offset_m: float = 0.0,
+                         heading_offset_rad: float = 0.0):
     """Semantic BEV index map (H, W) uint8, or None if render fails."""
     try:
         from metadrive.policy.metadrive_obs_to_plant2 import render_bev_plant2
@@ -441,6 +456,8 @@ def render_bev_semantics(engine, vehicle,
             size_meters=size_meters,
             device="cpu",
             return_semantic_map=True,
+            lateral_offset_m=lateral_offset_m,
+            heading_offset_rad=heading_offset_rad,
         )
         if sem is None:
             return None
@@ -462,8 +479,9 @@ class Plant2FrameCollector:
     def __init__(self, row: dict, save_bev: bool = True):
         self.row = row
         self.save_bev = bool(save_bev)
-        # (boxes, measurements, optional sem_map)
-        self.step_records: list[tuple[list, dict, np.ndarray | None]] = []
+        # (boxes, measurements, optional sem_map, optional jittered sem_map)
+        self.step_records: list[
+            tuple[list, dict, np.ndarray | None, np.ndarray | None]] = []
 
     def on_step(self, base_env, row: dict | None = None) -> None:
         """Capture one frame from the current pre-action env state."""
@@ -485,6 +503,18 @@ class Plant2FrameCollector:
         v_limit_raw_kmh = float(row.get("v_target_raw_kmh", 80))
         speed_limit_mps = v_limit_raw_kmh / 3.6
 
+        # Per-frame pose jitter. Magnitudes of 0 (the default) reproduce the
+        # old behaviour exactly, including writing the plain BEV into the
+        # augmented slot.
+        aug_translation = (
+            float(np.random.uniform(-_AUG_TRANSLATION_M, _AUG_TRANSLATION_M))
+            if _AUG_TRANSLATION_M > 0 else 0.0
+        )
+        aug_rotation = (
+            float(np.random.uniform(-_AUG_ROTATION_DEG, _AUG_ROTATION_DEG))
+            if _AUG_ROTATION_DEG > 0 else 0.0
+        )
+
         measurements = {
             "ego_matrix": ego_matrix,
             "pos_global": [float(pos[0]), float(pos[1])],
@@ -495,13 +525,26 @@ class Plant2FrameCollector:
             "route": route_pts.tolist(),
             "route_original": route_pts.tolist(),
             "brake": False,
-            "augmentation_translation": 0.0,
-            "augmentation_rotation": 0.0,
+            "augmentation_translation": aug_translation,
+            "augmentation_rotation": aug_rotation,
         }
         sem_map = None
+        sem_map_aug = None
         if self.save_bev:
             sem_map = render_bev_semantics(engine, vehicle)
-        self.step_records.append((boxes, measurements, sem_map))
+            if aug_translation or aug_rotation:
+                # Second render from the jittered viewpoint. aug_sample() pairs
+                # THIS image with labels shifted by the same recorded amounts,
+                # which is what teaches the model to steer back onto the expert
+                # trajectory from an off-nominal pose.
+                sem_map_aug = render_bev_semantics(
+                    engine, vehicle,
+                    lateral_offset_m=aug_translation,
+                    heading_offset_rad=math.radians(aug_rotation),
+                )
+            else:
+                sem_map_aug = sem_map
+        self.step_records.append((boxes, measurements, sem_map, sem_map_aug))
 
     def flush(self, route_dir: Path, success: bool, reason: dict | None = None) -> int:
         """Write boxes/measurements/BEV/results under ``route_dir``. Returns frame count.
@@ -514,17 +557,19 @@ class Plant2FrameCollector:
         """
         route_dir = Path(route_dir)
         n_bev = 0
-        for idx, (bxs, meas, sem) in enumerate(self.step_records):
+        for idx, (bxs, meas, sem, sem_aug) in enumerate(self.step_records):
             fname = f"{idx:04d}.json.gz"
             write_gz_json(route_dir / "boxes" / fname, bxs)
             write_gz_json(route_dir / "measurements" / fname, meas)
             if sem is not None:
                 png = f"{idx:04d}.png"
-                # PlanTDataset with augment=True also opens the *_augmented path.
-                # Our aug offsets are 0 → same semantic map is a valid stand-in.
+                # PlanTDataset with augment=True also opens the *_augmented
+                # path. With zero jitter magnitudes sem_aug IS sem, so this is
+                # byte-identical to the previous behaviour.
                 write_bev_png(route_dir / "bev_no_car_semantics" / png, sem)
                 write_bev_png(
-                    route_dir / "bev_no_car_semantics_augmented" / png, sem)
+                    route_dir / "bev_no_car_semantics_augmented" / png,
+                    sem if sem_aug is None else sem_aug)
                 n_bev += 1
 
         score = 100.0 if success else 0.0
