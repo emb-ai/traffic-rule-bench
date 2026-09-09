@@ -74,6 +74,8 @@ class RoundaboutYieldSign(YieldSign):
         self._main_zone_locked: bool = False
         # Legacy single-piece alias (first locked lane); prefer _active_main_zones.
         self._active_main_zone: dict | None = None
+        # Foes that entered the locked main edge at least once (post-exit meet).
+        self._main_seen_foes: set = set()
 
     def _road_key(self, lane) -> str | None:
         """SUMO/MetaDrive edge id shared by parallel lanes on one road.
@@ -331,10 +333,9 @@ class RoundaboutYieldSign(YieldSign):
             "is present in the nearest main conflict edge "
             f"({self.ENTRY_CONFLICT_BEFORE_M:.0f} m upstream of the ego entry, "
             f"plus {self.ENTRY_CONFLICT_AFTER_M:.0f} m past), locked once at "
-            "episode start for all parallel lanes on that edge. Yield while an "
-            "approaching ego×aux heading-ray meet exists; the first time the "
-            "meet disappears the foe is dropped immediately (no re-arm until it "
-            "leaves the arc)."
+            "episode start for all parallel lanes on that edge. A foe is "
+            "conflicting while inside that edge, or after exit while an "
+            "approaching ego×aux heading-ray meet still exists."
         )
 
     def _entry_conflict_point(self) -> np.ndarray | None:
@@ -518,15 +519,15 @@ class RoundaboutYieldSign(YieldSign):
 
     def _forget_foe(self, foe_id) -> None:
         self._path_sticky_foes.pop(foe_id, None)
+        self._main_seen_foes.discard(foe_id)
 
     def _is_foe_blocking_ego(self, ego_vehicle, foe_vehicle) -> bool:
-        """4.3: nearest main arc only; drop on first meet disappearance.
+        """4.3 conflict: in locked main OR post-exit while ray-meet remains.
 
-        1. Only the main-arc piece nearest ego counts.
-        2. Track every non-gated foe in that piece (pink ray while tracked).
-        3. Block while an approaching ego×aux heading-ray meet exists.
-        4. The first time the meet disappears, drop the foe immediately and
-           do not re-arm until it leaves the arc (``_path_released_foes``).
+        1. Non-gated foe inside the locked nearest main edge → always blocking.
+        2. After it leaves that edge: keep blocking while an approaching
+           ego×aux heading-ray meet still exists; drop when the meet clears.
+        3. Ray meet is also stored for the yellow GIF marker.
         """
         self._ensure_active_main_zones(ego_vehicle)
 
@@ -540,24 +541,31 @@ class RoundaboutYieldSign(YieldSign):
         # Agents on the ego approach (yield zone) are not conflicting traffic.
         if self._is_vehicle_in_zone(foe_vehicle):
             self._forget_foe(foe_id)
-            self._path_released_foes.discard(foe_id)
             return False
 
         in_main = self._is_vehicle_in_main_road_conflict_zone(foe_vehicle)
-        if not in_main:
-            self._forget_foe(foe_id)
-            # Left the arc → may re-arm on a later visit.
-            self._path_released_foes.discard(foe_id)
-            return False
-
-        if foe_id in self._path_released_foes:
-            return False
-
         ego_ray = self._heading_ray(ego_vehicle, self.EGO_RAY_AHEAD_M)
         foe_ray = self._heading_ray(foe_vehicle, self.FOE_RAY_AHEAD_M)
         meet = self._ray_meet_point(
             ego_vehicle, foe_vehicle, ego_ray=ego_ray, foe_ray=foe_ray
         )
+
+        if in_main:
+            self._main_seen_foes.add(foe_id)
+            if meet is not None:
+                self._path_sticky_foes[foe_id] = {
+                    "conflict_point": np.asarray(meet, dtype=float)
+                }
+            else:
+                # Still conflicting by presence; clear stale X if rays miss.
+                self._path_sticky_foes.pop(foe_id, None)
+            return True
+
+        # Left the main edge: only continue if we saw this foe in-main and
+        # an approaching ray meet is still live.
+        if foe_id not in self._main_seen_foes:
+            self._forget_foe(foe_id)
+            return False
 
         if meet is not None:
             self._path_sticky_foes[foe_id] = {
@@ -565,17 +573,12 @@ class RoundaboutYieldSign(YieldSign):
             }
             return True
 
-        # Meet gone: if we had armed this foe, drop immediately (no hold).
-        if foe_id in self._path_sticky_foes:
-            self._forget_foe(foe_id)
-            self._path_released_foes.add(foe_id)
-            return False
-
-        # In nearest main, never armed yet: tracked for overlay, not blocking.
+        # Meet gone after exit → drop completely.
+        self._forget_foe(foe_id)
         return False
 
     def get_top_down_path_conflict_overlay(self, ego_vehicle) -> dict:
-        """GIF: yellow nearest main; pink rays for foes still tracked there."""
+        """GIF: yellow locked main; pink while in-main or post-exit meet."""
         if self._auto_detect and not self._pg_initialized:
             self._identify_main_roads()
 
@@ -591,16 +594,11 @@ class RoundaboutYieldSign(YieldSign):
                 continue
 
             foe_id = getattr(v, "id", None)
-            # Geometry first — never draw pink for agents outside the locked edge.
             in_main = bool(self._is_vehicle_in_main_road_conflict_zone(v))
-            if not in_main:
-                continue
-
             blocking = bool(self._is_foe_blocking_ego(ego_vehicle, v))
-            released = foe_id in self._path_released_foes
-            # Re-check after blocking (may have released / still must be in zone).
+            # After blocking, in_main / sticky may have updated.
             in_main = bool(self._is_vehicle_in_main_road_conflict_zone(v))
-            if not in_main or released:
+            if not blocking:
                 continue
 
             foe_ray = self._heading_ray(v, self.FOE_RAY_AHEAD_M)
@@ -615,11 +613,11 @@ class RoundaboutYieldSign(YieldSign):
                 {
                     "vehicle_id": foe_id,
                     "path": foe_ray,
-                    "conflict_point": draw_pt if blocking else None,
-                    "in_main_zone": True,
-                    "blocking": blocking,
+                    "conflict_point": draw_pt,
+                    "in_main_zone": in_main,
+                    "blocking": True,
                     "waiting_gated": False,
-                    "sticky": blocking,
+                    "sticky": sticky_pt is not None,
                 }
             )
 

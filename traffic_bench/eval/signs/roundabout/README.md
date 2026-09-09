@@ -8,19 +8,18 @@ Yield semantics (4.3 tracker):
   of each candidate; pick once, never change). All **parallel lanes** on that
   edge are included in the yellow zone.
 - Agents in the ego **yield zone** are ignored (no meet / not conflicting).
-- Track every aux/NPC inside that locked edge; magenta heading ray **only**
-  while they are geometrically on that edge (strict road-id match).
-- Aux with an approaching ego×aux ray meet → block (expert waits / violations
-  latch).
-- The **first** time the meet disappears → drop that foe immediately (no hold,
-  no post-exit tracking). No re-arm until the foe leaves the arc.
+- Conflicting traffic (expert waits / violations latch):
+  1. any non-gated aux/NPC **inside** the locked main edge, or
+  2. after it **leaves** that edge, while an approaching ego×aux heading-ray
+     meet still exists (drop when the meet clears).
+- Magenta heading ray while blocking; yellow X when a live meet exists.
 
 Debug GIFs (`gif.draw_path_conflict`, on by default for roundabout):
 - **green** ribbon = ego yield zone
 - **yellow** ribbon = locked nearest conflict edge (all parallel lanes)
 - cyan = ego heading ray (always; not a conflict track)
-- magenta = foe ray only while on the locked main edge and not yet released
-- **yellow** X = approaching ray meet while blocking
+- magenta = foe ray while conflicting (in-main or post-exit meet)
+- **yellow** X = approaching ray meet
 
 | Eval id | Sign code |
 | --- | --- |
