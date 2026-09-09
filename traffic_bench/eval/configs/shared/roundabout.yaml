@@ -12,3 +12,7 @@ auxiliary:
 
 simulation:
   spawn_velocity_levels_ms: [3.61]
+
+# green=yield zone, yellow=nearest main arc, cyan/magenta=heading rays
+gif:
+  draw_path_conflict: true

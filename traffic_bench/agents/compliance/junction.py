@@ -116,8 +116,13 @@ class JunctionCompliance:
             stop_before = float(
                 getattr(sign, "YIELD_STOP_BEFORE_END", YieldSign.YIELD_STOP_BEFORE_END)
             )
+            # Roundabout uses ENTRY_CONFLICT_*; plain yield uses MAIN_ROAD_ZONE_*.
             main_before = float(
-                getattr(sign, "MAIN_ROAD_ZONE_BEFORE", YieldSign.MAIN_ROAD_ZONE_BEFORE)
+                getattr(
+                    sign,
+                    "ENTRY_CONFLICT_BEFORE_M",
+                    getattr(sign, "MAIN_ROAD_ZONE_BEFORE", YieldSign.MAIN_ROAD_ZONE_BEFORE),
+                )
             )
             stop_long = float(
                 getattr(

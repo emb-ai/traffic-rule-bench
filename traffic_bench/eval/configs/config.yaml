@@ -77,7 +77,7 @@ gif:
   hide_signs: true
   dir: null
   run_name: null
-  window_m: 60
+  window_m: 160
   draw_path_conflict: false  # cyan/magenta routes + yellow conflict X on GIFs
   # Optional; carl/carl_rule/plant2/plant2_rule default to pretrained:
   #   carl*:      traffic-bench/checkpoints/carl/nuplan_51479_1B/model_best.pth

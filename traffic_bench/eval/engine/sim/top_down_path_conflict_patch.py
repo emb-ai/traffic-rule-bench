@@ -27,7 +27,11 @@ EGO_PATH_COLOR = (0, 220, 255)       # cyan
 FOE_BLOCKING_COLOR = (255, 64, 220)  # magenta
 FOE_OTHER_COLOR = (160, 160, 160)    # gray
 CONFLICT_COLOR = (255, 220, 0)       # yellow
-ZONE_COLOR = (255, 180, 40)          # amber
+# Zone fills (distinct so yield vs main conflict are readable on GIFs).
+YIELD_ZONE_COLOR = (40, 200, 120)    # green — ego approach / yield zone
+MAIN_ZONE_COLOR = (255, 210, 40)     # yellow — aux main conflict arc
+ZONE_COLOR = MAIN_ZONE_COLOR         # legacy alias
+ENTRY_POINT_COLOR = (255, 230, 60)   # bright yellow — entry XY
 
 
 def _xy_list(points) -> list[tuple[float, float]]:
@@ -38,6 +42,13 @@ def _xy_list(points) -> list[tuple[float, float]]:
         except Exception:
             continue
     return out
+
+
+def _zone_color(zone) -> tuple[int, int, int]:
+    kind = str(zone.get("kind") or "").lower()
+    if kind in {"yield", "ego", "approach"}:
+        return YIELD_ZONE_COLOR
+    return MAIN_ZONE_COLOR
 
 
 def _truncate_polyline_along(polyline, dest_along: float):
@@ -97,20 +108,33 @@ def _draw_conflict_marker_frame(canvas, point, color) -> None:
     pygame.draw.line(canvas, (20, 20, 20), (cx, cy - r - 3), (cx, cy + r + 3), 2)
 
 
-def _zone_polyline(zone) -> list[tuple[float, float]]:
+def _zone_long_range(zone) -> tuple[object, float, float, float] | None:
+    """Return ``(lane, s0, s1, half_width)`` clamped to the lane, or None."""
     lane = zone.get("lane")
     if lane is None:
-        return []
+        return None
     try:
         long_start = float(zone.get("long_start", 0.0))
         long_end = float(zone.get("long_end", getattr(lane, "length", 0.0)))
         length = float(getattr(lane, "length", 0.0))
+        width = float(getattr(lane, "width", 3.5) or 3.5)
     except Exception:
-        return []
+        return None
     if length <= 1e-3:
-        return []
+        return None
     s0 = max(0.0, min(long_start, length - 1e-3))
     s1 = max(s0 + 1e-3, min(long_end, length))
+    half_w = max(0.8, 0.5 * width)
+    return lane, s0, s1, half_w
+
+
+def _zone_polyline(zone) -> list[tuple[float, float]]:
+    """Centerline sample of a longitudinal lane window."""
+    info = _zone_long_range(zone)
+    if info is None:
+        return []
+    lane, s0, s1, _half_w = info
+    length = float(getattr(lane, "length", 0.0))
     pts: list[tuple[float, float]] = []
     step = 2.0
     s = s0
@@ -122,6 +146,71 @@ def _zone_polyline(zone) -> list[tuple[float, float]]:
             break
         s += step
     return pts
+
+
+def _zone_polygon(zone) -> list[tuple[float, float]]:
+    """Lane-width ribbon for a longitudinal window (left edge then right reversed)."""
+    info = _zone_long_range(zone)
+    if info is None:
+        return []
+    lane, s0, s1, half_w = info
+    length = float(getattr(lane, "length", 0.0))
+    left: list[tuple[float, float]] = []
+    right: list[tuple[float, float]] = []
+    step = 2.0
+    s = s0
+    while s <= s1 + 1e-6:
+        along = min(s, length - 1e-3)
+        try:
+            pl = lane.position(along, -half_w)
+            pr = lane.position(along, half_w)
+            left.append((float(pl[0]), float(pl[1])))
+            right.append((float(pr[0]), float(pr[1])))
+        except Exception:
+            break
+        s += step
+    if len(left) < 2 or len(right) < 2:
+        return []
+    return left + list(reversed(right))
+
+
+def _draw_polygon_frame(canvas, points, color) -> None:
+    import pygame
+
+    pts = _xy_list(points)
+    if len(pts) < 3:
+        return
+    pix_pts = [canvas.pos2pix(x, y) for x, y in pts]
+    # Prefer a translucent fill so the road stays readable; fall back to outline.
+    try:
+        flags = canvas.get_flags() if hasattr(canvas, "get_flags") else 0
+        if flags & pygame.SRCALPHA:
+            overlay = pygame.Surface(canvas.get_size(), pygame.SRCALPHA)
+            pygame.draw.polygon(overlay, (*color, 110), pix_pts)
+            canvas.blit(overlay, (0, 0))
+        else:
+            # Opaque canvas: draw a temporary SRCALPHA layer and blit with alpha.
+            try:
+                overlay = pygame.Surface(canvas.get_size(), pygame.SRCALPHA)
+                pygame.draw.polygon(overlay, (*color, 110), pix_pts)
+                canvas.blit(overlay, (0, 0))
+            except Exception:
+                pass
+    except Exception:
+        pass
+    try:
+        pygame.draw.polygon(canvas, color, pix_pts, width=3)
+    except TypeError:
+        pygame.draw.lines(canvas, color, True, pix_pts, 3)
+
+
+def _draw_zone_frame(canvas, zone) -> None:
+    color = _zone_color(zone)
+    poly = _zone_polygon(zone)
+    if poly:
+        _draw_polygon_frame(canvas, poly, color)
+    else:
+        _draw_polyline_frame(canvas, _zone_polyline(zone), color, 6)
 
 
 def _draw_path_conflict_overlays_on_frame(renderer) -> None:
@@ -149,14 +238,18 @@ def _draw_path_conflict_overlays_on_frame(renderer) -> None:
         if not overlay:
             continue
 
+        # Zones under paths so routes stay readable.
         for zone in overlay.get("zones") or []:
-            _draw_polyline_frame(canvas, _zone_polyline(zone), ZONE_COLOR, 5)
+            _draw_zone_frame(canvas, zone)
+
+        entry_pt = overlay.get("entry_point")
+        if entry_pt is not None:
+            _draw_conflict_marker_frame(canvas, entry_pt, ENTRY_POINT_COLOR)
 
         _draw_polyline_frame(canvas, overlay.get("ego_path"), EGO_PATH_COLOR, 5)
 
         for foe in overlay.get("foes") or []:
-            # Always magenta for aux routes so short ring-circulate / non-blocking
-            # paths stay visible on GIFs (gray was easy to miss).
+            # Magenta for tracked foes in the nearest main arc (thicker if blocking).
             color = FOE_BLOCKING_COLOR
             width = 5 if foe.get("blocking") else 3
             _draw_polyline_frame(canvas, foe.get("path"), color, width)

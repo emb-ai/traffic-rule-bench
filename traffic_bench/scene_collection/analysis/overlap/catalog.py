@@ -6,8 +6,12 @@
 - segment crops → ``way:<osm_way_id>``
 
 Families for roll-ups come from assign taxonomy:
-behavioral family (e.g. ``direction_control``) and semantic group
-(``priority`` / ``speed`` / ``obstacle`` / ``reroute``).
+behavioral family (e.g. ``direction_control``, ``restricted_lane``) and
+semantic group (``priority`` / ``speed`` / ``obstacle`` / ``reroute``).
+
+Reserved-lane folders (``bus_lane``, ``bike_lane``, ``bus_lane_road``,
+``bike_lane_road``) map via ``_PDD_BY_FOLDER_EXTRA`` until eval registry
+profiles exist.
 """
 
 from __future__ import annotations
@@ -32,16 +36,39 @@ _DUAL_RE = re.compile(r"^dual_")
 _RB_RE = re.compile(r"^rb_")
 
 # Eval folder name → PDD code (from sign registry).
-_PDD_BY_FOLDER: Dict[str, str] = {
-    p.data_subdir: p.pdd_code for p in list_profiles()
+# Reserved-lane pools exist before eval SignProfiles; keep folder→PDD here.
+_PDD_BY_FOLDER_EXTRA: Dict[str, str] = {
+    "bus_lane_road": "5.11.1",
+    "bike_lane_road": "5.11.2",
+    "bus_lane": "5.14.1",
+    "bike_lane": "5.14.2",
 }
+_PDD_BY_FOLDER: Dict[str, str] = {
+    **{p.data_subdir: p.pdd_code for p in list_profiles()},
+    **_PDD_BY_FOLDER_EXTRA,
+}
+
+
+def _beh_of(pdd: str) -> str:
+    try:
+        return beh_of_pdd(pdd)
+    except KeyError:
+        return "other"
+
+
+def _sem_of(pdd: str) -> str:
+    try:
+        return sem_of_pdd(pdd)
+    except KeyError:
+        return "other"
+
 
 # Behavioral family of each eval sign folder (reviewer roll-ups).
 SIGN_FAMILY: Dict[str, str] = {
-    folder: beh_of_pdd(pdd) for folder, pdd in _PDD_BY_FOLDER.items()
+    folder: _beh_of(pdd) for folder, pdd in _PDD_BY_FOLDER.items()
 }
 SIGN_SEMANTIC: Dict[str, str] = {
-    folder: sem_of_pdd(pdd) for folder, pdd in _PDD_BY_FOLDER.items()
+    folder: _sem_of(pdd) for folder, pdd in _PDD_BY_FOLDER.items()
 }
 
 

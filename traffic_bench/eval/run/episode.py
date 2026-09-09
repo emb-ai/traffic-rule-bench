@@ -918,7 +918,8 @@ def run_one_episode(
                     "is_ego_in_yield_zone": _is_ego_in_yield_zone(sign_mgr, vehicle),
                 }
                 if draw_path_conflict or is_path_conflict_overlay_enabled():
-                    text_dict["paths"] = "cyan=ego magenta=auxX yellow=X amber=zone"
+                    text_dict["zones"] = "green=yield yellow=main"
+                    text_dict["paths"] = "cyan/magenta rays; nearest main"
 
             # Render before breaking so arrive/terminate frames are in the GIF.
             if save_gif:

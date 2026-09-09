@@ -2,9 +2,10 @@
 # Build oracle_metrics_summary_top2.md for a collection OUT_BASE.
 #
 # Usage:
+#   SIGN=crosswalk ./table.sh
 #   SIGN=yield ./table.sh data/trajectories/yield/trajectories_<ts>
 #   SIGN=main ./table.sh data/trajectories/main_road/trajectories_<ts>
-#   ./table.sh data/trajectories/<sign>/trajectories_<ts> .../experts
+#   ./table.sh data/trajectories/<sign>/final .../experts
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,7 +35,24 @@ _resolve_dir() {
     return 1
 }
 
-OUT_BASE="${1:?usage: $0 <OUT_BASE> [experts_dir]}"
+: "${SIGN:=}"
+if [ -z "${1:-}" ]; then
+    if [ -z "$SIGN" ]; then
+        echo "usage: SIGN=<eval_id> $0 [OUT_BASE] [experts_dir]" >&2
+        echo "   or: $0 <OUT_BASE> [experts_dir]" >&2
+        exit 1
+    fi
+    DATA_SUBDIR="$("$PYTHON_BIN" - "$SIGN" <<'PY'
+import sys
+from traffic_bench.eval.sign_registry import resolve_sign_token
+print(resolve_sign_token(sys.argv[1]).data_subdir)
+PY
+)"
+    OUT_BASE="data/trajectories/${DATA_SUBDIR}/final"
+else
+    OUT_BASE="$1"
+fi
+
 OUT_BASE="$(_resolve_dir "$OUT_BASE")"
 if [ -n "${2:-}" ]; then
     EXPERTS_DIR="$(_resolve_dir "$2")"
@@ -47,7 +65,6 @@ fi
 HORIZON="${HORIZON:-1500}"
 
 # Official plate code from SIGN, catalog, or all_runs.
-: "${SIGN:=}"
 : "${PDD_CODE:=}"
 if [ -z "$PDD_CODE" ] && [ -n "$SIGN" ]; then
     PDD_CODE="$("$PYTHON_BIN" - "$SIGN" <<'PY'
@@ -92,7 +109,7 @@ if [ ! -s "$ALL_RUNS" ]; then
     exit 1
 fi
 if [ ! -s "$PICKS" ]; then
-    echo "ERROR: missing picks $PICKS — run python -m traffic_bench.oracle.select.coverage first"
+    echo "ERROR: missing picks $PICKS — run SIGN=$SIGN ./traffic_bench/oracle/select/coverage.sh first"
     exit 1
 fi
 

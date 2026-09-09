@@ -39,6 +39,14 @@ def _is_aux_in_main_zone(sign_mgr, aux_vehicles, ego_vehicle=None) -> bool:
     ]
     if not yield_signs:
         return False
+    for sign in yield_signs:
+        # RoundaboutYieldSign monitors only the nearest main-arc piece to ego.
+        set_zone = getattr(sign, "_set_active_main_zone", None)
+        if callable(set_zone) and ego_vehicle is not None:
+            try:
+                set_zone(ego_vehicle)
+            except Exception:
+                pass
     for aux in aux_vehicles:
         if aux is None:
             continue

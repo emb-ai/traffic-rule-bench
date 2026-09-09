@@ -770,6 +770,19 @@ def build_manifest_entry(
         spawn_edges = outgoing_edges_from_junction_layout(junction_layout_cache)
         if spawn_edges:
             entry["background_spawn_edges"] = spawn_edges
+        if profile.spawn_strategy == "roundabout":
+            from traffic_bench.eval.signs.roundabout.nav import (
+                ring_edge_ids_from_roundabout_layout,
+            )
+
+            ring_edges = ring_edge_ids_from_roundabout_layout(junction_layout_cache)
+            if ring_edges:
+                entry["background_excluded_edges"] = list(ring_edges)
+                if spawn_edges:
+                    ring_ban = set(ring_edges)
+                    entry["background_spawn_edges"] = [
+                        e for e in spawn_edges if e not in ring_ban
+                    ]
         if profile.spawn_strategy in ("yield", "roundabout"):
             entry["main_lane_keys"] = [
                 lane_key

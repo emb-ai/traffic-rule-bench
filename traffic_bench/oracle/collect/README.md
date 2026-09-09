@@ -92,7 +92,7 @@ Disable cross-sign GPU parallelism (old behavior: finish one sign
 completely, then the next):
 
 ```bash
-MULTI_SIGN_PARALLEL=0 SIGN=yield,stop,crosswalk GPU_IDS=0 ./collect.sh
+MULTI_SIGN_PARALLEL=0 SIGN=yield,stop,crosswalk GPU_IDS=0,1 NN_CHUNKS=1 ./collect.sh
 ```
 
 ### Resuming `final/`
@@ -128,7 +128,8 @@ POLICIES_CPU="idm_rule ppo_rule" \
 POLICIES_CARL="carl_rule" POLICIES_PLANT2="plant2_rule" \
 PLANT2_ACTION_MODE=pid \
 GPU_IDS=0,1,2,3,4,5,6,7 \
-JOBS_PER_GPU=1 \
+GPUS_CARL=0,1,2,3 GPUS_PLANT2=4,5,6,7 \
+JOBS_PER_GPU=1 NN_CHUNKS=0 \
 N_WORKERS=32 IDM_CHUNKS=8 \
 EXTRA_SAMPLES_COMPREHENSIVE=4 IDM_SEED_BASE=42 \
 MAX_STEPS=1500 RESUME=1 \
@@ -144,12 +145,22 @@ IDM-family policies (`idm_rule`, …) are sharded into
 Sharding is skipped only when `SAVE_GIFS=1` (Panda3D) or `IDM_CHUNKS=1`.
 Without sharding, `POLICIES_CPU="idm_rule ppo_rule"`
 would only use **2** CPU processes even if `N_WORKERS=8`.
-- **GPU (single sign):** one process per NN policy name; `GPU_IDS` / `GPUS_CARL` /
-  `GPUS_PLANT2` pin cards. Multi-GPU **across signs** is what the multi-sign
-  orchestrator parallelizes (see above). Within one sign, extra GPUs for a single
-  `carl_rule` are still unused unless you add more policy names.
-- **CPU then GPU:** within each sign, `idm`/`ppo` finish first; then `carl`,
-  then `plant2` (no CPU↔GPU overlap). Progress bars refresh during each phase.
+- **GPU (single sign):** each NN policy (`carl_rule`, `plant2_rule`) is sharded
+  into `NN_CHUNKS` workers (default `0` = auto = `#GPUs × JOBS_PER_GPU` for that
+  pool) via `--start/--count/--worker-id`, round-robin across the pool's cards.
+  Default `GPU_IDS=0,1,2,3` auto-splits to `GPUS_CARL=0,1` and `GPUS_PLANT2=2,3`
+  (override with `GPUS_CARL=` / `GPUS_PLANT2=`). Cap concurrency with
+  `JOBS_PER_GPU` (default 1). `NN_CHUNKS=1` disables within-policy sharding;
+  `SAVE_GIFS=1` forces a single process.
+- **CPU + GPU overlap:** default `OVERLAP_CPU_GPU=1` starts `carl`/`plant2`
+  immediately, then queues CPU under `N_WORKERS` (they run together). Set
+  `OVERLAP_CPU_GPU=0` to finish all CPU workers before any GPU pool (less
+  MetaDrive contention on a busy node).
+- **CPU reserve for GPU sims:** MetaDrive for `carl`/`plant2` also needs host
+  CPU. With overlap, `RESERVE_CPU_FOR_GPU=auto` (default) shrinks `N_WORKERS`
+  by `(#GPUS_CARL + #GPUS_PLANT2) × JOBS_PER_GPU` — e.g. `N_WORKERS=32` and
+  4 GPU workers → effective `N_WORKERS=28`. Override with an integer, or
+  `RESERVE_CPU_FOR_GPU=0` to keep the requested `N_WORKERS`.
 - **Live progress:** every `PROGRESS_EVERY_S` seconds (default 30) the shell
 prints a per-policy bar (`done/target`) and the last `[i/N]` line from each
 worker log. Detail: `tail -f $OUT_BASE/_logs/.../<policy>.wXX.log`.
@@ -167,22 +178,22 @@ A shared `MANIFEST=` path is ignored unless it contains `{sign}` or `{id}`.
 ## 3. Oracle selection
 
 ```bash
-# from repo root (or any cwd — paths resolve against the repo)
-OUT=data/trajectories/yield/trajectories_<ts>
+# from repo root — SIGN once, paths default to data/trajectories/<sign>/final
+SIGN=yield HORIZON=1500 ./../select/coverage.sh
+# → .../final/experts/
 
-python -m traffic_bench.oracle.select.coverage \
-    --root "$OUT" \
-    --catalog "$OUT/catalog.jsonl" \
-    --signs yield \
-    --horizon 1500 \
-    --out-dir "$OUT/experts"
+# custom tree:
+SIGN=yield ROOT=data/trajectories/yield/trajectories_<ts> \
+  HORIZON=1500 ./../select/coverage.sh
 ```
 
-`--signs` accepts eval ids (`yield`).
+`--signs` / catalog / out-dir are filled from `SIGN` (eval id like `yield`).
 
 ## 4. Metrics table
 
 ```bash
+SIGN=yield HORIZON=1500 ../report/table.sh
+# or with an explicit tree:
 SIGN=yield ../report/table.sh data/trajectories/yield/trajectories_<ts>
 # → .../oracle_metrics/oracle_metrics_summary_top2.md
 ```

@@ -120,6 +120,26 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         if _row_is_one_way(row)
         else []
     )
+    # Roundabout only: ban background NPC spawn on the circular ring roadway
+    # (SUMO ``<roundabout>`` / layout ``main_edge_ids``), not on spoke arms.
+    if _row_is_roundabout(row):
+        from traffic_bench.eval.signs.roundabout.nav import (
+            ring_edge_ids_from_roundabout_layout,
+        )
+        from traffic_bench.eval.signs.roundabout.place import layout_from_row
+
+        layout = row.get("junction_layout")
+        if not isinstance(layout, dict):
+            try:
+                layout = layout_from_row(row, scenes_root)
+            except Exception:
+                layout = None
+        ring_edges = ring_edge_ids_from_roundabout_layout(layout)
+        if ring_edges:
+            background_excluded_edges = sorted(
+                {str(e) for e in background_excluded_edges} | set(ring_edges)
+            )
+
     use_junction_outgoing_traffic = (
         (_row_is_junction(row) or _row_is_roundabout(row))
         and traffic_density > 0.0
@@ -129,6 +149,11 @@ def _build_sumo_env(row: dict, scenes_root: Path, max_steps: int) -> TrafficSign
         if use_junction_outgoing_traffic
         else []
     )
+    if _row_is_roundabout(row) and background_excluded_edges:
+        ring_ban = set(background_excluded_edges)
+        background_spawn_edges = [
+            e for e in background_spawn_edges if str(e) not in ring_ban
+        ]
 
     vehicle_config: dict = {"show_lidar": False}
     spawn_vel = float(row.get("spawn_velocity_ms", 0.0) or 0.0)
