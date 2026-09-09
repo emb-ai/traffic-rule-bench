@@ -15,6 +15,8 @@ import random
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from traffic_bench.eval.engine.traffic.stable_hash import stable_hash
+
 
 @dataclass(frozen=True)
 class AuxiliaryParams:
@@ -95,7 +97,9 @@ def shuffle_cap(
         return list(preserved) + list(rest)
 
     out = list(rest)
-    rng = random.Random(hash(tuple(seed_key)) & 0xFFFFFFFF)
+    # hash() of str tuples is salted per interpreter (PYTHONHASHSEED), so the
+    # kept subset used to change between runs whenever the cap was binding.
+    rng = random.Random(stable_hash(*seed_key))
     rng.shuffle(out)
     return list(preserved) + out[:remaining]
 
