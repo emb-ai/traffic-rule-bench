@@ -511,74 +511,179 @@ Step 3 episode.
 Added after the checker fix landed. Everything below is measurement; no training,
 no fix implemented.
 
-## 7. Is the 80-90 % crash rate overfitting to the 8 training maps?
+## 7. The corrected campaign numbers (all ten checkpoints, n=20 each)
 
-**No. The model never learned to drive these scenes, and that is not a data-volume
-statement.**
+All ten previously-evaluated checkpoints re-scored under the fixed checker, run
+from `$SM/trb_stop`, reusing the original `shard8_*` grouping, into new
+`*_fixed` directories. The pre-fix records were not overwritten.
 
-`ft_only_stop_e9` was evaluated on the maps it was *trained* on. The map set was
-taken from the training split's own route directories
+| run | n | comp before | comp **after** | SR&Dest before | SR&Dest **after** | crash\|oor | `stopline_steps>0` | `yield_steps>0` |
+|---|---|---|---|---|---|---|---|---|
+| ft_only_stop_e1 | 20 | 0.10 | **0.50** | 0.00 | **0.00** | 0.85 | 10/20 | 10/20 |
+| ft_only_stop_e3 | 20 | 0.00 | **0.40** | 0.00 | **0.00** | 0.80 | 10/20 | 12/20 |
+| ft_only_stop_e5 | 20 | 0.00 | **0.35** | 0.00 | **0.00** | 0.75 | 10/20 | 13/20 |
+| ft_only_stop_e9 | 20 | 0.00 | **0.30** | 0.00 | **0.00** | 0.80 | 10/20 | 14/20 |
+| ft_prio_all_e1 | 20 | 0.00 | **0.20** | 0.00 | **0.00** | 0.80 | 3/20 | 16/20 |
+| ft_prio_all_e3 | 20 | 0.00 | **0.40** | 0.00 | **0.00** | 0.65 | 10/20 | 12/20 |
+| ft_prio_all_e5 | 20 | 0.00 | **0.05** | 0.00 | **0.05** | 0.65 | 13/20 | 18/20 |
+| ft_prio_all_e9 | 20 | 0.00 | **0.05** | 0.00 | **0.00** | 0.75 | 13/20 | 19/20 |
+| ft_prio_all_e9_blind | 20 | 0.00 | **0.00** | 0.00 | **0.00** | 0.90 | 14/20 | 20/20 |
+| ft_v6pad_e0 | 20 | 0.05 | **0.05** | 0.00 | **0.00** | 0.90 | 9/20 | 19/20 |
+
+`crash|oor` is identical before and after by construction — see the reproduction
+check below.
+
+**The fix does not rescue the campaign.** Compliance moves off the floor
+(0.00–0.10 → 0.00–0.50), but **SR&Dest stays 0.00 in nine of ten runs**; the one
+exception is `ft_prio_all_e5` at 0.05, a single episode. The 0.00 was never only
+a scoring artefact — it was a scoring artefact sitting on top of a driving
+failure, and only the artefact is gone.
+
+Two things the corrected numbers now show that the broken checker hid:
+
+- **Compliance is not trustworthy as a headline at these crash rates.** The
+  best compliance in the table, `ft_only_stop_e1` at 0.50, comes with
+  `crash|oor` 0.85 — most of that 0.50 is episodes that crash before reaching
+  the line and are "compliant" by never being judged. Compliance and crash rate
+  move together in the wrong direction across the table.
+- **The yield clause is now the dominant violation, not the stop-line clause.**
+  `yield_steps>0` fires in 10–20 of 20 episodes everywhere, and in the later
+  checkpoints (`prio_all` e5/e9, blind, v6pad) it fires in 18–20 of 20. The
+  blind ablation is at 20/20 with compliance 0.00, which is the expected
+  direction for a model denied the sign.
+
+### Reproduction check
+
+**`reached_dest`, `crashed`, `out_of_road` and `steps` are identical episode by
+episode on all 200 episodes across all 10 runs.** A scoring-only fix must leave
+these untouched, and it did — including across a GPU change (the originals ran
+on GPUs 0/1/2/3, the re-runs all on GPU 3). This also confirms the two trees
+differ only in the three files I changed: `traffic_bench` in `episode.py` and
+`yield_sign.py`, `metadrive` in `metadrive_obs_to_plant2.py` (two hunks, both
+no-ops with `PLANT2_DEBUG_BOXES` unset and jitter at 0), and `plant2` in
+`dataset.py` (training-only, never called at eval).
+
+Worth recording: `$SM/trb_eval_rl3`, where the originals ran, reaches its
+submodules by **symlink into `$SM/traffic-rule-bench-main`** — the tree other
+sessions edit in place. `$SM/trb_stop` has real checkouts. That was checked
+rather than assumed; the shared `metadrive_obs_to_plant2.py` is dated
+2026-08-31 and the originals ran 2026-09-09 16:15–17:31, so it did not move
+under them either.
+
+## 8. Decomposing the gap to the 1.00 expert ceiling
+
+`ft_prio_all_e5_fixed`, the only run with a non-zero SR&Dest. Mutually exclusive
+partition of all 20 episodes:
+
+| bucket | n | share |
+|---|---|---|
+| success | 1 | **0.05** |
+| driving failure (crash / off-road / no destination) | 13 | **0.65** |
+| drove fine, but tripped **both** 2.5 clauses | 6 | **0.30** |
+| drove fine, stop-line clause only | 0 | 0.00 |
+| drove fine, yield clause only | 0 | 0.00 |
+| drove fine, some other sign class | 0 | 0.00 |
+
+Counterfactual ladder:
+
+| | SR&Dest |
+|---|---|
+| as measured | 0.05 |
+| + every driving failure fixed | **0.70** (+0.65) |
+| + the stop-line clause alone always satisfied | 0.05 (+0.00) |
+| + the yield clause alone always satisfied | 0.05 (+0.00) |
+| + **both** clauses satisfied (driving untouched) | 0.35 (+0.30) |
+
+**Answer: the gap is driving, not scoring.** 0.65 of the 0.95 shortfall is
+episodes that never arrive. The remaining 0.30 is episodes that drive fine and
+violate *both* clauses together — which is why fixing either clause alone is
+worth exactly nothing; the same six episodes fail both.
+
+`ft_prio_all_e3_fixed` gives the same shape (success 0.00, driving 0.65, both
+clauses 0.35) and adds the sharpest single observation in this report: **10 of
+its 13 driving failures had come to a complete halt before the line
+(`min_speed` 0.001–0.036 m/s) and carry zero violations.** They obeyed 2.5
+perfectly and then crashed. Within the 13 driving failures, all 13 crossed the
+line and the median distance travelled is 19.6 m — the ego spawns 15 m before
+the lane end, so they die roughly 4 m into the junction.
+
+**So the next lever is neither the checker nor the rule head.** It is whatever
+stops the car from following its route through the intersection.
+
+## 9. Where the road is lost (all 200 episodes)
+
+From `sign_audits.max_long` minus the approach-lane length:
+
+| out-of-road episodes, n=104 | |
+|---|---|
+| died on the approach lane | **8 / 104 (0.08)**, all within 5 m of the mouth |
+| lost the road 0–5 m into the junction | **94 / 104 (0.90)** |
+| lost the road 5–15 m in | 2 / 104 (0.02) |
+| median position past the mouth | **+2.3 m** (p25 +1.6, p75 +3.0, max +6.5) |
+| crossed the stop line | 94 / 104 |
+| **had halted before it** | **81 / 104** |
+| median distance travelled | 19.9 m |
+
+Outcomes over the 200: out_of_road 104, collision-without-oor 53, reached
+destination 41, stuck 2. Per map: `junc_10793658469` dest 0.39 / oor 0.10 /
+crash 0.61; `junc_134684395` dest 0.02 / **oor 0.94** / crash 0.96.
+
+**The car stops correctly, enters the junction, and cannot follow the route
+through it.** Plain `idm` has out-of-road **0.00** on the same scenes and the
+rule expert 0.00 with dest 1.00, so the geometry is drivable and the failure is
+the model's.
+
+## 10. Is it overfitting to the 8 training maps? No.
+
+Both e9 checkpoints evaluated on the maps they were *trained* on. The map set
+came from the training split's own route directories
 (`$SM/ft_rl3/splits/only_stop/train/data`), **not** by filtering the train
 manifest against `split_meta.json`'s `val_maps` — that manifest spans 78 maps of
 which only 8 ever reached the model, and filtering that way would have quietly
 turned this into a second held-out measurement. All 20 sampled routes are
-themselves training routes, so this is the strongest form of the test: same map
-*and* same route.
+themselves training routes: same map *and* same route.
 
-| `ft_only_stop_e9`, n=20 each | dest | oor | crash | comp | SR&Dest | median dist |
+| n=20 each | dest | oor | crash | comp | SR&Dest | median dist |
 |---|---|---|---|---|---|---|
-| **TRAINED maps** (8 maps, routes seen in training) | 0.25 | 0.65 | 0.70 | 0.75 | 0.20 | 68.8 m |
-| **HELD-OUT maps** (2 maps, never seen) | 0.20 | 0.50 | 0.80 | 0.30 | 0.00 | 20.9 m |
-| `expert_idm_rule` (held-out) | **1.00** | 0.00 | 0.00 | 1.00 | 1.00 | 98.9 m |
-| plain `idm` (held-out) | 0.90 | **0.00** | 0.10 | 0.00 | 0.00 | 84.0 m |
+| `only_stop_e9` — **trained** maps | 0.25 | 0.65 | 0.70 | 0.75 | 0.20 | 68.8 m |
+| `only_stop_e9` — held-out maps | 0.20 | 0.50 | 0.80 | 0.30 | 0.00 | 20.9 m |
+| `prio_all_e9` — **trained** maps | 0.40 | 0.25 | 0.45 | 0.45 | 0.15 | 53.3 m |
+| `prio_all_e9` — held-out maps | 0.25 | 0.50 | 0.75 | 0.05 | 0.00 | 20.1 m |
+| `expert_idm_rule` — held-out | **1.00** | 0.00 | 0.00 | 1.00 | 1.00 | 98.9 m |
+| plain `idm` — held-out | 0.90 | **0.00** | 0.10 | 0.00 | 0.00 | 84.0 m |
 
-There is a small train-map advantage — SR&Dest 0.20 vs 0.00, crash 0.70 vs 0.80,
-and it drives 68.8 m before failing instead of 20.9 m — but **dest is 0.25 on data
-it was trained on** against an expert ceiling of 1.00 on the *harder* held-out
-maps. That is not memorisation, and more maps is not the first lever.
+There **is** a train-map advantage, and it is larger for `prio_all` (dest +0.15,
+crash −0.30) than for `only_stop` (dest +0.05, crash −0.10) — so the gradient is
+not zero and I will not claim it is. But the pre-registered arms were "dest high
+/ crash low on train maps" versus "dest low / crash high on train maps too", and
+**dest 0.25–0.40 with crash 0.45–0.70 on data the model was trained on, against
+an expert ceiling of 1.00 on the *harder* held-out maps, is unambiguously the
+second.** It never learned to drive these scenes. More maps is not the first
+lever.
 
-Per trained map it is uniform rather than one bad map: 5 of 8 have dest 0.00.
+Per trained map it is uniform rather than one bad map: for `only_stop_e9`,
+5 of 8 maps have dest 0.00.
 
-**The pre-registered arm-2 lever is refuted by this same run.** Arm 2 named the
-speed head and the label bins. On trained maps the stop behaviour is *perfect* —
-`halted-before-line 20/20`, `stopline_steps > 0` in **0/20**, compliance 0.75 —
-and it still crashes 70 % of the time. The speed head is doing its job. Arm 2's
-*diagnosis* ("it never learned to drive these scenes") stands; arm 2's
-*prescription* does not.
+**The pre-registered arm-2 *lever* is refuted by this same run.** Arm 2 named
+the speed head and the label bins. On trained maps the stop behaviour is
+*perfect* — `halted-before-line 20/20`, `stopline_steps>0` in **0/20** for both
+checkpoints — and they still crash 45–70 % of the time. The speed head is doing
+its job. Arm 2's *diagnosis* stands; arm 2's *prescription* does not.
 
-## 8. Where the road is lost
-
-Out-of-road episodes, position at furthest advance, from `sign_audits.max_long`
-minus the approach-lane length:
-
-| | held-out maps |
-|---|---|
-| died on the approach lane | **0 / 22** |
-| lost the road 0–5 m into the junction | 20 / 22 |
-| lost the road 5–15 m in | 2 / 22 |
-| median position past the junction mouth | **+3.2 m** (p25 +2.5, p75 +3.7, max +6.5) |
-| crossed the stop line | 22 / 22 |
-| had halted before it | 20 / 22 |
-
-On trained maps the same statistic is +4.4 m, on-approach 0/13. **The car stops
-correctly, enters the junction, and cannot follow the route through it.** Plain
-`idm` has out-of-road 0.00 on the same scenes, so the geometry is drivable.
-
-## 9. The leading candidate: `_future_path`'s straight-ahead fallback
+## 11. The leading candidate: `_future_path`'s straight-ahead fallback
 
 `PlanT/dataset.py::_future_path` builds the path target from the ego's realised
 future over `PATH_HORIZON_FRAMES` (40 = 4 s), arc-length resampled. When the ego
 travels less than `path_len + 1.0` = 21 m in that window it *extends* the tail
-rather than clamping. The extension direction is the last inter-frame step; below
+rather than clamping. The direction is the last inter-frame step; below
 `MIN_EXTEND_STEP_M` (0.05 m) it falls back to the net displacement; if that is
 also below 0.05 m it falls back to **`np.array([1.0, 0.0])` — the ego's own
 forward axis**, discarding the route entirely.
 
-A vehicle held at a stop line for the whole 4 s window lands on that last
-fallback. Reproduced independently over **40 routes per family, 7.9k–13.4k frames
-each** (the original sample was 12 routes):
+A vehicle held at a stop line for the whole window lands on that last fallback.
+Reproduced independently over **40 routes per family, 7.9k–13.4k frames each**:
 
-| family | straight-ahead | net-disp | last-step | no extension | route `|y|max` on straight frames (med / p90 / max) |
+| family | straight-ahead | net-disp | last-step | no extension | route `\|y\|max` on straight frames (med / p90 / max) |
 |---|---|---|---|---|---|
 | stop | **22.1 %** | 5.9 % | 47.3 % | 24.8 % | **4.3** / 10.0 / 11.7 m |
 | main_road | 21.0 % | 13.5 % | 37.0 % | 28.5 % | 3.7 / 19.0 / 19.1 m |
@@ -590,79 +695,88 @@ each** (the original sample was 12 routes):
 | bus_lane_road | **0.0 %** | 1.9 % | 26.4 % | 71.7 % | — |
 | bike_lane_road | **0.0 %** | 0.1 % | 15.2 % | 84.7 % | — |
 
-**The defect is real and confirmed.** A fifth of stop frames carry a path target
-pointing straight down the ego's axis while the navigation route departs by a
-median 4.3 m. The mechanism is exactly as described, and it fits the failure
-signature: correct stopping, then off-road inside the junction, identical on
-trained and held-out routes because the *label* is wrong and no amount of data
-fixes a wrong target.
+**The defect is real.** A fifth of stop frames carry a path target pointing
+straight down the ego's axis while the navigation route departs by a median
+4.3 m. It fits the failure signature: correct stopping, off-road inside the
+junction, and near-identical on trained and held-out routes because the *label*
+is wrong — no quantity of data fixes a wrong target.
 
 ### Three corrections to the original reading
 
-1. **The reserved-lane families are not the control they were expected to be.**
-   The fallback essentially never fires there (0.0–3.4 %), because those experts
-   never stop: 57–85 % of their frames travel the full 21 m and never reach the
-   extension branch at all. So they do not show "fires but harmless"; they show
-   the fallback is a *stopping* artefact. **Crosswalk is the real control** — it
-   fires at 20.7 %, statistically indistinguishable from stop's 22.1 %, but its
-   route is straight on those frames (median 0.1 m), and crosswalk's best runs
-   have out-of-road 0.05. Same defect rate, different consequence. That is a
-   cleaner version of the "harmless when straight" argument than the one
-   originally offered.
-2. **The crosswalk fallback rate was under-measured** (14.2 % on 12 routes vs
-   20.7 % on 40). This strengthens the argument rather than weakening it.
+1. **The reserved-lane families are not a control.** The fallback essentially
+   never fires there (0.0–3.4 %) because those experts never stop: 57–85 % of
+   their frames travel the full 21 m and never reach the extension branch. They
+   do not demonstrate "fires but harmless". **Crosswalk is the real control** —
+   it fires at 20.7 %, indistinguishable from stop's 22.1 %, but its route is
+   straight on those frames (median 0.1 m) and crosswalk's best runs have
+   out-of-road 0.05. Same defect rate, different consequence. This is a cleaner
+   form of the argument than the reserved-lane comparison would have given.
+2. **The crosswalk rate was under-measured** (14.2 % on 12 routes vs 20.7 % on
+   40), which strengthens rather than weakens the reading.
 3. **"It explains why all four junction families die inside the junction" is not
-   supported.** Three of the four do not die inside the junction:
+   supported — three of the four do not.**
 
-| specialist e9, n=40 | dest | **oor** | crash | comp | SR&Dest | straight-ahead rate | route `|y|` on those frames |
-|---|---|---|---|---|---|---|---|
-| `yield` | 0.85 | **0.00** | 0.15 | 0.65 | 0.60 | 16.1 % | 7.9 m |
-| `secondary_road` | 0.50 | **0.05** | 0.50 | 0.30 | 0.30 | 17.4 % | 7.8 m |
-| `main_road` | 0.30 | **0.20** | 0.50 | 0.45 | 0.05 | 21.0 % | 3.7 m |
-| `stop` | 0.20 | **0.50** | 0.80 | 0.00 | 0.00 | 22.1 % | 4.3 m |
+| specialist e9, n=40 | dest | **oor** | crash | SR&Dest | straight-ahead rate | route `\|y\|` there |
+|---|---|---|---|---|---|---|
+| `yield` | 0.85 | **0.00** | 0.15 | 0.60 | 16.1 % | 7.9 m |
+| `secondary_road` | 0.50 | **0.05** | 0.50 | 0.30 | 17.4 % | 7.8 m |
+| `main_road` | 0.30 | **0.20** | 0.50 | 0.05 | 21.0 % | 3.7 m |
+| `stop` | 0.20 | **0.50** | 0.80 | 0.00 | 22.1 % | 4.3 m |
 
-   The *rate* of the fallback orders the four families exactly as out-of-road does
-   (22.1 > 21.0 > 17.4 > 16.1 against 0.50 > 0.20 > 0.05 > 0.00). But the *size of
-   the lie* runs the other way: `yield` has the largest route mismatch (7.9 m) and
-   **zero** out-of-road. Neither the rate nor the magnitude alone explains the
-   pattern, and their product is not monotone either. Four points is not a trend.
+The *rate* of the fallback orders the four families exactly as out-of-road does
+(22.1 > 21.0 > 17.4 > 16.1 against 0.50 > 0.20 > 0.05 > 0.00). But the *size of
+the lie* runs the other way — `yield` has the largest route mismatch and **zero**
+out-of-road. Neither rate nor magnitude alone explains the pattern, their product
+is not monotone, and four points is not a trend.
 
-**Standing verdict.** This is a measured defect in the training label, it is the
-best candidate on the table, and it is consistent with every signature we have.
-It is **not proven**, it does **not** explain stop-versus-yield, and the
-monotone-in-rate ordering across four families is suggestive but far too small a
+**Standing verdict.** A measured defect in the training label, the best candidate
+on the table, consistent with every signature. **Not proven**, does **not**
+explain stop-versus-yield, and the monotone-in-rate ordering is far too small a
 sample to lean on. Proving it needs a retrain against a corrected target.
 
-## 10. Fixing it — the design tension, for the user to decide
+## 12. Fixing it — the design tension, for the user to decide
 
-Not implemented. The options are not equivalent and the choice is a real trade.
+Not implemented. The options are not equivalent.
 
-- **Extend along `route_original`.** Encodes the turn, which is the thing the
-  current fallback destroys. But it partially reintroduces the copy-the-input
-  shortcut that `PATH_TARGET=future` exists to prevent: `route_original` is an
-  input token the model already holds, and on a stopped frame the *entire* target
-  past the first point would come from it. Section 4.1 measured that the future
-  target currently deviates from `route_original` by a median 1.27 m; on exactly
-  the frames in question that deviation would drop to zero by construction.
+- **Extend along `route_original`.** Encodes the turn, which is what the current
+  fallback destroys. But it partially reintroduces the copy-the-input shortcut
+  that `PATH_TARGET=future` exists to prevent: `route_original` is an input token
+  the model already holds, and on a stopped frame the *entire* target past the
+  first point would come from it. §4.1 measured the future target currently
+  deviating from `route_original` by a median 1.27 m; on exactly these frames
+  that would drop to zero by construction.
 - **Middle option — route direction for the extension tail only.** Keep the
-  realised motion for the part the ego actually drove, and use the route's local
-  heading only to aim the synthetic tail, instead of `[1, 0]`. The copied content
-  is then a direction, not a trajectory, and only on the frames that already have
-  no real motion to report. This looks strictly better than both the status quo
-  and a wholesale route extension, but it is untested.
-- **Do nothing on stopped frames.** Mask them out of `loss_path` entirely rather
-  than inventing a target. Cheapest and safest; costs 16–22 % of junction frames
-  of path supervision, and it is not obvious whether that supervision is worth
-  more than the damage it does.
+  realised motion for the part actually driven, and use the route's local heading
+  only to aim the synthetic tail instead of `[1, 0]`. What is copied is then a
+  direction, not a trajectory, and only on frames that have no real motion to
+  report. Looks strictly better than both the status quo and a wholesale route
+  extension — but untested.
+- **Mask stopped frames out of `loss_path`.** Cheapest and safest: invent
+  nothing. Costs 16–22 % of junction frames of path supervision, and it is not
+  obvious whether that supervision is worth more than the damage it does.
 
 **What must be measured to choose**, none of which exists yet:
-1. the fraction of the target that would become a copy of `route_original` under
-   each option, on the affected frames — the shortcut cost, directly comparable to
-   the 1.27 m figure in §4.1;
+1. the fraction of the target that becomes a copy of `route_original` under each
+   option, on the affected frames — the shortcut cost, directly comparable to the
+   1.27 m in §4.1;
 2. closed-loop out-of-road on the four junction families after a retrain under
    each option — the only measurement that actually decides it;
-3. whether masking alone (option 3) recovers most of the gain, which would settle
-   whether the problem is the *wrong* target or merely the *invented* one.
+3. whether masking alone recovers most of the gain, which would settle whether
+   the problem is the *wrong* target or merely the *invented* one.
 
-A retrain is required either way, so this is a decision to take deliberately, not
-a patch to land.
+A retrain is required either way. This is a decision to take deliberately, not a
+patch to land.
+
+## 13. Operational note: an external process killed both eval jobs
+
+At ~00:37 every process of mine died at once — both GPUs, both driver scripts,
+SIGKILL — while another user's GPU 4–7 jobs continued. It was **not** the OOM
+killer: 1903 GB of 2011 GB were free. My jobs were `nohup`-ed, so their parent is
+PID 1, which is exactly what `who.sh` lists under *"СИРОТЫ (родитель 1) —
+кандидаты на уборку"*. The most likely cause is another session's orphan cleanup.
+Four completed runs survived; one run lost at 8/20 and five never started.
+
+The rerun script was made idempotent (per-shard episode counts, only short shards
+re-executed, capped at 4 concurrent workers regardless of shard count) and the
+work was completed. Anyone running that cleanup should know it will take out any
+long `nohup`-ed eval on this node.
