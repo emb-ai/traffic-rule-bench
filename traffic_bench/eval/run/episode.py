@@ -969,6 +969,20 @@ def run_one_episode(
             except Exception:
                 crash_attribution = None
 
+        # Per-sign audit trail (currently only StopSign exports one). 2.5 ORs
+        # its two clauses into one violation counter, so without this a 0.00
+        # compliance is uninterpretable: "never stopped", "never yielded" and
+        # "never reached the line" all look identical in the record.
+        sign_audits: dict[str, dict] = {}
+        try:
+            _mgr = getattr(base_env.engine, "traffic_sign_manager", None)
+            for _s in (getattr(_mgr, "signs", []) or []):
+                _a = getattr(_s, "stop_audit", None)
+                if isinstance(_a, dict):
+                    sign_audits[type(_s).__name__] = _a
+        except Exception:
+            pass
+
         pkl_path_str: str | None = None
         dump_error: str | None = None
 
@@ -1040,6 +1054,7 @@ def run_one_episode(
                     "violations_event_count": int(violations_event_count),
                     "violations_by_class_event": dict(violations_by_class_event),
                     "violations_timeline": list(violations_timeline),
+                    "sign_audits": dict(sign_audits),
                     "route_completion": (float(route_completion_pct) / 100.0
                                           if route_completion_pct else 0.0),
                     "total_reward": round(float(total_reward), 4),
@@ -1147,6 +1162,7 @@ def run_one_episode(
             "violations_timeline": list(violations_timeline),
             "in_zone_total_steps": int(in_zone_total_steps),
             "in_zone_by_class_step": dict(in_zone_by_class_step),
+            "sign_audits": dict(sign_audits),
             "pkl_path": pkl_path_str,
             "dump_error": dump_error,
         }
