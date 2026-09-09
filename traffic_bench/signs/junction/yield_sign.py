@@ -1172,19 +1172,32 @@ class StopSign(YieldSign):
         except Exception:
             return False
 
-        if self.zone_start <= veh_long <= self.zone_end:
+        if self.zone_start <= veh_long < self.stop_line_position:
             spd = float(getattr(vehicle, "speed", 0.0) or 0.0)
-            if veh_long < self.stop_line_position:
-                if self._audit_min_speed is None or spd < self._audit_min_speed:
-                    self._audit_min_speed = spd
-            elif veh_long >= self.stop_line_position + self.STOP_LINE_PAST_MARGIN:
-                self._audit_crossed = True
+            if self._audit_min_speed is None or spd < self._audit_min_speed:
+                self._audit_min_speed = spd
+        if veh_long >= self.stop_line_position + self.STOP_LINE_PAST_MARGIN:
+            self._audit_crossed = True
 
         vid = vehicle.id
-        in_zone = self.zone_start <= veh_long <= self.zone_end
-        if not in_zone:
+        if veh_long < self.zone_start:
+            # Behind the approach zone: this is a fresh approach, so any latch
+            # left over from a previous pass is stale. Drop it.
             self._vehicle_states_stop.pop(vid, None)
             return False
+        if veh_long > self.zone_end:
+            # Past the zone. The verdict is only ever taken from here (the stop
+            # line sits at zone_end - sign_distance_before_end, and the margin
+            # pushes the verdict point past zone_end whenever that distance is
+            # under STOP_LINE_PAST_MARGIN -- which is every junction-priority
+            # manifest we ship, all of which carry sign_distance_before_end
+            # 0.0). Popping the latch here erased "I stopped" 0.2 m before the
+            # only line that reads it, and _is_stop_line_violating's
+            # "return not stopped" then fired unconditionally: a rule expert
+            # that halted to 0.001 m/s scored 0.05 compliance over 20 episodes.
+            # Report the latch here; do not update or clear it.
+            state = self._vehicle_states_stop.get(vid)
+            return bool(state and state.get("stopped_before_line"))
 
         state = self._vehicle_states_stop.setdefault(vid, {"stopped_before_line": False})
         stop_long = self.stop_line_position
