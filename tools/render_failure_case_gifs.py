@@ -26,6 +26,12 @@ SIGN_GROUP_TO_SCENES = {
     "stop": REPO_ROOT / "data/scenes/stop",
     "roundabout": REPO_ROOT / "data/scenes/roundabout",
     "crosswalk": REPO_ROOT / "data/scenes/crosswalk",
+    "direction_straight": REPO_ROOT / "data/scenes/direction_straight",
+    "direction_right": REPO_ROOT / "data/scenes/direction_right",
+    "direction_left": REPO_ROOT / "data/scenes/direction_left",
+    "direction_straight_right": REPO_ROOT / "data/scenes/direction_straight_right",
+    "direction_straight_left": REPO_ROOT / "data/scenes/direction_straight_left",
+    "direction_left_right": REPO_ROOT / "data/scenes/direction_left_right",
 }
 
 MODEL_CACHE: dict[str, dict] = {}

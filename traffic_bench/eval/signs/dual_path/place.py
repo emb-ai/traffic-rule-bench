@@ -213,6 +213,11 @@ def _place_on_ego_approach(
     distance_before_end: float,
     show_model: bool,
 ) -> bool:
+    """Place exactly one 4.1.x / dual-path plate on the ego approach arm.
+
+    Other junction arms must stay unsigned; peer lanes on the ego edge are
+    covered by the sign's approach-scope checker, not by extra plates.
+    """
     spec = get_spec(resolve_row_sign_code(row))
     pdd_code = spec.sign_code
     log_tag = _LOG[spec.family]

@@ -113,6 +113,42 @@ pkill -f 'run_signs_parallel\.sh'
 pkill -f 'traffic_bench\.eval'
 ```
 
+**Orphan ProcessPool workers (important).** CPU eval uses
+`ProcessPoolExecutor` + `multiprocessing.spawn` (`jobs=…` in
+`run/policies.py`). If the parent is killed with Ctrl+C / `kill` /
+`pkill` before a clean `executor.shutdown()`, the spawn workers and
+`resource_tracker` processes often survive with `PPID=1`. They sit idle
+on MetaDrive/pipes, keep writing to the old log, and can waste hundreds
+of GiB of RAM for days.
+
+Symptoms: many
+`python -c from multiprocessing.spawn import spawn_main…` (and
+`resource_tracker`) with `PPID=1`; stdout pointing at
+`data/eval_parallel_logs/<SPLIT>/cpu_*.log`; log ends in
+`KeyboardInterrupt` inside `as_completed`. Incident note (2026-09):
+~240 orphans held ~340 GiB RAM for 1–5 days after a Ctrl+C’d
+`run_signs_parallel` / `jobs=16` test eval.
+
+Cleanup (targets only `PPID=1` spawn/`resource_tracker` — does **not**
+touch `oracle/collect`):
+
+```bash
+# list orphans (adjust ENV if needed)
+ENV=zinkovich-plant2
+ps -eo pid,ppid,etime,pcpu,rss,cmd | awk -v e="$ENV" \
+  'index($0,e) && (/multiprocessing.spawn/ || /resource_tracker/) && $2==1'
+
+# kill them
+ps -eo pid,ppid,cmd --no-headers | awk -v e="$ENV" \
+  'index($0,e) && (/multiprocessing.spawn/ || /resource_tracker/) && $2==1 {print $1}' \
+  | xargs -r kill -9
+```
+
+After every interrupted parallel eval, run the cleanup (or always pair
+`pkill -f 'traffic_bench\.eval'` with the spawn/`resource_tracker`
+kill above). Prefer letting the run finish or stopping via the parallel
+script so pools can shut down cleanly.
+
 Progress + ETA:
 
 ```
