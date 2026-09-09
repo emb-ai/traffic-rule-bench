@@ -42,13 +42,19 @@ measurement only. Then `expert_idm_rule` was run on the 20 stop validation rows.
 | stopped, yet stop-line-flagged | **19 / 20** |
 | `max_long > zone_end` | 20 / 20 |
 
-Prediction confirmed. The expert halts to a dead stop in every episode, never
-trips the yield clause, and is still flagged. C1 is real and dominant.
+Prediction confirmed. The expert halts to a dead stop in every one of the 20
+episodes, never trips the yield clause, and is flagged anyway in 19 of them.
+C1 is real and dominant.
 
-The single unflagged episode (`junc_134684395_td50_sv0_v1`) is the one where
-`crossed` is `False` even after the fix: its ego left the sign lane before the
-longitudinal projection passed the verdict point, so the clause was never
-sampled. The pre-fix 0.05 was that accident, not a pass.
+The single unflagged episode is `junc_134684395_td50_sv0_v1` — the same episode
+that is still the only one with `crossed == False` *after* the fix. `max_long` is
+an unconditional projection onto the sign lane, taken whatever lane the ego is
+actually on, and it reads 199.5 against a verdict point of 191.2; but the
+stop-line clause itself is gated on `_is_on_sign_road`, and here the ego had
+already left the approach lane by the time its projection passed that point, so
+the clause was never sampled at all. The pre-fix 0.05 was that accident, not a
+pass — which is the sharpest statement of the problem: the metric's one
+non-zero came from an episode it failed to evaluate.
 
 ### The arithmetic
 
@@ -401,6 +407,36 @@ must clear it.
 
 ---
 
+## 5b. What was and was not taken from `rebbutle-wip`
+
+Ranked by what it was worth to us.
+
+| piece | taken? | why |
+|---|---|---|
+| the split `aug_sample` (y=right `+t`/`R`, y=left `−t`/`R.T`) | **yes**, re-derived | the one genuinely portable fix; their prose in `DETOUR_HYPOTHESES.md` matches the derivation |
+| BEV pose jitter in `render_bev_plant2` | **yes**, ported verbatim | 13 lines, exactly what the second BEV needs |
+| `PLANT2_AUG_TRANSLATION_M` / `_ROTATION_DEG` in the dumper (1.0 m / 5.0°) | **yes**, knobs only | defaults left at 0, so nothing changes until a re-dump |
+| their `input[:, 3] += rad2deg(rot)` yaw sign | **no** | the unit test shows it is wrong by 2·rot; see above |
+| the `stop_audit` accessor | **yes** | it is what made the 0.00 interpretable |
+| `fix_route_target.py` | no | our in-dataset `PATH_TARGET` / `PATH_HORIZON_FRAMES` supersedes it, and theirs must be re-run after every dump |
+| `sign_range_m` 30 / `PLANT2_SIGN_RANGE_M` 90 | no | our 120 m is deliberate and better measured (2 % of frames at the narrow radius against 33 % at 120 m, `plant2_frames.py:108-112`), and §4.2 shows the plate is in 100 % of frames |
+| eval `max_distance=75, range_factor_front=16` | no | ours (50 / 2) already matches training on both sides |
+| their `dataset.py` wholesale | no | ~1200 lines behind ours; drops `_log_sign_metrics`, `frame_weight`, the `wps_weight` key fix and the 2.3-variant merge |
+| `PLANT2_YLEFT` | not done | same knob as our `PLANT2_AXIS_ALIGN`, same default, same two flip points; an alias would only stop their scripts being silently ignored |
+| the 10-bin speed grid + `speed_class_weights` | **no — needs a decision** | §4.3 quantifies the case; it is checkpoint-breaking (speed head 8 → 10) and needs a full retrain |
+| the checkpoint itself (446 MB) | no | on a different machine (`antonov`), and the split that produced it was on `/tmp` and is gone |
+
+**One caveat on provenance.** The `aug_sample` and BEV-jitter fixes are *not* in
+the `rebbutle-wip` refs fetched into `$SM/traffic-rule-bench-main` (metadrive
+fetched 2026-08-13, plant2 2026-08-24) — those are byte-identical to our pre-fix
+code. They are only in the submodule commits the GitHub branch points at
+(metadrive `aa30ce85`, plant2 `52159a93`), reachable through
+`gh api repos/emb-ai/traffic-rule-bench/contents/<sub>?ref=rebbutle-wip`. Anyone
+re-checking this against the node's local refs will conclude, wrongly, that the
+fix does not exist.
+
+---
+
 ## 6. What is still unknown
 
 - **The corrected campaign numbers are not known.** Only the expert was
@@ -431,8 +467,9 @@ must clear it.
 2. **`sign_distance_before_end: 0.0` should probably not stay 0.0.** With the
    plate clamped to `L − 0.1`, the stop-line clause is only ever sampled in a
    ~3-step sliver where `vehicle.lane` still reports the approach lane but the
-   longitudinal projection has passed its end — that is how one of 20 episodes
-   escaped the clause entirely, in both directions. Setting it to 5.0 would put
+   longitudinal projection has passed its end. One of the 20 validation
+   episodes slips through that sliver entirely — the same one, before and after
+   the fix — so the clause is not reliably evaluated. Setting it to 5.0 would put
    the line at `L − 5`, comfortably inside the `[L − 30, L]` zone, still 10 m
    ahead of the `L − 15` spawn, and would match `YieldSign.YIELD_STOP_BEFORE_END`.
    That is a benchmark-semantics change and was **not** made here.
