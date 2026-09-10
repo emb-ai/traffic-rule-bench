@@ -780,3 +780,75 @@ The rerun script was made idempotent (per-shard episode counts, only short shard
 re-executed, capped at 4 concurrent workers regardless of shard count) and the
 work was completed. Anyone running that cleanup should know it will take out any
 long `nohup`-ed eval on this node.
+
+---
+
+# 13. The capability was not missing — it was erased
+
+Everything above treats junction traversal as a skill the model never acquired.
+That framing is wrong, and one measurement overturns it.
+
+PlanT-2's CARLA pretraining is full of intersections. Running that pretrain
+unchanged on the 20 stop validation episodes, from `$SM/trb_eval_rl3` (no latch
+fix, so `dest`/`crash` are comparable with every earlier row):
+
+| checkpoint | dest | out_of_road | crash | median distance |
+|---|---|---|---|---|
+| `checkpoints/plant2_pretrain/epoch=029_final_3.ckpt` | **0.50** | 0.45 | 0.50 | **98.9 m** |
+| `v6best_padded` (`ft_v6pad_e0`) | 0.10 | 0.60 | 0.90 | **15.7 m** |
+| `ft_only_stop_e9` | 0.20 | 0.50 | 0.80 | 21.2 m |
+| `expert_idm_rule` | 1.00 | 0.00 | 0.00 | 100.4 m |
+
+The pretrain drives 98.9 m of a route the expert covers in 100.4 m. The v6
+checkpoint — our fine-tuning base — drives 15.7 m.
+
+**The v6 campaign destroyed junction driving.** Its families are all
+straight-road (speed limits, detours, reserved lanes, crosswalk); it was trained
+at lr 1e-3 with `TRUNK_LR_MULT=1`, i.e. the whole trunk at full rate. It scores
+1.00 on speed limits and 0.9+ on reserved lanes, so it did not fail — it
+specialised, and the cost was paid somewhere no straight-road benchmark looks.
+Using it as the base for junction signs then starts from a model that has to
+relearn what the pretrain already knew.
+
+This reorders every recommendation in §12. The path-target defect (§11) and the
+augmentation no-op (§5) are real and measured, but they are second-order against
+a 98.9 → 15.7 m regression that happened before any priority-sign fine-tuning ran.
+
+## What this implies for the recipe
+
+The colleague's working stop model (`BEST_EXPERIMENT.md`, compliance 0.738 /
+success 0.857) initialises from **this same CARLA pretrain**, at lr 3e-4, trained
+jointly over stop and detour. Our recipe initialises from `v6best_padded` at lr
+1e-3, one family at a time. On the evidence here the first difference is the one
+that matters.
+
+The pretrain is not itself a solution: crash 0.50, out_of_road 0.45, and it has
+no 2.5 in its vocabulary at all. The goal is to keep its driving while adding
+sign compliance — which is exactly what the colleague demonstrates is reachable.
+
+## The experiment that settles it
+
+One variable changed against the existing `prio_all` baseline — the init:
+
+    CKPT0=<repo>/checkpoints/plant2_pretrain/epoch=029_final_3.ckpt \
+    bash tmp/ft_rl3/train_rl.sh prio_pre $FT/splits/prio_all \
+      TS_WINDOW_FRAMES=default:1,3.24:8,5.31:8,5.21:8 MAX_EPOCHS=10 \
+      CKPT_EVERY_N_EPOCHS=2 EVAL_FAMS="main_road secondary_road yield stop" \
+      EVAL_EPOCHS="1 3 5 9" EVAL_VARIANTS=base
+
+`CKPT0` is `${CKPT0:-...}` in `lib_rl.sh`, so no script edit is needed. Keep lr at
+1e-3 for this run: changing init and lr together would leave the outcome
+unattributable, which is exactly how three GPU-hours were lost earlier in this
+campaign. If the init alone does not recover the driving, lr 3e-4 is the second
+run, not a simultaneous one.
+
+## Caveats
+
+n = 20 per row, so ±0.2 on the rates; 98.9 m against 15.7 m is not marginal, but
+the rates are. The pretrain was evaluated with a 45-class sign vocabulary against
+a 49-class model config — it loaded and ran, but it cannot be said to have been
+given the sign at all, which is the point of the comparison rather than a flaw in
+it. Whether the loss happened during the v6 campaign or never transferred from
+CARLA to MetaDrive/SUMO is not separated here; the colleague reports the same
+pretrain crashing 100% on their detour benchmark, which argues the transfer is
+fragile in both directions.
