@@ -20,5 +20,3 @@ simulation:
   max_ego_lanes: 8
   zone_tail_m: 8.0
   zone_min_m: 20.0
-  # Corridor floor: 50 m brake/accel approach + zone. Not the T/X [60, 90].
-  max_path_length_levels: [90, 120]

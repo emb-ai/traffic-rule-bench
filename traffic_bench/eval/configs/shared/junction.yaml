@@ -13,5 +13,3 @@ auxiliary:
 # Other sign families keep root simulation.spawn_velocity_levels_ms.
 simulation:
   spawn_velocity_levels_ms: [3.61]
-  # T/X: spawn ~15 m before the node; dest just past the first exit.
-  max_path_length_levels: [60, 90]

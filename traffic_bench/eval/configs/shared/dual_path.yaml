@@ -15,5 +15,3 @@ simulation:
   spawn_velocity_ms: 2.5
   sign_distance_before_end: 0.0
   spawn_distance_before_end: 20.0
-  # T/X: spawn 20 m before the fork; dest past the first signed exit.
-  max_path_length_levels: [60, 90]

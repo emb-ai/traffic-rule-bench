@@ -14,8 +14,6 @@ simulation:
   # Dense ring yield needs more wall-clock than junction (600 @ 10 Hz).
   horizon: 1000
   spawn_velocity_levels_ms: [3.61]
-  # Same T/X intersection budget: decision is on the ring, not a 50 m run-up.
-  max_path_length_levels: [60, 90]
 
 # green=yield zone, yellow=nearest main arc, cyan/magenta=heading rays
 gif:

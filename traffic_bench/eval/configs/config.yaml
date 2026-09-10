@@ -60,9 +60,6 @@ simulation:
   #   route × density(p25/p50/p75) × ego_speed(p25/p50/p75) × n_variations
   # Speed plates keep task-conditioned approach speed (skip ego_speed axis).
   # Priority signs (shared/junction + shared/roundabout) override to [3.61] only.
-  # Route budget: this root value is the corridor default (speed/detour/crosswalk)
-  # — 50 m kinematic approach + zone. T/X/O intersection families override to
-  # [60, 90] in shared/{junction,dual_path,roundabout,blocked}.yaml.
   max_path_length_m: 90.0
   max_path_length_levels: [90, 120]
   traffic_density_levels: [0.1462, 0.2682, 0.6]
