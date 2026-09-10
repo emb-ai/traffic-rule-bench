@@ -19,6 +19,8 @@ simulation:
   sign_distance_before_end: 12.0
   spawn_distance_before_end: 50.0
   min_hops_after_depart: 0
+  # 50 m spawn before the zebra; 60 m would leave almost no post-crossing dest.
+  max_path_length_levels: [90, 120]
 
 gif:
   window_m: 130

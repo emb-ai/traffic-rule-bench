@@ -11,6 +11,8 @@ simulation:
   spawn_velocity_ms: 2.5
   sign_distance_from_start: 10.0
   spawn_distance_before_end: 25.0
+  # Intersection approach (T/X): dest just past the forbidden arm.
+  max_path_length_levels: [60, 90]
   compliant_stop_success_seconds: 3.0
   compliant_stop_max_dist_m: 10.0
   compliant_stop_speed_mps: 0.5

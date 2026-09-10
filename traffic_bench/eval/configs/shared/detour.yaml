@@ -18,3 +18,5 @@ simulation:
   sign_distance_before_end: 12.0
   approach_before_sign_m: 50.0
   tail_after_sign_m: 30.0
+  # Corridor floor: approach 50 + zone/tail. Keep above T/X [60, 90].
+  max_path_length_levels: [90, 120]
