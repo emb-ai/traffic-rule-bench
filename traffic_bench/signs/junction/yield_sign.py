@@ -1195,6 +1195,15 @@ class StopSign(YieldSign):
             # only line that reads it, and _is_stop_line_violating's
             # "return not stopped" then fired unconditionally: a rule expert
             # that halted to 0.001 m/s scored 0.05 compliance over 20 episodes.
+            #
+            # Checked against the colleague's own collection, which reports 50
+            # clean idm_rule runs out of 50 on junc_134684395: replaying ten of
+            # those scenes from their manifest, with their scenes_root and the
+            # same expert, this file before the fix called nine of the ten a
+            # violation and after it agrees with them ten out of ten. Their
+            # tree carries the unfixed version; their collection never reaches
+            # the verdict because the episode ends first.
+            #
             # Report the latch here; do not update or clear it.
             state = self._vehicle_states_stop.get(vid)
             return bool(state and state.get("stopped_before_line"))
