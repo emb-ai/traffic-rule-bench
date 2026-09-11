@@ -486,6 +486,44 @@ def replay_in_our_env(
         except Exception:
             pass
 
+        # Dual-path signs (4.1.x / 3.18.x / 5.7.x): the manifest's destination is
+        # the compliant one, so the env was built routing through the allowed turn
+        # -- a route that gives the answer away. A learned policy is evaluated on
+        # MetaDrive's default route to the baseline destination, through the
+        # forbidden turn, and that is the route its frames must carry.
+        # DUMP_DUAL_PATH_ROUTE=baseline keeps it for the whole replay; =reroute
+        # switches to the compliant route once the expert is on the allowed path.
+        from traffic_bench.eval.engine.map.lane_keys import lane_edge_id
+        from traffic_bench.eval.run.env import _apply_manifest_ego_destination
+        from traffic_bench.eval.signs.dual_path.nav import install_one_way_compliant_nav_route
+        from traffic_bench.eval.signs.dual_path.place import (
+            resolve_row_for_policy,
+            row_uses_dual_path_nav,
+        )
+
+        dual_path_mode = None
+        dual_path_allowed_edges: set = set()
+        dual_path_rerouted_step = None
+        if row_uses_dual_path_nav(row):
+            dual_path_mode = os.environ.get("DUMP_DUAL_PATH_ROUTE")
+            if dual_path_mode not in ("baseline", "reroute"):
+                raise ValueError(
+                    f"dual-path row {row.get('scene_id')}: set DUMP_DUAL_PATH_ROUTE="
+                    f"baseline|reroute (got {dual_path_mode!r}); the manifest's "
+                    f"compliant destination must not reach the frames")
+            dual_path_allowed_edges = {
+                str(e) for e in ((row.get("dual_path") or {}).get("straight_path") or [])}
+            if not dual_path_allowed_edges:
+                raise ValueError(f"dual-path row {row.get('scene_id')}: no straight_path")
+            baseline_row = resolve_row_for_policy(row, "plant2")
+            if not _apply_manifest_ego_destination(env, baseline_row):
+                raise RuntimeError(
+                    f"dual-path row {row.get('scene_id')}: could not route to the "
+                    f"baseline destination {baseline_row.get('destination_lane_id')}")
+            nav0 = env.vehicle.navigation
+            print(f"[replay] dual-path route={dual_path_mode}: "
+                  f"{nav0.checkpoints[0]} -> {nav0.checkpoints[-1]} "
+                  f"({len(nav0.checkpoints)} checkpoints, baseline destination)")
 
         ego_rec_id = None
         replay_diag = {"steps": 0, "updated_sum": 0, "unmatched_sum": 0,
@@ -626,6 +664,18 @@ def replay_in_our_env(
                     print(f"[replay] step={step} updated={n_upd}/"
                           f"{len(npc_frames[step])} unmatched_rec={n_un} "
                           f"ego_err={ego_err}")
+
+            if dual_path_mode == "reroute" and dual_path_rerouted_step is None:
+                ego_lane = getattr(env.vehicle, "lane", None)
+                ego_edge = lane_edge_id(str(ego_lane.index)) if ego_lane is not None else ""
+                if ego_edge in dual_path_allowed_edges:
+                    if not install_one_way_compliant_nav_route(env, row):
+                        raise RuntimeError(
+                            f"dual-path row {row.get('scene_id')}: compliant re-route "
+                            f"failed at step {step}")
+                    dual_path_rerouted_step = step
+                    print(f"[replay] dual-path re-route to the compliant destination "
+                          f"at step {step} (on {ego_edge})")
 
             # PlanT2: capture AFTER teleporting ego+NPC to this frame's recorded
             # positions and BEFORE env.step. Matches PlanTDataset pre-step

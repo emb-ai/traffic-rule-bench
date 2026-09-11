@@ -234,6 +234,25 @@ def forbidden_edges_for_compliant_nav(row: dict) -> list[str]:
     return one_way
 
 
+def classify_dual_path_exit(edge_id, row: dict) -> str | None:
+    """Which way a dual-path ego left the signed approach.
+
+    None while it is still on the approach edge or inside the junction
+    (internal ``:`` edges); otherwise ``compliant`` for an edge of the allowed
+    path (``straight_path``), ``baseline`` for an edge of the forbidden path
+    (``turn_path``) and ``other`` for any further exit of the junction.
+    """
+    edge = str(edge_id or "")
+    if not edge or edge.startswith(":") or edge == str(row.get("road_id") or ""):
+        return None
+    dual = row.get("dual_path") or {}
+    if edge in {str(e) for e in (dual.get("straight_path") or [])}:
+        return "compliant"
+    if edge in {str(e) for e in (dual.get("turn_path") or [])}:
+        return "baseline"
+    return "other"
+
+
 def install_one_way_compliant_nav_route(env, row: dict) -> bool:
     """Rebuild ego nav on the allowed route with the forbidden path blocked."""
     dual = row.get("dual_path") or {}

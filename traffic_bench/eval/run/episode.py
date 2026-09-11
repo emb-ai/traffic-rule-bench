@@ -96,6 +96,7 @@ from traffic_bench.signs.junction import (
 from traffic_bench.eval.engine.map.lane_keys import clamp_lane_key_to_graph, lane_edge_id, make_lane_key
 from traffic_bench.eval.signs.dual_path.nav import (
     OneWaySumoTrafficManager,
+    classify_dual_path_exit,
     install_one_way_compliant_nav_route,
     resolve_row_background_excluded_edges,
 )
@@ -696,6 +697,27 @@ def run_one_episode(
         # Re-apply after spawn/signs/policy — nav may have been rebuilt.
         _apply_destination_along_cap(base_env, row)
 
+        # Dual-path: record which exit the ego took and whether it reached the
+        # compliant destination, whatever its route says. DUAL_PATH_REROUTE=1
+        # re-routes a learned policy to the compliant destination once it is on
+        # the allowed path, so arriving there counts; the default 0 keeps the
+        # benchmark protocol (a learned policy arrives only past the forbidden turn).
+        dual_path_row = _row_uses_dual_path_nav(row)
+        dual_path_exit = None
+        dual_path_exit_edge = None
+        dual_path_reached_compliant = False
+        dual_path_rerouted_step = None
+        reroute_flag = os.environ.get("DUAL_PATH_REROUTE", "0")
+        if reroute_flag not in ("0", "1"):
+            raise ValueError(f"DUAL_PATH_REROUTE must be 0 or 1, got {reroute_flag!r}")
+        dual_path_reroute = (dual_path_row and reroute_flag == "1"
+                             and policy_type not in COMPLIANT_NAV_POLICIES)
+        if dual_path_row:
+            dual_path_allowed_edges = {
+                str(e) for e in ((row.get("dual_path") or {}).get("straight_path") or [])}
+            dual_path_compliant_edge = str(row["compliant_destination_edge_id"])
+            dual_path_compliant_cap = float(row["compliant_destination_max_along_m"])
+
         episode_horizon = _manifest_horizon(row, max_steps)
         for step in range(episode_horizon):
             if policy_obj is not None:
@@ -714,6 +736,28 @@ def run_one_episode(
             steps += 1
 
             vehicle = base_env.agent
+            if dual_path_row and vehicle is not None and getattr(vehicle, "lane", None) is not None:
+                ego_lane = vehicle.lane
+                ego_edge = lane_edge_id(str(ego_lane.index))
+                if dual_path_exit is None:
+                    dual_path_exit = classify_dual_path_exit(ego_edge, row)
+                    if dual_path_exit is not None:
+                        dual_path_exit_edge = ego_edge
+                if ego_edge == dual_path_compliant_edge and not dual_path_reached_compliant:
+                    along = float(ego_lane.local_coordinates(vehicle.position)[0])
+                    target = min(dual_path_compliant_cap, max(0.5, float(ego_lane.length) - 5.0))
+                    dual_path_reached_compliant = along >= target - 2.0
+                if (dual_path_reroute and dual_path_rerouted_step is None
+                        and ego_edge in dual_path_allowed_edges):
+                    if not install_one_way_compliant_nav_route(base_env, row):
+                        raise RuntimeError(
+                            f"dual-path {row.get('scene_id')}: compliant re-route failed "
+                            f"at step {step}")
+                    _apply_destination_along_cap(
+                        base_env, resolve_row_for_policy(row, "idm_rule"))
+                    dual_path_rerouted_step = step
+                    print(f"[DualPathNav] re-routed {policy_type} to the compliant "
+                          f"destination at step {step} (on {ego_edge})")
             sign_mgr = getattr(base_env.engine, "traffic_sign_manager", None)
             current_violation_texts = []
             current_violated_class_names: set = set()
@@ -1192,6 +1236,12 @@ def run_one_episode(
                 if is_blocked_road_row
                 else bool(reached_dest and not crashed)
             ),
+            **({
+                "dual_path_exit": dual_path_exit,
+                "dual_path_exit_edge": dual_path_exit_edge,
+                "dual_path_reached_compliant": bool(dual_path_reached_compliant),
+                "dual_path_rerouted_step": dual_path_rerouted_step,
+            } if dual_path_row else {}),
             "route_completion_pct": route_completion_pct,
             "infraction_penalty": infraction_penalty,
             "driving_score": driving_score,
