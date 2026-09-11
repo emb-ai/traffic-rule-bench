@@ -530,6 +530,19 @@ def run_one_episode(
                     policy_obj.NORMAL_SPEED = v0_kmh
                     policy_obj.MAX_SPEED = max(float(getattr(policy_obj, "MAX_SPEED", 0.0)), v0_kmh)
                     print(f"[PlainIDM] cruise = spawn speed {v0_kmh:.1f} km/h")
+                    # Record what the policy drives with, not the pre-override sample:
+                    # ego_params otherwise shows the sampled cruise, not v0.
+                    _kmh = ("NORMAL_SPEED", "MAX_SPEED", "CREEP_SPEED")
+                    sampled_ego_params = {
+                        k: (float(getattr(policy_obj, k)) / 3.6 if k in _kmh
+                            else abs(float(getattr(policy_obj, k))) if k == "DEACC_FACTOR"
+                            else getattr(policy_obj, k))
+                        for k in ("NORMAL_SPEED", "MAX_SPEED", "CREEP_SPEED", "ACC_FACTOR",
+                                  "DEACC_FACTOR", "DISTANCE_WANTED", "TIME_WANTED", "LANE_CHANGE_FREQ")
+                        if hasattr(policy_obj, k)
+                    }
+                    sampled_ego_params["cruise"] = "spawn_speed"
+                    sampled_ego_params["ego_variant"] = ego_variant
             if hasattr(policy_obj, "STOP_WAIT_STEPS"):
                 policy_obj.STOP_WAIT_STEPS = int(
                     row.get("stop_wait_steps", DEFAULT_STOP_WAIT_STEPS)
