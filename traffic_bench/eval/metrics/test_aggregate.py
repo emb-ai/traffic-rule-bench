@@ -1,59 +1,56 @@
-"""Per-map aggregation: map identity, std over maps, bootstrap CI, report."""
+"""Per-map aggregation: the map comes from the manifest only, inputs are
+parsed strictly, std over maps, bootstrap CI, report, combine, plot."""
 from __future__ import annotations
 
 import csv
 import json
 import statistics
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from traffic_bench.eval.engine.expand.world_axes import iter_world_axis_cells
 from traffic_bench.eval.metrics import aggregate as agg
+from traffic_bench.eval.metrics import combine
+from traffic_bench.eval.metrics import csv as csv_mod
+from traffic_bench.eval.metrics import plot_benchmark
 from traffic_bench.eval.metrics import report
 from traffic_bench.eval.metrics.csv import (
     CSV_COLUMNS,
+    ManifestIndex,
     _build_row,
-    _default_manifests_root,
     _episode_to_replay,
-    _load_manifest_lookup,
+    load_manifest,
 )
 from traffic_bench.eval.metrics.map_id import (
-    base_scene_id,
-    map_id_for,
+    MAP_ID_SOURCE,
+    ManifestError,
     map_id_from_manifest_row,
 )
 
 
 # ---------------------------------------------------------------------------
-# map identity
+# map identity: the manifest's net_path, nothing else
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("scene_id, expected", [
-    ("seg_1067603714_v0", "seg_1067603714"),
-    ("seg_1067603714_v0_z60a60n2_td50_sv1_v0", "seg_1067603714"),
-    ("seg_1067603714_v2_z100a100n1_td50_sv2_v2", "seg_1067603714"),
-    ("seg_389266120_0_v1", "seg_389266120_0"),
-    ("seg_123_v1_rl90_td50_sv1_v2", "seg_123"),
-    # v6 speed families carry the spawn lane before the variant
-    ("seg_100833537_0_l0_v0", "seg_100833537_0"),
-    ("seg_100833537_0_l1_v3_rl120_td75_sv0_v1", "seg_100833537_0"),
-    ("junc_cluster_331124312_331124313", "junc_cluster_331124312_331124313"),
-    ("junc_8669788456", "junc_8669788456"),
-    ("", ""),
-])
-def test_base_scene_id_strips_variant_and_world_cell(scene_id, expected):
-    assert base_scene_id(scene_id) == expected
-
-
-def test_map_id_prefers_manifest_net_path():
+def test_map_id_is_the_net_path_directory():
     assert map_id_from_manifest_row({"net_path": "seg_1067603714/map.net.xml"}) == "seg_1067603714"
     assert map_id_from_manifest_row(
         {"net_path": "data/scenes/speed_limit/seg_154326272_4/map.net.xml"}) == "seg_154326272_4"
-    assert map_id_from_manifest_row({"net_path": "seg_y"}) == "seg_y"
-    assert map_id_from_manifest_row({}) is None
-    assert map_id_from_manifest_row(None) is None
-    # manifest wins over the scene id, the scene id is the fallback
-    assert map_id_for("seg_1_v0", {"net_path": "seg_other/map.net.xml"}) == "seg_other"
-    assert map_id_for("seg_1_v0_z60a60n2_td50_sv1_v0", None) == "seg_1"
+    assert map_id_from_manifest_row({"net_path": "junc_8669788456/map.net.xml"}) == "junc_8669788456"
+
+
+@pytest.mark.parametrize("net_path", [
+    None, "", "   ", 5,
+    "seg_y",          # a bare directory names no net file
+    "map.net.xml",    # a net file outside any scene directory
+])
+def test_map_id_without_a_usable_net_path_raises(net_path):
+    row = {"scene_id": "seg_1_v0"}
+    if net_path is not None:
+        row["net_path"] = net_path
+    with pytest.raises(ManifestError):
+        map_id_from_manifest_row(row)
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +64,8 @@ def _row(map_id: str, scene_id: str, *, success: bool = True, arrived: bool = Tr
         "variant": "default", "display_policy": baseline, "backend": "sumo",
         "pdd_code": pdd, "sign_slug": pdd.replace(".", "_"),
         "target_sign_class": "SpeedLimitSign", "is_no_entry_sign": False,
-        "scene_id": scene_id, "scene_uid": f"{scene_id}_lane0_seed1_v0", "map_id": map_id,
+        "scene_id": scene_id, "scene_uid": f"{scene_id}_lane0_seed1_v0",
+        "map_id": map_id, "net_path": f"{map_id}/map.net.xml",
         "manifest_source": "", "is_paired_scene": False,
         "pdd_code_start": "", "pdd_code_end": "", "pdd_code_target": pdd,
         "sign_type_start": "", "sign_type_end": "", "zone_length_m": None,
@@ -135,16 +133,20 @@ def test_aggregate_by_map_collapses_each_map_then_averages():
 
 
 def test_map_id_groups_augmented_scene_ids_of_one_net():
-    """The old per-map aggregation keyed on scene_id, which carries the
-    augmentation suffix, so every episode was its own map."""
     rows = _four_map_rows()
     assert len({r["scene_id"] for r in rows}) == 12
     assert agg.aggregate_by_map(rows)["n_maps"] == 4
-    # a row without map_id falls back to the stripped scene id
-    for r in rows:
-        r.pop("map_id")
-    assert agg.aggregate_by_map(rows)["n_maps"] == 4
     assert agg.map_key(rows[0]) == "3.24|seg_a"
+
+
+def test_row_without_map_id_raises_instead_of_parsing_the_scene_id():
+    rows = _four_map_rows()
+    rows[5]["map_id"] = ""
+    with pytest.raises(ManifestError):
+        agg.aggregate_by_map(rows)
+    del rows[5]["map_id"]
+    with pytest.raises(ManifestError):
+        agg.map_key(rows[5])
 
 
 def test_same_net_under_two_signs_is_two_maps():
@@ -162,6 +164,15 @@ def test_per_map_mean_differs_from_per_episode_when_unbalanced():
     out = agg.aggregate_by_map(rows)
     assert out["success_rate"] == pytest.approx(0.5)
     assert (out["episodes_per_map_min"], out["episodes_per_map_max"]) == (1, 3)
+
+
+def test_non_finite_values_raise_and_undefined_ones_are_left_out():
+    with pytest.raises(ValueError):
+        agg._mean([1.0, float("nan")])
+    with pytest.raises(ValueError):
+        agg.map_values([{"x": float("inf")}], "x")
+    assert agg._mean([None, 1.0, 3.0]) == 2.0
+    assert agg.map_values([{"x": None}, {"x": 0.5}], "x") == [0.5]
 
 
 def test_bootstrap_ci_is_seeded_and_optional():
@@ -195,7 +206,62 @@ def test_bootstrap_mean_ci_matches_normal_approximation_for_large_n():
 
 
 # ---------------------------------------------------------------------------
-# csv builder: map_id column and manifest sources
+# manifest loading
+# ---------------------------------------------------------------------------
+def _write_jsonl(path: Path, rows: list) -> Path:
+    """Rows are dicts, or raw strings for deliberately broken lines."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join((r if isinstance(r, str) else json.dumps(r)) + "\n" for r in rows),
+                    encoding="utf-8")
+    return path
+
+
+def test_load_manifest_reads_a_manifest_file_or_a_chunks_dir(tmp_path: Path):
+    rows = [
+        {"scene_id": "seg_1_v0", "net_path": "seg_1/map.net.xml"},
+        {"scene_id": "seg_1_v1_rl90_td50_sv1_v1", "net_path": "seg_1/map.net.xml"},
+    ]
+    idx = load_manifest(_write_jsonl(tmp_path / "real_manifest.jsonl", rows), {0})
+    assert set(idx.rows) == {(0, "seg_1_v0"), (0, "seg_1_v1_rl90_td50_sv1_v1")}
+    assert idx.row(0, "seg_1_v0")["net_path"] == "seg_1/map.net.xml"
+    _write_jsonl(tmp_path / "chunks" / "var_0" / "var_0.jsonl", rows[:1])
+    _write_jsonl(tmp_path / "chunks" / "var_1" / "var_1.jsonl", rows[1:])
+    idx = load_manifest(tmp_path / "chunks", {0, 1})
+    assert set(idx.rows) == {(0, "seg_1_v0"), (1, "seg_1_v1_rl90_td50_sv1_v1")}
+    with pytest.raises(ManifestError, match="not in the manifest"):
+        idx.row(0, "seg_1_v1_rl90_td50_sv1_v1")
+
+
+def test_load_manifest_refuses_anything_it_would_have_to_guess(tmp_path: Path):
+    good = {"scene_id": "seg_1_v0", "net_path": "seg_1/map.net.xml"}
+    with pytest.raises(FileNotFoundError, match="manifest not found"):
+        load_manifest(tmp_path / "missing.jsonl", {0})
+    # a run directory is not a manifest, even with real_manifest.jsonl inside
+    _write_jsonl(tmp_path / "run" / "real_manifest.jsonl", [good])
+    with pytest.raises(FileNotFoundError, match="chunks"):
+        load_manifest(tmp_path / "run", {0})
+    # a chunks/ dir must cover every var index scored
+    _write_jsonl(tmp_path / "chunks" / "var_0" / "var_0.jsonl", [good])
+    with pytest.raises(FileNotFoundError, match="var_1"):
+        load_manifest(tmp_path / "chunks", {0, 1})
+    for name, rows in {
+        "empty": [],
+        "no_net_path": [{"scene_id": "seg_1_v0"}],
+        "no_scene_id": [{"net_path": "seg_1/map.net.xml"}],
+        "conflict": [good, {"scene_id": "seg_1_v0", "net_path": "seg_2/map.net.xml"}],
+    }.items():
+        with pytest.raises(ManifestError):
+            load_manifest(_write_jsonl(tmp_path / f"{name}.jsonl", rows), {0})
+    torn = _write_jsonl(tmp_path / "torn.jsonl", [good, '{"scene_id": "seg_1_v1", "net_pa'])
+    with pytest.raises(ValueError, match=r"torn.jsonl:2: malformed JSON"):
+        load_manifest(torn, {0})
+    # one scene_id twice with the same net (junction rows differ by seed only)
+    same = load_manifest(_write_jsonl(tmp_path / "dup.jsonl", [good, dict(good, seed=5)]), {0})
+    assert same.row(0, "seg_1_v0")["net_path"] == "seg_1/map.net.xml"
+
+
+# ---------------------------------------------------------------------------
+# csv builder: one episode → one row
 # ---------------------------------------------------------------------------
 def _episode(scene_id: str, **extra) -> dict:
     ep = {
@@ -209,47 +275,203 @@ def _episode(scene_id: str, **extra) -> dict:
     return ep
 
 
-def test_build_row_stamps_map_id_from_manifest_or_scene_id():
+def _index(rows: dict[str, str]) -> ManifestIndex:
+    """{scene_id: net_path} → a one-file manifest index."""
+    return ManifestIndex({(0, sid): {"scene_id": sid, "net_path": net}
+                          for sid, net in rows.items()}, [Path("real_manifest.jsonl")])
+
+
+def test_build_row_takes_the_map_from_the_manifest_row():
     sid = "seg_1067603714_v0_z60a60n2_td50_sv1_v0"
-    lookup = {(0, sid): {"scene_id": sid, "net_path": "seg_1067603714/map.net.xml"}}
-    row = _build_row(_episode_to_replay(_episode(sid)), "var_0", 0, "idm_default", lookup)
-    assert row["map_id"] == "seg_1067603714"
-    row = _build_row(_episode_to_replay(_episode(sid)), "var_0", 0, "idm_default", None)
-    assert row["map_id"] == "seg_1067603714"
-    other = {(0, sid): {"scene_id": sid, "net_path": "seg_other/map.net.xml"}}
-    row = _build_row(_episode_to_replay(_episode(sid)), "var_0", 0, "idm_default", other)
+    row = _build_row(_episode_to_replay(_episode(sid)), "var_0", 0, "idm_default",
+                     _index({sid: "seg_1067603714/map.net.xml"}))
+    assert (row["map_id"], row["net_path"]) == ("seg_1067603714", "seg_1067603714/map.net.xml")
+    # whatever the scene id says, the manifest decides
+    row = _build_row(_episode_to_replay(_episode(sid)), "var_0", 0, "idm_default",
+                     _index({sid: "seg_other/map.net.xml"}))
     assert row["map_id"] == "seg_other"
-    assert "map_id" in CSV_COLUMNS
+    assert {"map_id", "net_path"} <= set(CSV_COLUMNS)
+    # an episode the manifest does not list has no map: an error, not a guess
+    with pytest.raises(ManifestError, match="not in the manifest"):
+        _build_row(_episode_to_replay(_episode("seg_9_v0")), "var_0", 0, "idm_default",
+                   _index({sid: "seg_1067603714/map.net.xml"}))
 
 
-def test_manifest_lookup_accepts_flat_real_manifest(tmp_path: Path):
-    man = tmp_path / "real_manifest.jsonl"
-    rows = [
-        {"scene_id": "seg_1_v0", "net_path": "seg_1/map.net.xml", "var_idx": 0},
-        {"scene_id": "seg_1_v1_rl90_td50_sv1_v1", "net_path": "seg_1/map.net.xml", "var_idx": 1},
-    ]
-    man.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
-    # the run dir (holding real_manifest.jsonl), the file itself, and the
-    # default resolution from the run dir all lead to the same lookup
-    for root in (tmp_path, man, _default_manifests_root(tmp_path)):
-        lookup = _load_manifest_lookup(root, wanted_var_idxs={0})
-        assert set(lookup) == {(0, "seg_1_v0"), (0, "seg_1_v1_rl90_td50_sv1_v1")}
-        assert lookup[(0, "seg_1_v0")]["net_path"] == "seg_1/map.net.xml"
-    # chunks/ layout still wins when present
-    chunks = tmp_path / "chunks" / "var_0"
-    chunks.mkdir(parents=True)
-    (chunks / "var_0.jsonl").write_text(json.dumps(rows[0]) + "\n", encoding="utf-8")
-    assert _default_manifests_root(tmp_path) == (tmp_path / "chunks").resolve()
-    assert set(_load_manifest_lookup(tmp_path / "chunks", {0})) == {(0, "seg_1_v0")}
-    # nothing found → empty lookup, no exception
-    assert _load_manifest_lookup(tmp_path / "missing", {0}) == {}
+def test_episode_records_must_be_well_formed():
+    idx = _index({"seg_1_v0": "seg_1/map.net.xml"})
+    no_uid = {k: v for k, v in _episode("seg_1_v0").items() if k != "scene_uid"}
+    with pytest.raises(ValueError, match="scene_uid"):
+        _episode_to_replay(no_uid)
+    with pytest.raises(ValueError, match="bool"):
+        _episode_to_replay(_episode("seg_1_v0", reached_dest="yes"))
+    with pytest.raises(ValueError, match="integer"):
+        _build_row(_episode_to_replay(_episode("seg_1_v0", steps=12.5)), "var_0", 0, "b", idx)
+    with pytest.raises(ValueError, match="non-finite"):
+        _build_row(_episode_to_replay(_episode("seg_1_v0", driving_score=float("nan"))),
+                   "var_0", 0, "b", idx)
+    with pytest.raises(ValueError, match="dict"):
+        _episode_to_replay(_episode("seg_1_v0", violations_by_class_step=[1, 2]))
+    # an absent optional metric stays undefined
+    row = _build_row(_episode_to_replay(_episode("seg_1_v0")), "var_0", 0, "b", idx)
+    assert row["min_ttc_sec"] is None and row["final_step"] == 120
 
 
 # ---------------------------------------------------------------------------
-# csv loader + end-to-end aggregate → report
+# end to end: `metrics csv` on stop / speed scene ids of every format
 # ---------------------------------------------------------------------------
-def _write_episode_csv(path: Path, rows: list[dict], with_map_id: bool) -> None:
-    cols = [c for c in CSV_COLUMNS if with_map_id or c != "map_id"]
+def _grid(task_conditioned: bool) -> list:
+    """The world grid the expanders iterate (route × density × [speed] × NPC)."""
+    return list(iter_world_axis_cells(route_levels=[90.0, 120.0],
+                                      sim=SimpleNamespace(n_variations=3),
+                                      task_conditioned_spawn=task_conditioned))
+
+
+def _stop_rows(name: str, cells: list) -> list[dict]:
+    """junction/expand.py (stop 2.5): scene_id = scene_name + "_" + world
+    cell; approach, convoy and lanes are not in the id, so the tenth row
+    repeats the first cell under another approach."""
+    picked = cells[::5][:9]
+    spec = [(c, 0, 1000 + i) for i, c in enumerate(picked)] + [(picked[0], 1, 2000)]
+    return [{"scene_id": f"{name}_{c.scene_suffix(route_augment=True)}",
+             "net_path": f"{name}/map.net.xml", "seed": seed, "var_idx": c.npc_var,
+             "spawn_lane_num": lane, "pdd_code": "2.5"} for c, lane, seed in spec]
+
+
+def _speed_rows(name: str, cells: list) -> list[dict]:
+    """speed/expand.py (3.24): scene_id = f"{scene_name}_l{lane}_v{variant}"
+    + "_" + world cell."""
+    rows = []
+    for k in range(10):
+        c = cells[(k * 7) % len(cells)]
+        rows.append({"scene_id": f"{name}_l{k % 2}_v{k // 2}_{c.scene_suffix(route_augment=True)}",
+                     "net_path": f"{name}/map.net.xml", "seed": 5000 + k, "var_idx": k // 2,
+                     "spawn_lane_num": k % 2, "pdd_code": "3.24"})
+    return rows
+
+
+def _speed_rows_aug27(name: str) -> list[dict]:
+    """data/runs/*/test on the node, built 2026-08-27 (4.6 here):
+    seg_x_l0_td2_v0, no manifest variant after the lane."""
+    return [{"scene_id": f"{name}_l{k % 2}_td{k // 2 % 3}_v{k // 6}",
+             "net_path": f"{name}/map.net.xml", "seed": 7000 + k, "var_idx": k // 6,
+             "spawn_lane_num": k % 2, "pdd_code": "4.6"} for k in range(10)]
+
+
+def _episode_for(m: dict, success: bool) -> dict:
+    return {
+        "ok": True, "backend": "sumo", "scene_id": m["scene_id"],
+        "scene_uid": f"{m['scene_id']}_lane{m['spawn_lane_num']}_seed{m['seed']}_v{m['var_idx']}",
+        "policy": "idm", "variant": "default", "sign_type": m["pdd_code"], "seed": m["seed"],
+        "reached_dest": success, "success": success, "crashed": False, "out_of_road": False,
+        "steps": 300, "route_completion_pct": 100.0 if success else 40.0,
+        "violations": 0, "violations_event_count": 0,
+        "violations_by_class_step": {}, "violations_by_class_event": {},
+        "in_zone_total_steps": 10, "in_zone_by_class_step": {},
+    }
+
+
+def _layout(root: Path, manifest_rows: list[dict], share: dict[str, float]) -> tuple[Path, Path]:
+    """<root>/test/real_manifest.jsonl + eval_out/idm/episodes_idm.jsonl; the
+    first round(share * 10) augmentations of each map succeed."""
+    split = root / "test"
+    man = _write_jsonl(split / "real_manifest.jsonl", manifest_rows)
+    seen: dict[str, int] = {}
+    eps = []
+    for m in manifest_rows:
+        mid = m["net_path"].split("/")[0]
+        i = seen.get(mid, 0)
+        seen[mid] = i + 1
+        eps.append(_episode_for(m, i < round(share[mid] * 10)))
+    _write_jsonl(split / "eval_out" / "idm" / "episodes_idm.jsonl", eps)
+    return split, man
+
+
+def _metrics_csv(monkeypatch, *args) -> None:
+    monkeypatch.setattr("sys.argv", ["metrics csv", *map(str, args)])
+    csv_mod.main()
+
+
+def test_stop_and_speed_maps_come_from_the_manifest_whatever_the_id_format(
+        tmp_path: Path, monkeypatch):
+    jc, sc = _grid(False), _grid(True)
+    rows = (_stop_rows("junc_10036627085", jc) + _stop_rows("junc_1056023309", jc)
+            + _speed_rows("seg_100833537_0", sc) + _speed_rows("seg_1047867720_0", sc)
+            + _speed_rows_aug27("seg_1004765070_0") + _speed_rows_aug27("seg_128075583_1"))
+    share = {"junc_10036627085": 1.0, "junc_1056023309": 0.3, "seg_100833537_0": 0.9,
+             "seg_1047867720_0": 0.2, "seg_1004765070_0": 0.5, "seg_128075583_1": 0.1}
+    split, man = _layout(tmp_path, rows, share)
+    out_csv = split / "eval_out" / "metrics_per_episode.csv"
+    _metrics_csv(monkeypatch, "--episodes-root", split / "eval_out", "--manifest", man,
+                 "--out", out_csv)
+    by_sign: dict[str, list[dict]] = {}
+    for r in agg.load_episode_csv(out_csv):
+        by_sign.setdefault(r["pdd_code"], []).append(r)
+    expected = {"2.5": (1.0 + 0.3) / 2, "3.24": (0.9 + 0.2) / 2, "4.6": (0.5 + 0.1) / 2}
+    assert set(by_sign) == set(expected)
+    for pdd, rs in by_sign.items():
+        out = agg.aggregate_by_map(rs, n_boot=200)
+        assert (out["n"], out["n_maps"], out["episodes_per_map_min"],
+                out["episodes_per_map_max"]) == (20, 2, 10, 10), pdd
+        assert out["success_rate"] == pytest.approx(expected[pdd]), pdd
+    # a stop map lists one cell twice (two approaches): 18 scene ids, 20 episodes
+    assert len({r["scene_id"] for r in by_sign["2.5"]}) == 18
+    assert {r["map_id"] for r in by_sign["2.5"]} == {"junc_10036627085", "junc_1056023309"}
+
+
+def test_metrics_csv_needs_the_manifest_the_episodes_were_run_from(
+        tmp_path: Path, monkeypatch, capsys):
+    sc = _grid(True)
+    split, man = _layout(tmp_path, _speed_rows("seg_100833537_0", sc), {"seg_100833537_0": 0.5})
+    root = split / "eval_out"
+    out_csv = tmp_path / "m.csv"
+    with pytest.raises(SystemExit) as e:
+        _metrics_csv(monkeypatch, "--episodes-root", root, "--out", out_csv)
+    assert e.value.code == 2
+    assert "--manifest" in capsys.readouterr().err
+    with pytest.raises(FileNotFoundError, match="manifest not found"):
+        _metrics_csv(monkeypatch, "--episodes-root", root,
+                     "--manifest", tmp_path / "nope.jsonl", "--out", out_csv)
+    # the split dir holds real_manifest.jsonl, but a directory is read as chunks/
+    with pytest.raises(FileNotFoundError, match="chunks"):
+        _metrics_csv(monkeypatch, "--episodes-root", root, "--manifest", split, "--out", out_csv)
+    other = _write_jsonl(tmp_path / "other.jsonl", _speed_rows("seg_1047867720_0", sc))
+    with pytest.raises(ManifestError, match="not in the manifest"):
+        _metrics_csv(monkeypatch, "--episodes-root", root, "--manifest", other, "--out", out_csv)
+    assert not out_csv.exists()
+    _metrics_csv(monkeypatch, "--episodes-root", root, "--manifest", man, "--out", out_csv)
+    assert {r["map_id"] for r in agg.load_episode_csv(out_csv)} == {"seg_100833537_0"}
+
+
+def test_failed_or_torn_episode_records_stop_the_build(tmp_path: Path, monkeypatch):
+    split, man = _layout(tmp_path, _speed_rows("seg_100833537_0", _grid(True)),
+                         {"seg_100833537_0": 0.5})
+    ep_file = split / "eval_out" / "idm" / "episodes_idm.jsonl"
+    eps = [json.loads(line) for line in ep_file.read_text(encoding="utf-8").splitlines()]
+    failed = dict(eps[3], ok=False, error="Traceback …")
+    out_csv = tmp_path / "m.csv"
+    args = ("--episodes-root", split / "eval_out", "--manifest", man, "--out", out_csv)
+    _write_jsonl(ep_file, eps[:3] + [failed] + eps[4:])
+    with pytest.raises(ValueError, match="failed to run"):
+        _metrics_csv(monkeypatch, *args)
+    assert not out_csv.exists()
+    # rerun_failed appends the successful record: the last record wins
+    _write_jsonl(ep_file, eps[:3] + [failed] + eps[4:] + [eps[3]])
+    _metrics_csv(monkeypatch, *args)
+    assert len(agg.load_episode_csv(out_csv)) == 10
+    ep_file.write_text(ep_file.read_text(encoding="utf-8") + '{"ok": true, "scene_id": "seg_1',
+                       encoding="utf-8")
+    with pytest.raises(ValueError, match=r"episodes_idm.jsonl:12: malformed JSON"):
+        _metrics_csv(monkeypatch, *args)
+    _write_jsonl(ep_file, eps + [{k: v for k, v in eps[0].items() if k != "scene_uid"}])
+    with pytest.raises(ValueError, match=r"episodes_idm.jsonl:11: record has no scene_uid"):
+        _metrics_csv(monkeypatch, *args)
+
+
+# ---------------------------------------------------------------------------
+# csv loader
+# ---------------------------------------------------------------------------
+def _write_episode_csv(path: Path, rows: list[dict], drop: tuple[str, ...] = ()) -> None:
+    cols = [c for c in CSV_COLUMNS if c not in drop]
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
@@ -262,28 +484,47 @@ def _write_episode_csv(path: Path, rows: list[dict], with_map_id: bool) -> None:
             w.writerow(rec)
 
 
-def test_load_episode_csv_reads_or_derives_map_id(tmp_path: Path):
+def test_load_episode_csv_needs_manifest_columns_and_well_formed_cells(tmp_path: Path):
     rows = _four_map_rows()
-    for r in rows:
-        r["map_id"] = "net_" + r["map_id"]     # a manifest-given id ≠ scene prefix
-    p = tmp_path / "with.csv"
-    _write_episode_csv(p, rows, with_map_id=True)
-    loaded = agg.load_episode_csv(p)
-    assert {r["map_id"] for r in loaded} == {"net_seg_a", "net_seg_b", "net_seg_c", "net_seg_d"}
-    p = tmp_path / "without.csv"
-    _write_episode_csv(p, rows, with_map_id=False)
+    p = tmp_path / "ok.csv"
+    _write_episode_csv(p, rows)
     loaded = agg.load_episode_csv(p)
     assert {r["map_id"] for r in loaded} == {"seg_a", "seg_b", "seg_c", "seg_d"}
     assert agg.aggregate_by_map(loaded)["n_maps"] == 4
+    # a CSV from before --manifest is refused, its map is not re-derived
+    for col in ("map_id", "net_path"):
+        old = tmp_path / f"no_{col}.csv"
+        _write_episode_csv(old, rows, drop=(col,))
+        with pytest.raises(ManifestError, match=col):
+            agg.load_episode_csv(old)
+    # map_id must be the directory of net_path
+    bad = [dict(r) for r in rows]
+    bad[4]["map_id"] = "seg_x"
+    _write_episode_csv(tmp_path / "mismatch.csv", bad)
+    with pytest.raises(ManifestError, match=r"mismatch.csv:6"):
+        agg.load_episode_csv(tmp_path / "mismatch.csv")
+    for field, value in (("success", "yes"), ("final_step", ""), ("final_step", "12.5"),
+                         ("driving_score", "nan"), ("violations_by_class_step", "[]")):
+        broken = [dict(r) for r in rows]
+        if field == "violations_by_class_step":
+            broken[0][field] = []
+        else:
+            broken[0][field] = value
+        _write_episode_csv(tmp_path / "broken.csv", broken)
+        with pytest.raises(ValueError, match=r"broken.csv:2"):
+            agg.load_episode_csv(tmp_path / "broken.csv")
 
 
+# ---------------------------------------------------------------------------
+# aggregate → cumulative.json → report / plot, and combine
+# ---------------------------------------------------------------------------
 def test_aggregate_cli_writes_ci_tables_and_report_renders_them(tmp_path: Path, monkeypatch):
     rows = _four_map_rows() + [
         dict(r, baseline="carl_rule", display_policy="carl_rule")
         for r in _four_map_rows()
     ]
     csv_path = tmp_path / "metrics_per_episode.csv"
-    _write_episode_csv(csv_path, rows, with_map_id=True)
+    _write_episode_csv(csv_path, rows)
     out_dir = tmp_path / "out"
     monkeypatch.setattr("sys.argv", ["aggregate", "--csv", str(csv_path),
                                      "--out-dir", str(out_dir), "--n-boot", "2000"])
@@ -297,17 +538,17 @@ def test_aggregate_cli_writes_ci_tables_and_report_renders_them(tmp_path: Path, 
     assert float(sr["idm_default"]["mean"]) == pytest.approx(0.5)
     assert int(sr["idm_default"]["n_maps"]) == 4
     assert float(sr["idm_default"]["ci_lo"]) <= 0.5 <= float(sr["idm_default"]["ci_hi"])
-    # the wide map table now counts physical maps and episodes per map
+    # the wide map table counts physical maps and episodes per map
     map_rows = list(csv.DictReader(
         (out_dir / "aggregations" / "agg_per_baseline_map.csv").open(encoding="utf-8")))
     m = {r["baseline"]: r for r in map_rows}["idm_default"]
     assert (m["n"], m["n_maps"], m["episodes_per_map_min"], m["episodes_per_map_max"]) == (
         "12", "4", "3", "3")
-    per_sign_ci = out_dir / "aggregations" / "agg_per_sign_baseline_map_ci.csv"
-    assert any(r["pdd_code"] == "3.24" for r in csv.DictReader(per_sign_ci.open(encoding="utf-8")))
 
-    # cumulative.json carries the CI blocks and how they were built
-    cum = json.loads((out_dir / "reports" / "cumulative.json").read_text(encoding="utf-8"))
+    # cumulative.json carries the CI blocks and says the maps come from the manifest
+    cum_path = out_dir / "reports" / "cumulative.json"
+    cum = json.loads(cum_path.read_text(encoding="utf-8"))
+    assert cum["ci"]["map_id"] == MAP_ID_SOURCE
     assert cum["ci"]["n_boot"] == 2000 and cum["ci"]["level"] == 0.95 and cum["ci"]["unit"] == "map"
     blk = cum["per_baseline_map_ci"]["idm_default"]["sr_and_dest"]
     assert blk["mean"] == pytest.approx(0.5) and blk["n_maps"] == 4
@@ -322,8 +563,54 @@ def test_aggregate_cli_writes_ci_tables_and_report_renders_them(tmp_path: Path, 
     md = (out_dir / "reports" / "report_cumulative.md").read_text(encoding="utf-8")
     assert "### Overall — per-map mean ± std, 95% CI (2000 resamples)" in md
     assert "#### Sign `3.24` — per-map mean ± std" in md
-    idm_line = next(l for l in md.splitlines()
-                    if l.startswith("| `idm_default` | 4 | 3 |"))
+    idm_line = next(line for line in md.splitlines()
+                    if line.startswith("| `idm_default` | 4 | 3 |"))
     assert "0.500 ± 0.430 [" in idm_line
-    # the classic table still renders episode / map with the map count
     assert "| `idm_default` | 12 | 12 | 4 | 0.500 / 0.500 |" in md
+
+    # plot reads the same blocks
+    assert plot_benchmark._load_cumulative(cum_path, "map") == cum["per_sign_map"]
+    assert plot_benchmark._load_cumulative(cum_path, "episode") == cum["per_sign"]
+
+    # a cumulative.json not built from manifest maps is refused by report and plot
+    no_marker = dict(cum, ci={k: v for k, v in cum["ci"].items() if k != "map_id"})
+    no_blocks = {k: v for k, v in cum.items()
+                 if not k.startswith("per_") or k in ("per_baseline", "per_sign")}
+    for name, broken in (("no_marker", no_marker), ("no_blocks", no_blocks)):
+        p = tmp_path / f"{name}.json"
+        p.write_text(json.dumps(broken), encoding="utf-8")
+        md_out = tmp_path / f"{name}.md"
+        monkeypatch.setattr("sys.argv", ["report", "--run-root", str(out_dir),
+                                         "--cumulative", str(p), "--out", str(md_out)])
+        with pytest.raises(ValueError):
+            report.main()
+        assert not md_out.exists()
+        with pytest.raises(ValueError):
+            plot_benchmark._load_cumulative(p, "map")
+
+
+def test_aggregate_cli_refuses_missing_csv_and_bad_ci_args(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("sys.argv", ["aggregate", "--csv", str(tmp_path / "nope.csv"),
+                                     "--out-dir", str(tmp_path / "out")])
+    with pytest.raises(FileNotFoundError):
+        agg.main()
+    csv_path = tmp_path / "m.csv"
+    _write_episode_csv(csv_path, _four_map_rows())
+    for bad in (["--n-boot", "-1"], ["--ci-level", "1.5"]):
+        monkeypatch.setattr("sys.argv", ["aggregate", "--csv", str(csv_path),
+                                         "--out-dir", str(tmp_path / "out"), *bad])
+        with pytest.raises(SystemExit):
+            agg.main()
+
+
+def test_combine_refuses_csvs_of_another_schema(tmp_path: Path):
+    rows = _four_map_rows()
+    good = tmp_path / "a.csv"
+    _write_episode_csv(good, rows)
+    old = tmp_path / "b.csv"
+    _write_episode_csv(old, rows, drop=("map_id", "net_path"))
+    assert combine.concat_csvs([good, good], tmp_path / "merged.csv") == 24
+    with pytest.raises(ValueError, match="map_id"):
+        combine.concat_csvs([good, old], tmp_path / "merged2.csv")
+    assert not (tmp_path / "merged2.csv").exists()
+    assert not (tmp_path / "merged2.csv.tmp").exists()

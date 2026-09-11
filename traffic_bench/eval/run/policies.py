@@ -309,7 +309,9 @@ def _assemble_rows(manifest_path: Path, cfg: DictConfig) -> list[dict]:
     return rows
 
 
-def _run_metrics(out_dir: Path) -> None:
+def _run_metrics(out_dir: Path, manifest_path: Path) -> None:
+    """metrics csv → aggregate → report for one run. ``manifest_path`` is the
+    manifest the episodes were run from; every episode's map is read from it."""
     from traffic_bench.eval.cli import _run_module_main
     from traffic_bench.eval.metrics import aggregate as aggregate_mod
     from traffic_bench.eval.metrics import csv as csv_mod
@@ -320,6 +322,8 @@ def _run_metrics(out_dir: Path) -> None:
         [
             "--episodes-root",
             str(out_dir / "benchmark" / "full" / "policy_eval"),
+            "--manifest",
+            str(manifest_path),
             "--out",
             str(out_dir / "metrics_per_episode.csv"),
         ],
@@ -600,7 +604,7 @@ def run_policy_list(cfg: DictConfig, policies: list[str]) -> None:
         merged.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
         print(f"[{run_name}] merged episodes → {merged}")
 
-    _run_metrics(out_dir)
+    _run_metrics(out_dir, manifest_path)
     report = out_dir / "reports" / "report_cumulative.md"
     print("\n" + "=" * 60)
     print("DONE.")

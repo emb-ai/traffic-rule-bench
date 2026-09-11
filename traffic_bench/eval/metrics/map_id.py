@@ -1,52 +1,41 @@
-"""Physical-map identity of an episode.
+"""Physical-map identity of an episode: from the manifest, and only from it.
 
-A manifest row names its net (``net_path`` = ``<scene_dir>/map.net.xml``) and
-expands it into augmented variants whose ``scene_id`` carries the variant and
-the world-axis cell as a suffix:
+A manifest row names the net its episode runs on: ``net_path`` =
+``<scene_dir>/map.net.xml``. Every augmented row of one catalog scene points
+at that net whatever its ``scene_id`` looks like (the expanders have written
+``seg_x_l0_v3_rl90_td50_v2``, ``junc_x_rl90_td25_sv0_v0``, ``seg_x_l0_td2_v0``,
+``dual_T_x_rl100`` and more), so the map is the directory of ``net_path``.
 
-    seg_1067603714_v0                        nominal
-    seg_1067603714_v0_z60a60n2_td50_sv1_v0   manifest variant 0, world cell
-    seg_1067603714_v2_z100a100n1_td50_sv2_v2 manifest variant 2, world cell
-    seg_100833537_0_l0_v3                    spawn lane 0, manifest variant 3
-
-All of these are the same map. Metrics are averaged per map first (see
-``aggregate.aggregate_by_map``), so the CSV builder stamps every episode with
-one stable ``map_id`` and the aggregator groups on it. The manifest's
-``net_path`` is authoritative; without a manifest the suffix is stripped from
-the scene id. Junction scenes (``junc_…``) carry no ``_v<k>`` suffix — their
-variants differ by seed only — so their id is already the map.
+There is no fallback. Scene-id formats change with the expanders and cannot
+be parsed reliably, so a row without a usable ``net_path`` raises
+``ManifestError``, and so does every consumer that meets an episode without a
+manifest map (``metrics csv``, ``metrics aggregate``, ``metrics report``,
+``metrics plot --agg map``).
 """
 from __future__ import annotations
 
 from pathlib import PurePosixPath
-import re
 
-# ``<base>[_l<lane>]_v<k>`` optionally followed by the world-axis cell
-# (``_rl90_td50_sv1_v2``, ``_z60a60n2_td50_sv1_v0``). ``_sv1`` does not match:
-# the variant marker is ``_v`` directly after an underscore.
-_VARIANT_SUFFIX_RE = re.compile(r"(?:_l\d+)?_v\d+(?:_.*)?$")
+# Written into cumulative.json as ``ci.map_id``: the per-map blocks are keyed
+# on this map identity. report.py and plot_benchmark.py refuse files without it.
+MAP_ID_SOURCE = "manifest net_path directory"
 
 
-def base_scene_id(scene_id: str) -> str:
-    """Scene id with its manifest-variant / world-axis suffix stripped."""
-    sid = str(scene_id or "")
-    return _VARIANT_SUFFIX_RE.sub("", sid, count=1) or sid
+class ManifestError(ValueError):
+    """The manifest is missing, malformed, or does not give an episode's map."""
 
 
-def map_id_from_manifest_row(row: dict | None) -> str | None:
-    """Map id of a manifest row: the scene directory named by ``net_path``."""
-    if not row:
-        return None
+def map_id_from_manifest_row(row: dict) -> str:
+    """Directory of the row's ``net_path``: ``seg_1/map.net.xml`` -> ``seg_1``."""
     net_path = row.get("net_path")
-    if not net_path:
-        return None
-    p = PurePosixPath(str(net_path))
-    # "<scene_dir>/map.net.xml" -> scene_dir; a bare directory name stays as is.
-    name = p.parent.name if p.suffix else p.name
-    return name or None
-
-
-def map_id_for(scene_id: str, manifest_row: dict | None = None) -> str:
-    """``net_path`` directory when the manifest row is known, else the scene
-    id without its suffix."""
-    return map_id_from_manifest_row(manifest_row) or base_scene_id(scene_id)
+    where = f"scene_id={row.get('scene_id')!r}"
+    if not isinstance(net_path, str) or not net_path.strip():
+        raise ManifestError(
+            f"manifest row {where} has no net_path; the map of its episodes "
+            "cannot be determined")
+    p = PurePosixPath(net_path.strip())
+    if not p.suffix or not p.parent.name:
+        raise ManifestError(
+            f"net_path {net_path!r} ({where}) does not name a net file inside a "
+            "scene directory (<scene_dir>/map.net.xml)")
+    return p.parent.name

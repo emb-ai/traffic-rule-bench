@@ -34,10 +34,16 @@ Plus, for backward compatibility with the existing MD-report scripts:
   6. cumulative_2node.json          — {vars_processed, cumulative_through_latest,
                                        per_var} schema for merge_and_report_2node.py
 
+Input: a metrics_per_episode.csv built by `metrics csv --manifest`. Each row
+names its episode's physical map (``map_id``, the directory of the manifest's
+``net_path``; both columns are required). A CSV without them, a row whose
+map_id does not match its net_path, or a malformed cell raises with the file
+and line: nothing is guessed, defaulted or skipped.
+
 Usage:
-  python3 aggregate_episode_metrics.py \
-      --csv     /path/to/metrics_per_episode.csv \
-      --out-dir /path/to/benchmark_2node_eval
+  python -m traffic_bench.eval metrics aggregate \
+      --csv     <eval_out>/metrics_per_episode.csv \
+      --out-dir <eval_out>
 """
 from __future__ import annotations
 
@@ -54,7 +60,12 @@ import numpy as np
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 from traffic_bench.agents.policy_names import canonical_policy_name
-from traffic_bench.eval.metrics.map_id import base_scene_id
+from traffic_bench.eval.metrics.csv import CSV_COLUMNS
+from traffic_bench.eval.metrics.map_id import (
+    MAP_ID_SOURCE,
+    ManifestError,
+    map_id_from_manifest_row,
+)
 from traffic_bench.oracle.select.filter import (
     BETA_DEFAULT,
     HORIZON_DEFAULT,
@@ -104,7 +115,12 @@ def baseline_sort_key(baseline: str) -> tuple[int, str]:
 
 
 def _to_bool(s: str) -> bool:
-    return s == "True"
+    """CSV flag cell: True or False (how csv.DictWriter writes bools)."""
+    if s == "True":
+        return True
+    if s == "False":
+        return False
+    raise ValueError(f"expected True or False, got {s!r}")
 
 
 def sign_group(row_or_code) -> str:
@@ -148,26 +164,60 @@ def sign_group(row_or_code) -> str:
     return pdd_code
 
 
-def _to_int(s: str, default: int = 0) -> int:
-    try:
-        return int(s) if s != "" else default
-    except (ValueError, TypeError):
-        return default
+# CSV cells are parsed strictly: an empty cell means "undefined" only where
+# csv.py writes one (optional floats, target_* columns); a malformed cell
+# raises instead of turning into a default.
+def _to_int(s: str) -> int:
+    """Integer cell; empty or non-integer raises ValueError."""
+    return int(s)
 
 
-def _to_float(s: str, default: float | None = None) -> float | None:
-    try:
-        return float(s) if s != "" else default
-    except (ValueError, TypeError):
-        return default
+def _opt_int(s: str) -> int | None:
+    """Integer cell that is empty when undefined."""
+    return None if s == "" else int(s)
+
+
+def _opt_bool(s: str) -> bool | None:
+    """Flag cell that is empty when undefined."""
+    return None if s == "" else _to_bool(s)
+
+
+def _to_float(s: str) -> float | None:
+    """Float cell: empty means undefined (None); otherwise a finite number."""
+    if s == "":
+        return None
+    f = float(s)
+    if not math.isfinite(f):
+        raise ValueError(f"non-finite value {s!r}")
+    return f
+
+
+def _req_float(s: str) -> float:
+    """Float cell that csv.py always fills."""
+    f = _to_float(s)
+    if f is None:
+        raise ValueError("empty cell where a number is required")
+    return f
+
+
+def _json_dict(s: str) -> dict:
+    """JSON-encoded per-class breakdown."""
+    d = json.loads(s)
+    if not isinstance(d, dict):
+        raise ValueError(f"expected a JSON object, got {s!r}")
+    return d
 
 
 def _mean(vals: list[float]) -> float | None:
-    vals = [v for v in vals if v is not None and isinstance(v, (int, float))
-            and math.isfinite(v)]
-    if not vals:
+    """Mean over the defined values (None = undefined for that episode). A
+    non-finite value is an error, not something to skip."""
+    xs = [v for v in vals if v is not None]
+    for v in xs:
+        if not math.isfinite(v):
+            raise ValueError(f"non-finite value {v!r} in a mean")
+    if not xs:
         return None
-    return float(sum(vals) / len(vals))
+    return float(sum(xs) / len(xs))
 
 
 def _rate(num: int, den: int) -> float | None:
@@ -182,92 +232,120 @@ def _round_or_none(x, n=6):
 # Load CSV → list of dict-rows with typed values
 # ---------------------------------------------------------------------------
 def load_episode_csv(path: Path) -> list[dict]:
+    """Typed rows of a metrics_per_episode.csv built by `metrics csv --manifest`.
+
+    The header must hold every column of csv.CSV_COLUMNS, ``map_id`` and
+    ``net_path`` among them; an older CSV is refused, its map is not
+    re-derived. Each row's ``map_id`` must be the directory of its
+    ``net_path``, and every cell must parse. Errors carry the file and line.
+    """
     rows = []
-    with path.open(encoding="utf-8") as fh:
-        for r in csv.DictReader(fh):
-            row = {
-                "var_name": r["var_name"],
-                "var_idx": _to_int(r["var_idx"]),
-                # CSVs written before the rename carry legacy policy spellings.
-                "baseline": canonical_policy_name(r["baseline"]),
-                "policy": canonical_policy_name(r["policy"]),
-                "variant": r["variant"],
-                "display_policy": canonical_policy_name(r["display_policy"]),
-                "backend": r["backend"],
-                "pdd_code": r["pdd_code"],
-                "sign_slug": r["sign_slug"],
-                "target_sign_class": r["target_sign_class"] or None,
-                "is_no_entry_sign": _to_bool(r["is_no_entry_sign"]),
-                "scene_id": r["scene_id"],
-                "scene_uid": r["scene_uid"],
-                # CSVs written before the column existed: strip the variant /
-                # world-axis suffix from the scene id (metrics/map_id.py).
-                "map_id": (r.get("map_id") or "").strip() or base_scene_id(r["scene_id"]),
-                "manifest_source": r.get("manifest_source", ""),
-                "is_paired_scene": _to_bool(r.get("is_paired_scene", "")),
-                "pdd_code_start": r.get("pdd_code_start", ""),
-                "pdd_code_end": r.get("pdd_code_end", ""),
-                "pdd_code_target": r.get("pdd_code_target", ""),
-                "sign_type_start": r.get("sign_type_start", ""),
-                "sign_type_end": r.get("sign_type_end", ""),
-                "zone_length_m": _to_float(r.get("zone_length_m", "")),
-                "valid": _to_bool(r["valid"]),
-                "arrived_dest": _to_bool(r["arrived_dest"]),
-                "crashed": _to_bool(r["crashed"]),
-                "crashed_ego_fault": _to_bool(r["crashed_ego_fault"]),
-                "crashed_npc_fault": _to_bool(r["crashed_npc_fault"]),
-                "out_of_road": _to_bool(r["out_of_road"]),
-                "success": _to_bool(r["success"]),
-                "final_step": _to_int(r["final_step"]),
-                "total_reward": _to_float(r["total_reward"]),
-                "route_completion": _to_float(r["route_completion"]),
-                "route_length_m": _to_float(r["route_length_m"]),
-                "distance_travelled_m": _to_float(r["distance_travelled_m"]),
-                "driving_score": _to_float(r["driving_score"]),
-                "driving_efficiency": _to_float(r["driving_efficiency"]),
-                "infraction_penalty": _to_float(r["infraction_penalty"]),
-                "smoothness_ratio": _to_float(r["smoothness_ratio"]),
-                "frame_smooth_ratio": _to_float(r["frame_smooth_ratio"]),
-                "smooth_segments": _to_int(r["smooth_segments"]),
-                "total_segments": _to_int(r["total_segments"]),
-                "min_ttc_sec": _to_float(r["min_ttc_sec"]),
-                "mean_abs_lane_offset": _to_float(r["mean_abs_lane_offset"]),
-                "mean_abs_steer_delta": _to_float(r["mean_abs_steer_delta"]),
-                "hard_brake_count": _to_int(r["hard_brake_count"]),
-                "hard_accel_count": _to_int(r["hard_accel_count"]),
-                "total_violations": _to_int(r["total_violations"]),
-                "violations_event_count": _to_int(r["violations_event_count"]),
-                "in_zone_total_steps": _to_int(r["in_zone_total_steps"]),
-                "viol_high_sign": _to_int(r["viol_high_sign"]),
-                "viol_high_traffic_light": _to_int(r["viol_high_traffic_light"]),
-                "viol_high_crosswalk": _to_int(r["viol_high_crosswalk"]),
-                "violations_by_class_step": json.loads(r["violations_by_class_step_json"] or "{}"),
-                "violations_by_class_event": json.loads(r["violations_by_class_event_json"] or "{}"),
-                "in_zone_by_class_step": json.loads(r["in_zone_by_class_step_json"] or "{}"),
-                "target_violations_step": _to_int(r["target_violations_step"]) if r["target_violations_step"] != "" else None,
-                "target_violations_event": _to_int(r["target_violations_event"]) if r["target_violations_event"] != "" else None,
-                "target_in_zone_steps": _to_int(r["target_in_zone_steps"]) if r["target_in_zone_steps"] != "" else None,
-                "target_in_zone": _to_bool(r["target_in_zone"]),
-                "target_compliant_event": _to_bool(r["target_compliant_event"]) if r["target_compliant_event"] != "" else None,
-                "target_compliant_step": _to_bool(r["target_compliant_step"]) if r["target_compliant_step"] != "" else None,
-                # SR&Dest per episode. CSVs written before the column existed
-                # lack it → derive from target_compliant_event AND arrived_dest.
-                "sr_and_dest": (
-                    _to_bool(r["sr_and_dest"]) if r.get("sr_and_dest") not in (None, "")
-                    else (
-                        (_to_bool(r["target_compliant_event"]) and _to_bool(r["arrived_dest"]))
-                        if r["target_compliant_event"] != "" else None
-                    )
-                ),
-                "sign_compliant_high": _to_bool(r["sign_compliant_high"]),
-                "tl_compliant": _to_bool(r["tl_compliant"]),
-                "cw_compliant": _to_bool(r["cw_compliant"]),
-                "dest_recomputed": _to_bool(r["dest_recomputed"]),
-                "passes_filter": _to_bool(r["passes_filter"]),
-                "comfort": _to_float(r["comfort"], 0.0) or 0.0,
-            }
-            rows.append(row)
+    with path.open(encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh)
+        header = reader.fieldnames or []
+        missing = [c for c in CSV_COLUMNS if c not in header]
+        if missing:
+            raise ManifestError(
+                f"{path} lacks column(s) {', '.join(missing)}: it was not built by "
+                "`metrics csv --manifest`, so its episodes carry no manifest map. "
+                "Rebuild it from the episodes and the manifest they were run from.")
+        for lineno, r in enumerate(reader, start=2):
+            try:
+                if None in r or any(v is None for v in r.values()):
+                    raise ValueError(f"row has {len(r) - (None in r)} fields, "
+                                     f"the header has {len(header)}")
+                rows.append(_parse_episode_row(r))
+            except ManifestError as e:
+                raise ManifestError(f"{path}:{lineno}: {e}") from e
+            except (ValueError, KeyError) as e:
+                raise ValueError(f"{path}:{lineno}: {e}") from e
+    if not rows:
+        raise ValueError(f"{path} has no episode rows")
     return rows
+
+
+def _parse_episode_row(r: dict) -> dict:
+    """One CSV row → typed dict (see load_episode_csv)."""
+    net_path = r["net_path"]
+    map_id = r["map_id"]
+    expected = map_id_from_manifest_row({"net_path": net_path, "scene_id": r["scene_id"]})
+    if map_id != expected:
+        raise ManifestError(
+            f"map_id {map_id!r} does not match net_path {net_path!r} "
+            f"(its directory is {expected!r})")
+    return {
+        "var_name": r["var_name"],
+        "var_idx": _to_int(r["var_idx"]),
+        # CSVs written before the rename carry legacy policy spellings.
+        "baseline": canonical_policy_name(r["baseline"]),
+        "policy": canonical_policy_name(r["policy"]),
+        "variant": r["variant"],
+        "display_policy": canonical_policy_name(r["display_policy"]),
+        "backend": r["backend"],
+        "pdd_code": r["pdd_code"],
+        "sign_slug": r["sign_slug"],
+        "target_sign_class": r["target_sign_class"] or None,
+        "is_no_entry_sign": _to_bool(r["is_no_entry_sign"]),
+        "scene_id": r["scene_id"],
+        "scene_uid": r["scene_uid"],
+        "map_id": map_id,
+        "net_path": net_path,
+        "manifest_source": r["manifest_source"],
+        "is_paired_scene": _to_bool(r["is_paired_scene"]),
+        "pdd_code_start": r["pdd_code_start"],
+        "pdd_code_end": r["pdd_code_end"],
+        "pdd_code_target": r["pdd_code_target"],
+        "sign_type_start": r["sign_type_start"],
+        "sign_type_end": r["sign_type_end"],
+        "zone_length_m": _to_float(r["zone_length_m"]),
+        "valid": _to_bool(r["valid"]),
+        "arrived_dest": _to_bool(r["arrived_dest"]),
+        "crashed": _to_bool(r["crashed"]),
+        "crashed_ego_fault": _to_bool(r["crashed_ego_fault"]),
+        "crashed_npc_fault": _to_bool(r["crashed_npc_fault"]),
+        "out_of_road": _to_bool(r["out_of_road"]),
+        "success": _to_bool(r["success"]),
+        "final_step": _to_int(r["final_step"]),
+        "total_reward": _to_float(r["total_reward"]),
+        "route_completion": _to_float(r["route_completion"]),
+        "route_length_m": _to_float(r["route_length_m"]),
+        "distance_travelled_m": _to_float(r["distance_travelled_m"]),
+        "driving_score": _to_float(r["driving_score"]),
+        "driving_efficiency": _to_float(r["driving_efficiency"]),
+        "infraction_penalty": _to_float(r["infraction_penalty"]),
+        "smoothness_ratio": _to_float(r["smoothness_ratio"]),
+        "frame_smooth_ratio": _to_float(r["frame_smooth_ratio"]),
+        "smooth_segments": _to_int(r["smooth_segments"]),
+        "total_segments": _to_int(r["total_segments"]),
+        "min_ttc_sec": _to_float(r["min_ttc_sec"]),
+        "mean_abs_lane_offset": _to_float(r["mean_abs_lane_offset"]),
+        "mean_abs_steer_delta": _to_float(r["mean_abs_steer_delta"]),
+        "hard_brake_count": _to_int(r["hard_brake_count"]),
+        "hard_accel_count": _to_int(r["hard_accel_count"]),
+        "total_violations": _to_int(r["total_violations"]),
+        "violations_event_count": _to_int(r["violations_event_count"]),
+        "in_zone_total_steps": _to_int(r["in_zone_total_steps"]),
+        "viol_high_sign": _to_int(r["viol_high_sign"]),
+        "viol_high_traffic_light": _to_int(r["viol_high_traffic_light"]),
+        "viol_high_crosswalk": _to_int(r["viol_high_crosswalk"]),
+        "violations_by_class_step": _json_dict(r["violations_by_class_step_json"]),
+        "violations_by_class_event": _json_dict(r["violations_by_class_event_json"]),
+        "in_zone_by_class_step": _json_dict(r["in_zone_by_class_step_json"]),
+        "target_violations_step": _opt_int(r["target_violations_step"]),
+        "target_violations_event": _opt_int(r["target_violations_event"]),
+        "target_in_zone_steps": _opt_int(r["target_in_zone_steps"]),
+        "target_in_zone": _to_bool(r["target_in_zone"]),
+        "target_compliant_event": _opt_bool(r["target_compliant_event"]),
+        "target_compliant_step": _opt_bool(r["target_compliant_step"]),
+        # SR&Dest per episode: empty when the target sign class is unknown.
+        "sr_and_dest": _opt_bool(r["sr_and_dest"]),
+        "sign_compliant_high": _to_bool(r["sign_compliant_high"]),
+        "tl_compliant": _to_bool(r["tl_compliant"]),
+        "cw_compliant": _to_bool(r["cw_compliant"]),
+        "dest_recomputed": _to_bool(r["dest_recomputed"]),
+        "passes_filter": _to_bool(r["passes_filter"]),
+        "comfort": _req_float(r["comfort"]),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +429,7 @@ def aggregate(rows: list[dict], beta: float = BETA_DEFAULT,
         if not r["passes_filter"]:
             continue
         sid = r["scene_id"]
-        mm = scene_minmax.get(sid, [1, 1])
+        mm = scene_minmax[sid]
         t = time_eff(r, mm[0])  # min_over_final = scene_min_step / final_step
         c = float(r["comfort"])
         sum_te += t
@@ -467,25 +545,37 @@ CI_SEED_DEFAULT = 0
 def map_key(row: dict) -> str:
     """A map is one net under one sign.
 
-    ``map_id`` names the net (the manifest's ``net_path`` directory, or the
-    scene id with its variant / world-axis suffix stripped — metrics/map_id.py);
-    a map's augmented variants differ by manifest variant, route length,
-    density, spawn speed, NPC draw, lane and seed. The pool is shared between
-    signs (the same junction crop can serve yield and stop), and the same net
-    under another sign is another scenario, so the sign code is part of the
-    key. Within a per-sign slice this reduces to ``map_id``.
+    ``map_id`` names the net: the directory of the manifest's ``net_path``
+    (metrics/map_id.py), never anything parsed from the scene id. A map's
+    augmented variants differ by manifest variant, route length, density,
+    spawn speed, NPC draw, lane and seed. The pool is shared between signs
+    (the same junction crop can serve yield and stop), and the same net under
+    another sign is another scenario, so the sign code is part of the key.
+    Within a per-sign slice this reduces to ``map_id``. A row without one
+    raises.
     """
-    scene = str(row.get("map_id")
-                or base_scene_id(str(row.get("scene_id") or ""))
-                or row.get("scene_uid") or "?")
+    map_id = row.get("map_id")
+    if not map_id:
+        raise ManifestError(
+            f"episode {row.get('scene_uid')!r} has no map_id; per-map metrics need "
+            "the manifest the episodes were run from (`metrics csv --manifest`)")
     pdd = str(row.get("pdd_code") or "")
-    return f"{pdd}|{scene}" if pdd else scene
+    return f"{pdd}|{map_id}" if pdd else str(map_id)
 
 
 def map_values(per_map: list[dict], field: str) -> list[float]:
-    """Per-map values of a metric, skipping maps where it is undefined."""
-    return [float(v) for v in (m.get(field) for m in per_map)
-            if v is not None and isinstance(v, (int, float)) and math.isfinite(v)]
+    """Per-map values of a metric, skipping maps where it is undefined (None).
+    A non-finite value is an error."""
+    vals: list[float] = []
+    for m in per_map:
+        v = m.get(field)
+        if v is None:
+            continue
+        v = float(v)
+        if not math.isfinite(v):
+            raise ValueError(f"non-finite per-map value {v!r} for {field}")
+        vals.append(v)
+    return vals
 
 
 def mean_over_maps(per_map: list[dict], field: str) -> float | None:
@@ -965,7 +1055,9 @@ def write_legacy_cumulative_json(out_path: Path,
                                       for b, m in sorted(per_baseline_map.items())}
         out["per_sign_map_ci"] = {b: dict(sorted(s.items()))
                                   for b, s in sorted(per_sign_map_ci.items())}
-        out["ci"] = dict(ci_meta or {"unit": "map", "method": "bootstrap_percentile"})
+        if not ci_meta or ci_meta.get("map_id") != MAP_ID_SOURCE:
+            raise ValueError(f"per-map blocks need ci_meta with map_id={MAP_ID_SOURCE!r}")
+        out["ci"] = dict(ci_meta)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(out, indent=2, ensure_ascii=False),
                          encoding="utf-8")
@@ -1011,18 +1103,18 @@ def main() -> None:
     ap.add_argument("--ci-seed", type=int, default=CI_SEED_DEFAULT,
                     help=f"Seed of the bootstrap generator (default {CI_SEED_DEFAULT})")
     args = ap.parse_args()
+    if args.n_boot < 0:
+        ap.error("--n-boot must be >= 0")
+    if not 0.0 < args.ci_level < 1.0:
+        ap.error("--ci-level must be in (0, 1)")
 
     csv_path = Path(args.csv).resolve()
     out_dir = Path(args.out_dir).resolve()
-    if not csv_path.exists():
-        print(f"ERROR: csv not found: {csv_path}", file=sys.stderr)
-        sys.exit(2)
+    if not csv_path.is_file():
+        raise FileNotFoundError(f"csv not found: {csv_path}")
 
     rows = load_episode_csv(csv_path)
     print(f"[load] {len(rows)} episode rows from {csv_path}")
-    if not rows:
-        print("ERROR: no rows", file=sys.stderr)
-        sys.exit(2)
 
     # Group rows. sign_group is row-aware: paired-zone scenes get "<start>+<end>"
     # group key, standalone END-variants get "<major>.<minor>.x", everything
@@ -1085,6 +1177,7 @@ def main() -> None:
     mag_pgbv = {k: by_map(rs) for k, rs in by_signgroup_baseline_var.items()}
     ci_meta = {
         "unit": "map",
+        "map_id": MAP_ID_SOURCE,
         "method": "bootstrap_percentile",
         "n_boot": int(args.n_boot),
         "level": float(args.ci_level),

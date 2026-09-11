@@ -83,16 +83,39 @@ def combined_dest(folder: str) -> Path:
 
 
 def concat_csvs(csv_paths: list[Path], out_path: Path) -> int:
+    """Concatenate per-sign CSVs of the current `metrics csv` schema.
+
+    A CSV whose header is not exactly csv.CSV_COLUMNS (an older build without
+    map_id / net_path, or a foreign file) or a row with a wrong number of
+    fields raises; nothing is padded with empty cells or dropped.
+    """
+    expected = set(CSV_COLUMNS)
+    for path in csv_paths:
+        with path.open(encoding="utf-8", newline="") as src:
+            header = set(csv.DictReader(src).fieldnames or [])
+        if header != expected:
+            raise ValueError(
+                f"{path}: columns differ from the `metrics csv` schema (missing "
+                f"{sorted(expected - header)}, unexpected {sorted(header - expected)}); "
+                "rebuild it with `metrics csv --manifest`")
     n = 0
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_COLUMNS, extrasaction="ignore")
-        writer.writeheader()
-        for path in csv_paths:
-            with path.open(encoding="utf-8", newline="") as src:
-                for row in csv.DictReader(src):
-                    writer.writerow(row)
-                    n += 1
+    tmp = out_path.with_name(out_path.name + ".tmp")
+    try:
+        with tmp.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=CSV_COLUMNS)
+            writer.writeheader()
+            for path in csv_paths:
+                with path.open(encoding="utf-8", newline="") as src:
+                    for lineno, row in enumerate(csv.DictReader(src), start=2):
+                        if None in row or any(v is None for v in row.values()):
+                            raise ValueError(f"{path}:{lineno}: wrong number of fields")
+                        writer.writerow(row)
+                        n += 1
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    tmp.replace(out_path)
     return n
 
 
@@ -102,9 +125,11 @@ def write_combined_report(eval_outs: list[Path], dest: Path) -> Path:
     from traffic_bench.eval.metrics import report as report_mod
 
     csvs = [path / "metrics_per_episode.csv" for path in eval_outs]
-    csvs = [path for path in csvs if path.is_file()]
     if not csvs:
         raise FileNotFoundError("no metrics_per_episode.csv to combine")
+    missing = [str(path) for path in csvs if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"metrics_per_episode.csv not found: {', '.join(missing)}")
     merged = dest / "metrics_per_episode.csv"
     n_rows = concat_csvs(csvs, merged)
     print(f"[combine] {len(csvs)} CSV(s) → {n_rows} rows → {merged}")
