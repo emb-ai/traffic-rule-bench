@@ -10,6 +10,9 @@ Two input modes (mutually exclusive):
   --runs-root      (legacy)   <runs-root>/var_<i>/<baseline>_replays.jsonl
       Reads consolidated replays / replay.json sidecars.
 
+Both need ``--manifest``, the manifest the episodes were run from: each
+episode's map is the directory of its manifest row's ``net_path``.
+
 Either way, one CSV row per episode carries all `metrics` fields plus precomputed
 flags (target compliance, recomputed dest, passes_filter) needed by
   generate_cumulative_markdown_report.py
@@ -18,6 +21,7 @@ flags (target compliance, recomputed dest, passes_filter) needed by
 Usage:
   python -m traffic_bench.eval metrics csv \
       --episodes-root <out>/benchmark/policy_eval \
+      --manifest      <split>/real_manifest.jsonl \
       --out           <out>/metrics_per_episode.csv
 """
 from __future__ import annotations
@@ -25,8 +29,10 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import re
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 from traffic_bench.oracle.select.filter import (
@@ -40,6 +46,7 @@ from traffic_bench.oracle.select.filter import (
     passes_filter,
 )
 from traffic_bench.agents.policy_names import canonical_policy_name
+from traffic_bench.eval.metrics.map_id import ManifestError, map_id_from_manifest_row
 
 
 # Display names for baselines recorded under legacy spellings. Baselines are
@@ -90,52 +97,76 @@ def _sum_class_keys(d: dict, classes: list[str]) -> int:
         v = d.get(c)
         if v is None:
             continue
-        try:
-            total += int(v)
-        except (TypeError, ValueError):
-            continue
+        total += _to_int(v)
     return total
 
 
 VAR_DIR_RE = re.compile(r"^var_(\d+)$")
 
 
+# Values: None -> the default; anything else must parse or raise ValueError.
 def _to_int(v, default=0) -> int:
-    try:
-        return int(v) if v is not None else default
-    except (TypeError, ValueError):
+    if v is None:
         return default
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float):
+        if not v.is_integer():
+            raise ValueError(f"expected an integer, got {v!r}")
+        return int(v)
+    if isinstance(v, str):
+        return int(v)
+    raise ValueError(f"expected an integer, got {type(v).__name__} {v!r}")
 
 
 def _to_float(v, default=None):
-    try:
-        if v is None:
-            return default
-        f = float(v)
-        return f
-    except (TypeError, ValueError):
+    if v is None:
         return default
+    if isinstance(v, bool) or not isinstance(v, (int, float, str)):
+        raise ValueError(f"expected a number, got {type(v).__name__} {v!r}")
+    f = float(v)
+    if not math.isfinite(f):
+        raise ValueError(f"non-finite value {v!r}")
+    return f
 
 
 def _bool(v) -> bool:
-    return bool(v)
+    if v is None:
+        return False
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, int) and v in (0, 1):
+        return bool(v)
+    raise ValueError(f"expected a bool flag, got {type(v).__name__} {v!r}")
 
 
-def _ensure_dict(v) -> dict:
-    return v if isinstance(v, dict) else {}
+def _dict_or_empty(v, what: str) -> dict:
+    if v is None:
+        return {}
+    if isinstance(v, dict):
+        return v
+    raise ValueError(f"{what}: expected a dict, got {type(v).__name__} {v!r}")
 
 
-def _scene_uid_from_episode(ep: dict) -> str | None:
-    uid = ep.get("scene_uid")
-    if uid:
-        return str(uid)
-    scene_id = ep.get("scene_id")
-    if not scene_id:
-        return None
-    seed = int(ep.get("seed") or 0)
-    lane = int(ep.get("spawn_lane_num", 0) or 0)
-    var = int(ep.get("var_idx", 0) or 0)
-    return f"{scene_id}_lane{lane}_seed{seed}_v{var}"
+def _required_id(rec: dict, key: str) -> str:
+    v = rec.get(key)
+    if not isinstance(v, str) or not v:
+        raise ValueError(f"record has no {key} (got {v!r}); it cannot be matched "
+                         "to the manifest or deduplicated")
+    return v
+
+
+@contextmanager
+def _located(where: str):
+    """Prefix errors raised inside with ``where`` (file:line), keeping the type."""
+    try:
+        yield
+    except ManifestError as e:
+        raise ManifestError(f"{where}: {e}") from e
+    except ValueError as e:
+        raise ValueError(f"{where}: {e}") from e
 
 
 def _episode_to_replay(ep: dict) -> dict:
@@ -149,17 +180,17 @@ def _episode_to_replay(ep: dict) -> dict:
     """
     rc_pct = ep.get("route_completion_pct")
     metrics = {
-        "arrived_dest": bool(ep.get("reached_dest")),
+        "arrived_dest": _bool(ep.get("reached_dest")),
         # sidecar `metrics.crashed` is info["crash"] alone (without OOR);
         # run_benchmark exposes that as `crashed_raw`.
-        "crashed": bool(ep.get("crashed_raw", ep.get("crashed"))),
-        "crashed_ego_fault": bool(ep.get("crashed_ego_fault")),
-        "crashed_npc_fault": bool(ep.get("crashed_npc_fault")),
-        "out_of_road": bool(ep.get("out_of_road")),
-        "success": bool(ep.get("success")),
+        "crashed": _bool(ep.get("crashed_raw", ep.get("crashed"))),
+        "crashed_ego_fault": _bool(ep.get("crashed_ego_fault")),
+        "crashed_npc_fault": _bool(ep.get("crashed_npc_fault")),
+        "out_of_road": _bool(ep.get("out_of_road")),
+        "success": _bool(ep.get("success")),
         "final_step": ep.get("steps"),
         "total_reward": ep.get("total_reward"),
-        "route_completion": (float(rc_pct) / 100.0) if rc_pct is not None else None,
+        "route_completion": (_to_float(rc_pct) / 100.0) if rc_pct is not None else None,
         "route_length_m": ep.get("route_length_m"),
         "distance_travelled_m": ep.get("distance_travelled_m"),
         "driving_score": ep.get("driving_score"),
@@ -180,82 +211,83 @@ def _episode_to_replay(ep: dict) -> dict:
             "traffic_light": ep.get("traffic_light_violations", 0),
             "crosswalk": ep.get("crosswalk_violations", 0),
         },
-        "violations_by_class_step": ep.get("violations_by_class_step") or {},
-        "violations_by_class_event": ep.get("violations_by_class_event") or {},
+        "violations_by_class_step": _dict_or_empty(
+            ep.get("violations_by_class_step"), "violations_by_class_step"),
+        "violations_by_class_event": _dict_or_empty(
+            ep.get("violations_by_class_event"), "violations_by_class_event"),
         "in_zone_total_steps": ep.get("in_zone_total_steps", 0),
-        "in_zone_by_class_step": ep.get("in_zone_by_class_step") or {},
+        "in_zone_by_class_step": _dict_or_empty(
+            ep.get("in_zone_by_class_step"), "in_zone_by_class_step"),
         "violations_event_count": ep.get("violations_event_count", 0),
     }
     pdd = ep.get("sign_type") or ep.get("pdd_code") or ""
     return {
-        "scene_id": ep.get("scene_id"),
-        "scene_uid": _scene_uid_from_episode(ep),
+        "scene_id": _required_id(ep, "scene_id"),
+        "scene_uid": _required_id(ep, "scene_uid"),
         "backend": ep.get("backend") or "",
         "pdd_code": pdd,
         "sign_slug": ep.get("sign_slug") or (str(pdd).replace(".", "_") if pdd else ""),
         "policy": ep.get("policy") or "",
         "variant": ep.get("variant") or "",
-        "valid": bool(ep.get("ok", True)),
+        "valid": ep.get("ok") is True,
         "source_row": {},
         "metrics": metrics,
     }
 
 
 def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
-                manifest_lookup: dict[tuple[int, str], dict] | None = None) -> dict | None:
+               manifest: "ManifestIndex") -> dict:
     """Convert one consolidated replay JSON object into a flat CSV row dict.
 
-    If `manifest_lookup` is provided, enriches the row with manifest-derived
+    The manifest row of the replay's scene gives ``map_id`` and the
     fields for paired-zone scenes: `manifest_source`, `is_paired_scene`,
     `pdd_code_start`, `pdd_code_end`, `pdd_code_target`, `sign_type_start`,
     `sign_type_end`, `zone_length_m`. These are used by the aggregator to
     correctly group paired scenes by their (start, end) pair.
 
-    Returns None if essential fields are missing (cannot identify the episode).
+    Raises if the scene is not in the manifest or a value is malformed.
     """
-    metrics = _ensure_dict(replay.get("metrics"))
+    metrics = replay.get("metrics")
+    if not isinstance(metrics, dict):
+        raise ValueError(f"replay has no metrics dict (got {type(metrics).__name__})")
     pdd_code_raw = replay.get("pdd_code") or replay.get("sign_slug") or ""
     pdd_code = normalize_sign(str(pdd_code_raw)) if pdd_code_raw else ""
     sign_slug = (replay.get("sign_slug")
                  or (pdd_code.replace(".", "_") if pdd_code else ""))
     if not pdd_code:
         # Fallback to source_row
-        sr = _ensure_dict(replay.get("source_row"))
+        sr = _dict_or_empty(replay.get("source_row"), "source_row")
         pdd_code = normalize_sign(str(sr.get("sign_code") or sr.get("pdd_code") or "")) or ""
         if pdd_code and not sign_slug:
             sign_slug = pdd_code.replace(".", "_")
 
-    scene_id = replay.get("scene_id")
-    scene_uid = replay.get("scene_uid")
-    if not scene_id or not scene_uid:
-        return None
+    scene_id = _required_id(replay, "scene_id")
+    scene_uid = _required_id(replay, "scene_uid")
 
     # Manifest lookup — paired-scene fields come from chunks/var_<i>.jsonl which
     # carries pdd_code_start / pdd_code_end / source. Match by (var_idx, scene_id).
-    manifest_source = ""
-    is_paired_scene = False
+    mr = manifest.row(var_idx, scene_id)
+    map_id = map_id_from_manifest_row(mr)
+    net_path = str(mr["net_path"]).strip()
+    manifest_source = str(mr.get("source") or "")
+    is_paired_scene = ("paired" in manifest_source.lower())
     pdd_code_start = ""
     pdd_code_end = ""
     pdd_code_target = pdd_code    # default — replay's own code
     sign_type_start = ""
     sign_type_end = ""
     zone_length_m = ""
-    if manifest_lookup is not None:
-        mr = manifest_lookup.get((var_idx, scene_id))
-        if mr:
-            manifest_source = str(mr.get("source") or "")
-            is_paired_scene = ("paired" in manifest_source.lower())
-            if is_paired_scene:
-                pdd_code_start = str(mr.get("pdd_code_start") or "")
-                pdd_code_end = str(mr.get("pdd_code_end") or "")
-                # rewrite_speed_manifests.py drops `pdd_code` from paired rows
-                # and rarely sets `pdd_code_target` — fall back to `pdd_code_start`
-                # so target_class lookup works downstream.
-                pdd_code_target = str(mr.get("pdd_code_target") or pdd_code_start or pdd_code)
-                sign_type_start = str(mr.get("sign_type_start") or "")
-                sign_type_end = str(mr.get("sign_type_end") or "")
-                zl = mr.get("zone_length_m")
-                zone_length_m = "" if zl is None else float(zl)
+    if is_paired_scene:
+        pdd_code_start = str(mr.get("pdd_code_start") or "")
+        pdd_code_end = str(mr.get("pdd_code_end") or "")
+        # rewrite_speed_manifests.py drops `pdd_code` from paired rows
+        # and rarely sets `pdd_code_target` — use `pdd_code_start` then
+        # so target_class lookup works downstream.
+        pdd_code_target = str(mr.get("pdd_code_target") or pdd_code_start or pdd_code)
+        sign_type_start = str(mr.get("sign_type_start") or "")
+        sign_type_end = str(mr.get("sign_type_end") or "")
+        zl = mr.get("zone_length_m")
+        zone_length_m = "" if zl is None else _to_float(zl)
 
     # For paired scenes pdd_code is empty; pdd_code_target carries the target
     # (start) sign. For non-paired scenes pdd_code_target == pdd_code.
@@ -264,15 +296,15 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
     is_no_entry = bool(target_pdd in NO_ENTRY_SIGNS)
 
     # High-level violations dict in replay.json: keys are {"sign","traffic_light","crosswalk"}
-    vbc_high = _ensure_dict(metrics.get("violations_by_class"))
+    vbc_high = _dict_or_empty(metrics.get("violations_by_class"), "violations_by_class")
     viol_high_sign = _to_int(vbc_high.get("sign"), 0)
     viol_high_tl = _to_int(vbc_high.get("traffic_light"), 0)
     viol_high_cw = _to_int(vbc_high.get("crosswalk"), 0)
 
     # Per-class breakdowns: keys are sign-class names (e.g., "MainRoadSign")
-    vbc_step = _ensure_dict(metrics.get("violations_by_class_step"))
-    vbc_event = _ensure_dict(metrics.get("violations_by_class_event"))
-    in_zone_by_class = _ensure_dict(metrics.get("in_zone_by_class_step"))
+    vbc_step = _dict_or_empty(metrics.get("violations_by_class_step"), "violations_by_class_step")
+    vbc_event = _dict_or_empty(metrics.get("violations_by_class_event"), "violations_by_class_event")
+    in_zone_by_class = _dict_or_empty(metrics.get("in_zone_by_class_step"), "in_zone_by_class_step")
 
     # Lookup expands base class to its registered subclasses (speed signs only;
     # see TARGET_CLASS_SUBCLASSES). For non-speed PDDs this collapses to
@@ -327,6 +359,8 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
         "is_no_entry_sign": is_no_entry,
         "scene_id": scene_id,
         "scene_uid": scene_uid,
+        "map_id": map_id,
+        "net_path": net_path,
         # Manifest-derived paired-scene fields (empty for non-paired scenes)
         "manifest_source": manifest_source,
         "is_paired_scene": is_paired_scene,
@@ -410,7 +444,7 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
 CSV_COLUMNS = [
     "var_name", "var_idx", "baseline", "policy", "variant", "display_policy",
     "backend", "pdd_code", "sign_slug", "target_sign_class", "is_no_entry_sign",
-    "scene_id", "scene_uid",
+    "scene_id", "scene_uid", "map_id", "net_path",
     "manifest_source", "is_paired_scene",
     "pdd_code_start", "pdd_code_end", "pdd_code_target",
     "sign_type_start", "sign_type_end", "zone_length_m",
@@ -440,109 +474,161 @@ CSV_COLUMNS = [
 def _iter_jsonl(fp: Path):
     """Yield (lineno, dict) for each parseable JSON object in a JSONL file.
 
-    Truncated/malformed lines are skipped with a warning to stderr.
+    Truncated/malformed lines raise ValueError with the file and line.
     """
-    bad = 0
     with fp.open(encoding="utf-8") as fh:
         for i, line in enumerate(fh, 1):
             line = line.strip()
             if not line:
                 continue
             try:
-                yield i, json.loads(line)
+                rec = json.loads(line)
             except json.JSONDecodeError as e:
-                bad += 1
-                print(f"  [warn] {fp.name} line {i}: bad json (len={len(line)}, err={e})",
-                      file=sys.stderr)
-    if bad:
-        print(f"  [warn] {fp.name}: skipped {bad} malformed lines", file=sys.stderr)
+                raise ValueError(
+                    f"{fp}:{i}: malformed JSON ({e.msg}, line of {len(line)} chars)") from e
+            if not isinstance(rec, dict):
+                raise ValueError(f"{fp}:{i}: expected a JSON object, got {type(rec).__name__}")
+            yield i, rec
 
 
-def _load_manifest_lookup(manifests_root: Path,
-                            wanted_var_idxs: set[int]) -> dict[tuple[int, str], dict]:
-    """Load chunks/var_<i>/var_<i>.jsonl into a (var_idx, scene_id) -> manifest_row map.
+# Manifest fields _build_row reads; rows sharing a scene_id must agree on them.
+_MANIFEST_MATCH_FIELDS: tuple[str, ...] = (
+    "net_path", "source", "pdd_code_start", "pdd_code_end", "pdd_code_target",
+    "sign_type_start", "sign_type_end", "zone_length_m",
+)
 
-    The chunks manifest carries paired-scene fields (pdd_code_start/_end/_target,
-    source=pgmap_paired, etc.) which the consolidated replay JSONL doesn't.
-    """
-    lookup: dict[tuple[int, str], dict] = {}
-    if not manifests_root.is_dir():
-        print(f"  [warn] manifests-root not found: {manifests_root}", file=sys.stderr)
-        return lookup
-    n_loaded = 0
-    n_paired = 0
-    for var_idx in sorted(wanted_var_idxs):
-        mp = manifests_root / f"var_{var_idx}" / f"var_{var_idx}.jsonl"
-        if not mp.exists():
-            continue
-        for _, r in _iter_jsonl(mp):
-            sid = r.get("scene_id")
-            if not sid:
-                continue
-            lookup[(var_idx, str(sid))] = r
-            n_loaded += 1
+
+class ManifestIndex:
+    """Manifest rows by (var_idx, scene_id). A lookup that misses raises."""
+
+    def __init__(self, rows: dict[tuple[int, str], dict], sources: list[Path]):
+        self.rows = rows
+        self.sources = list(sources)
+
+    def row(self, var_idx: int, scene_id: str) -> dict:
+        try:
+            return self.rows[(int(var_idx), scene_id)]
+        except KeyError:
+            raise ManifestError(
+                f"scene_id {scene_id!r} (var {var_idx}) is not in the manifest "
+                f"{', '.join(str(p) for p in self.sources)}: the episode was run from "
+                "another manifest, so its map cannot be determined") from None
+
+
+def load_manifest(manifest: Path, var_idxs: set[int]) -> ManifestIndex:
+    """Manifest rows by (var_idx, scene_id): a manifest JSONL, registered under
+    every var index, or a chunks/ dir with var_<i>/var_<i>.jsonl per var index."""
+    if manifest.is_file():
+        sources: list[tuple[int | None, Path]] = [(None, manifest)]
+    elif manifest.is_dir():
+        sources = [(i, manifest / f"var_{i}" / f"var_{i}.jsonl") for i in sorted(var_idxs)]
+        missing = [str(p) for _, p in sources if not p.is_file()]
+        if missing:
+            raise FileNotFoundError(
+                f"{manifest} is read as a chunks/ manifest and lacks "
+                f"{', '.join(missing)}; pass the manifest file the episodes were run from")
+    else:
+        raise FileNotFoundError(
+            f"manifest not found: {manifest}. Per-map metrics cannot be computed "
+            "without the manifest the episodes were run from")
+    rows: dict[tuple[int, str], dict] = {}
+    n_rows = n_paired = 0
+    for var_idx, path in sources:
+        idxs = [var_idx] if var_idx is not None else sorted(var_idxs)
+        n_file = 0
+        for lineno, r in _iter_jsonl(path):
+            with _located(f"{path}:{lineno}"):
+                sid = r.get("scene_id")
+                if not isinstance(sid, str) or not sid:
+                    raise ManifestError("manifest row has no scene_id")
+                map_id_from_manifest_row(r)
+                ident = tuple(r.get(f) for f in _MANIFEST_MATCH_FIELDS)
+                for i in idxs:
+                    prev = rows.get((i, sid))
+                    if prev is not None and tuple(
+                            prev.get(f) for f in _MANIFEST_MATCH_FIELDS) != ident:
+                        raise ManifestError(
+                            f"scene_id {sid!r} is listed twice with different net_path "
+                            "or paired-zone fields, so its episodes cannot be matched "
+                            "to one map")
+                    rows.setdefault((i, sid), r)
+            n_file += 1
             if "paired" in str(r.get("source") or "").lower():
                 n_paired += 1
-    print(f"  [manifest] loaded {n_loaded} rows ({n_paired} paired) from "
-          f"{manifests_root}/var_*/var_*.jsonl")
-    return lookup
+        if n_file == 0:
+            raise ManifestError(f"manifest {path} has no rows")
+        n_rows += n_file
+    print(f"  [manifest] {n_rows} rows ({n_paired} paired) from "
+          + ", ".join(str(p) for _, p in sources))
+    return ManifestIndex(rows, [p for _, p in sources])
 
 
 def _write_csv(rows: list[dict], out_path: Path) -> None:
-    with out_path.open("w", encoding="utf-8", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=CSV_COLUMNS, extrasaction="ignore")
+    """Check every row against the schema, then write atomically."""
+    expected = set(CSV_COLUMNS)
+    for r in rows:
+        if set(r) != expected:
+            raise ValueError(f"row {r.get('scene_uid')!r} does not match the CSV schema: "
+                             f"{sorted(set(r) ^ expected)}")
+    tmp = out_path.with_name(out_path.name + ".tmp")
+    with tmp.open("w", encoding="utf-8", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=CSV_COLUMNS)
         w.writeheader()
         for r in rows:
             w.writerow(r)
+    tmp.replace(out_path)
     print(f"[write] {out_path}  ({len(rows)} rows × {len(CSV_COLUMNS)} cols)")
 
 
-def _build_from_episodes(episodes_root: Path, out_path: Path,
-                          manifests_root_arg: str | None) -> None:
+def _build_from_episodes(episodes_root: Path, out_path: Path, manifest: Path) -> None:
     """Build the metrics CSV from run_benchmark `episodes_*.jsonl` (unified path).
 
     Layout: <episodes_root>/<run_name>/episodes_*.jsonl, where <run_name> is
-    "<policy>_<variant>" (the baseline). Only ok=true episodes are emitted. All
+    "<policy>_<variant>" (the baseline). The last record per scene_uid must be ok. All
     episodes are treated as var_0 (a single-policy run uses var_0).
     """
     if not episodes_root.is_dir():
-        print(f"ERROR: not a directory: {episodes_root}", file=sys.stderr)
-        sys.exit(2)
+        raise FileNotFoundError(f"episodes root is not a directory: {episodes_root}")
+    index = load_manifest(manifest, {0})
 
-    manifests_root = (Path(manifests_root_arg).resolve() if manifests_root_arg
-                      else (episodes_root.parent / "chunks").resolve())
-    manifest_lookup = _load_manifest_lookup(manifests_root, wanted_var_idxs={0})
-
-    seen: dict[tuple[int, str, str], dict] = {}
-    n_total = n_kept = n_dup = n_no_id = n_skip = 0
+    last: dict[tuple[int, str, str], tuple[Path, int, dict]] = {}
+    n_read = n_dup = 0
     for run_dir in sorted(d for d in episodes_root.iterdir() if d.is_dir()):
         baseline = run_dir.name
         eps = sorted(run_dir.glob("episodes_*.jsonl"))
+        if not eps:
+            print(f"  [scan] {baseline}: no episodes_*.jsonl, not a run directory",
+                  file=sys.stderr)
+            continue
         n_for_baseline = 0
         for fp in eps:
-            for _, ep in _iter_jsonl(fp):
-                if not ep.get("ok"):
-                    n_skip += 1
-                    continue
-                n_total += 1
-                row = _build_row(_episode_to_replay(ep), "var_0", 0, baseline,
-                                 manifest_lookup)
-                if row is None:
-                    n_no_id += 1
-                    continue
-                key = (0, baseline, row["scene_uid"])
-                if key in seen:
+            for lineno, ep in _iter_jsonl(fp):
+                with _located(f"{fp}:{lineno}"):
+                    uid = _required_id(ep, "scene_uid")
+                key = (0, baseline, uid)
+                if key in last:
                     n_dup += 1
-                seen[key] = row
-                n_kept += 1
+                last[key] = (fp, lineno, ep)
+                n_read += 1
                 n_for_baseline += 1
-        if eps:
-            print(f"  [scan] {baseline}: {len(eps)} episodes file(s), "
-                  f"{n_for_baseline} episodes")
+        print(f"  [scan] {baseline}: {len(eps)} episodes file(s), {n_for_baseline} records")
+    if not last:
+        raise ValueError(f"no episode records under {episodes_root}")
 
-    rows = list(seen.values())
-    print(f"[stats] read={n_total} kept={len(rows)} dups_overwritten={n_dup} "
-          f"no_scene_uid={n_no_id} skipped_not_ok={n_skip}")
+    failed = [(fp, ln, ep) for fp, ln, ep in last.values() if ep.get("ok") is not True]
+    if failed:
+        shown = "; ".join(f"{fp}:{ln} {ep.get('scene_uid')}" for fp, ln, ep in failed[:5])
+        more = " …" if len(failed) > 5 else ""
+        raise ValueError(
+            f"{len(failed)} episode(s) failed to run (ok is not true) and have no later "
+            f"successful record: {shown}{more}. Re-run them (rerun_failed=true) before "
+            "scoring; dropping them would bias the per-map means.")
+
+    rows = []
+    for (_, baseline, _uid), (fp, lineno, ep) in last.items():
+        with _located(f"{fp}:{lineno}"):
+            rows.append(_build_row(_episode_to_replay(ep), "var_0", 0, baseline, index))
+    print(f"[stats] records={n_read} episodes={len(rows)} dups_overwritten={n_dup}")
     _write_csv(rows, out_path)
 
 
@@ -556,29 +642,28 @@ def main() -> None:
     src.add_argument("--runs-root",
                      help="Directory containing var_<i>/<baseline>_replays.jsonl. "
                           "Legacy path — reads consolidated replays / replay.json sidecars.")
+    ap.add_argument("--manifest", required=True,
+                    help="Manifest the episodes were run from: a manifest JSONL, or a "
+                         "chunks/ dir with var_<i>/var_<i>.jsonl (--runs-root)")
     ap.add_argument("--out", required=True,
                     help="Output CSV path (e.g. metrics_per_episode.csv)")
     ap.add_argument("--vars", default="all",
                     help="Comma-separated var indices (e.g. '0,1,2') or 'all' (default). "
                          "Only used with --runs-root.")
-    ap.add_argument("--manifests-root", default=None,
-                    help="Directory with var_<i>/var_<i>.jsonl manifests (for paired-scene "
-                         "info: pdd_code_start/end/target). Default: <runs-root>/../chunks")
     args = ap.parse_args()
 
     out_path = Path(args.out).resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest = Path(args.manifest).resolve()
 
     # --episodes-root: build directly from episodes_*.jsonl (unified path).
     if args.episodes_root:
-        _build_from_episodes(Path(args.episodes_root).resolve(), out_path,
-                             args.manifests_root)
+        _build_from_episodes(Path(args.episodes_root).resolve(), out_path, manifest)
         return
 
     runs_root = Path(args.runs_root).resolve()
     if not runs_root.is_dir():
-        print(f"ERROR: not a directory: {runs_root}", file=sys.stderr)
-        sys.exit(2)
+        raise FileNotFoundError(f"runs root is not a directory: {runs_root}")
 
     # Collect var_<i> directories
     var_dirs: list[tuple[int, Path]] = []
@@ -592,22 +677,15 @@ def main() -> None:
         wanted = {int(s.strip()) for s in args.vars.split(",") if s.strip()}
         var_dirs = [(i, d) for i, d in var_dirs if i in wanted]
     if not var_dirs:
-        print(f"ERROR: no var_<i> dirs found in {runs_root}", file=sys.stderr)
-        sys.exit(2)
+        raise FileNotFoundError(f"no var_<i> dirs in {runs_root} (vars={args.vars})")
 
     # Load manifest lookup for paired-scene enrichment
-    manifests_root = (Path(args.manifests_root).resolve() if args.manifests_root
-                      else (runs_root.parent / "chunks").resolve())
-    manifest_lookup = _load_manifest_lookup(manifests_root,
-                                              wanted_var_idxs={i for i, _ in var_dirs})
+    index = load_manifest(manifest, {i for i, _ in var_dirs})
 
     # Dedup by (var_idx, baseline, scene_uid). Last write wins (matches reruns).
     seen: dict[tuple[int, str, str], dict] = {}
     n_total = 0
-    n_kept = 0
     n_dup = 0
-    n_no_id = 0
-
     n_sidecar_total = 0
 
     for var_idx, vdir in var_dirs:
@@ -618,17 +696,14 @@ def main() -> None:
         for fp in jsonls:
             baseline = fp.stem[:-len("_replays")] if fp.stem.endswith("_replays") else fp.stem
             consolidated_baselines.add(baseline)
-            for _, replay in _iter_jsonl(fp):
+            for lineno, replay in _iter_jsonl(fp):
                 n_total += 1
-                row = _build_row(replay, var_name, var_idx, baseline, manifest_lookup)
-                if row is None:
-                    n_no_id += 1
-                    continue
+                with _located(f"{fp}:{lineno}"):
+                    row = _build_row(replay, var_name, var_idx, baseline, index)
                 key = (var_idx, baseline, row["scene_uid"])
                 if key in seen:
                     n_dup += 1
                 seen[key] = row
-                n_kept += 1
 
         # Step 2: fall back to sidecar replay.json for baselines without
         # consolidated jsonl. Sidecars live at:
@@ -645,23 +720,18 @@ def main() -> None:
                 continue
             n_for_baseline = 0
             for sidecar in replays_dir.glob("*/by_sign/*/by_scene/*/*/replay.json"):
-                try:
+                with _located(str(sidecar)):
                     replay = json.loads(sidecar.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError) as e:
-                    print(f"  [warn] {sidecar}: {e}", file=sys.stderr)
-                    continue
+                    if not isinstance(replay, dict):
+                        raise ValueError(f"expected a JSON object, got {type(replay).__name__}")
+                    row = _build_row(replay, var_name, var_idx, baseline, index)
                 n_total += 1
                 n_sidecar_total += 1
                 n_for_baseline += 1
-                row = _build_row(replay, var_name, var_idx, baseline, manifest_lookup)
-                if row is None:
-                    n_no_id += 1
-                    continue
                 key = (var_idx, baseline, row["scene_uid"])
                 if key in seen:
                     n_dup += 1
                 seen[key] = row
-                n_kept += 1
             if n_for_baseline:
                 sidecar_baselines[baseline] = n_for_baseline
 
@@ -674,8 +744,10 @@ def main() -> None:
             print(f"  [scan] {var_name}: no data (no jsonl, no sidecars)")
 
     rows = list(seen.values())
+    if not rows:
+        raise ValueError(f"no replays under {runs_root}")
     print(f"[stats] read={n_total} (sidecars={n_sidecar_total}) "
-          f"kept={len(rows)} dups_overwritten={n_dup} no_scene_uid={n_no_id}")
+          f"kept={len(rows)} dups_overwritten={n_dup}")
     _write_csv(rows, out_path)
 
 

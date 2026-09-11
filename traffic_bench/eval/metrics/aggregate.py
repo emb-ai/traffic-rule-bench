@@ -13,7 +13,8 @@ Every slice is produced under two aggregations (both are always written):
                                           (the original aggregation);
   * per-map      — agg_per_*_map.csv       each map's episodes are collapsed
                                           first, then the mean is taken over
-                                          maps (see aggregate_by_map).
+                                          maps (see aggregate_by_map);
+                   agg_per_*_map_ci.csv    per metric: mean, std over maps, CI.
 
 `sr_and_dest` (SR&Dest) = target sign obeyed AND destination reached, over
 every scored episode.
@@ -24,7 +25,8 @@ Plus, for backward compatibility with the existing MD-report scripts:
                                        generate_category_aggregation_report.py,
                                        plus per_baseline_map / per_sign_map with
                                        the map-level aggregation (report.py shows
-                                       both as `episode / map` in each cell)
+                                       both as `episode / map` in each cell) and
+                                       per_*_map_ci with {mean, std, ci_lo, ci_hi}
   6. cumulative_2node.json          — {vars_processed, cumulative_through_latest,
                                        per_var} schema for merge_and_report_2node.py
 
@@ -43,9 +45,13 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+import numpy as np
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 from traffic_bench.agents.policy_names import canonical_policy_name
+from traffic_bench.eval.metrics.csv import CSV_COLUMNS
+from traffic_bench.eval.metrics.map_id import MAP_ID_SOURCE, ManifestError, map_id_from_manifest_row
 from traffic_bench.oracle.select.filter import (
     BETA_DEFAULT,
     HORIZON_DEFAULT,
@@ -95,7 +101,11 @@ def baseline_sort_key(baseline: str) -> tuple[int, str]:
 
 
 def _to_bool(s: str) -> bool:
-    return s == "True"
+    if s == "True":
+        return True
+    if s == "False":
+        return False
+    raise ValueError(f"expected True or False, got {s!r}")
 
 
 def sign_group(row_or_code) -> str:
@@ -139,23 +149,46 @@ def sign_group(row_or_code) -> str:
     return pdd_code
 
 
-def _to_int(s: str, default: int = 0) -> int:
-    try:
-        return int(s) if s != "" else default
-    except (ValueError, TypeError):
-        return default
+# CSV cells: empty = undefined where csv.py writes one; malformed raises.
+def _to_int(s: str) -> int:
+    return int(s)
 
 
-def _to_float(s: str, default: float | None = None) -> float | None:
-    try:
-        return float(s) if s != "" else default
-    except (ValueError, TypeError):
-        return default
+def _opt_int(s: str) -> int | None:
+    return None if s == "" else int(s)
+
+
+def _opt_bool(s: str) -> bool | None:
+    return None if s == "" else _to_bool(s)
+
+
+def _to_float(s: str) -> float | None:
+    if s == "":
+        return None
+    f = float(s)
+    if not math.isfinite(f):
+        raise ValueError(f"non-finite value {s!r}")
+    return f
+
+
+def _req_float(s: str) -> float:
+    f = _to_float(s)
+    if f is None:
+        raise ValueError("empty cell where a number is required")
+    return f
+
+
+def _json_dict(s: str) -> dict:
+    d = json.loads(s)
+    if not isinstance(d, dict):
+        raise ValueError(f"expected a JSON object, got {s!r}")
+    return d
 
 
 def _mean(vals: list[float]) -> float | None:
-    vals = [v for v in vals if v is not None and isinstance(v, (int, float))
-            and math.isfinite(v)]
+    vals = [v for v in vals if v is not None]
+    if any(not math.isfinite(v) for v in vals):
+        raise ValueError("non-finite value in a mean")
     if not vals:
         return None
     return float(sum(vals) / len(vals))
@@ -173,89 +206,112 @@ def _round_or_none(x, n=6):
 # Load CSV → list of dict-rows with typed values
 # ---------------------------------------------------------------------------
 def load_episode_csv(path: Path) -> list[dict]:
+    """Typed rows of a CSV built by `metrics csv --manifest`; errors carry file:line."""
     rows = []
-    with path.open(encoding="utf-8") as fh:
-        for r in csv.DictReader(fh):
-            row = {
-                "var_name": r["var_name"],
-                "var_idx": _to_int(r["var_idx"]),
-                # CSVs written before the rename carry legacy policy spellings.
-                "baseline": canonical_policy_name(r["baseline"]),
-                "policy": canonical_policy_name(r["policy"]),
-                "variant": r["variant"],
-                "display_policy": canonical_policy_name(r["display_policy"]),
-                "backend": r["backend"],
-                "pdd_code": r["pdd_code"],
-                "sign_slug": r["sign_slug"],
-                "target_sign_class": r["target_sign_class"] or None,
-                "is_no_entry_sign": _to_bool(r["is_no_entry_sign"]),
-                "scene_id": r["scene_id"],
-                "scene_uid": r["scene_uid"],
-                "manifest_source": r.get("manifest_source", ""),
-                "is_paired_scene": _to_bool(r.get("is_paired_scene", "")),
-                "pdd_code_start": r.get("pdd_code_start", ""),
-                "pdd_code_end": r.get("pdd_code_end", ""),
-                "pdd_code_target": r.get("pdd_code_target", ""),
-                "sign_type_start": r.get("sign_type_start", ""),
-                "sign_type_end": r.get("sign_type_end", ""),
-                "zone_length_m": _to_float(r.get("zone_length_m", "")),
-                "valid": _to_bool(r["valid"]),
-                "arrived_dest": _to_bool(r["arrived_dest"]),
-                "crashed": _to_bool(r["crashed"]),
-                "crashed_ego_fault": _to_bool(r["crashed_ego_fault"]),
-                "crashed_npc_fault": _to_bool(r["crashed_npc_fault"]),
-                "out_of_road": _to_bool(r["out_of_road"]),
-                "success": _to_bool(r["success"]),
-                "final_step": _to_int(r["final_step"]),
-                "total_reward": _to_float(r["total_reward"]),
-                "route_completion": _to_float(r["route_completion"]),
-                "route_length_m": _to_float(r["route_length_m"]),
-                "distance_travelled_m": _to_float(r["distance_travelled_m"]),
-                "driving_score": _to_float(r["driving_score"]),
-                "driving_efficiency": _to_float(r["driving_efficiency"]),
-                "infraction_penalty": _to_float(r["infraction_penalty"]),
-                "smoothness_ratio": _to_float(r["smoothness_ratio"]),
-                "frame_smooth_ratio": _to_float(r["frame_smooth_ratio"]),
-                "smooth_segments": _to_int(r["smooth_segments"]),
-                "total_segments": _to_int(r["total_segments"]),
-                "min_ttc_sec": _to_float(r["min_ttc_sec"]),
-                "mean_abs_lane_offset": _to_float(r["mean_abs_lane_offset"]),
-                "mean_abs_steer_delta": _to_float(r["mean_abs_steer_delta"]),
-                "hard_brake_count": _to_int(r["hard_brake_count"]),
-                "hard_accel_count": _to_int(r["hard_accel_count"]),
-                "total_violations": _to_int(r["total_violations"]),
-                "violations_event_count": _to_int(r["violations_event_count"]),
-                "in_zone_total_steps": _to_int(r["in_zone_total_steps"]),
-                "viol_high_sign": _to_int(r["viol_high_sign"]),
-                "viol_high_traffic_light": _to_int(r["viol_high_traffic_light"]),
-                "viol_high_crosswalk": _to_int(r["viol_high_crosswalk"]),
-                "violations_by_class_step": json.loads(r["violations_by_class_step_json"] or "{}"),
-                "violations_by_class_event": json.loads(r["violations_by_class_event_json"] or "{}"),
-                "in_zone_by_class_step": json.loads(r["in_zone_by_class_step_json"] or "{}"),
-                "target_violations_step": _to_int(r["target_violations_step"]) if r["target_violations_step"] != "" else None,
-                "target_violations_event": _to_int(r["target_violations_event"]) if r["target_violations_event"] != "" else None,
-                "target_in_zone_steps": _to_int(r["target_in_zone_steps"]) if r["target_in_zone_steps"] != "" else None,
-                "target_in_zone": _to_bool(r["target_in_zone"]),
-                "target_compliant_event": _to_bool(r["target_compliant_event"]) if r["target_compliant_event"] != "" else None,
-                "target_compliant_step": _to_bool(r["target_compliant_step"]) if r["target_compliant_step"] != "" else None,
-                # SR&Dest per episode. CSVs written before the column existed
-                # lack it → derive from target_compliant_event AND arrived_dest.
-                "sr_and_dest": (
-                    _to_bool(r["sr_and_dest"]) if r.get("sr_and_dest") not in (None, "")
-                    else (
-                        (_to_bool(r["target_compliant_event"]) and _to_bool(r["arrived_dest"]))
-                        if r["target_compliant_event"] != "" else None
-                    )
-                ),
-                "sign_compliant_high": _to_bool(r["sign_compliant_high"]),
-                "tl_compliant": _to_bool(r["tl_compliant"]),
-                "cw_compliant": _to_bool(r["cw_compliant"]),
-                "dest_recomputed": _to_bool(r["dest_recomputed"]),
-                "passes_filter": _to_bool(r["passes_filter"]),
-                "comfort": _to_float(r["comfort"], 0.0) or 0.0,
-            }
-            rows.append(row)
+    with path.open(encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh)
+        header = reader.fieldnames or []
+        missing = [c for c in CSV_COLUMNS if c not in header]
+        if missing:
+            raise ManifestError(
+                f"{path} lacks column(s) {', '.join(missing)}: it was not built by "
+                "`metrics csv --manifest`, so its episodes carry no manifest map. "
+                "Rebuild it from the episodes and the manifest they were run from.")
+        for lineno, r in enumerate(reader, start=2):
+            try:
+                if None in r or any(v is None for v in r.values()):
+                    raise ValueError(f"row has {len(r) - (None in r)} fields, "
+                                     f"the header has {len(header)}")
+                rows.append(_parse_episode_row(r))
+            except ManifestError as e:
+                raise ManifestError(f"{path}:{lineno}: {e}") from e
+            except (ValueError, KeyError) as e:
+                raise ValueError(f"{path}:{lineno}: {e}") from e
+    if not rows:
+        raise ValueError(f"{path} has no episode rows")
     return rows
+
+
+def _parse_episode_row(r: dict) -> dict:
+    net_path = r["net_path"]
+    map_id = r["map_id"]
+    expected = map_id_from_manifest_row({"net_path": net_path, "scene_id": r["scene_id"]})
+    if map_id != expected:
+        raise ManifestError(
+            f"map_id {map_id!r} does not match net_path {net_path!r} "
+            f"(its directory is {expected!r})")
+    return {
+        "var_name": r["var_name"],
+        "var_idx": _to_int(r["var_idx"]),
+        # CSVs written before the rename carry legacy policy spellings.
+        "baseline": canonical_policy_name(r["baseline"]),
+        "policy": canonical_policy_name(r["policy"]),
+        "variant": r["variant"],
+        "display_policy": canonical_policy_name(r["display_policy"]),
+        "backend": r["backend"],
+        "pdd_code": r["pdd_code"],
+        "sign_slug": r["sign_slug"],
+        "target_sign_class": r["target_sign_class"] or None,
+        "is_no_entry_sign": _to_bool(r["is_no_entry_sign"]),
+        "scene_id": r["scene_id"],
+        "scene_uid": r["scene_uid"],
+        "map_id": map_id,
+        "net_path": net_path,
+        "manifest_source": r["manifest_source"],
+        "is_paired_scene": _to_bool(r["is_paired_scene"]),
+        "pdd_code_start": r["pdd_code_start"],
+        "pdd_code_end": r["pdd_code_end"],
+        "pdd_code_target": r["pdd_code_target"],
+        "sign_type_start": r["sign_type_start"],
+        "sign_type_end": r["sign_type_end"],
+        "zone_length_m": _to_float(r["zone_length_m"]),
+        "valid": _to_bool(r["valid"]),
+        "arrived_dest": _to_bool(r["arrived_dest"]),
+        "crashed": _to_bool(r["crashed"]),
+        "crashed_ego_fault": _to_bool(r["crashed_ego_fault"]),
+        "crashed_npc_fault": _to_bool(r["crashed_npc_fault"]),
+        "out_of_road": _to_bool(r["out_of_road"]),
+        "success": _to_bool(r["success"]),
+        "final_step": _to_int(r["final_step"]),
+        "total_reward": _to_float(r["total_reward"]),
+        "route_completion": _to_float(r["route_completion"]),
+        "route_length_m": _to_float(r["route_length_m"]),
+        "distance_travelled_m": _to_float(r["distance_travelled_m"]),
+        "driving_score": _to_float(r["driving_score"]),
+        "driving_efficiency": _to_float(r["driving_efficiency"]),
+        "infraction_penalty": _to_float(r["infraction_penalty"]),
+        "smoothness_ratio": _to_float(r["smoothness_ratio"]),
+        "frame_smooth_ratio": _to_float(r["frame_smooth_ratio"]),
+        "smooth_segments": _to_int(r["smooth_segments"]),
+        "total_segments": _to_int(r["total_segments"]),
+        "min_ttc_sec": _to_float(r["min_ttc_sec"]),
+        "mean_abs_lane_offset": _to_float(r["mean_abs_lane_offset"]),
+        "mean_abs_steer_delta": _to_float(r["mean_abs_steer_delta"]),
+        "hard_brake_count": _to_int(r["hard_brake_count"]),
+        "hard_accel_count": _to_int(r["hard_accel_count"]),
+        "total_violations": _to_int(r["total_violations"]),
+        "violations_event_count": _to_int(r["violations_event_count"]),
+        "in_zone_total_steps": _to_int(r["in_zone_total_steps"]),
+        "viol_high_sign": _to_int(r["viol_high_sign"]),
+        "viol_high_traffic_light": _to_int(r["viol_high_traffic_light"]),
+        "viol_high_crosswalk": _to_int(r["viol_high_crosswalk"]),
+        "violations_by_class_step": _json_dict(r["violations_by_class_step_json"]),
+        "violations_by_class_event": _json_dict(r["violations_by_class_event_json"]),
+        "in_zone_by_class_step": _json_dict(r["in_zone_by_class_step_json"]),
+        "target_violations_step": _opt_int(r["target_violations_step"]),
+        "target_violations_event": _opt_int(r["target_violations_event"]),
+        "target_in_zone_steps": _opt_int(r["target_in_zone_steps"]),
+        "target_in_zone": _to_bool(r["target_in_zone"]),
+        "target_compliant_event": _opt_bool(r["target_compliant_event"]),
+        "target_compliant_step": _opt_bool(r["target_compliant_step"]),
+        "sr_and_dest": _opt_bool(r["sr_and_dest"]),
+        "sign_compliant_high": _to_bool(r["sign_compliant_high"]),
+        "tl_compliant": _to_bool(r["tl_compliant"]),
+        "cw_compliant": _to_bool(r["cw_compliant"]),
+        "dest_recomputed": _to_bool(r["dest_recomputed"]),
+        "passes_filter": _to_bool(r["passes_filter"]),
+        "comfort": _req_float(r["comfort"]),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +395,7 @@ def aggregate(rows: list[dict], beta: float = BETA_DEFAULT,
         if not r["passes_filter"]:
             continue
         sid = r["scene_id"]
-        mm = scene_minmax.get(sid, [1, 1])
+        mm = scene_minmax[sid]
         t = time_eff(r, mm[0])  # min_over_final = scene_min_step / final_step
         c = float(r["comfort"])
         sum_te += t
@@ -422,10 +478,11 @@ def aggregate(rows: list[dict], beta: float = BETA_DEFAULT,
 # ---------------------------------------------------------------------------
 # Episode-level averages let a map with many variations outweigh a map with
 # few, so a policy can win by doing well where the catalog happens to be
-# dense. Here every map (scene_id) contributes exactly one number: aggregate()
+# dense. Here every map (map_id) contributes exactly one number: aggregate()
 # runs on each map's episodes and the per-map values are averaged. Counts and
 # totals are summed instead, so both aggregations share one schema and can be
 # written side by side. Ported from the old map_level_metrics.py.
+# The per-map values also give the std over maps and the bootstrap CI.
 MAP_SUM_FIELDS: set[str] = {
     "n", "n_in_zone", "n_passing", "n_with_class",
     "total_violation_steps", "total_violation_events", "total_in_zone_steps",
@@ -435,31 +492,89 @@ MAP_DICT_SUM_FIELDS: set[str] = {
     "violations_by_class_event_total",
     "in_zone_by_class_step_total",
 }
+MAP_ONLY_FIELDS: tuple[str, ...] = (
+    "n_maps", "episodes_per_map_min", "episodes_per_map_max",
+)
+
+N_BOOT_DEFAULT = 10_000
+CI_LEVEL_DEFAULT = 0.95
+CI_SEED_DEFAULT = 0
 
 
 def map_key(row: dict) -> str:
     """A map is one net under one sign.
 
-    scene_id names the net; variations differ by lane/seed/var. The pool is
+    map_id names the net (the manifest's net_path directory). The pool is
     shared between signs (the same junction crop can serve yield and stop), and
     the same net under another sign is another scenario, so the sign code is
-    part of the key. Within a per-sign slice this reduces to scene_id.
+    part of the key. Within a per-sign slice this reduces to map_id.
     """
-    scene = str(row.get("scene_id") or row.get("scene_uid") or "?")
+    map_id = row.get("map_id")
+    if not map_id:
+        raise ManifestError(
+            f"episode {row.get('scene_uid')!r} has no map_id; per-map metrics need "
+            "the manifest the episodes were run from (`metrics csv --manifest`)")
     pdd = str(row.get("pdd_code") or "")
-    return f"{pdd}|{scene}" if pdd else scene
+    return f"{pdd}|{map_id}" if pdd else str(map_id)
+
+
+def map_values(per_map: list[dict], field: str) -> list[float]:
+    """Per-map values of a metric, skipping maps where it is undefined."""
+    vals: list[float] = []
+    for m in per_map:
+        v = m.get(field)
+        if v is None:
+            continue
+        v = float(v)
+        if not math.isfinite(v):
+            raise ValueError(f"non-finite per-map value {v!r} for {field}")
+        vals.append(v)
+    return vals
 
 
 def mean_over_maps(per_map: list[dict], field: str) -> float | None:
     """Mean of a per-map value, skipping maps where it is undefined."""
-    vals = [m.get(field) for m in per_map]
-    vals = [v for v in vals if v is not None]
+    vals = map_values(per_map, field)
     return (sum(vals) / len(vals)) if vals else None
 
 
+def std_over_maps(vals: list[float]) -> float | None:
+    """Sample standard deviation (ddof=1) of the per-map values."""
+    if len(vals) < 2:
+        return None
+    return float(np.std(np.asarray(vals, dtype=float), ddof=1))
+
+
+def bootstrap_mean_ci(vals: list[float], *, n_boot: int = N_BOOT_DEFAULT,
+                      level: float = CI_LEVEL_DEFAULT,
+                      rng: "np.random.Generator | None" = None,
+                      idx_cache: "dict[int, np.ndarray] | None" = None,
+                      ) -> tuple[float, float] | None:
+    """Percentile bootstrap CI of the mean (``n_boot`` resamples with replacement);
+    draws are cached per sample size. None for < 2 values or ``n_boot`` 0."""
+    n = len(vals)
+    if n < 2 or n_boot <= 0:
+        return None
+    if rng is None:
+        rng = np.random.default_rng(CI_SEED_DEFAULT)
+    idx = None if idx_cache is None else idx_cache.get(n)
+    if idx is None:
+        idx = rng.integers(0, n, size=(int(n_boot), n))
+        if idx_cache is not None:
+            idx_cache[n] = idx
+    means = np.asarray(vals, dtype=float)[idx].mean(axis=1)
+    alpha = (1.0 - float(level)) / 2.0
+    lo, hi = np.quantile(means, [alpha, 1.0 - alpha])
+    return float(lo), float(hi)
+
+
 def aggregate_by_map(rows: list[dict], beta: float = BETA_DEFAULT,
-                     horizon: int = HORIZON_DEFAULT) -> dict:
-    """Same keys as aggregate(), but averaged over maps (plus ``n_maps``)."""
+                     horizon: int = HORIZON_DEFAULT, *,
+                     n_boot: int = N_BOOT_DEFAULT,
+                     ci_level: float = CI_LEVEL_DEFAULT,
+                     ci_seed: int = CI_SEED_DEFAULT) -> dict:
+    """Same keys as aggregate(), but averaged over maps (plus ``n_maps``,
+    ``episodes_per_map_min/max`` and ``dispersion``: {metric: n_maps, std, ci_lo, ci_hi})."""
     if not rows:
         return {"n": 0, "n_maps": 0}
     by_map: dict[str, list[dict]] = defaultdict(list)
@@ -471,7 +586,10 @@ def aggregate_by_map(rows: list[dict], beta: float = BETA_DEFAULT,
         for k in m:
             if k not in keys:
                 keys.append(k)
+    rng = np.random.default_rng(int(ci_seed))
+    idx_cache: dict[int, np.ndarray] = {}
     out: dict = {}
+    dispersion: dict[str, dict] = {}
     for k in keys:
         if k in MAP_SUM_FIELDS:
             out[k] = sum(int(m.get(k) or 0) for m in per_map)
@@ -483,14 +601,28 @@ def aggregate_by_map(rows: list[dict], beta: float = BETA_DEFAULT,
         elif k == "in_zone_violation_rate_by_class":
             continue  # recomputed from the summed dicts below
         else:
-            out[k] = mean_over_maps(per_map, k)
+            vals = map_values(per_map, k)
+            out[k] = (sum(vals) / len(vals)) if vals else None
+            if vals:
+                ci = bootstrap_mean_ci(vals, n_boot=n_boot, level=ci_level,
+                                       rng=rng, idx_cache=idx_cache)
+                dispersion[k] = {
+                    "n_maps": len(vals),
+                    "std": std_over_maps(vals),
+                    "ci_lo": None if ci is None else ci[0],
+                    "ci_hi": None if ci is None else ci[1],
+                }
     by_class_step = out.get("violations_by_class_step_total") or {}
     in_zone = out.get("in_zone_by_class_step_total") or {}
     out["in_zone_violation_rate_by_class"] = {
         cls: round(by_class_step.get(cls, 0) / cnt, 4)
         for cls, cnt in in_zone.items() if cnt > 0
     }
+    sizes = [len(rs) for rs in by_map.values()]
     out["n_maps"] = len(per_map)
+    out["episodes_per_map_min"] = min(sizes)
+    out["episodes_per_map_max"] = max(sizes)
+    out["dispersion"] = dispersion
     return out
 
 
@@ -498,7 +630,8 @@ def aggregate_by_map(rows: list[dict], beta: float = BETA_DEFAULT,
 # CSV writers (flat tables)
 # ---------------------------------------------------------------------------
 FLAT_METRIC_COLUMNS = [
-    "n", "n_maps", "n_in_zone", "n_passing", "n_with_class",
+    "n", "n_maps", "episodes_per_map_min", "episodes_per_map_max",
+    "n_in_zone", "n_passing", "n_with_class",
     "success_rate", "dest_rate", "dest_rate_recomputed",
     "crash_rate", "out_of_road_rate", "pass_rate",
     "sign_compliance_sr", "sign_compliance_x",
@@ -661,11 +794,43 @@ def write_grouped_csv(path: Path, group_keys: list[str],
             w.writerow(row)
 
 
+CI_CSV_COLUMNS = ["metric", "n_maps", "mean", "std", "ci_lo", "ci_hi"]
+
+
+def write_ci_csv(path: Path, group_keys: list[str],
+                 grouped: dict[tuple, dict]) -> None:
+    """One row per (group, metric): mean, std and CI over maps."""
+    fieldnames = group_keys + CI_CSV_COLUMNS
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=fieldnames)
+        w.writeheader()
+        for key in sorted(grouped.keys(),
+                          key=lambda k: _grouped_sort_key(k, group_keys)):
+            metrics = grouped[key]
+            disp = metrics.get("dispersion") or {}
+            for metric in FLAT_METRIC_COLUMNS:
+                d = disp.get(metric)
+                if d is None:
+                    continue
+                row = dict(zip(group_keys, key))
+                row.update({
+                    "metric": metric,
+                    "n_maps": int(d.get("n_maps") or 0),
+                    "mean": _round_or_none(metrics.get(metric)),
+                    "std": _round_or_none(d.get("std")),
+                    "ci_lo": _round_or_none(d.get("ci_lo")),
+                    "ci_hi": _round_or_none(d.get("ci_hi")),
+                })
+                w.writerow({k: ("" if v is None else v) for k, v in row.items()})
+
+
 # ---------------------------------------------------------------------------
 # Legacy JSON emitters
 # ---------------------------------------------------------------------------
 LEGACY_CUMULATIVE_FIELDS = [
-    "n", "n_maps", "n_in_zone", "success_rate", "dest_rate",
+    "n", "n_maps", "episodes_per_map_min", "episodes_per_map_max",
+    "n_in_zone", "success_rate", "dest_rate",
     "target_compliance_rate_event", "sr_and_dest",
     "sign_compliance_sr", "sign_compliance_x",
     "traffic_light_sr", "crosswalk_sr",
@@ -687,7 +852,7 @@ def _emit_legacy_per_baseline_block(metrics: dict) -> dict:
     out = {}
     for f in LEGACY_CUMULATIVE_FIELDS:
         v = metrics.get(f)
-        if f == "n_maps":
+        if f in MAP_ONLY_FIELDS:
             # Only map-level blocks carry it; leave it out of episode blocks.
             if v is not None:
                 out[f] = int(v)
@@ -698,6 +863,25 @@ def _emit_legacy_per_baseline_block(metrics: dict) -> dict:
             out[f] = 0.0 if v is None else float(v)
     eff = metrics.get("avg_driving_efficiency")
     out["avg_efficiency"] = 0.0 if eff is None else float(eff)
+    return out
+
+
+def _emit_ci_block(metrics: dict) -> dict:
+    """{metric: {mean, std, ci_lo, ci_hi, n_maps}} for the legacy metric set."""
+    disp = metrics.get("dispersion") or {}
+    out = {}
+    for f in LEGACY_CUMULATIVE_FIELDS + ["avg_driving_efficiency"]:
+        d = disp.get(f)
+        if d is None:
+            continue
+        name = "avg_efficiency" if f == "avg_driving_efficiency" else f
+        out[name] = {
+            "mean": _round_or_none(metrics.get(f)),
+            "std": _round_or_none(d.get("std")),
+            "ci_lo": _round_or_none(d.get("ci_lo")),
+            "ci_hi": _round_or_none(d.get("ci_hi")),
+            "n_maps": int(d.get("n_maps") or 0),
+        }
     return out
 
 
@@ -749,13 +933,15 @@ def write_legacy_cumulative_json(out_path: Path,
                                    per_sign_baseline_map: dict[tuple[str, str], dict]
                                        | None = None,
                                    per_signgroup_baseline_map: dict[tuple[str, str], dict]
-                                       | None = None) -> None:
+                                       | None = None,
+                                   ci_meta: dict | None = None) -> None:
     """Schema for generate_cumulative_markdown_report.py + category report.
 
     ``per_baseline`` / ``per_sign`` keep the per-episode aggregation. When the
     map-level dicts are given, ``per_baseline_map`` / ``per_sign_map`` are
     added with the same block schema (plus ``n_maps``) and ``aggregations``
     lists both kinds; report.py renders them as ``episode / map``.
+    ``*_map_ci`` blocks and ``ci`` (ci_meta) carry the dispersion.
 
     Per-sign tables get individual pdd_codes for ALL signs plus group keys
     (e.g. "2.1+2.2", "5.12.x") for paired groups — paired-zone scenes from
@@ -784,18 +970,28 @@ def write_legacy_cumulative_json(out_path: Path,
     }
     if per_baseline_map:
         per_sign_map: dict[str, dict[str, dict]] = defaultdict(dict)
+        per_sign_map_ci: dict[str, dict[str, dict]] = defaultdict(dict)
         for (sign, baseline), m in (per_sign_baseline_map or {}).items():
             per_sign_map[baseline][sign] = _emit_legacy_per_baseline_block(m)
+            per_sign_map_ci[baseline][sign] = _emit_ci_block(m)
         if per_signgroup_baseline_map and members_pgb is not None:
             for (group, baseline), m in per_signgroup_baseline_map.items():
                 members = members_pgb.get((group, baseline), set())
                 if not (_is_paired_group(group) or len(members) > 1):
                     continue
                 per_sign_map[baseline][group] = _emit_legacy_per_baseline_block(m)
+                per_sign_map_ci[baseline][group] = _emit_ci_block(m)
         out["per_baseline_map"] = {b: _emit_legacy_per_baseline_block(m)
                                    for b, m in sorted(per_baseline_map.items())}
         out["per_sign_map"] = {b: dict(sorted(s.items()))
                                for b, s in sorted(per_sign_map.items())}
+        out["per_baseline_map_ci"] = {b: _emit_ci_block(m)
+                                      for b, m in sorted(per_baseline_map.items())}
+        out["per_sign_map_ci"] = {b: dict(sorted(s.items()))
+                                  for b, s in sorted(per_sign_map_ci.items())}
+        if not ci_meta or ci_meta.get("map_id") != MAP_ID_SOURCE:
+            raise ValueError(f"per-map blocks need ci_meta with map_id={MAP_ID_SOURCE!r}")
+        out["ci"] = dict(ci_meta)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(out, indent=2, ensure_ascii=False),
                          encoding="utf-8")
@@ -833,19 +1029,26 @@ def main() -> None:
                     help="Output directory (will create aggregations/ and reports/ subdirs)")
     ap.add_argument("--beta", type=float, default=BETA_DEFAULT)
     ap.add_argument("--horizon", type=int, default=HORIZON_DEFAULT)
+    ap.add_argument("--n-boot", type=int, default=N_BOOT_DEFAULT,
+                    help="Bootstrap resamples of the per-map values for the CI of "
+                         f"the mean (default {N_BOOT_DEFAULT}; 0 = std only)")
+    ap.add_argument("--ci-level", type=float, default=CI_LEVEL_DEFAULT,
+                    help=f"Two-sided CI level (default {CI_LEVEL_DEFAULT})")
+    ap.add_argument("--ci-seed", type=int, default=CI_SEED_DEFAULT,
+                    help=f"Seed of the bootstrap generator (default {CI_SEED_DEFAULT})")
     args = ap.parse_args()
+    if args.n_boot < 0:
+        ap.error("--n-boot must be >= 0")
+    if not 0.0 < args.ci_level < 1.0:
+        ap.error("--ci-level must be in (0, 1)")
 
     csv_path = Path(args.csv).resolve()
     out_dir = Path(args.out_dir).resolve()
-    if not csv_path.exists():
-        print(f"ERROR: csv not found: {csv_path}", file=sys.stderr)
-        sys.exit(2)
+    if not csv_path.is_file():
+        raise FileNotFoundError(f"csv not found: {csv_path}")
 
     rows = load_episode_csv(csv_path)
     print(f"[load] {len(rows)} episode rows from {csv_path}")
-    if not rows:
-        print("ERROR: no rows", file=sys.stderr)
-        sys.exit(2)
 
     # Group rows. sign_group is row-aware: paired-zone scenes get "<start>+<end>"
     # group key, standalone END-variants get "<major>.<minor>.x", everything
@@ -892,13 +1095,29 @@ def main() -> None:
 
     # Map-level aggregation of the same slices (collapse each map, then mean
     # over maps). Written next to the per-episode files as *_map.csv.
-    print("[aggregate] map-level: collapse each map, then mean over maps...")
-    mag_pbv = {k: aggregate_by_map(rs, args.beta, args.horizon) for k, rs in by_baseline_var.items()}
-    mag_psbv = {k: aggregate_by_map(rs, args.beta, args.horizon) for k, rs in by_sign_baseline_var.items()}
-    mag_pb = {k: aggregate_by_map(rs, args.beta, args.horizon) for k, rs in by_baseline.items()}
-    mag_psb = {k: aggregate_by_map(rs, args.beta, args.horizon) for k, rs in by_sign_baseline.items()}
-    mag_pgb = {k: aggregate_by_map(rs, args.beta, args.horizon) for k, rs in by_signgroup_baseline.items()}
-    mag_pgbv = {k: aggregate_by_map(rs, args.beta, args.horizon) for k, rs in by_signgroup_baseline_var.items()}
+    print(f"[aggregate] map-level: collapse each map, then mean over maps; "
+          f"std over maps + {args.ci_level:.0%} bootstrap CI of the mean "
+          f"({args.n_boot} resamples, seed {args.ci_seed})...")
+
+    def by_map(rs: list[dict]) -> dict:
+        return aggregate_by_map(rs, args.beta, args.horizon, n_boot=args.n_boot,
+                                ci_level=args.ci_level, ci_seed=args.ci_seed)
+
+    mag_pbv = {k: by_map(rs) for k, rs in by_baseline_var.items()}
+    mag_psbv = {k: by_map(rs) for k, rs in by_sign_baseline_var.items()}
+    mag_pb = {k: by_map(rs) for k, rs in by_baseline.items()}
+    mag_psb = {k: by_map(rs) for k, rs in by_sign_baseline.items()}
+    mag_pgb = {k: by_map(rs) for k, rs in by_signgroup_baseline.items()}
+    mag_pgbv = {k: by_map(rs) for k, rs in by_signgroup_baseline_var.items()}
+    ci_meta = {
+        "unit": "map",
+        "map_id": MAP_ID_SOURCE,
+        "method": "bootstrap_percentile",
+        "n_boot": int(args.n_boot),
+        "level": float(args.ci_level),
+        "seed": int(args.ci_seed),
+        "std": "sample std (ddof=1) over the per-map values",
+    }
 
     # Write flat CSVs
     aggregations_dir = out_dir / "aggregations"
@@ -935,6 +1154,19 @@ def main() -> None:
                        ["sign_group", "baseline", "var_name"], mag_pgbv)
     print(f"[write] {aggregations_dir}/agg_per_*_map.csv  (map-level: 6 files)")
 
+    # Per-map dispersion (std over maps + bootstrap CI) as long tables.
+    for name, keys, grouped in (
+        ("agg_per_baseline_var_map_ci.csv", ["baseline", "var_name"], mag_pbv),
+        ("agg_per_sign_baseline_var_map_ci.csv", ["pdd_code", "baseline", "var_name"], mag_psbv),
+        ("agg_per_baseline_map_ci.csv", ["baseline"], {(b,): m for b, m in mag_pb.items()}),
+        ("agg_per_sign_baseline_map_ci.csv", ["pdd_code", "baseline"], mag_psb),
+        ("agg_per_signgroup_baseline_map_ci.csv", ["sign_group", "baseline"], mag_pgb),
+        ("agg_per_signgroup_baseline_var_map_ci.csv", ["sign_group", "baseline", "var_name"], mag_pgbv),
+    ):
+        write_ci_csv(aggregations_dir / name, keys, grouped)
+    print(f"[write] {aggregations_dir}/agg_per_*_map_ci.csv  "
+          f"(per-map std + bootstrap CI: 6 files)")
+
     # Paired view: interleave group totals + member-sign breakdowns. Member
     # SIGN rows use within-group aggregations (agg_pgpb) so paired-zone metrics
     # don't mix with non-paired same-pdd_code rows.
@@ -955,10 +1187,11 @@ def main() -> None:
                                    members_pgb=members_pgb,
                                    per_baseline_map=mag_pb,
                                    per_sign_baseline_map=mag_psb,
-                                   per_signgroup_baseline_map=mag_pgb)
+                                   per_signgroup_baseline_map=mag_pgb,
+                                   ci_meta=ci_meta)
     print(f"[write] {cumulative_json}  (per_baseline={len(agg_pb)}, "
           f"per_sign baselines={len({b for _, b in agg_psb})}, "
-          f"aggregations=episode+map)")
+          f"aggregations=episode+map, +map_ci)")
 
     cumulative_2node = reports_dir / "cumulative_2node.json"
     write_2node_cumulative_json(cumulative_2node, agg_pb, agg_pbv, vars_processed)

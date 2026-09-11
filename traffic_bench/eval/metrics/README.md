@@ -3,7 +3,7 @@
 Used after `python -m traffic_bench.eval run policies=all sign=yield`, or on its own:
 
 ```bash
-python -m traffic_bench.eval metrics csv --episodes-root <eval_out>/benchmark/full/policy_eval --out <eval_out>/metrics_per_episode.csv
+python -m traffic_bench.eval metrics csv --episodes-root <eval_out>/benchmark/full/policy_eval --manifest <split>/real_manifest.jsonl --out <eval_out>/metrics_per_episode.csv
 python -m traffic_bench.eval metrics aggregate --csv <eval_out>/metrics_per_episode.csv --out-dir <eval_out>
 python -m traffic_bench.eval metrics report --run-root <eval_out>
 python -m traffic_bench.eval metrics combine sign=all
@@ -42,8 +42,18 @@ Every slice is aggregated two ways and both are written:
 |---|---|---|
 | per-episode | `aggregations/agg_per_*.csv`, `per_baseline` / `per_sign` | every episode weighs the same (original) |
 | per-map | `aggregations/agg_per_*_map.csv`, `per_baseline_map` / `per_sign_map` | each map's episodes are collapsed first, then the mean is taken over maps (`n_maps`) |
+| per-map dispersion | `aggregations/agg_per_*_map_ci.csv`, `per_*_map_ci` | std over maps and bootstrap CI of the mean |
 
 `report.py` prints both in every cell as `episode / map`.
+
+A map is the directory of the manifest row's `net_path`, so all augmented
+variants of a net are one map; scene ids are never parsed. `metrics csv`
+requires `--manifest`, the manifest the episodes were run from (`run
+policies=…` passes its own). Per metric: the mean over each map's variants,
+then the mean of those per-map values, their sample std (ddof=1) and a
+percentile bootstrap CI of the mean (maps resampled `--n-boot` times, default
+10000; `--ci-level` 0.95; seeded per slice by `--ci-seed`). Missing or
+malformed input raises with the file and line instead of being skipped.
 
 ## SR&Dest
 

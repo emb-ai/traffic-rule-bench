@@ -504,16 +504,25 @@ def _resolve_policies(raw: Iterable[str] | None, seen: set[str], *, all_policies
 
 
 def _per_sign_block(data: dict, agg: AggMode) -> dict[str, dict[str, dict]]:
+    """``per_sign``, or ``per_sign_map`` keyed on manifest maps for ``--agg map``."""
+    from traffic_bench.eval.metrics.map_id import MAP_ID_SOURCE
+
     if agg == "map":
-        block = data.get("per_sign_map") or {}
-        if block:
-            return block
-    return data.get("per_sign") or {}
+        source = (data.get("ci") or {}).get("map_id")
+        if source != MAP_ID_SOURCE or "per_sign_map" not in data:
+            raise ValueError(
+                f"--agg map needs per-map blocks keyed on manifest maps (ci.map_id = "
+                f"{source!r}); rebuild with `metrics csv --manifest` and `metrics aggregate`")
+        return data["per_sign_map"]
+    return data["per_sign"]
 
 
 def _load_cumulative(path: Path, agg: AggMode) -> dict[str, dict[str, dict]]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    return _per_sign_block(data, agg)
+    try:
+        return _per_sign_block(data, agg)
+    except (ValueError, KeyError) as e:
+        raise ValueError(f"{path}: {e}") from e
 
 
 def _profile_for_sign_code(code: str) -> SignProfile | None:
