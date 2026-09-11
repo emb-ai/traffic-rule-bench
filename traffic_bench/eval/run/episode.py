@@ -518,6 +518,18 @@ def run_one_episode(
                     apply_ego_sampled(policy_obj, sampled_ego_params)
                 else:
                     apply_ego_defaults(policy_obj)
+            # Plain IDM on the speed-limit plates (3.24 / 5.31): cruise at the
+            # manifest spawn speed. A sign-blind driver keeps going as it was;
+            # with the default 36 km/h cruise it passed every 40 km/h plate and
+            # every 30 km/h scene where traffic held it back, ~0.5 SR without
+            # reading a sign. Off by default; idm_rule is not touched.
+            if (policy_type == "idm" and os.environ.get("PLAIN_IDM_CRUISE_V0", "0") == "1"
+                    and str(row.get("pdd_code") or row.get("sign_code") or "") in ("3.24", "5.31")):
+                v0_kmh = float(row.get("spawn_velocity_ms") or 0.0) * 3.6
+                if v0_kmh > 0:
+                    policy_obj.NORMAL_SPEED = v0_kmh
+                    policy_obj.MAX_SPEED = max(float(getattr(policy_obj, "MAX_SPEED", 0.0)), v0_kmh)
+                    print(f"[PlainIDM] cruise = spawn speed {v0_kmh:.1f} km/h")
             if hasattr(policy_obj, "STOP_WAIT_STEPS"):
                 policy_obj.STOP_WAIT_STEPS = int(
                     row.get("stop_wait_steps", DEFAULT_STOP_WAIT_STEPS)
