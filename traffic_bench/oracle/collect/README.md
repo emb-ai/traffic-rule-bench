@@ -145,6 +145,8 @@ IDM-family policies (`idm_rule`, …) are sharded into
 Sharding is skipped only when `SAVE_GIFS=1` (Panda3D) or `IDM_CHUNKS=1`.
 Without sharding, `POLICIES_CPU="idm_rule ppo_rule"`
 would only use **2** CPU processes even if `N_WORKERS=8`.
+CPU workers get `CUDA_VISIBLE_DEVICES=` empty so they do not steal VRAM on
+GPU 0 (same pin as `eval/run/run_signs_parallel.sh`).
 - **GPU (single sign):** each NN policy (`carl_rule`, `plant2_rule`) is sharded
   into `NN_CHUNKS` workers (default `0` = auto = `#GPUs × JOBS_PER_GPU` for that
   pool) via `--start/--count/--worker-id`, round-robin across the pool's cards.

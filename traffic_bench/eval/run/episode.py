@@ -99,6 +99,7 @@ from traffic_bench.eval.signs.dual_path.nav import (
     install_one_way_compliant_nav_route,
     resolve_row_background_excluded_edges,
 )
+from traffic_bench.eval.signs.dual_path.route_probe import metadrive_route_loops
 from traffic_bench.eval.run.place import place_signs_for_row
 from traffic_bench.eval.signs.blocked.place import (
     ego_compliant_stop_before_blocked_road,
@@ -443,7 +444,7 @@ def run_one_episode(
                 and checkpoints
                 and spawn_lane_idx
             ):
-                if len(checkpoints) <= 1 or checkpoints[-1] == spawn_lane_idx or checkpoints[0] == checkpoints[-1]:
+                if metadrive_route_loops(checkpoints, spawn_lane_idx):
                     scene_id = row.get("scene_id", "unknown")
                     dest = row.get("destination_lane_id", "unknown")
                     print(f"[RouteValidation] INVALID: {scene_id} - route loops back to spawn. "

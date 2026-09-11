@@ -42,12 +42,29 @@ def _is_nn_policy(policy: str) -> bool:
     return policy in NN_NEED_CHECKPOINT
 
 
-def _apply_cuda_devices(raw) -> None:
-    """Set CUDA_VISIBLE_DEVICES before NN checkpoints load (leave GPU 0 free, etc.)."""
+def _cuda_devices_csv(raw) -> str | None:
+    """Normalize Hydra list / string ``cuda_devices`` to ``0,1,2``."""
     if raw is None:
-        return
+        return None
+    if OmegaConf.is_config(raw):
+        raw = OmegaConf.to_container(raw, resolve=True)
+    if isinstance(raw, (list, tuple)):
+        parts = [str(x).strip() for x in raw if str(x).strip()]
+        return ",".join(parts) or None
     text = str(raw).strip()
     if not text or text.lower() in {"null", "none", "~"}:
+        return None
+    # Hydra list printed as ``[0, 1, 2]``
+    if text.startswith("[") and text.endswith("]"):
+        inner = text[1:-1].replace(" ", "")
+        return inner or None
+    return text
+
+
+def _apply_cuda_devices(raw) -> None:
+    """Set CUDA_VISIBLE_DEVICES before NN checkpoints load (leave GPU 0 free, etc.)."""
+    text = _cuda_devices_csv(raw)
+    if not text:
         return
     os.environ["CUDA_VISIBLE_DEVICES"] = text
     print(f"[run] CUDA_VISIBLE_DEVICES={text}", flush=True)
@@ -55,8 +72,8 @@ def _apply_cuda_devices(raw) -> None:
 
 def _parse_cuda_device_list(raw) -> list[str]:
     """Physical GPU ids from cfg or existing CUDA_VISIBLE_DEVICES."""
-    text = None if raw is None else str(raw).strip()
-    if not text or text.lower() in {"null", "none", "~"}:
+    text = _cuda_devices_csv(raw)
+    if not text:
         text = (os.environ.get("CUDA_VISIBLE_DEVICES") or "").strip()
     if not text:
         return []

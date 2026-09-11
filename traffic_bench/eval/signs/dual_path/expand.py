@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -87,6 +88,20 @@ def dual_path_geometry_key(entry: Dict[str, Any]) -> Tuple:
         entry.get("spawn_velocity_level_id"),
         round(float(entry.get("route_length_level_m") or entry.get("max_path_length_m") or 0.0), 1),
     )
+
+
+def _manifest_entry_routable(entry: Dict[str, Any], net_path: Path) -> bool:
+    """True when both baseline and compliant MetaDrive dests are non-looping."""
+    from traffic_bench.eval.signs.dual_path.route_probe import probe_manifest_entry
+
+    result = probe_manifest_entry(entry, net_path=net_path)
+    if result.ok:
+        return True
+    print(
+        f"  [route-probe] skip {entry.get('scene_id')}: {result.reason}",
+        flush=True,
+    )
+    return False
 
 
 def expand_dual_path_scene_entries(
@@ -183,6 +198,7 @@ def expand_dual_path_scene_entries(
     seen: set = set()
     configured_route_levels = list_route_length_levels(sim)
     spawn_before_end = float(sim.spawn_distance_before_end)
+    net_full = scene_dir / str(meta.get("net_file") or "map.net.xml")
 
     # One no-NPC reference row per map (first dual×lane geometry).
     if bool(sim.default_first_variant) and geometries:
@@ -209,7 +225,8 @@ def expand_dual_path_scene_entries(
             spawn_velocity_ms=float(sim.spawn_velocity_ms),
             traffic_density=0.0,
         )
-        scene_entries.append(mark_nominal_row(nominal))
+        if _manifest_entry_routable(nominal, net_full):
+            scene_entries.append(mark_nominal_row(nominal))
 
     combos = []
     for dual_i, dual, lane_num in geometries:
@@ -282,6 +299,8 @@ def expand_dual_path_scene_entries(
             scene_id_suffix=suffix,
         )
         entry = stamp_world_axis_fields(entry, cell)
+        if not _manifest_entry_routable(entry, net_full):
+            continue
         key = dual_path_geometry_key(entry)
         if key in seen:
             continue
@@ -528,11 +547,13 @@ from functools import partial
 from traffic_bench.eval.engine.map.junction_priority_layout import allowed_shapes_for_mode
 from traffic_bench.eval.manifest.io import (
     append_scene_entries,
-    apply_max_total,
+    apply_pending_scene_rejects,
+    apply_scene_row_quota,
     apply_split_filter,
     assert_rejected_scenes_applied,
     discover_scenes,
     load_scene_metadata,
+    sign_split_quota,
     write_real_manifest,
 )
 from traffic_bench.eval.manifest.lanes import parse_sumo_net_for_spawn_lanes
@@ -579,6 +600,7 @@ def generate(cfg, scenes=None):
     split = cfg.split
 
     split = normalize_split(split)
+    apply_pending_scene_rejects(scenes_dir)
     assert_rejected_scenes_applied(scenes_dir)
     all_scenes = discover_scenes(scenes_dir)
     print(f"Scenes root: {scenes_dir.resolve()}")
@@ -644,29 +666,54 @@ def generate(cfg, scenes=None):
     entries: List[Dict] = []
     used_scene_ids: List[str] = []
     min_lane = min(float(sim_cfg.spawn_distance_before_end), 8.0)
+    max_total = scenario_cfg.max_total
+    scene_cache: Dict[str, Dict[str, Any]] = {}
+    n_maps_quota = sign_split_quota(PDD_CODE, split)
 
-    for scene_dir in scenes:
+    from traffic_bench.eval.sign_registry import hydra_sign_override
+    from traffic_bench.eval.signs.dual_path.route_probe import (
+        _run_materialize_refill,
+        close_probe_envs,
+    )
+    from traffic_bench.scene_collection.sign_scenes.filter.selection import (
+        apply_rejected_scenes,
+        set_scene_reject,
+    )
+
+    def _expand_scene(scene_dir: Path, cap: Optional[int]) -> List[Dict]:
         meta = load_scene_metadata(scene_dir)
         scene_name = meta.get("scene_name", scene_dir.name)
         net_file = meta.get("net_file", "map.net.xml")
         net_full_path = scene_dir / net_file
-        print(f"\n=== {scene_name} ===")
-
-        spawn_lanes = parse_sumo_net_for_spawn_lanes(net_full_path, min_length=min_lane)
-        print(f"  Found {len(spawn_lanes)} intersection-approaching lane(s)")
-
-        sign_lat = meta.get("latitude") or meta.get("center_lat")
-        sign_lon = meta.get("longitude") or meta.get("center_lon")
-        junction_layout = build_junction_layout_for_scene(
-            net_full_path,
-            profile=profile,
-            sign_lat=float(sign_lat) if sign_lat is not None else None,
-            sign_lon=float(sign_lon) if sign_lon is not None else None,
-            scene_meta=meta,
-        )
+        cached = scene_cache.get(scene_dir.name)
+        if cached is None:
+            print(f"\n=== {scene_name} ===")
+            spawn_lanes = parse_sumo_net_for_spawn_lanes(net_full_path, min_length=min_lane)
+            print(f"  Found {len(spawn_lanes)} intersection-approaching lane(s)")
+            sign_lat = meta.get("latitude") or meta.get("center_lat")
+            sign_lon = meta.get("longitude") or meta.get("center_lon")
+            junction_layout = build_junction_layout_for_scene(
+                net_full_path,
+                profile=profile,
+                sign_lat=float(sign_lat) if sign_lat is not None else None,
+                sign_lon=float(sign_lon) if sign_lon is not None else None,
+                scene_meta=meta,
+            )
+            cached = {
+                "meta": meta,
+                "net_full_path": net_full_path,
+                "spawn_lanes": spawn_lanes,
+                "junction_layout": junction_layout,
+            }
+            scene_cache[scene_dir.name] = cached
+        else:
+            meta = cached["meta"]
+            net_full_path = cached["net_full_path"]
+            spawn_lanes = cached["spawn_lanes"]
+            junction_layout = cached["junction_layout"]
         if junction_layout is None:
             print(f"  Skipping {scene_name}: no junction layout")
-            continue
+            return []
         shape = junction_layout.get("shape")
         allowed_shapes = allowed_shapes_for_mode(profile.layout_mode)
         if shape not in allowed_shapes:
@@ -674,9 +721,14 @@ def generate(cfg, scenes=None):
                 f"  Skipping {scene_name}: junction shape {shape!r} "
                 f"(need {sorted(allowed_shapes)})"
             )
-            continue
-
-        scene_entries = expand_dual_path_scene_entries(
+            return []
+        local_expansion = DualPathExpansionConfig(
+            layout=expansion.layout,
+            max_scenarios=cap,
+            max_dual_paths=expansion.max_dual_paths,
+            arm_counts=expansion.arm_counts,
+        )
+        return expand_dual_path_scene_entries(
             scene_dir=scene_dir,
             scenes_root=scenes_dir,
             meta=meta,
@@ -684,21 +736,162 @@ def generate(cfg, scenes=None):
             spawn_lanes=spawn_lanes,
             junction_layout=junction_layout,
             sim=sim_params,
-            expansion=expansion,
+            expansion=local_expansion,
             build_entry=build_entry,
             pdd_code=PDD_CODE,
         )
+
+    empty_names: List[str] = []
+
+    def _reject_unexpandable(scene_dir: Path, why: str) -> None:
+        meta = scene_cache.get(scene_dir.name, {}).get("meta") or load_scene_metadata(
+            scene_dir
+        )
+        scene_name = meta.get("scene_name", scene_dir.name)
+        print(f"  Skipping {scene_name}: {why}")
+        set_scene_reject(
+            scenes_dir,
+            scene_dir.name,
+            reason="no_expand_dests",
+            detail=why,
+        )
+        empty_names.append(scene_dir.name)
+        apply_rejected_scenes(scenes_dir, only=[scene_dir.name])
+
+    def _expand_and_append(scene_dir: Path) -> bool:
+        scene_entries = _expand_scene(scene_dir, expansion.max_scenarios)
         if not scene_entries:
-            print(f"  Skipping {scene_name}: no manifest entries after expansion")
-            continue
+            _reject_unexpandable(scene_dir, "no manifest entries after expansion")
+            return False
         append_scene_entries(
             entries, used_scene_ids, scene_entries,
-            scene_dir=scene_dir, meta=meta, split_by_id=split_by_id,
+            scene_dir=scene_dir, meta=scene_cache[scene_dir.name]["meta"],
+            split_by_id=split_by_id,
         )
+        return True
 
-    entries, used_scene_ids, pre_total = apply_max_total(
+    def _flush_empty() -> None:
+        if not empty_names:
+            return
+        moved, n = apply_rejected_scenes(scenes_dir, only=list(empty_names))
+        print(
+            f"[expand] moved {moved}/{n} unexpandable scene(s) to _rejected/",
+            flush=True,
+        )
+        empty_names.clear()
+
+    try:
+        for scene_dir in scenes:
+            _expand_and_append(scene_dir)
+        _flush_empty()
+
+        sign_token = hydra_sign_override(profile)
+        for _map_i in range(10):
+            n_unique = len(set(used_scene_ids))
+            if n_maps_quota is None or n_unique >= int(n_maps_quota):
+                break
+            print(
+                f"[expand] unique maps {n_unique}/{n_maps_quota}; "
+                f"materialize --refill and expand replacements",
+                flush=True,
+            )
+            close_probe_envs()
+            rc = _run_materialize_refill(sign_token)
+            if rc:
+                print(f"[expand] warn: refill exited {rc}", flush=True)
+            all_scenes = discover_scenes(scenes_dir)
+            scenes, split_by_id = apply_split_filter(
+                all_scenes, scenes_dir=scenes_dir, split=split
+            )
+            used = set(used_scene_ids)
+            new_dirs = [s for s in scenes if s.name not in used]
+            if not new_dirs:
+                print(
+                    "[expand] refill added no new maps in this split; "
+                    "crop pool may be exhausted",
+                    flush=True,
+                )
+                break
+            for scene_dir in new_dirs:
+                _expand_and_append(scene_dir)
+            _flush_empty()
+
+        n_unique = len(set(used_scene_ids))
+        at_map_quota = n_maps_quota is None or n_unique >= int(n_maps_quota)
+        if (
+            max_total is not None
+            and int(max_total) > 0
+            and len(entries) < int(max_total)
+            and at_map_quota
+        ):
+            print(
+                f"[max_total] {len(entries)}/{max_total} after {n_unique} maps; "
+                f"refilling leftover combos (unique-map quota already met)",
+                flush=True,
+            )
+            have = {dual_path_geometry_key(e) for e in entries}
+            used = set(used_scene_ids)
+
+            def _merge_leftover(cap: Optional[int]) -> int:
+                added_n = 0
+                for scene_dir in scenes:
+                    if scene_dir.name not in used:
+                        continue
+                    extra = _expand_scene(scene_dir, cap)
+                    added = []
+                    for entry in extra:
+                        key = dual_path_geometry_key(entry)
+                        if key in have:
+                            continue
+                        have.add(key)
+                        added.append(entry)
+                    if not added:
+                        continue
+                    meta = scene_cache[scene_dir.name]["meta"]
+                    scene_name = meta.get("scene_name", scene_dir.name)
+                    scene_split = split_by_id.get(scene_name) or split_by_id.get(
+                        scene_dir.name
+                    )
+                    for entry in added:
+                        entry["split"] = scene_split
+                    entries.extend(added)
+                    added_n += len(added)
+                    print(
+                        f"  [max_total] {scene_dir.name}: +{len(added)} leftover combos",
+                        flush=True,
+                    )
+                return added_n
+
+            base_cap = expansion.max_scenarios
+            if base_cap is not None:
+                shortfall = int(max_total) - len(entries)
+                n_ok = max(len(used), 1)
+                raised = int(base_cap) + math.ceil(shortfall / n_ok)
+                _merge_leftover(raised)
+            if len(entries) < int(max_total):
+                _merge_leftover(None)
+        elif (
+            max_total is not None
+            and int(max_total) > 0
+            and len(entries) < int(max_total)
+            and not at_map_quota
+        ):
+            print(
+                f"[expand] skip leftover combo padding: "
+                f"{n_unique}/{n_maps_quota} unique maps (want rows from new maps)",
+                flush=True,
+            )
+    finally:
+        close_probe_envs()
+
+    entries, used_scene_ids, pre_total = apply_scene_row_quota(
         entries, used_scene_ids,
-        max_total=scenario_cfg.max_total, split=split, pdd_code=PDD_CODE,
+        n_maps=n_maps_quota,
+        max_scenarios=expansion.max_scenarios,
+        max_total=max_total,
+        split=split,
+        pdd_code=PDD_CODE,
+        scene_id_key="scene_name",
     )
     write_real_manifest(
         output_dir=output_dir,

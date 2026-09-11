@@ -60,6 +60,25 @@ def assert_rejected_scenes_applied(scenes_dir: Path) -> None:
     )
 
 
+def apply_pending_scene_rejects(scenes_dir: Path) -> int:
+    """Move json-rejected dirs to ``_rejected/``. Returns how many were pending."""
+    from traffic_bench.scene_collection.sign_scenes.filter.selection import (
+        apply_rejected_scenes,
+        unapplied_rejected_scenes,
+    )
+
+    pending = unapplied_rejected_scenes(scenes_dir)
+    if not pending:
+        return 0
+    moved, n = apply_rejected_scenes(scenes_dir)
+    print(
+        f"[expand] applied {moved}/{n} recorded reject(s) still live under "
+        f"{scenes_dir.resolve()}",
+        flush=True,
+    )
+    return n
+
+
 def load_scene_metadata(scene_dir: Path) -> Dict:
     """Load scene metadata from ``meta.json`` (lat/lon live there, not center.json)."""
     meta_path = scene_dir / "meta.json"
@@ -144,6 +163,72 @@ def apply_max_total(
     return entries, used_scene_ids, pre_total
 
 
+def apply_scene_row_quota(
+    entries: List[Dict],
+    used_scene_ids: List[str],
+    *,
+    n_maps: Optional[int],
+    max_scenarios: Optional[int],
+    max_total: Optional[int],
+    split: str,
+    pdd_code: str,
+    scene_id_key: str = "scene_name",
+) -> Tuple[List[Dict], List[str], int]:
+    """Keep whole maps: up to ``n_maps`` scenes, ``max_scenarios`` rows each.
+
+    A global row shuffle can drop an entire map while padding others past
+    ``max_scenarios``. Protocol size is ``n_maps × max_scenarios``.
+    """
+    pre_total = len(entries)
+    if not entries:
+        return entries, [], pre_total
+
+    by_scene: Dict[str, List[Dict]] = {}
+    order: List[str] = []
+    for entry in entries:
+        sid = str(entry.get(scene_id_key) or "")
+        if not sid:
+            continue
+        if sid not in by_scene:
+            by_scene[sid] = []
+            order.append(sid)
+        by_scene[sid].append(entry)
+
+    selected = list(order)
+    if n_maps is not None and int(n_maps) >= 0 and len(selected) > int(n_maps):
+        rng = random.Random(
+            hash(("scene_quota", int(n_maps), split, pdd_code)) & 0xFFFFFFFF
+        )
+        rng.shuffle(selected)
+        selected = selected[: int(n_maps)]
+
+    out: List[Dict] = []
+    per = int(max_scenarios) if max_scenarios is not None else None
+    for sid in selected:
+        rows = list(by_scene[sid])
+        if per is not None and len(rows) > per:
+            rng = random.Random(
+                hash(("scene_rows", sid, per, split, pdd_code)) & 0xFFFFFFFF
+            )
+            rng.shuffle(rows)
+            rows = rows[:per]
+        out.extend(rows)
+
+    print(
+        f"[scene_quota] {split}: {len(selected)} map(s)"
+        + (f" (want {n_maps})" if n_maps is not None else "")
+        + f", {len(out)} row(s) of {pre_total}"
+        + (f", ≤{per}/map" if per is not None else "")
+        + (f", cap={max_total}" if max_total is not None else "")
+    )
+    if n_maps is not None and len(selected) < int(n_maps):
+        print(
+            f"[scene_quota] warn: {len(selected)}/{n_maps} unique maps; "
+            f"unexpandable scenes were skipped — refill the crop pool"
+        )
+    return out, selected, pre_total
+
+
 def _file_sha256(path: Path) -> Optional[str]:
     if not path.is_file():
         return None
@@ -163,6 +248,62 @@ def _load_signs_quota(signs_yaml: Path = DEFAULT_SIGNS_YAML) -> dict:
         return {}
     with signs_yaml.open(encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+def sign_split_quota(
+    pdd_code: str,
+    split: str,
+    *,
+    signs_yaml: Path = DEFAULT_SIGNS_YAML,
+) -> Optional[int]:
+    """Official protocol map count for this sign/split (``signs.yaml`` n_train / n_test)."""
+    split_key = str(split or "").strip().lower()
+    if split_key not in {"train", "test"}:
+        return None
+    cfg = _load_signs_quota(signs_yaml)
+    if not cfg:
+        return None
+    n_train = int(cfg.get("n_train", 80))
+    test_frac = float(cfg.get("test_frac", 0.2))
+    raw_test = cfg.get("n_test")
+    n_test = (
+        int(raw_test)
+        if raw_test is not None
+        else max(1, round(n_train * test_frac / (1.0 - test_frac)))
+    )
+    spec = (cfg.get("signs") or {}).get(str(pdd_code)) or {}
+    if "n_train" in spec:
+        n_train = int(spec["n_train"])
+    if "n_test" in spec:
+        n_test = int(spec["n_test"])
+    return n_train if split_key == "train" else n_test
+
+
+def resolve_max_total(
+    configured: Optional[int],
+    *,
+    max_scenarios: Optional[int],
+    split: str,
+    pdd_code: str,
+) -> Optional[int]:
+    """Hydra ``max_total`` if set; else ``n_{split} × max_scenarios`` for train/test.
+
+    Debug stays uncapped. Explicit ``scenario.max_total=N`` always wins.
+    """
+    if configured is not None:
+        return int(configured)
+    n_maps = sign_split_quota(pdd_code, split)
+    if n_maps is None or max_scenarios is None:
+        return None
+    per = int(max_scenarios)
+    if per < 0:
+        return None
+    total = int(n_maps) * per
+    print(
+        f"[max_total] {split}: {n_maps} maps × {per} scenarios/map → {total} "
+        f"(from signs.yaml; override with scenario.max_total=)"
+    )
+    return total
 
 
 def write_repro_artifacts(
@@ -202,20 +343,9 @@ def write_repro_artifacts(
     )
 
     signs_cfg = _load_signs_quota()
-    n_train = int(signs_cfg.get("n_train", 115)) if signs_cfg else None
     test_frac = float(signs_cfg.get("test_frac", 0.2)) if signs_cfg else None
-    n_test = None
-    if signs_cfg:
-        n_test = signs_cfg.get("n_test")
-        if n_test is None and n_train is not None and test_frac is not None:
-            n_test = max(1, round(n_train * test_frac / (1.0 - test_frac)))
-        else:
-            n_test = int(n_test) if n_test is not None else None
-        sign_spec = (signs_cfg.get("signs") or {}).get(str(pdd_code)) or {}
-        if "n_train" in sign_spec:
-            n_train = int(sign_spec["n_train"])
-        if "n_test" in sign_spec:
-            n_test = int(sign_spec["n_test"])
+    n_train = sign_split_quota(pdd_code, "train")
+    n_test = sign_split_quota(pdd_code, "test")
 
     alloc_path = DEFAULT_ALLOCATIONS
     allocations_ref = {

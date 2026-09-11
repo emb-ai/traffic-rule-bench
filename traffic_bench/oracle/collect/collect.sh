@@ -823,6 +823,16 @@ _is_idm_family() {
     esac
 }
 
+# NN policies get a real CUDA_VISIBLE_DEVICES pin from _run_gpu_pool.
+# CPU policies must not see any card: importing torch otherwise grabs cuda:0
+# (idle ~700MiB each) and nvidia-smi looks like "only GPU 0 is used".
+_is_nn_policy() {
+    case "$1" in
+        carl|carl_rule|plant2|plant2_rule|plant2_ft) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 _manifest_nrows() {
     "$PYTHON_BIN" - "$1" <<'PY'
 import json, sys
@@ -930,7 +940,11 @@ run_one() {
     [ "$RESUME" = "1" ] && resume_args+=( --resume )
 
     echo "[run] $policy → $out_dir  log=$log_tag"
-    if "$PYTHON_BIN" "$RUNNER" \
+    local -a cuda_env=()
+    if ! _is_nn_policy "$policy"; then
+        cuda_env=(env CUDA_VISIBLE_DEVICES=)
+    fi
+    if ${cuda_env[@]+"${cuda_env[@]}"} "$PYTHON_BIN" "$RUNNER" \
         --sign "$SIGN" \
         --manifest "$MANIFEST" \
         --scenes-root "$SCENES_ROOT" \

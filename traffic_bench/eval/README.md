@@ -96,13 +96,20 @@ CPU_WORKERS=2 GPUS=1,2,3,4,5,6,7 JOBS=16 JOBS_NN=32 \
 SPLIT=test SIGNS="main_road secondary yield stop roundabout" \
 CPU_WORKERS=4 GPUS=1,2,3,4,5,6,7 JOBS=16 JOBS_NN=16 \
   bash traffic_bench/eval/run/run_signs_parallel.sh
+
+# subset of policies (skip the other pool). Extra GPUs are packed onto fewer signs.
+SPLIT=test SIGNS="no_turn/left" POLICIES=carl,carl_rule \
+GPUS=0,1,2,3 JOBS_NN=32 \
+  bash traffic_bench/eval/run/run_signs_parallel.sh
 ```
 
 - `SPLIT` — `train` (default) or `test`; manifests under `data/runs/<sign>/<SPLIT>/`
 - Ready manifests are scheduled first; missing ones stay pending until they appear (`WAIT_POLL=30`, `WAIT_TIMEOUT=0` = forever)
+- `POLICIES` — optional subset (`carl,carl_rule` or `[idm,ppo_rule]`). Splits into CPU vs GPU lists and skips the empty side. Else `CPU_POLICIES` / `GPU_POLICIES` (set either to empty to skip that pool)
 - `CPU_WORKERS` — concurrent signs for CPU policies (`idm` / `idm_rule` / `ppo_lidar` / `ppo_rule`)
-- `GPUS` — physical GPU indices for `carl` / `carl_rule` / `plant2` / `plant2_rule` (one sign per GPU; leave `0` free)
-- `JOBS` / `JOBS_NN` — scene workers inside each sign (CPU vs NN)
+- `GPUS` — physical GPU indices for `carl` / `carl_rule` / `plant2` / `plant2_rule`. Free cards are packed onto ready signs (`cuda_devices=`); one sign can use several GPUs
+- `JOBS` / `JOBS_NN` — scene workers inside each sign (CPU vs **per GPU** for NN; a 4-GPU sign gets `JOBS_NN×4` workers)
+- After every sign’s `eval run` (metrics csv/report already), `metrics combine` writes `data/runs/_all/<SPLIT>/` (`RUN_METRICS=0` to skip combine)
 - defaults: full **16 baselines** — `ego_variants=[default,s1,s2,s3,s4]` for IDM family + PPO/CaRL/PlanT2 base & rule
 - logs: `data/eval_parallel_logs/<SPLIT>/`
 
@@ -194,7 +201,13 @@ Scenario augmentation is controlled by:
 
 - `augmentation.layout` — ego/arm/lane/destination variants;
 - `augmentation.auxiliary` — convoy size × occupied lanes;
-- `scenario.max_scenarios` — final per-scene cap.
+- `scenario.max_scenarios` — final per-scene cap;
+- `scenario.max_total` — global row cap. Unset on train/test means
+  `signs.yaml` `n_train`/`n_test` × `max_scenarios` (refill after dropped maps).
+  Debug stays uncapped. Override with `scenario.max_total=N`.
+  Dual-path: unique **maps** must hit `n_train`/`n_test` (80/20); leftover
+  combos are not used to hide missing maps. Looping MetaDrive routes are
+  moved aside before refill; see [signs/dual_path](signs/dual_path/README.md#filling-traintest-map-quotas).
 
 `scenario.max_scenarios` is applied **after** augmentation, filtering, geometry deduplication, and shuffling.
 
