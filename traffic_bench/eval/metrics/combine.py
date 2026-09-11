@@ -83,12 +83,7 @@ def combined_dest(folder: str) -> Path:
 
 
 def concat_csvs(csv_paths: list[Path], out_path: Path) -> int:
-    """Concatenate per-sign CSVs of the current `metrics csv` schema.
-
-    A CSV whose header is not exactly csv.CSV_COLUMNS (an older build without
-    map_id / net_path, or a foreign file) or a row with a wrong number of
-    fields raises; nothing is padded with empty cells or dropped.
-    """
+    """Concatenate per-sign CSVs; another column set or a short row raises."""
     expected = set(CSV_COLUMNS)
     for path in csv_paths:
         with path.open(encoding="utf-8", newline="") as src:

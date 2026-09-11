@@ -10,12 +10,8 @@ Two input modes (mutually exclusive):
   --runs-root      (legacy)   <runs-root>/var_<i>/<baseline>_replays.jsonl
       Reads consolidated replays / replay.json sidecars.
 
-Both need ``--manifest``: the manifest the episodes were run from. Every
-episode is matched to its manifest row by scene_id, and its map (``map_id``)
-is the directory of that row's ``net_path`` (metrics/map_id.py). Nothing is
-guessed and nothing is skipped: a missing manifest, an episode the manifest
-does not list, a failed episode, a record without ids or a malformed value
-raises with the file and line (metrics/README.md, "Errors").
+Both need ``--manifest``, the manifest the episodes were run from: each
+episode's map is the directory of its manifest row's ``net_path``.
 
 Either way, one CSV row per episode carries all `metrics` fields plus precomputed
 flags (target compliance, recomputed dest, passes_filter) needed by
@@ -24,9 +20,9 @@ flags (target compliance, recomputed dest, passes_filter) needed by
 
 Usage:
   python -m traffic_bench.eval metrics csv \
-      --episodes-root <eval_out>/benchmark/full/policy_eval \
+      --episodes-root <out>/benchmark/policy_eval \
       --manifest      <split>/real_manifest.jsonl \
-      --out           <eval_out>/metrics_per_episode.csv
+      --out           <out>/metrics_per_episode.csv
 """
 from __future__ import annotations
 
@@ -95,7 +91,7 @@ def _resolve_target_classes(base_class: str | None) -> list[str]:
 
 
 def _sum_class_keys(d: dict, classes: list[str]) -> int:
-    """Sum the integer counts of d for the given class keys (absent keys count 0)."""
+    """Sum integer values from d for any of the given class keys (skip missing)."""
     total = 0
     for c in classes:
         v = d.get(c)
@@ -108,13 +104,8 @@ def _sum_class_keys(d: dict, classes: list[str]) -> int:
 VAR_DIR_RE = re.compile(r"^var_(\d+)$")
 
 
-# ---------------------------------------------------------------------------
-# Strict value parsing: an absent value (None) takes the documented default,
-# anything present must parse. Nothing is coerced to a default on error.
-# ---------------------------------------------------------------------------
+# Values: None -> the default; anything else must parse or raise ValueError.
 def _to_int(v, default=0) -> int:
-    """``default`` when absent (None); otherwise an int, a bool, an integral
-    float or a decimal string. Anything else raises ValueError."""
     if v is None:
         return default
     if isinstance(v, bool):
@@ -131,8 +122,6 @@ def _to_int(v, default=0) -> int:
 
 
 def _to_float(v, default=None):
-    """``default`` when absent (None); otherwise a finite number or its
-    string. Anything else, NaN and infinities included, raises ValueError."""
     if v is None:
         return default
     if isinstance(v, bool) or not isinstance(v, (int, float, str)):
@@ -144,8 +133,6 @@ def _to_float(v, default=None):
 
 
 def _bool(v) -> bool:
-    """An episode flag: absent (None) is False; otherwise a bool or 0 / 1.
-    Anything else raises ValueError."""
     if v is None:
         return False
     if isinstance(v, bool):
@@ -156,7 +143,6 @@ def _bool(v) -> bool:
 
 
 def _dict_or_empty(v, what: str) -> dict:
-    """A per-class breakdown: absent (None) is empty; otherwise a dict."""
     if v is None:
         return {}
     if isinstance(v, dict):
@@ -165,7 +151,6 @@ def _dict_or_empty(v, what: str) -> dict:
 
 
 def _required_id(rec: dict, key: str) -> str:
-    """An identifier every record must carry (scene_id, scene_uid)."""
     v = rec.get(key)
     if not isinstance(v, str) or not v:
         raise ValueError(f"record has no {key} (got {v!r}); it cannot be matched "
@@ -175,8 +160,7 @@ def _required_id(rec: dict, key: str) -> str:
 
 @contextmanager
 def _located(where: str):
-    """Prefix a ManifestError / ValueError raised inside with ``where``
-    (file and line), keeping its type."""
+    """Prefix errors raised inside with ``where`` (file:line), keeping the type."""
     try:
         yield
     except ManifestError as e:
@@ -255,15 +239,13 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
                manifest: "ManifestIndex") -> dict:
     """Convert one consolidated replay JSON object into a flat CSV row dict.
 
-    The replay's scene is looked up in ``manifest`` (``ManifestIndex.row``
-    raises when the manifest does not list it). That row gives the episode's
-    physical map (``map_id`` = directory of ``net_path``) and, for paired-zone
-    scenes, the fields the aggregator groups on: ``manifest_source``,
-    ``is_paired_scene``, ``pdd_code_start``, ``pdd_code_end``,
-    ``pdd_code_target``, ``sign_type_start``, ``sign_type_end``,
-    ``zone_length_m``.
+    The manifest row of the replay's scene gives ``map_id`` and the
+    fields for paired-zone scenes: `manifest_source`, `is_paired_scene`,
+    `pdd_code_start`, `pdd_code_end`, `pdd_code_target`, `sign_type_start`,
+    `sign_type_end`, `zone_length_m`. These are used by the aggregator to
+    correctly group paired scenes by their (start, end) pair.
 
-    Raises ValueError when the replay lacks its ids or a value is malformed.
+    Raises if the scene is not in the manifest or a value is malformed.
     """
     metrics = replay.get("metrics")
     if not isinstance(metrics, dict):
@@ -273,7 +255,7 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
     sign_slug = (replay.get("sign_slug")
                  or (pdd_code.replace(".", "_") if pdd_code else ""))
     if not pdd_code:
-        # Legacy replays without pdd_code: the embedded manifest row has it.
+        # Fallback to source_row
         sr = _dict_or_empty(replay.get("source_row"), "source_row")
         pdd_code = normalize_sign(str(sr.get("sign_code") or sr.get("pdd_code") or "")) or ""
         if pdd_code and not sign_slug:
@@ -282,8 +264,8 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
     scene_id = _required_id(replay, "scene_id")
     scene_uid = _required_id(replay, "scene_uid")
 
-    # The manifest row the episode was run from, matched by (var_idx,
-    # scene_id): the physical map and the paired-zone fields.
+    # Manifest lookup — paired-scene fields come from chunks/var_<i>.jsonl which
+    # carries pdd_code_start / pdd_code_end / source. Match by (var_idx, scene_id).
     mr = manifest.row(var_idx, scene_id)
     map_id = map_id_from_manifest_row(mr)
     net_path = str(mr["net_path"]).strip()
@@ -377,7 +359,6 @@ def _build_row(replay: dict, var_name: str, var_idx: int, baseline: str,
         "is_no_entry_sign": is_no_entry,
         "scene_id": scene_id,
         "scene_uid": scene_uid,
-        # Physical map from the manifest row (metrics/map_id.py)
         "map_id": map_id,
         "net_path": net_path,
         # Manifest-derived paired-scene fields (empty for non-paired scenes)
@@ -491,9 +472,10 @@ CSV_COLUMNS = [
 
 
 def _iter_jsonl(fp: Path):
-    """Yield (lineno, dict) for each JSON object of a JSONL file. A line that
-    is not a JSON object (a torn write, a stray value) raises ValueError with
-    the file and line."""
+    """Yield (lineno, dict) for each parseable JSON object in a JSONL file.
+
+    Truncated/malformed lines raise ValueError with the file and line.
+    """
     with fp.open(encoding="utf-8") as fh:
         for i, line in enumerate(fh, 1):
             line = line.strip()
@@ -509,12 +491,7 @@ def _iter_jsonl(fp: Path):
             yield i, rec
 
 
-# ---------------------------------------------------------------------------
-# Manifest: the only source of an episode's map
-# ---------------------------------------------------------------------------
-# Fields of a manifest row that _build_row reads. Two rows with the same
-# scene_id must agree on them, or the episodes of that scene_id have no
-# single map.
+# Manifest fields _build_row reads; rows sharing a scene_id must agree on them.
 _MANIFEST_MATCH_FIELDS: tuple[str, ...] = (
     "net_path", "source", "pdd_code_start", "pdd_code_end", "pdd_code_target",
     "sign_type_start", "sign_type_end", "zone_length_m",
@@ -539,17 +516,8 @@ class ManifestIndex:
 
 
 def load_manifest(manifest: Path, var_idxs: set[int]) -> ManifestIndex:
-    """The manifest the episodes were run from.
-
-    ``manifest`` is a manifest JSONL file (``real_manifest.jsonl``, or the
-    ``input_manifest.jsonl`` that ``run policies=…`` writes), registered under
-    every var index scored, or a ``chunks/`` directory that must hold
-    ``var_<i>/var_<i>.jsonl`` for every var index scored. Every row needs a
-    scene_id and a net_path naming ``<scene_dir>/<net file>``; a scene_id
-    listed twice must name the same net and paired-zone fields. Anything else
-    raises: without the manifest the map of an episode is unknown, and
-    per-map metrics cannot be computed.
-    """
+    """Manifest rows by (var_idx, scene_id): a manifest JSONL, registered under
+    every var index, or a chunks/ dir with var_<i>/var_<i>.jsonl per var index."""
     if manifest.is_file():
         sources: list[tuple[int | None, Path]] = [(None, manifest)]
     elif manifest.is_dir():
@@ -596,8 +564,7 @@ def load_manifest(manifest: Path, var_idxs: set[int]) -> ManifestIndex:
 
 
 def _write_csv(rows: list[dict], out_path: Path) -> None:
-    """Write all rows or nothing: rows are checked against the schema first,
-    and the file is written to a temporary name and moved into place."""
+    """Check every row against the schema, then write atomically."""
     expected = set(CSV_COLUMNS)
     for r in rows:
         if set(r) != expected:
@@ -617,11 +584,8 @@ def _build_from_episodes(episodes_root: Path, out_path: Path, manifest: Path) ->
     """Build the metrics CSV from run_benchmark `episodes_*.jsonl` (unified path).
 
     Layout: <episodes_root>/<run_name>/episodes_*.jsonl, where <run_name> is
-    "<policy>_<variant>" (the baseline). All episodes are treated as var_0 (a
-    single-policy run uses var_0). A rerun appends to the same file, so the
-    last record of a (baseline, scene_uid) wins. If that record is a failed
-    episode (``ok`` is not true) the build stops: dropping it would change the
-    map's set of augmentations without a trace.
+    "<policy>_<variant>" (the baseline). The last record per scene_uid must be ok. All
+    episodes are treated as var_0 (a single-policy run uses var_0).
     """
     if not episodes_root.is_dir():
         raise FileNotFoundError(f"episodes root is not a directory: {episodes_root}")
@@ -679,12 +643,8 @@ def main() -> None:
                      help="Directory containing var_<i>/<baseline>_replays.jsonl. "
                           "Legacy path — reads consolidated replays / replay.json sidecars.")
     ap.add_argument("--manifest", required=True,
-                    help="The manifest the episodes were run from: a manifest JSONL "
-                         "(real_manifest.jsonl, or the input_manifest.jsonl that "
-                         "`run policies=…` writes), or a chunks/ dir holding "
-                         "var_<i>/var_<i>.jsonl for every var scored (--runs-root). "
-                         "An episode's map is the directory of its row's net_path; an "
-                         "episode the manifest does not list is an error.")
+                    help="Manifest the episodes were run from: a manifest JSONL, or a "
+                         "chunks/ dir with var_<i>/var_<i>.jsonl (--runs-root)")
     ap.add_argument("--out", required=True,
                     help="Output CSV path (e.g. metrics_per_episode.csv)")
     ap.add_argument("--vars", default="all",
@@ -719,6 +679,7 @@ def main() -> None:
     if not var_dirs:
         raise FileNotFoundError(f"no var_<i> dirs in {runs_root} (vars={args.vars})")
 
+    # Load manifest lookup for paired-scene enrichment
     index = load_manifest(manifest, {i for i, _ in var_dirs})
 
     # Dedup by (var_idx, baseline, scene_uid). Last write wins (matches reruns).
@@ -744,8 +705,8 @@ def main() -> None:
                     n_dup += 1
                 seen[key] = row
 
-        # Step 2: baselines without a consolidated jsonl are read from their
-        # replay.json sidecars:
+        # Step 2: fall back to sidecar replay.json for baselines without
+        # consolidated jsonl. Sidecars live at:
         #   <var_dir>/<baseline>/replays/<sign>/by_sign/<sign>/by_scene/<scene_uid>/<expert>/replay.json
         sidecar_baselines: dict[str, int] = {}
         for baseline_dir in sorted(d for d in vdir.iterdir() if d.is_dir()):

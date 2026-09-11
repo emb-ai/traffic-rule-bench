@@ -5,25 +5,14 @@ Every numeric cell shows both aggregations side by side:
 
     <per-episode> / <per-map>
 
-* per-episode — every episode weighs the same (``per_baseline`` /
-  ``per_sign`` blocks of cumulative.json);
-* per-map — a map's episodes (its augmented variants) are collapsed first,
-  then the mean is taken over maps, so every map contributes exactly one
-  number (``per_baseline_map`` / ``per_sign_map`` blocks; see
-  ``aggregate.aggregate_by_map``).
+* per-episode — every episode weighs the same (the original aggregation;
+  ``per_baseline`` / ``per_sign`` blocks of cumulative.json);
+* per-map — a map's episodes are collapsed first, then the mean is taken over
+  maps, so every map contributes exactly one number (``per_baseline_map`` /
+  ``per_sign_map`` blocks; see ``aggregate.aggregate_by_map``).
 
-Each table is followed by a dispersion table over the per-map values:
-
-    <mean> ± <std over maps> [<ci_lo>, <ci_hi>]
-
-with the bootstrap CI of the mean (``per_baseline_map_ci`` / ``per_sign_map_ci``
-blocks, parameters in ``ci``).
-
-Only a cumulative.json written by the current ``metrics aggregate`` is
-accepted: every block above must be present and ``ci.map_id`` must say the
-maps come from the manifest. An older file, whose "per-map" blocks were keyed
-on the augmented scene id (one map per episode), raises instead of being
-rendered.
+Each table is followed by ``mean ± std [ci_lo, ci_hi]`` over maps. A
+cumulative.json without manifest maps (``ci.map_id``) raises.
 """
 from __future__ import annotations
 
@@ -121,9 +110,7 @@ def _table_row(policy: str, m_ep: dict, m_map: dict) -> str:
 
 
 def _ci_cell(block: dict, key: str) -> str:
-    """``mean ± std [lo, hi]`` for one metric of a ``*_map_ci`` block; "—"
-    when the metric is undefined on every map (aggregate leaves it out). No
-    std with a single map, no interval with ``--n-boot 0``."""
+    """``mean ± std [lo, hi]``; "—" when the metric is undefined on every map."""
     d = block.get(key)
     if d is None:
         return "—"

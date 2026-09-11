@@ -504,12 +504,7 @@ def _resolve_policies(raw: Iterable[str] | None, seen: set[str], *, all_policies
 
 
 def _per_sign_block(data: dict, agg: AggMode) -> dict[str, dict[str, dict]]:
-    """``per_sign`` for ``--agg episode``, ``per_sign_map`` for ``--agg map``.
-
-    Map mode needs per-map blocks keyed on manifest maps (``ci.map_id``); a
-    cumulative.json without them raises instead of silently plotting the
-    per-episode numbers or scene-id "maps".
-    """
+    """``per_sign``, or ``per_sign_map`` keyed on manifest maps for ``--agg map``."""
     from traffic_bench.eval.metrics.map_id import MAP_ID_SOURCE
 
     if agg == "map":

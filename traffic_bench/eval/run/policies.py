@@ -310,8 +310,6 @@ def _assemble_rows(manifest_path: Path, cfg: DictConfig) -> list[dict]:
 
 
 def _run_metrics(out_dir: Path, manifest_path: Path) -> None:
-    """metrics csv → aggregate → report for one run. ``manifest_path`` is the
-    manifest the episodes were run from; every episode's map is read from it."""
     from traffic_bench.eval.cli import _run_module_main
     from traffic_bench.eval.metrics import aggregate as aggregate_mod
     from traffic_bench.eval.metrics import csv as csv_mod
