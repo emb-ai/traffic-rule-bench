@@ -132,6 +132,8 @@ class SumoTrafficManager(BaseManager):
     # ------------------------------------------------------------------
     def _get_spawnable_lanes(self):
         """Non-junction driving lanes longer than 20 m."""
+        from traffic_bench.eval.engine.map.lane_keys import lane_edge_id
+
         graph = self.engine.map_manager.graph
         road_network = self.engine.current_map.road_network
         cfg = self.engine.global_config
@@ -155,6 +157,19 @@ class SumoTrafficManager(BaseManager):
             except Exception:
                 continue
             lanes.append(lane_obj)
+
+        # Optional edge blacklist (e.g. roundabout circular ring, one-way wrong-dir).
+        try:
+            raw = self.engine.global_config.get("background_excluded_edges") or ()
+            excluded = {str(e) for e in raw if e}
+        except Exception:
+            excluded = set()
+        if excluded:
+            lanes = [
+                ln
+                for ln in lanes
+                if lane_edge_id(str(getattr(ln, "index", ""))) not in excluded
+            ]
         return lanes
 
     def _random_vehicle_type(self):

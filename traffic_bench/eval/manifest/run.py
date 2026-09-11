@@ -228,11 +228,23 @@ def _resolve_max_scenarios(scenario_cfg) -> Optional[int]:
     return int(raw)
 
 
-def _resolve_max_total(scenario_cfg) -> Optional[int]:
+def _resolve_max_total(
+    scenario_cfg,
+    *,
+    split: str,
+    pdd_code: str,
+    max_scenarios: Optional[int],
+) -> Optional[int]:
+    from traffic_bench.eval.manifest.io import resolve_max_total
+
     raw = getattr(scenario_cfg, "max_total", None)
-    if raw is None:
-        return None
-    return int(raw)
+    configured = None if raw is None else int(raw)
+    return resolve_max_total(
+        configured,
+        max_scenarios=max_scenarios,
+        split=split,
+        pdd_code=pdd_code,
+    )
 
 
 def _resolve_convoy_gaps_m(raw) -> List[float]:
@@ -245,9 +257,15 @@ def _resolve_convoy_gaps_m(raw) -> List[float]:
 
 
 def _job_from_hydra(cfg: DictConfig, profile, scenes_dir: Path, output_dir: Path) -> GenerateCfg:
+    max_scenarios = _resolve_max_scenarios(cfg.scenario)
     scenario_cfg = ScenarioConfig(
-        max_scenarios=_resolve_max_scenarios(cfg.scenario),
-        max_total=_resolve_max_total(cfg.scenario),
+        max_scenarios=max_scenarios,
+        max_total=_resolve_max_total(
+            cfg.scenario,
+            split=str(getattr(cfg.paths, "split", "debug") or "debug"),
+            pdd_code=str(profile.pdd_code),
+            max_scenarios=max_scenarios,
+        ),
         min_dual_path_gain_m=float(
             getattr(cfg.scenario, "min_dual_path_gain_m", 20.0) or 20.0
         ),

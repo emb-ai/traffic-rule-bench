@@ -38,7 +38,9 @@ from traffic_bench.eval.engine.expand.manifest_config import (
 )
 from traffic_bench.eval.engine.expand.manifest_expansion import (
     mark_nominal_row,
+    non_nominal_budget,
     shuffle_cap,
+    shuffled_copy,
 )
 from traffic_bench.eval.engine.expand.world_axes import (
     DEFAULT_HORIZON_STEPS,
@@ -329,6 +331,11 @@ def build_crosswalk_manifest_entry(
         "pedestrian_manager": ped_mgr,
         "auxiliary_agent": False,
         "approach_lane_length_m": approach.approach_lane_length,
+        # Real edge length (no-split: longer than approach_lane_length_m=zebra mark).
+        "edge_length_m": (
+            float(approach.edge_length_m or approach.approach_lane_length or 0.0)
+            or None
+        ),
         "crossed_edge_ids": list(approach.crossed_edge_ids),
         "latitude": meta.get("latitude"),
         "longitude": meta.get("longitude"),
@@ -440,6 +447,7 @@ def expand_crosswalk_scene_entries(
         )
         entries.append(mark_nominal_row(nominal))
 
+    combos = []
     for approach in approaches:
         no_split_approach = str(approach.approach_edge_id) == str(approach.depart_edge_id)
         available_route_m = measure_spawn_to_dest_length_m(
@@ -466,34 +474,51 @@ def expand_crosswalk_scene_entries(
                 sim=sim,
                 task_conditioned_spawn=False,
             ):
-                suffix = cell.scene_suffix(route_augment=route_augment)
-                seed = stable_hash(
-                    scene_name,
-                    approach.scenario_id,
-                    preset.id,
-                    *cell.seed_tags(),
-                )
-                npc_profile = sample_profile_for_cell(cell, seed=int(seed), sim=sim)
-                row = build_crosswalk_manifest_entry(
-                    scene_dir=scene_dir,
-                    scenes_root=scenes_root,
-                    meta=meta,
-                    approach=approach,
-                    preset=preset,
-                    npc_profile=npc_profile,
-                    sim=sim,
-                    pdd_code=pdd_code,
-                    sign_type=sign_type,
-                    variant=cell.npc_var,
-                    max_path_length_m=float(cell.route_length_m),
-                    route_length_augment=route_augment,
-                    spawn_velocity_ms=cell.spawn_velocity_ms,
-                    traffic_density=float(cell.density.traffic_density),
-                    scene_id_suffix=suffix,
-                )
-                entries.append(stamp_world_axis_fields(row, cell))
+                combos.append((approach, preset, cell, bool(route_augment)))
 
     max_sc = expansion.max_scenarios
+    budget = non_nominal_budget(max_sc, len(entries))
+    ordered = shuffled_copy(
+        combos,
+        seed_key=(
+            str(scene_dir.name),
+            "crosswalk_world_cap",
+            int(max_sc) if max_sc is not None else 0,
+        ),
+    )
+    pre_pool = len(ordered)
+    built = 0
+    for approach, preset, cell, route_augment in ordered:
+        if budget is not None and built >= budget:
+            break
+        suffix = cell.scene_suffix(route_augment=route_augment)
+        seed = stable_hash(
+            scene_name,
+            approach.scenario_id,
+            preset.id,
+            *cell.seed_tags(),
+        )
+        npc_profile = sample_profile_for_cell(cell, seed=int(seed), sim=sim)
+        row = build_crosswalk_manifest_entry(
+            scene_dir=scene_dir,
+            scenes_root=scenes_root,
+            meta=meta,
+            approach=approach,
+            preset=preset,
+            npc_profile=npc_profile,
+            sim=sim,
+            pdd_code=pdd_code,
+            sign_type=sign_type,
+            variant=cell.npc_var,
+            max_path_length_m=float(cell.route_length_m),
+            route_length_augment=route_augment,
+            spawn_velocity_ms=cell.spawn_velocity_ms,
+            traffic_density=float(cell.density.traffic_density),
+            scene_id_suffix=suffix,
+        )
+        entries.append(stamp_world_axis_fields(row, cell))
+        built += 1
+
     pre_cap = len(entries)
     entries = shuffle_cap(
         entries,
@@ -504,13 +529,19 @@ def expand_crosswalk_scene_entries(
             int(max_sc) if max_sc is not None else 0,
         ),
     )
-    if max_sc is not None and pre_cap > max_sc:
+    if max_sc is not None and pre_pool > (budget if budget is not None else pre_pool):
+        print(
+            f"  Early-sampled {built} of {pre_pool} combos "
+            f"(cap={max_sc}; nominal preserved)"
+        )
+    elif max_sc is not None and pre_cap > max_sc:
         print(
             f"  Retained {len(entries)} of {pre_cap} world-grid variants "
             f"(shuffled, cap={max_sc}; nominal preserved)"
         )
 
     return entries
+
 
 from traffic_bench.eval.manifest.io import (
     append_scene_entries,

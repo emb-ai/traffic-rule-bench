@@ -1,4 +1,5 @@
 # @package _global_
+# Roundabout (4.3) is scored with priority signs; same ego-spawn probe as junction.
 
 augmentation:
   layout: true
@@ -6,3 +7,14 @@ augmentation:
 
 auxiliary:
   enabled: true
+  # Shorter conflict arcs than junction approaches — cap convoy at 2 (root is 3).
+  convoy_size: 2
+
+simulation:
+  # Dense ring yield needs more wall-clock than junction (600 @ 10 Hz).
+  horizon: 1000
+  spawn_velocity_levels_ms: [3.61]
+
+# green=yield zone, yellow=nearest main arc, cyan/magenta=heading rays
+gif:
+  draw_path_conflict: true

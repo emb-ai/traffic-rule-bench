@@ -24,6 +24,9 @@ class CrosswalkApproach:
     approach_lane_length: float
     destination_lane_id: str
     scenario_id: str
+    # Real SUMO/MetaDrive lane length. On no-split rows ``approach_lane_length``
+    # is the zebra mark (spawn clamps), so remap must use this instead.
+    edge_length_m: float = 0.0
 
 
 def parse_crossing_junction_id(crossing_edge_id: str) -> Optional[str]:
@@ -370,6 +373,7 @@ def _approaches_for_crossing(
                     approach_lane_length=lane_length,
                     destination_lane_id=dest_lane_id,
                     scenario_id=scenario_id,
+                    edge_length_m=float(lane_length),
                 )
             )
     return approaches
@@ -542,10 +546,12 @@ def _approaches_from_meta_position(
                 approach_edge_id=edge_id,
                 depart_edge_id=edge_id,
                 approach_lane_num=int(lane_num),
-                # Treat the zebra mark as the approach "end" for spawn clamps.
+                # Zebra mark as approach "end" for spawn clamps (before zebra).
                 approach_lane_length=float(pos_m),
                 destination_lane_id=make_lane_key(edge_id, int(lane_num)),
                 scenario_id=f"{edge_id}_L{int(lane_num)}",
+                # Real continuous-edge length for SUMO→MetaDrive along remap.
+                edge_length_m=float(lane_len),
             )
         )
     return approaches

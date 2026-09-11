@@ -99,6 +99,7 @@ from traffic_bench.eval.signs.dual_path.nav import (
     install_one_way_compliant_nav_route,
     resolve_row_background_excluded_edges,
 )
+from traffic_bench.eval.signs.dual_path.route_probe import metadrive_route_loops
 from traffic_bench.eval.run.place import place_signs_for_row
 from traffic_bench.eval.signs.blocked.place import (
     ego_compliant_stop_before_blocked_road,
@@ -448,7 +449,7 @@ def run_one_episode(
                 and checkpoints
                 and spawn_lane_idx
             ):
-                if len(checkpoints) <= 1 or checkpoints[-1] == spawn_lane_idx or checkpoints[0] == checkpoints[-1]:
+                if metadrive_route_loops(checkpoints, spawn_lane_idx):
                     scene_id = row.get("scene_id", "unknown")
                     dest = row.get("destination_lane_id", "unknown")
                     print(f"[RouteValidation] INVALID: {scene_id} - route loops back to spawn. "
@@ -724,6 +725,7 @@ def run_one_episode(
                         step_in_any_zone = True
                         cls = type(_s).__name__
                         in_zone_by_class_step[cls] = in_zone_by_class_step.get(cls, 0) + 1
+                yield_zone_this_step = False
                 for rule in getattr(sign_mgr, "rules", []):
                     if type(rule).__name__ != "PedestrianYieldRule":
                         continue
@@ -736,10 +738,24 @@ def run_one_episode(
                         or ped_status.get("in_crosswalk")
                         or ped_status.get("in_no_stop_zone")
                     ):
-                        step_in_any_zone = True
-                        in_zone_by_class_step["PedestrianYieldRule"] = (
-                            in_zone_by_class_step.get("PedestrianYieldRule", 0) + 1
-                        )
+                        yield_zone_this_step = True
+                # 5.19: plate approach zone counts toward the yield-rule target
+                # when the geometric zebra verifier did not fire this step.
+                if not yield_zone_this_step and any(
+                    type(rule).__name__ == "PedestrianYieldRule"
+                    for rule in (getattr(sign_mgr, "rules", []) or [])
+                ):
+                    for _s in sign_mgr.signs:
+                        if type(_s).__name__ == "PedestrianCrossingSign" and _ego_in_sign_zone(
+                            _s, vehicle
+                        ):
+                            yield_zone_this_step = True
+                            break
+                if yield_zone_this_step:
+                    step_in_any_zone = True
+                    in_zone_by_class_step["PedestrianYieldRule"] = (
+                        in_zone_by_class_step.get("PedestrianYieldRule", 0) + 1
+                    )
                 if step_in_any_zone:
                     in_zone_total_steps += 1
 
@@ -898,11 +914,23 @@ def run_one_episode(
                         dest_cap_m = float(stored)
                     except (TypeError, ValueError):
                         pass
+            # No-split crosswalk (and detour/speed) finish via along-cap on the
+            # same edge as spawn — without allow_same_lane the checker always
+            # returns False for degenerate same-lane checkpoint routes.
+            same_edge_crosswalk = (
+                _row_is_crosswalk(row)
+                and str(row.get("road_id") or "")
+                == str(row.get("destination_edge_id") or "")
+            )
             capped_arrive = capped_arrive or _ego_reached_capped_destination(
                 vehicle,
                 max_along_m=dest_cap_m,
-                allow_same_lane=(_row_is_detour(row) or _row_is_speed(row)
-                                 or _row_is_restricted_lane(row)),
+                allow_same_lane=(
+                    _row_is_detour(row)
+                    or _row_is_speed(row)
+                    or _row_is_restricted_lane(row)
+                    or same_edge_crosswalk
+                ),
             )
             natural_done = bool(terminated or truncated)
 
@@ -924,7 +952,8 @@ def run_one_episode(
                     "is_ego_in_yield_zone": _is_ego_in_yield_zone(sign_mgr, vehicle),
                 }
                 if draw_path_conflict or is_path_conflict_overlay_enabled():
-                    text_dict["paths"] = "cyan=ego magenta=auxX yellow=X amber=zone"
+                    text_dict["zones"] = "green=yield yellow=main"
+                    text_dict["paths"] = "cyan/magenta rays; nearest main"
 
             # Render before breaking so arrive/terminate frames are in the GIF.
             if save_gif:

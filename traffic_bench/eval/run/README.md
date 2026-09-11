@@ -16,7 +16,7 @@ python -m traffic_bench.eval run \
     sign=all \
     jobs=4 \
     jobs_nn=1 \
-    cuda_devices=1,2,3,4,5,6,7
+    cuda_devices=[1,2,3,4,5,6,7]
 
 # Use a specific manifest
 python -m traffic_bench.eval run \

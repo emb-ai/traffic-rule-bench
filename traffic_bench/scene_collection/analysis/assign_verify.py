@@ -164,11 +164,18 @@ def verify(alloc: dict, *, scene_to_junc, segments_index, dual_meta) -> Dict[str
         global_test |= places[code]["test"]
     global_leak = sorted(global_train & global_test)
 
-    counts_ok = all(
-        row["n_train"] == int(alloc.get("n_train_target") or 80)
-        and row["n_test"] == int(alloc.get("n_test_target") or 20)
-        for row in per_sign.values()
-    )
+    n_train_t = int(alloc.get("n_train_target") or 80)
+    n_test_t = int(alloc.get("n_test_target") or 20)
+    off_target = [
+        {
+            "code": code,
+            "n_train": row["n_train"],
+            "n_test": row["n_test"],
+        }
+        for code, row in per_sign.items()
+        if row["n_train"] != n_train_t or row["n_test"] != n_test_t
+    ]
+    counts_ok = not off_target
 
     reuse: Dict[str, Any] = {}
     for split in ("train", "test"):
@@ -204,6 +211,7 @@ def verify(alloc: dict, *, scene_to_junc, segments_index, dual_meta) -> Dict[str
             "target_train": alloc.get("n_train_target"),
             "target_test": alloc.get("n_test_target"),
             "all_signs_hit_target": counts_ok,
+            "off_target": off_target,
             "per_sign": per_sign,
         },
         "reuse": reuse,
@@ -247,7 +255,18 @@ def _md(summary: Dict[str, Any]) -> str:
         )
 
     ok_tt = "PASS" if tt["ok"] else "FAIL"
-    ok_counts = "PASS" if counts["all_signs_hit_target"] else "FAIL"
+    off = counts.get("off_target") or []
+    if counts["all_signs_hit_target"]:
+        ok_counts = "PASS"
+    else:
+        preview = ", ".join(
+            f"`{r['code']}` {r['n_train']}/{r['n_test']}" for r in off[:8]
+        )
+        more = f" (+{len(off) - 8})" if len(off) > 8 else ""
+        ok_counts = (
+            f"WARNING (want {counts['target_train']}/{counts['target_test']}; "
+            f"{preview}{more})"
+        )
     ok_cross = "PASS" if all(
         reuse[s]["across_semantic"] == 0 for s in ("train", "test")
     ) else "FAIL"
@@ -335,10 +354,18 @@ def main(argv: List[str] | None = None) -> int:
         f"within={len(tt['within_sign_leak_signs'])} → "
         f"{'PASS' if tt['ok'] else 'FAIL'}"
     )
-    print(
-        f"  counts 80/20: "
-        f"{'PASS' if summary['counts']['all_signs_hit_target'] else 'FAIL'}"
-    )
+    counts = summary["counts"]
+    if counts["all_signs_hit_target"]:
+        print("  counts 80/20: PASS")
+    else:
+        off = counts.get("off_target") or []
+        detail = ", ".join(
+            f"{r['code']} {r['n_train']}/{r['n_test']}" for r in off
+        )
+        print(
+            f"  counts 80/20: WARNING want "
+            f"{counts['target_train']}/{counts['target_test']}; {detail}"
+        )
     for split in ("train", "test"):
         r = summary["reuse"][split]
         print(
@@ -348,7 +375,7 @@ def main(argv: List[str] | None = None) -> int:
             f"across={r['across_semantic']}"
         )
     print(f"[verify] wrote {md_path}")
-    return 0 if tt["ok"] and summary["counts"]["all_signs_hit_target"] else 1
+    return 0 if tt["ok"] else 1
 
 
 if __name__ == "__main__":

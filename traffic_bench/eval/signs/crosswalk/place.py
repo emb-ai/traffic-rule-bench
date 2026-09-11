@@ -59,7 +59,7 @@ def ensure_pedestrian_yield_rule(env) -> None:
         PedestrianYieldRule(
             yield_distance=float(ped_cfg.get("yield_distance", 12.0)),
             yield_speed_kmh=float(ped_cfg.get("yield_speed_kmh", 8.0)),
-            no_stop_before_m=float(ped_cfg.get("no_stop_before_crosswalk_m", 0.0)),
+            no_stop_before_m=float(ped_cfg.get("no_stop_before_crosswalk_m", 3.0)),
             no_stop_speed_kmh=float(ped_cfg.get("no_stop_speed_kmh", 1.0)),
             no_stop_min_duration_s=float(ped_cfg.get("no_stop_min_duration_s", 1.0)),
         )
@@ -437,6 +437,19 @@ def install_segment_crosswalk_geometry(env, row: dict) -> bool:
         except (TypeError, ValueError):
             zebra_s = 0.0
         if zebra_s > 0.0 and not row.get("crosswalk_node_id"):
+            # Manifest mark is SUMO-edge along; MetaDrive may stitch a longer
+            # lane (same shared end). Remap like spawn / 5.19 placement so the
+            # zebra sits 50m ahead of the remapped ego, not mid-lane behind it.
+            from traffic_bench.eval.engine.map.sumo_metadrive_along import (
+                remap_sumo_along_to_metadrive,
+                row_sumo_edge_length_m,
+            )
+
+            zebra_s = remap_sumo_along_to_metadrive(
+                zebra_s,
+                sumo_edge_length_m=row_sumo_edge_length_m(row),
+                metadrive_lane_length_m=lane_len,
+            )
             sample_s = max(0.5, min(lane_len - 0.5, zebra_s))
         else:
             sample_s = max(0.5, min(lane_len - 0.5, lane_len - 2.0))

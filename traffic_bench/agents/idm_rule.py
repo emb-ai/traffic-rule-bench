@@ -325,6 +325,13 @@ class ComprehensiveRuleExpertPolicy(SignComplianceMixin, IDMPolicy):
         desired speed here makes IDM accelerate to the floor through its own
         car-following, so the floor never fights the car ahead. A floor never
         exceeds the curvature-safe speed.
+
+        Full-stop caps (yield / stop, ``_speed_cap < 1``) must *not* push
+        ``target_speed`` to 0 here: MetaDrive's IDM does
+        ``speed / not_zero(target_speed, 0)``, and ``not_zero(0, 0)`` is still
+        zero → ZeroDivisionError. They get ``STOP_TARGET_KMH`` instead; hard
+        stops stay in ``_apply_speed_constraints`` (``BRAKE_ACTION``) after
+        ``act()``.
         """
         front_obj, dist_to_front = self._drop_reserved_leader(front_obj, dist_to_front)
         if self._speed_cap is not None:

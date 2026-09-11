@@ -1,5 +1,6 @@
 # @package _global_
-# Shared knobs for main_road / secondary / yield / stop / roundabout.
+# Shared knobs for priority signs: main_road / secondary / yield / stop.
+# Roundabout (4.3) uses shared/roundabout.yaml with the same spawn override.
 
 augmentation:
   layout: true
@@ -7,3 +8,8 @@ augmentation:
 
 auxiliary:
   enabled: true
+
+# Priority plates only: single low ego spawn probe (nuPlan p25).
+# Other sign families keep root simulation.spawn_velocity_levels_ms.
+simulation:
+  spawn_velocity_levels_ms: [3.61]

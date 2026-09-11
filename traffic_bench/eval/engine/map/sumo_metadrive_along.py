@@ -51,8 +51,14 @@ def remap_sumo_along_to_metadrive(
 
 
 def row_sumo_edge_length_m(row: dict) -> Optional[float]:
-    """Best-effort SUMO edge length from a manifest row."""
-    for key in ("edge_length_m", "length_m", "approach_lane_length_m"):
+    """Best-effort SUMO edge length from a manifest row.
+
+    Prefer explicit edge length. Do **not** treat no-split crosswalk
+    ``approach_lane_length_m`` (often equal to ``crosswalk_position_m``, the
+    zebra mark) as the edge length — that falsely triggers stitched-prefix
+    remapping and collapses spawn/dest onto the MetaDrive lane end.
+    """
+    for key in ("edge_length_m", "length_m"):
         raw = row.get(key)
         if raw is None or raw == "":
             continue
@@ -62,4 +68,22 @@ def row_sumo_edge_length_m(row: dict) -> Optional[float]:
             continue
         if val > 0.0:
             return val
-    return None
+
+    approach = row.get("approach_lane_length_m")
+    if approach is None or approach == "":
+        return None
+    try:
+        approach_m = float(approach)
+    except (TypeError, ValueError):
+        return None
+    if approach_m <= 0.0:
+        return None
+
+    cw = row.get("crosswalk_position_m")
+    if cw is not None and cw != "":
+        try:
+            if abs(approach_m - float(cw)) <= 1.0:
+                return None
+        except (TypeError, ValueError):
+            pass
+    return approach_m
