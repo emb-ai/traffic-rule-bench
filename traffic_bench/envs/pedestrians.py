@@ -397,11 +397,18 @@ class CrosswalkPedestrianManager(BaseManager):
         end = spec.walk_end + side_bias if start_from_left else spec.walk_start + side_bias
         if on_crosswalk:
             # Place the pedestrian on the zebra, not on the curb waiting to enter.
-            inward = min(0.6, max(0.15, 0.1 * spec.walk_length))
-            start = start + spec.walk_dir * inward
-            end = end - spec.walk_dir * inward
-            start = self._snap_point_into_crosswalk(start, spec, spec.walk_dir)
-            end = self._snap_point_into_crosswalk(end, spec, -spec.walk_dir)
+            # Inward must follow start→end: using ±walk_dir assumes start is always
+            # walk_start, which is wrong half the time and snaps both ends to center.
+            crossing = np.asarray(end[:2], dtype=np.float64) - np.asarray(start[:2], dtype=np.float64)
+            crossing_len = float(np.linalg.norm(crossing))
+            if crossing_len < 1e-6:
+                return False
+            crossing_dir = crossing / crossing_len
+            inward = min(0.6, max(0.15, 0.1 * crossing_len))
+            start = start + crossing_dir * inward
+            end = end - crossing_dir * inward
+            start = self._snap_point_into_crosswalk(start, spec, crossing_dir)
+            end = self._snap_point_into_crosswalk(end, spec, -crossing_dir)
 
         if not self._is_position_free(start):
             return False

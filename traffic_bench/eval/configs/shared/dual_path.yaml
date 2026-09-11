@@ -10,6 +10,8 @@ auxiliary:
 
 scenario:
   min_dual_path_gain_m: 20.0
+  # train/test row cap is derived: signs.yaml n_{split} × max_scenarios
+  # (80×10=800 train, 20×10=200 test). Override with scenario.max_total=.
 
 simulation:
   spawn_velocity_ms: 2.5

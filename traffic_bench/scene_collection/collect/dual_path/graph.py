@@ -819,6 +819,22 @@ def crop_to_dual_path(
         if straight_path_reenters_signed_junction(out_net, rebuilt):
             last_error = JunctionLayoutError("Compliant path revisits signed approach")
             continue
+        from traffic_bench.eval.signs.dual_path.route_probe import (
+            invalidate_probe_env,
+            probe_cropped_dual_path,
+        )
+
+        invalidate_probe_env(out_net)
+        try:
+            probe = probe_cropped_dual_path(out_net, rebuilt)
+        except Exception as exc:
+            last_error = JunctionLayoutError(f"MetaDrive route probe failed: {exc}")
+            continue
+        if not probe.ok:
+            last_error = JunctionLayoutError(
+                f"MetaDrive route loops after crop ({probe.reason})"
+            )
+            continue
         cropped = rebuilt
         used_margin = attempt_margin
         used_bbox = bbox
@@ -871,4 +887,7 @@ def crop_to_dual_path(
     leftover = scene_dir / "center.json"
     if leftover.is_file():
         leftover.unlink()
+    from traffic_bench.eval.signs.dual_path.route_probe import invalidate_probe_env
+
+    invalidate_probe_env(out_net)
     return cropped

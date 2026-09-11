@@ -258,19 +258,29 @@ class DualPathCompliance:
             return self._apply_sumo_nav_path(nav, path)
 
         def _direction_blocked_exits_from_source(self, sign, source_lane) -> set:
-            """First-hop via/to_lane targets for directions NOT allowed by the sign."""
+            """First-hop via/to_lane targets for directions NOT allowed by the sign.
+
+            Prefer the lane the agent is actually on; also union forbidden hops
+            from every approach-arm peer so a plate on the rightmost lane still
+            blocks left exits that only exist on a left peer lane.
+            """
             allowed_dirs = set(
                 self._normalize_turn_dir(d)
                 for d in (getattr(sign, "ALLOWED_DIRS", None) or ())
             )
+            lanes = [source_lane]
+            for peer in getattr(sign, "applicable_lanes", None) or []:
+                if peer is not None and peer not in lanes:
+                    lanes.append(peer)
             blocked = set()
-            for turn in getattr(source_lane, "turns", None) or []:
-                d = self._normalize_turn_dir(turn.get("direction"))
-                if allowed_dirs and d not in allowed_dirs:
-                    if turn.get("via_lane"):
-                        blocked.add(turn["via_lane"])
-                    if turn.get("to_lane"):
-                        blocked.add(turn["to_lane"])
+            for lane_obj in lanes:
+                for turn in getattr(lane_obj, "turns", None) or []:
+                    d = self._normalize_turn_dir(turn.get("direction"))
+                    if allowed_dirs and d not in allowed_dirs:
+                        if turn.get("via_lane"):
+                            blocked.add(turn["via_lane"])
+                        if turn.get("to_lane"):
+                            blocked.add(turn["to_lane"])
             return blocked
 
         def _sumo_route_uses_blocked_source_exit(
@@ -294,7 +304,9 @@ class DualPathCompliance:
             nav = getattr(self.control_object, "navigation", None)
             if nav is None or not self._is_sumo_edge_nav(nav):
                 return False
-            source_lane = sign.lane
+            # Block relative to the lane ego is on (peer lanes on the same arm
+            # may offer different first-hop exits than the plate's placement lane).
+            source_lane = getattr(self.control_object, "lane", None) or sign.lane
             source_id = getattr(source_lane, "index", None)
             if not isinstance(source_id, str):
                 return False
@@ -302,7 +314,17 @@ class DualPathCompliance:
             if not blocked:
                 return False
             if not self._sumo_route_uses_blocked_source_exit(nav, source_id, blocked):
-                return False
+                # Route may still be indexed on the plate lane — check that too.
+                plate_id = getattr(getattr(sign, "lane", None), "index", None)
+                if (
+                    not isinstance(plate_id, str)
+                    or plate_id == source_id
+                    or not self._sumo_route_uses_blocked_source_exit(
+                        nav, plate_id, blocked
+                    )
+                ):
+                    return False
+                source_id = plate_id
 
             cache_key = ("sumo_dir", source_id, frozenset(blocked), nav.checkpoints[-1])
             if cache_key in self._rerouted_edges:

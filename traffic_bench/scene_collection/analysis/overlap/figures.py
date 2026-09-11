@@ -70,7 +70,15 @@ _RCPARAMS = {
 
 
 def _short(sign: str) -> str:
-    return sign.replace("direction_", "dir_").replace("detour_", "det_").replace("_", "\n")
+    return (
+        sign.replace("direction_", "dir_")
+        .replace("detour_", "det_")
+        .replace("bus_lane_road", "bus\nlane\nroad")
+        .replace("bike_lane_road", "bike\nlane\nroad")
+        .replace("bus_lane", "bus\nlane")
+        .replace("bike_lane", "bike\nlane")
+        .replace("_", "\n")
+    )
 
 
 def _save(fig: plt.Figure, path: Path, pdf: bool) -> List[Path]:

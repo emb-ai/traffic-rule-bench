@@ -6,6 +6,7 @@ from typing import List, Sequence
 
 from traffic_bench.envs.traffic import SumoTrafficManager
 from traffic_bench.eval.engine.map.lane_keys import lane_edge_id
+from traffic_bench.eval.signs.roundabout.nav import ring_edge_ids_from_roundabout_layout
 
 _OUTGOING_ARM_KEYS = ("straight_to", "left_to", "right_to", "outgoing_to")
 
@@ -24,20 +25,31 @@ def outgoing_edges_from_junction_layout(layout: dict) -> List[str]:
                 if eid and not eid.startswith(":"):
                     outgoing.add(eid)
     outgoing -= incoming
+    # Roundabout: never allow the circular ring itself as a background spawn.
+    # ``main_edge_ids`` are SUMO ring edges; spokes are secondary and stay eligible
+    # when they appear as true departures outside the approach set.
+    for eid in ring_edge_ids_from_roundabout_layout(layout):
+        outgoing.discard(eid)
     return sorted(outgoing)
 
 
 def resolve_row_background_spawn_edges(row: dict, net_path: Path | str) -> List[str]:
-    """Outgoing-edge whitelist for junction background traffic."""
+    """Outgoing-edge whitelist for junction / roundabout background traffic."""
     stored = row.get("background_spawn_edges")
     if stored:
-        return [str(e) for e in stored if e]
+        edges = [str(e) for e in stored if e]
+    else:
+        layout = row.get("junction_layout")
+        if isinstance(layout, dict):
+            edges = outgoing_edges_from_junction_layout(layout)
+        else:
+            edges = []
     layout = row.get("junction_layout")
     if isinstance(layout, dict):
-        edges = outgoing_edges_from_junction_layout(layout)
-        if edges:
-            return edges
-    return []
+        ring = set(ring_edge_ids_from_roundabout_layout(layout))
+        if ring:
+            edges = [e for e in edges if e not in ring]
+    return edges
 
 
 class JunctionOutgoingTrafficManager(SumoTrafficManager):
@@ -54,4 +66,5 @@ class JunctionOutgoingTrafficManager(SumoTrafficManager):
         return [ln for ln in lanes if lane_edge_id(str(ln.index)) in allowed]
 
     def _get_spawnable_lanes(self):
+        # Parent already drops ``background_excluded_edges`` (e.g. ring).
         return self._filter_spawn_lanes(super()._get_spawnable_lanes())

@@ -65,6 +65,209 @@ print(f"SIGN_TYPE={profile.sign_type}")
 PY
 }
 
+_data_subdir_for_sign() {
+    "$PYTHON_BIN" - "$1" <<'PY'
+import sys
+from traffic_bench.eval.sign_registry import resolve_sign_token
+print(resolve_sign_token(sys.argv[1]).data_subdir)
+PY
+}
+
+# Exit 0 if stored collection is a continuation of current_manifest.
+# Rule: every scene_uid in stored ⊆ current; optional by_scene evidence
+# under out_base must also ⊆ current (guards a reused folder from another run).
+_manifests_compatible() {
+    local stored="$1" current="$2" out_base="${3:-}"
+    "$PYTHON_BIN" - "$stored" "$current" "$out_base" <<'PY'
+import json, sys
+from pathlib import Path
+
+def scene_uid(row: dict):
+    if row.get("scene_uid"):
+        return str(row["scene_uid"])
+    sid = row.get("scene_id")
+    if sid is None:
+        return None
+    # Match traffic_bench.oracle.collect.run._scene_uid
+    seed = int(row.get("seed") or row.get("deterministic_seed") or 0)
+    return (
+        f"{sid}_lane{int(row.get('spawn_lane_num', 0) or 0)}"
+        f"_seed{seed}_v{int(row.get('var_idx', 0) or 0)}"
+    )
+
+def uids(path: Path) -> set:
+    out = set()
+    if not path.is_file():
+        return out
+    for ln in path.read_text(encoding="utf-8").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            row = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        if row.get("valid") is False:
+            continue
+        uid = scene_uid(row)
+        if uid:
+            out.add(uid)
+    return out
+
+def log(msg: str) -> None:
+    print(msg, file=sys.stderr, flush=True)
+
+stored_p, curr_p, out_base = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+stored = uids(stored_p)
+current = uids(curr_p)
+if not current:
+    log("[final] FAIL: current manifest has no valid rows")
+    sys.exit(1)
+if stored:
+    extra = stored - current
+    if extra:
+        sample = ", ".join(sorted(extra)[:3])
+        log(
+            f"[final] FAIL: {len(extra)} UID(s) in stored manifest not in current "
+            f"(e.g. {sample})"
+        )
+        sys.exit(1)
+
+evidence = set()
+if out_base:
+    root = Path(out_base)
+    disk = set()
+    for p in root.glob("*/by_scene/*"):
+        if p.is_dir():
+            disk.add(p.name)
+    stray = disk - current
+    if stray:
+        sample = ", ".join(sorted(stray)[:3])
+        log(
+            f"[final] FAIL: {len(stray)} by_scene UID(s) not in current manifest "
+            f"(e.g. {sample})"
+        )
+        sys.exit(1)
+    evidence = disk & current
+    if not stored and disk and not evidence:
+        log("[final] FAIL: on-disk scenes do not overlap current manifest")
+        sys.exit(1)
+
+overlap = stored & current if stored else evidence
+log(
+    f"[final] OK: stored={len(stored)} current={len(current)} "
+    f"overlap={len(overlap)} on_disk={len(evidence)}"
+)
+sys.exit(0)
+PY
+}
+
+# Resolve MANIFEST path for a sign (echo absolute path). Uses env SPLIT / SMOKE.
+_resolve_manifest_for_sign() {
+    local sid="$1" data_subdir="$2" user_manifest="${3:-}"
+    local data_runs="$REPO_ROOT/data/runs/$data_subdir"
+    local m="" split_use="${SPLIT:-train}"
+    if [ "${SMOKE:-0}" = "1" ]; then
+        split_use=debug
+    fi
+    if [ -n "$user_manifest" ]; then
+        m="$user_manifest"
+        m="${m//\{sign\}/$sid}"
+        m="${m//\{id\}/$sid}"
+        if [[ "$user_manifest" != *"{sign}"* ]] && [[ "$user_manifest" != *"{id}"* ]]; then
+            # Shared path without placeholders — only valid for single-sign.
+            m="$user_manifest"
+        fi
+    else
+        if [ "$split_use" = "debug" ]; then
+            m="$data_runs/debug"
+        else
+            m="$data_runs/$split_use/real_manifest.jsonl"
+        fi
+    fi
+    if [[ "$m" != /* ]]; then
+        if [ -e "$REPO_ROOT/$m" ]; then
+            m="$REPO_ROOT/$m"
+        elif [ -e "$m" ]; then
+            m="$(cd -- "$(dirname -- "$m")" && pwd)/$(basename -- "$m")"
+        fi
+    fi
+    if [ -d "$m" ]; then
+        if [ -s "$m/real_manifest.jsonl" ]; then
+            m="$m/real_manifest.jsonl"
+        elif [ -e "$m/latest/real_manifest.jsonl" ]; then
+            m="$(cd -- "$m/latest" && pwd)/real_manifest.jsonl"
+        else
+            local _last
+            _last=$(ls -1d "$m"/[0-9][0-9][0-9][0-9]-* 2>/dev/null | sort | tail -1 || true)
+            if [ -n "$_last" ] && [ -s "$_last/real_manifest.jsonl" ]; then
+                m="$_last/real_manifest.jsonl"
+            else
+                echo "[FAIL] MANIFEST dir has no real_manifest.jsonl: $m" >&2
+                return 1
+            fi
+        fi
+    fi
+    if [ ! -s "$m" ]; then
+        echo "[FAIL] MANIFEST missing/empty: $m" >&2
+        return 1
+    fi
+    echo "$m"
+}
+
+# Decide OUT_BASE for a sign. Echoes: OUT_BASE|RESUME(0|1)
+# Prefer data/trajectories/<sign>/final when present and compatible.
+_resolve_out_base_for_sign() {
+    local sid="$1" data_subdir="$2" manifest="$3" user_out="${4:-}" ts="$5"
+    local data_traj="$REPO_ROOT/data/trajectories/$data_subdir"
+    local out resume=0
+
+    if [ -n "$user_out" ]; then
+        out="$user_out"
+        if [[ "$out" != /* ]]; then
+            out="$REPO_ROOT/$out"
+        fi
+        # Multi-sign caller may already append /<sid>; single shared root gets /sid.
+        if [ -n "${_MULTI_SIGN:-}" ] && [[ "$out" != *"/$sid" ]] && [[ "$out" != *"/$sid/"* ]]; then
+            # If user_out is the multi root, caller passes already-joined path.
+            :
+        fi
+        echo "${out}|${resume}"
+        return 0
+    fi
+
+    local final="$data_traj/final"
+    if [ "${USE_FINAL:-1}" = "1" ] && [ -d "$final" ]; then
+        local stored="$final/_manifests/real_manifest.jsonl"
+        if [ -s "$stored" ]; then
+            if ! _manifests_compatible "$stored" "$manifest" "$final"; then
+                echo "[FAIL] SIGN=$sid refusing final/ — manifest mismatch" >&2
+                echo "       final=$final" >&2
+                echo "       current=$manifest" >&2
+                return 1
+            fi
+            echo "[final] SIGN=$sid → $final (RESUME=1)" >&2
+            echo "${final}|1"
+            return 0
+        fi
+        # Non-empty final without _manifests: still require disk ⊆ current.
+        if [ -n "$(ls -A "$final" 2>/dev/null || true)" ]; then
+            if ! _manifests_compatible "/dev/null" "$manifest" "$final"; then
+                echo "[FAIL] SIGN=$sid final/ has data but no _manifests/ and disk UIDs mismatch" >&2
+                return 1
+            fi
+            echo "[final] SIGN=$sid using existing final/ without stored manifest (RESUME=1)" >&2
+            echo "${final}|1"
+            return 0
+        fi
+        echo "[final] SIGN=$sid empty final/ → fresh collection there" >&2
+        echo "${final}|0"
+        return 0
+    fi
+
+    echo "${data_traj}/trajectories_${ts}|0"
+}
+
 if [ "$_COLLECT_INNER" != "1" ]; then
     if ! _SIGN_LIST="$(_list_sign_ids "$SIGN")"; then
         echo "[FAIL] unknown SIGN='$SIGN'"
@@ -79,33 +282,222 @@ if [ "$_COLLECT_INNER" != "1" ]; then
         TS="${TS:-$(date +%Y%m%d_%H%M%S)}"
         _user_out="${OUT_BASE-}"
         _user_manifest="${MANIFEST-}"
-        fail=0
-        echo "=== collect ${_SIGN_IDS[*]}  ts=$TS ==="
-        for sid in "${_SIGN_IDS[@]}"; do
-            echo
-            echo "######## SIGN=$sid ########"
-            if ! (
-                export _COLLECT_INNER=1 SIGN="$sid" TS="$TS"
-                if [ -n "${_user_out}" ]; then
-                    export OUT_BASE="${_user_out}/${sid}"
-                else
-                    unset OUT_BASE
-                fi
-                if [ -n "${_user_manifest}" ]; then
-                    _m="$_user_manifest"
-                    _m="${_m//\{sign\}/$sid}"
-                    _m="${_m//\{id\}/$sid}"
-                    if [[ "$_user_manifest" == *"{sign}"* ]] || [[ "$_user_manifest" == *"{id}"* ]]; then
-                        export MANIFEST="$_m"
+        : "${MULTI_SIGN_PARALLEL:=1}"
+
+        # Legacy / safe mode: one sign at a time (full CPU+GPU+merge per sign).
+        if [ "$MULTI_SIGN_PARALLEL" = "0" ]; then
+            fail=0
+            echo "=== multi-sign collect (SEQUENTIAL)  signs=${#_SIGN_IDS[@]}  ts=$TS ==="
+            echo "  MULTI_SIGN_PARALLEL=0  (one sign fully finishes before the next)"
+            for sid in "${_SIGN_IDS[@]}"; do
+                echo
+                echo "######## SIGN=$sid ########"
+                if ! (
+                    export _COLLECT_INNER=1 SIGN="$sid" TS="$TS"
+                    if [ -n "${_user_out}" ]; then
+                        export OUT_BASE="${_user_out}/${sid}"
                     else
-                        unset MANIFEST
+                        unset OUT_BASE
                     fi
+                    if [ -n "${_user_manifest}" ]; then
+                        _m="$_user_manifest"
+                        _m="${_m//\{sign\}/$sid}"
+                        _m="${_m//\{id\}/$sid}"
+                        if [[ "$_user_manifest" == *"{sign}"* ]] || [[ "$_user_manifest" == *"{id}"* ]]; then
+                            export MANIFEST="$_m"
+                        else
+                            unset MANIFEST
+                        fi
+                    fi
+                    bash "$0"
+                ); then
+                    fail=$((fail + 1))
                 fi
-                bash "$0"
-            ); then
-                fail=$((fail + 1))
+            done
+            echo "=== multi-sign done. failures=$fail ==="
+            exit "$fail"
+        fi
+
+        # -----------------------------------------------------------------
+        # Multi-sign orchestrator (MULTI_SIGN_PARALLEL=1, default):
+        #   1) GPU policies for all signs in parallel (1 job ↔ 1 GPU slot)
+        #   2) CPU policies one sign at a time (N_WORKERS still shards within)
+        #   3) merge/consolidate per sign after its CPU phase
+        # -----------------------------------------------------------------
+        : "${GPU_IDS:=0,1,2,3}"
+        : "${JOBS_PER_GPU:=1}"
+        : "${NN_CHUNKS:=0}"
+        : "${SKIP_CPU:=0}"
+        : "${SKIP_CARL:=}"
+        : "${SKIP_PLANT2:=}"
+        : "${SMOKE:=0}"
+
+        # Smoke forces CPU-only (same as single-sign).
+        if [ "$SMOKE" = "1" ]; then
+            SKIP_CARL=1
+            SKIP_PLANT2=1
+        fi
+
+        # Resolve default skip from ckpt presence when unset (mirrors inner).
+        _carl_ckpt="${CARL_CKPT:-$REPO_ROOT/checkpoints/carl/nuplan_51479_1B/model_best.pth}"
+        _plant2_ckpt="${PLANT2_CKPT:-$REPO_ROOT/checkpoints/plant2_pretrain/epoch=029_final_3.ckpt}"
+        if [ -z "${SKIP_CARL}" ]; then
+            if [ -f "$_carl_ckpt" ]; then SKIP_CARL=0; else SKIP_CARL=1; fi
+        fi
+        if [ -z "${SKIP_PLANT2}" ]; then
+            if [ -f "$_plant2_ckpt" ] || [ -f "$REPO_ROOT/checkpoints/plant2_pretrain/epoch%3D029_final_3.ckpt" ]; then
+                SKIP_PLANT2=0
+            else
+                SKIP_PLANT2=1
             fi
+        fi
+
+        IFS=',' read -ra _GPU_LIST <<< "$GPU_IDS"
+        _max_gpu=$(( ${#_GPU_LIST[@]} * JOBS_PER_GPU ))
+        [ "$_max_gpu" -lt 1 ] && _max_gpu=1
+
+        declare -a _SIGN_OUT=()
+        declare -a _SIGN_MAN=()
+        declare -a _SIGN_RESUME=()
+        fail=0
+        echo "=== multi-sign collect  signs=${#_SIGN_IDS[@]}  ts=$TS ==="
+        echo "  GPU_IDS=$GPU_IDS  JOBS_PER_GPU=$JOBS_PER_GPU  NN_CHUNKS=$NN_CHUNKS (0=auto)  max_parallel_gpu=$_max_gpu"
+        echo "  SKIP_CPU=$SKIP_CPU SKIP_CARL=$SKIP_CARL SKIP_PLANT2=$SKIP_PLANT2"
+        echo "  phase1=GPU(all signs parallel)  phase2=CPU(sequential per sign)"
+        echo "  tip: MULTI_SIGN_PARALLEL=0 for one-sign-at-a-time"
+
+        for sid in "${_SIGN_IDS[@]}"; do
+            _sub="$(_data_subdir_for_sign "$sid")" || { fail=$((fail + 1)); continue; }
+            if [ -n "${_user_out}" ]; then
+                _out_arg="${_user_out}/${sid}"
+            else
+                _out_arg=""
+            fi
+            if [ -n "${_user_manifest}" ]; then
+                if [[ "$_user_manifest" == *"{sign}"* ]] || [[ "$_user_manifest" == *"{id}"* ]]; then
+                    _man_arg="$_user_manifest"
+                else
+                    # No placeholders — auto per-sign manifests.
+                    _man_arg=""
+                fi
+            else
+                _man_arg=""
+            fi
+            if ! _man="$(_resolve_manifest_for_sign "$sid" "$_sub" "$_man_arg")"; then
+                fail=$((fail + 1))
+                continue
+            fi
+            if ! _resolved="$(_resolve_out_base_for_sign "$sid" "$_sub" "$_man" "$_out_arg" "$TS")"; then
+                fail=$((fail + 1))
+                continue
+            fi
+            _out="${_resolved%%|*}"
+            _res="${_resolved##*|}"
+            _SIGN_OUT+=("$_out")
+            _SIGN_MAN+=("$_man")
+            _SIGN_RESUME+=("$_res")
+            echo "  plan SIGN=$sid  OUT=$_out  RESUME=$_res  MANIFEST=$_man"
         done
+        if [ "${#_SIGN_OUT[@]}" -ne "${#_SIGN_IDS[@]}" ]; then
+            echo "[FAIL] multi-sign setup incomplete (failures=$fail)"
+            exit 1
+        fi
+
+        # ---- Phase 1: GPU jobs across signs ----
+        declare -a _GPU_JOBS=()  # sid_idx|family
+        _idx=0
+        for sid in "${_SIGN_IDS[@]}"; do
+            if [ "$SKIP_CARL" != "1" ]; then
+                _GPU_JOBS+=("${_idx}|carl")
+            fi
+            if [ "$SKIP_PLANT2" != "1" ]; then
+                _GPU_JOBS+=("${_idx}|plant2")
+            fi
+            _idx=$((_idx + 1))
+        done
+
+        _gpu_fail=0
+        if [ "${#_GPU_JOBS[@]}" -gt 0 ]; then
+            echo
+            echo "######## phase1 GPU: ${#_GPU_JOBS[@]} jobs on ${#_GPU_LIST[@]} GPU(s) ########"
+            _gi=0
+            _gpids=()
+            for _job in "${_GPU_JOBS[@]}"; do
+                while [ "$(jobs -rp | wc -l)" -ge "$_max_gpu" ]; do
+                    wait -n 2>/dev/null || true
+                done
+                _jidx="${_job%%|*}"
+                _fam="${_job##*|}"
+                _sid="${_SIGN_IDS[$_jidx]}"
+                _out="${_SIGN_OUT[$_jidx]}"
+                _man="${_SIGN_MAN[$_jidx]}"
+                _res="${_SIGN_RESUME[$_jidx]}"
+                _gpu="${_GPU_LIST[$((_gi % ${#_GPU_LIST[@]}))]}"
+                _gi=$((_gi + 1))
+                echo "[gpu$_gpu] START SIGN=$_sid family=$_fam → $_out"
+                (
+                    export _COLLECT_INNER=1 SIGN="$_sid" TS="$TS"
+                    export OUT_BASE="$_out" MANIFEST="$_man"
+                    export RESUME="$_res"
+                    export SKIP_CPU=1 SKIP_MERGE=1
+                    export GPU_IDS="$_gpu"
+                    if [ "$_fam" = "carl" ]; then
+                        export SKIP_CARL=0 SKIP_PLANT2=1
+                        export GPUS_CARL="$_gpu"
+                        unset GPUS_PLANT2 || true
+                    else
+                        export SKIP_CARL=1 SKIP_PLANT2=0
+                        export GPUS_PLANT2="$_gpu"
+                        unset GPUS_CARL || true
+                    fi
+                    bash "$0"
+                ) &
+                _gpids+=("$!")
+            done
+            for _p in ${_gpids[@]+"${_gpids[@]}"}; do
+                if ! wait "$_p"; then
+                    _gpu_fail=$((_gpu_fail + 1))
+                fi
+            done
+            echo "######## phase1 GPU done. failures=$_gpu_fail ########"
+            fail=$((fail + _gpu_fail))
+        else
+            echo "######## phase1 GPU: skipped ########"
+        fi
+
+        # ---- Phase 2: CPU (+ merge) sequential per sign ----
+        _idx=0
+        for sid in "${_SIGN_IDS[@]}"; do
+            _out="${_SIGN_OUT[$_idx]}"
+            _man="${_SIGN_MAN[$_idx]}"
+            _res="${_SIGN_RESUME[$_idx]}"
+            echo
+            echo "######## phase2 CPU SIGN=$sid → $_out ########"
+            if [ "$SKIP_CPU" = "1" ]; then
+                # Still merge GPU outputs for this sign.
+                if ! (
+                    export _COLLECT_INNER=1 SIGN="$sid" TS="$TS"
+                    export OUT_BASE="$_out" MANIFEST="$_man" RESUME="$_res"
+                    export SKIP_CPU=1 SKIP_CARL=1 SKIP_PLANT2=1 SKIP_MERGE=0
+                    bash "$0"
+                ); then
+                    fail=$((fail + 1))
+                fi
+            else
+                if ! (
+                    export _COLLECT_INNER=1 SIGN="$sid" TS="$TS"
+                    export OUT_BASE="$_out" MANIFEST="$_man" RESUME="$_res"
+                    export SKIP_CARL=1 SKIP_PLANT2=1 SKIP_MERGE=0
+                    # leave SKIP_CPU unset/0
+                    unset SKIP_CPU || true
+                    bash "$0"
+                ); then
+                    fail=$((fail + 1))
+                fi
+            fi
+            _idx=$((_idx + 1))
+        done
+
         echo "=== multi-sign done. failures=$fail ==="
         exit "$fail"
     fi
@@ -148,11 +540,22 @@ export PER_SIGN_COMPLIANT_NPC EGO_SAMPLER EGO_CURVE_AWARE EGO_HOLD_V0 CARL_LONGI
 : "${POLICIES_CARL:=carl_rule}"
 : "${POLICIES_PLANT2:=plant2_rule}"
 
-: "${GPU_IDS:=0}"
+# Default: 4 GPUs, carl on 0,1 and plant2 on 2,3 (via auto-split below).
+: "${GPU_IDS:=0,1,2,3}"
 : "${GPUS_CARL:=}"
 : "${GPUS_PLANT2:=}"
 : "${JOBS_PER_GPU:=1}"
-: "${NN_CHUNKS:=1}"
+# Shard each NN policy across this many processes (--start/--count/--worker-id).
+# 0 = auto (= #GPUs_in_pool × JOBS_PER_GPU so every assigned card is used).
+: "${NN_CHUNKS:=0}"
+# 1 = start carl/plant2 immediately alongside CPU (default).
+# 0 = finish all CPU workers before launching GPU pools (less CPU contention).
+: "${OVERLAP_CPU_GPU:=1}"
+# Reserve CPU slots for concurrent GPU MetaDrive procs when overlapping.
+#   auto — (#carl GPUs + #plant2 GPUs) × JOBS_PER_GPU  (only if OVERLAP_CPU_GPU=1)
+#   0    — do not shrink N_WORKERS
+#   N    — reserve exactly N slots
+: "${RESERVE_CPU_FOR_GPU:=auto}"
 
 # Default checkpoints under the repo root.
 : "${CARL_CKPT:=$REPO_ROOT/checkpoints/carl/nuplan_51479_1B/model_best.pth}"
@@ -210,19 +613,21 @@ fi
 
 : "${TS:=$(date +%Y%m%d_%H%M%S)}"
 : "${NODE_ID:=$(hostname -s 2>/dev/null || echo local)}"
-# Per-sign storage: data/trajectories/<sign>/...
-: "${OUT_BASE:=$DATA_TRAJ/trajectories_$TS}"
-if [[ "$OUT_BASE" != /* ]]; then
-    OUT_BASE="$REPO_ROOT/$OUT_BASE"
+
+# Remember whether the caller fixed OUT_BASE (multi-sign / resume into final).
+_OUT_BASE_FROM_USER=0
+if [ -n "${OUT_BASE+x}" ] && [ -n "${OUT_BASE}" ]; then
+    _OUT_BASE_FROM_USER=1
+    if [[ "$OUT_BASE" != /* ]]; then
+        OUT_BASE="$REPO_ROOT/$OUT_BASE"
+    fi
 fi
-: "${LOG_DIR:=$OUT_BASE/_logs/run_node${NODE_ID}_${TS}}"
-MERGED_DIR="$OUT_BASE/_merged"
-MANIFESTS_DIR="$OUT_BASE/_manifests"
 
 # Auto-split GPUs between carl / plant2 if not set.
+# With default GPU_IDS=0,1,2,3 → GPUS_CARL=0,1 and GPUS_PLANT2=2,3.
 IFS=',' read -ra _GPU_LIST <<< "$GPU_IDS"
 _NUM_GPUS=${#_GPU_LIST[@]}
-if [ -z "$GPUS_CARL" ] && [ -z "$GPUS_PLANT2" ]; then
+if [ -z "${GPUS_CARL:-}" ] && [ -z "${GPUS_PLANT2:-}" ]; then
     if [ "$_NUM_GPUS" -le 1 ]; then
         GPUS_CARL="$GPU_IDS"
         GPUS_PLANT2="$GPU_IDS"
@@ -232,9 +637,9 @@ if [ -z "$GPUS_CARL" ] && [ -z "$GPUS_PLANT2" ]; then
         GPUS_CARL=$(IFS=, ; echo "${_GPU_LIST[*]:0:$_half}")
         GPUS_PLANT2=$(IFS=, ; echo "${_GPU_LIST[*]:$_half}")
     fi
-elif [ -z "$GPUS_CARL" ]; then
+elif [ -z "${GPUS_CARL:-}" ]; then
     GPUS_CARL="$GPU_IDS"
-elif [ -z "$GPUS_PLANT2" ]; then
+elif [ -z "${GPUS_PLANT2:-}" ]; then
     GPUS_PLANT2="$GPU_IDS"
 fi
 
@@ -260,9 +665,7 @@ fi
 POLICIES_CPU="${POLICIES_CPU//comprehensive_rule_expert/idm_rule}"
 POLICIES_CPU="${POLICIES_CPU//rule_compliant/ppo_rule}"
 
-mkdir -p "$OUT_BASE" "$LOG_DIR" "$MERGED_DIR" "$MANIFESTS_DIR"
-exec > >(tee -a "$LOG_DIR/progress.log") 2>&1
-
+# Resolve MANIFEST before OUT_BASE so final/ can be checked against it.
 if [ -z "$MANIFEST" ]; then
     if [ "$SPLIT" = "debug" ]; then
         MANIFEST="$DATA_RUNS/debug"
@@ -300,10 +703,92 @@ if [ ! -s "$MANIFEST" ]; then
     exit 1
 fi
 
-cp -f "$MANIFEST" "$MANIFESTS_DIR/real_manifest.jsonl"
-echo "[manifests] $MANIFESTS_DIR/real_manifest.jsonl"
+# Per-sign storage: prefer data/trajectories/<sign>/final when compatible.
+if [ "$_OUT_BASE_FROM_USER" = "0" ]; then
+    if ! _resolved="$(_resolve_out_base_for_sign "$SIGN" "$DATA_SUBDIR" "$MANIFEST" "" "$TS")"; then
+        exit 1
+    fi
+    OUT_BASE="${_resolved%%|*}"
+    _final_resume="${_resolved##*|}"
+    if [ "$_final_resume" = "1" ]; then
+        RESUME=1
+    fi
+fi
+: "${LOG_DIR:=$OUT_BASE/_logs/run_node${NODE_ID}_${TS}}"
+MERGED_DIR="$OUT_BASE/_merged"
+MANIFESTS_DIR="$OUT_BASE/_manifests"
+
+mkdir -p "$OUT_BASE" "$LOG_DIR" "$MERGED_DIR" "$MANIFESTS_DIR"
+exec > >(tee -a "$LOG_DIR/progress.log") 2>&1
+
+# When resuming final/, verify stored manifest ⊆ current, then refresh
+# _manifests to the current file (allows growing the scene set).
+if [ -s "$MANIFESTS_DIR/real_manifest.jsonl" ] && [ "$RESUME" = "1" ]; then
+    if ! _manifests_compatible "$MANIFESTS_DIR/real_manifest.jsonl" "$MANIFEST" "$OUT_BASE"; then
+        echo "[FAIL] existing _manifests/ incompatible with MANIFEST=$MANIFEST"
+        exit 1
+    fi
+    cp -f "$MANIFEST" "$MANIFESTS_DIR/real_manifest.jsonl"
+    echo "[manifests] resume OK — refreshed $MANIFESTS_DIR/real_manifest.jsonl"
+else
+    cp -f "$MANIFEST" "$MANIFESTS_DIR/real_manifest.jsonl"
+    echo "[manifests] $MANIFESTS_DIR/real_manifest.jsonl"
+fi
 
 CATALOG="$OUT_BASE/catalog.jsonl"
+
+# GPU MetaDrive workers need host CPU too. When overlapping, shrink N_WORKERS
+# so carl/plant2 sims are not starved by idm/ppo.
+_csv_len() {
+    local s="${1:-}"
+    if [ -z "$s" ]; then
+        echo 0
+        return
+    fi
+    local IFS=','
+    # shellcheck disable=SC2206
+    local -a a=($s)
+    echo "${#a[@]}"
+}
+_gpu_concurrent_slots() {
+    local n=0
+    local c
+    if [ "${SKIP_CARL:-1}" != "1" ]; then
+        c=$(_csv_len "$GPUS_CARL")
+        n=$((n + c * JOBS_PER_GPU))
+    fi
+    if [ "${SKIP_PLANT2:-1}" != "1" ]; then
+        c=$(_csv_len "$GPUS_PLANT2")
+        n=$((n + c * JOBS_PER_GPU))
+    fi
+    echo "$n"
+}
+N_WORKERS_REQUESTED="$N_WORKERS"
+GPU_CPU_RESERVE=0
+case "${RESERVE_CPU_FOR_GPU}" in
+    auto|AUTO|"")
+        if [ "$OVERLAP_CPU_GPU" = "1" ]; then
+            GPU_CPU_RESERVE="$(_gpu_concurrent_slots)"
+        fi
+        ;;
+    *)
+        GPU_CPU_RESERVE="$RESERVE_CPU_FOR_GPU"
+        ;;
+esac
+if [ "$GPU_CPU_RESERVE" -gt 0 ] 2>/dev/null; then
+    _nw_floor=1
+    if [ "$SKIP_CPU" = "1" ]; then
+        _nw_floor=0
+    fi
+    _nw_new=$((N_WORKERS - GPU_CPU_RESERVE))
+    if [ "$_nw_new" -lt "$_nw_floor" ]; then
+        _nw_new=$_nw_floor
+    fi
+    if [ "$_nw_new" -ne "$N_WORKERS" ]; then
+        echo "[sched] RESERVE_CPU_FOR_GPU=$RESERVE_CPU_FOR_GPU → reserve $GPU_CPU_RESERVE slot(s) for GPU MetaDrive; N_WORKERS $N_WORKERS → $_nw_new"
+        N_WORKERS=$_nw_new
+    fi
+fi
 
 echo "================================================================"
 echo "oracle collect  SIGN=$SIGN ($SIGN_CODE)  [$TS]"
@@ -314,9 +799,17 @@ echo "  COUNT/ROWS_LIMIT= ${COUNT:-—} / ${ROWS_LIMIT:-—}"
 echo "  SAVE_GIFS/SMOKE = $SAVE_GIFS / $SMOKE"
 echo "  EGO_SAMPLER     = $EGO_SAMPLER  CURVE_AWARE=$EGO_CURVE_AWARE  HOLD_V0=$EGO_HOLD_V0"
 echo "  CARL_LONGITUDINAL=$CARL_LONGITUDINAL  COMPLIANT_NPC=$PER_SIGN_COMPLIANT_NPC"
-echo "  CPU             = $POLICIES_CPU  (SKIP_CPU=$SKIP_CPU, N_WORKERS=$N_WORKERS, IDM_CHUNKS=$IDM_CHUNKS)"
+echo "  CPU             = $POLICIES_CPU  (SKIP_CPU=$SKIP_CPU, N_WORKERS=$N_WORKERS"
+if [ "$N_WORKERS" != "$N_WORKERS_REQUESTED" ]; then
+    echo "                     requested=$N_WORKERS_REQUESTED, reserved_for_gpu=$GPU_CPU_RESERVE, IDM_CHUNKS=$IDM_CHUNKS)"
+else
+    echo "                     IDM_CHUNKS=$IDM_CHUNKS)"
+fi
 echo "  CARL            = $POLICIES_CARL (SKIP_CARL=$SKIP_CARL, GPUS=$GPUS_CARL)"
 echo "  PLANT2          = $POLICIES_PLANT2 (SKIP_PLANT2=$SKIP_PLANT2, GPUS=$GPUS_PLANT2)"
+echo "  GPU             = GPU_IDS=$GPU_IDS  JOBS_PER_GPU=$JOBS_PER_GPU  NN_CHUNKS=${NN_CHUNKS} (0=auto)"
+echo "  OVERLAP_CPU_GPU = $OVERLAP_CPU_GPU  (1=CPU+GPU together, 0=CPU then GPU)"
+echo "  RESERVE_CPU_FOR_GPU=$RESERVE_CPU_FOR_GPU  (auto→$GPU_CPU_RESERVE concurrent GPU sims)"
 echo "  EXTRA_SAMPLES   = $EXTRA_SAMPLES_COMPREHENSIVE  IDM_SEED_BASE=$IDM_SEED_BASE"
 echo "  MAX_STEPS       = $MAX_STEPS  RESUME=$RESUME  PROGRESS_EVERY_S=$PROGRESS_EVERY_S"
 echo "  CARL_CKPT       = ${CARL_CKPT:-<unset>}"
@@ -326,6 +819,16 @@ echo "================================================================"
 _is_idm_family() {
     case "$1" in
         idm|idm_rule) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# NN policies get a real CUDA_VISIBLE_DEVICES pin from _run_gpu_pool.
+# CPU policies must not see any card: importing torch otherwise grabs cuda:0
+# (idle ~700MiB each) and nvidia-smi looks like "only GPU 0 is used".
+_is_nn_policy() {
+    case "$1" in
+        carl|carl_rule|plant2|plant2_rule|plant2_ft) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -437,7 +940,11 @@ run_one() {
     [ "$RESUME" = "1" ] && resume_args+=( --resume )
 
     echo "[run] $policy → $out_dir  log=$log_tag"
-    if "$PYTHON_BIN" "$RUNNER" \
+    local -a cuda_env=()
+    if ! _is_nn_policy "$policy"; then
+        cuda_env=(env CUDA_VISIBLE_DEVICES=)
+    fi
+    if ${cuda_env[@]+"${cuda_env[@]}"} "$PYTHON_BIN" "$RUNNER" \
         --sign "$SIGN" \
         --manifest "$MANIFEST" \
         --scenes-root "$SCENES_ROOT" \
@@ -463,24 +970,44 @@ run_one() {
     fi
 }
 
+# Count only CPU workers toward N_WORKERS (GPU pids must not steal slots).
+_cpu_slots_busy() {
+    local n=0 p
+    for p in ${cpu_pids[@]+"${cpu_pids[@]}"}; do
+        if kill -0 "$p" 2>/dev/null; then
+            n=$((n + 1))
+        fi
+    done
+    echo "$n"
+}
+
+_cpu_track() {
+    cpu_pids+=("$1")
+    pids+=("$1")
+}
+
 # Launch one CPU policy, optionally sharded across IDM_CHUNKS processes.
 _run_cpu_policy() {
     local policy="$1"
-    # Smoke / tiny COUNT: keep single process.
-    if [ -n "$COUNT" ] || [ "${IDM_CHUNKS:-1}" -le 1 ]; then
-        while [ "$(jobs -rp | wc -l)" -ge "$N_WORKERS" ]; do
+    # GIF / ShowBase: one process only (Panda3D is not multi-process safe).
+    # COUNT/ROWS_LIMIT still shard via N_USE when IDM_CHUNKS>1 and no GIFs.
+    if [ "${SAVE_GIFS:-0}" = "1" ] || [ "${IDM_CHUNKS:-1}" -le 1 ]; then
+        if [ "${SAVE_GIFS:-0}" = "1" ] && [ "${IDM_CHUNKS:-1}" -gt 1 ]; then
+            echo "[shard] $policy: SAVE_GIFS=1 → single process (no IDM_CHUNKS)"
+        fi
+        while [ "$(_cpu_slots_busy)" -ge "$N_WORKERS" ]; do
             sleep 1
         done
         run_one "$policy" &
-        pids+=("$!")
+        _cpu_track "$!"
         return 0
     fi
 
-    # Shard over the rows that will actually be used. ROWS_LIMIT is already
-    # folded into N_USE above; sharding over the whole manifest collected every
-    # row while the banner still printed the limit -- measured as 240 of 240
-    # scenes under ROWS_LIMIT=192. A limit that prints but does not bind is
-    # worse than no limit at all.
+    # Shard over the rows that will actually be used. ROWS_LIMIT/COUNT are
+    # already folded into N_USE above; sharding over the whole manifest
+    # collected every row while the banner still printed the limit -- measured
+    # as 240 of 240 scenes under ROWS_LIMIT=192. A limit that prints but does
+    # not bind is worse than no limit at all.
     local n_rows
     n_rows="${N_USE:-}"
     if [ -z "$n_rows" ] || [ "$n_rows" -le 0 ]; then
@@ -507,68 +1034,22 @@ _run_cpu_policy() {
         if [ $((start + count)) -gt "$n_rows" ]; then
             count=$((n_rows - start))
         fi
-        while [ "$(jobs -rp | wc -l)" -ge "$N_WORKERS" ]; do
+        while [ "$(_cpu_slots_busy)" -ge "$N_WORKERS" ]; do
             sleep 1
         done
         run_one "$policy" --start "$start" --count "$count" --worker-id "$i" &
-        pids+=("$!")
+        _cpu_track "$!"
     done
 }
 
 fail=0
 pids=()
 
-if [ "$SKIP_CPU" != "1" ]; then
-    for policy in $POLICIES_CPU; do
-        _run_cpu_policy "$policy"
-    done
-fi
-
-_run_gpu_pool() {
-    local policies="$1" gpus="$2" ckpt="$3"
-    shift 3
-    local extra=("$@")
-    IFS=',' read -ra gpu_list <<< "$gpus"
-    local gi=0
-    local running=0
-    local max_parallel=$(( ${#gpu_list[@]} * JOBS_PER_GPU ))
-    [ "$max_parallel" -lt 1 ] && max_parallel=1
-    for policy in $policies; do
-        while [ "$running" -ge "$max_parallel" ]; do
-            wait -n 2>/dev/null || true
-            running=$(jobs -rp | wc -l)
-        done
-        local gpu="${gpu_list[$((gi % ${#gpu_list[@]}))]}"
-        gi=$((gi + 1))
-        CUDA_VISIBLE_DEVICES="$gpu" run_one "$policy" --model-path "$ckpt" "${extra[@]}" &
-        pids+=("$!")
-        running=$((running + 1))
-    done
-}
-
-if [ "$SKIP_CARL" != "1" ]; then
-    if [ -z "$CARL_CKPT" ]; then
-        echo "[FAIL] CARL pool enabled but CARL_CKPT unset"
-        fail=$((fail + 1))
-    else
-        _run_gpu_pool "$POLICIES_CARL" "$GPUS_CARL" "$CARL_CKPT"
-    fi
-fi
-
-if [ "$SKIP_PLANT2" != "1" ]; then
-    if [ -z "$PLANT2_CKPT" ]; then
-        echo "[FAIL] PLANT2 pool enabled but PLANT2_CKPT unset"
-        fail=$((fail + 1))
-    else
-        _run_gpu_pool "$POLICIES_PLANT2" "$GPUS_PLANT2" "$PLANT2_CKPT" \
-            --plant2-action-mode "$PLANT2_ACTION_MODE"
-    fi
-fi
-
-# Live dashboard while policies run in parallel (progress is otherwise only in
-# $LOG_DIR/<policy>.log — easy to miss from the main terminal).
+# Live dashboard — defined before launch so we can print while workers are
+# still being queued (IDM may fill N_WORKERS before PPO/GPU join).
 _print_collect_progress() {
-    "$PYTHON_BIN" - "$OUT_BASE" "$MANIFEST" "$EXTRA_SAMPLES_COMPREHENSIVE" "$LOG_DIR" <<'PY'
+    # Pass N_USE so COUNT/ROWS_LIMIT caps the denominator (not full manifest size).
+    "$PYTHON_BIN" - "$OUT_BASE" "$MANIFEST" "$EXTRA_SAMPLES_COMPREHENSIVE" "$LOG_DIR" "${N_USE:-}" <<'PY'
 import os, re, sys, json
 from pathlib import Path
 
@@ -576,6 +1057,7 @@ out_base = Path(sys.argv[1])
 manifest = Path(sys.argv[2])
 extra = int(sys.argv[3] or 0)
 log_dir = Path(sys.argv[4])
+n_use_raw = (sys.argv[5] if len(sys.argv) > 5 else "").strip()
 
 n_rows = 0
 if manifest.is_file():
@@ -593,10 +1075,25 @@ if manifest.is_file():
                 continue
             n_rows += 1
 
+# COUNT / ROWS_LIMIT already folded into N_USE by the shell plan.
+if n_use_raw:
+    try:
+        n_use = int(n_use_raw)
+        if n_use > 0:
+            n_rows = min(n_rows, n_use) if n_rows else n_use
+    except ValueError:
+        pass
+
 idm = {"idm", "idm_rule"}
+# Post-collect artifacts (select/report) sit next to policy dirs — not workers.
+_skip = {"experts", "oracle_metrics"}
 print("----- progress -----", flush=True)
 any_pol = False
-for pol_dir in sorted(p for p in out_base.iterdir() if p.is_dir() and not p.name.startswith("_")):
+for pol_dir in sorted(
+    p
+    for p in out_base.iterdir()
+    if p.is_dir() and not p.name.startswith("_") and p.name not in _skip
+):
     any_pol = True
     pol = pol_dir.name
     n_var = (1 + max(0, extra)) if pol in idm else 1
@@ -656,8 +1153,200 @@ print("--------------------", flush=True)
 PY
 }
 
+# Background dashboard from the first worker onward (not after the full queue).
+_PROGRESS_PID=""
+_start_progress_dashboard() {
+    if [ -n "$_PROGRESS_PID" ]; then
+        return 0
+    fi
+    echo
+    echo "[progress] live dashboard every ${PROGRESS_EVERY_S}s  (per-policy detail: $LOG_DIR/<policy>.log)"
+    (
+        # Stop when parent writes the sentinel or we get killed.
+        while [ ! -f "$LOG_DIR/_progress_stop" ]; do
+            _print_collect_progress
+            sleep "$PROGRESS_EVERY_S"
+        done
+    ) &
+    _PROGRESS_PID=$!
+}
+
+_stop_progress_dashboard() {
+    mkdir -p "$LOG_DIR"
+    : > "$LOG_DIR/_progress_stop"
+    if [ -n "$_PROGRESS_PID" ] && kill -0 "$_PROGRESS_PID" 2>/dev/null; then
+        kill "$_PROGRESS_PID" 2>/dev/null || true
+        wait "$_PROGRESS_PID" 2>/dev/null || true
+    fi
+    rm -f "$LOG_DIR/_progress_stop"
+    _PROGRESS_PID=""
+}
+
+_run_gpu_pool() {
+    local policies="$1" gpus="$2" ckpt="$3"
+    shift 3
+    local extra=("$@")
+    IFS=',' read -ra gpu_list <<< "$gpus"
+    local gi=0
+    local -a pool_pids=()
+    local max_parallel=$(( ${#gpu_list[@]} * JOBS_PER_GPU ))
+    [ "$max_parallel" -lt 1 ] && max_parallel=1
+
+    # Reap only THIS pool's pids — never gate on CPU jobs via `jobs -rp`.
+    _gpu_pool_reap() {
+        local -a alive=()
+        local p
+        for p in ${pool_pids[@]+"${pool_pids[@]}"}; do
+            if kill -0 "$p" 2>/dev/null; then
+                alive+=("$p")
+            else
+                wait "$p" 2>/dev/null || true
+            fi
+        done
+        pool_pids=("${alive[@]}")
+    }
+
+    _gpu_track() {
+        pool_pids+=("$1")
+        gpu_pids+=("$1")
+        pids+=("$1")
+    }
+
+    _gpu_launch_one() {
+        local policy="$1"
+        shift
+        _gpu_pool_reap
+        while [ "${#pool_pids[@]}" -ge "$max_parallel" ]; do
+            # Wait only on this pool — not CPU workers / progress dashboard.
+            if [ "${#pool_pids[@]}" -gt 0 ]; then
+                wait -n "${pool_pids[@]}" 2>/dev/null || true
+            else
+                sleep 0.2
+            fi
+            _gpu_pool_reap
+            sleep 0.2
+        done
+        local gpu="${gpu_list[$((gi % ${#gpu_list[@]}))]}"
+        gi=$((gi + 1))
+        CUDA_VISIBLE_DEVICES="$gpu" run_one "$policy" --model-path "$ckpt" \
+            "$@" ${extra[@]+"${extra[@]}"} &
+        _gpu_track "$!"
+    }
+
+    # Rows to cover (COUNT / ROWS_LIMIT already folded into N_USE).
+    local n_rows
+    n_rows="${N_USE:-}"
+    if [ -z "$n_rows" ] || [ "$n_rows" -le 0 ]; then
+        n_rows=$(_manifest_nrows "$MANIFEST")
+    fi
+
+    for policy in $policies; do
+        local n_chunks="${NN_CHUNKS:-0}"
+        if [ -z "$n_chunks" ] || [ "$n_chunks" -le 0 ]; then
+            n_chunks=$max_parallel
+        fi
+        # GIF / ShowBase: one process only (Panda3D is not multi-process safe).
+        if [ "${SAVE_GIFS:-0}" = "1" ]; then
+            if [ "$n_chunks" -gt 1 ]; then
+                echo "[shard] $policy: SAVE_GIFS=1 → single process (no NN_CHUNKS)"
+            fi
+            n_chunks=1
+        fi
+
+        if [ "$n_chunks" -le 1 ]; then
+            _gpu_launch_one "$policy"
+            continue
+        fi
+
+        if [ -z "$n_rows" ] || [ "$n_rows" -le 0 ]; then
+            echo "[FAIL] empty manifest for GPU sharding: $MANIFEST"
+            fail=$((fail + 1))
+            continue
+        fi
+        if [ "$n_chunks" -gt "$n_rows" ]; then
+            n_chunks="$n_rows"
+        fi
+        local chunk_size=$(( (n_rows + n_chunks - 1) / n_chunks ))
+        echo "[shard] $policy  rows=$n_rows  chunks=$n_chunks  chunk_size=$chunk_size  gpus=$gpus  max_parallel=$max_parallel"
+        local i start count
+        for ((i = 0; i < n_chunks; i++)); do
+            start=$((i * chunk_size))
+            if [ "$start" -ge "$n_rows" ]; then
+                break
+            fi
+            count=$chunk_size
+            if [ $((start + count)) -gt "$n_rows" ]; then
+                count=$((n_rows - start))
+            fi
+            _gpu_launch_one "$policy" --start "$start" --count "$count" --worker-id "$i"
+        done
+    done
+}
+
+_launch_all_gpu_pools() {
+    if [ "$SKIP_CARL" != "1" ]; then
+        if [ -z "$CARL_CKPT" ]; then
+            echo "[FAIL] CARL pool enabled but CARL_CKPT unset"
+            fail=$((fail + 1))
+        else
+            _run_gpu_pool "$POLICIES_CARL" "$GPUS_CARL" "$CARL_CKPT"
+        fi
+    fi
+    if [ "$SKIP_PLANT2" != "1" ]; then
+        if [ -z "$PLANT2_CKPT" ]; then
+            echo "[FAIL] PLANT2 pool enabled but PLANT2_CKPT unset"
+            fail=$((fail + 1))
+        else
+            _run_gpu_pool "$POLICIES_PLANT2" "$GPUS_PLANT2" "$PLANT2_CKPT" \
+                --plant2-action-mode "$PLANT2_ACTION_MODE"
+        fi
+    fi
+}
+
+_launch_all_cpu_policies() {
+    if [ "$SKIP_CPU" != "1" ]; then
+        for policy in $POLICIES_CPU; do
+            _run_cpu_policy "$policy"
+        done
+    fi
+}
+
+_wait_cpu_workers() {
+    local p
+    for p in ${cpu_pids[@]+"${cpu_pids[@]}"}; do
+        wait "$p" || fail=$((fail + 1))
+    done
+}
+
+rm -f "$LOG_DIR/_progress_stop"
+_start_progress_dashboard
+
+# CPU under N_WORKERS; GPU pools on GPUS_*. With OVERLAP_CPU_GPU=1, launch GPU
+# first so carl/plant2 start immediately instead of waiting for the CPU queue.
+pids=()
+cpu_pids=()
+gpu_pids=()
+
+if [ "$OVERLAP_CPU_GPU" = "1" ]; then
+    echo "[sched] OVERLAP_CPU_GPU=1 — launching GPU pools, then CPU"
+    _launch_all_gpu_pools
+    _launch_all_cpu_policies
+else
+    echo "[sched] OVERLAP_CPU_GPU=0 — CPU first, then GPU"
+    _launch_all_cpu_policies
+    if [ "${#cpu_pids[@]}" -gt 0 ]; then
+        echo "[sched] waiting for ${#cpu_pids[@]} CPU worker(s) before GPU…"
+        _wait_cpu_workers
+        # Already reaped — drop from global wait list so we don't double-wait.
+        pids=()
+        cpu_pids=()
+    fi
+    _launch_all_gpu_pools
+fi
+
+_stop_progress_dashboard
 echo
-echo "[progress] live dashboard every ${PROGRESS_EVERY_S}s  (per-policy detail: $LOG_DIR/<policy>.log)"
+echo "[progress] waiting for workers  (detail: $LOG_DIR/<policy>.log)"
 _print_collect_progress
 
 while true; do
@@ -674,7 +1363,7 @@ while true; do
 done
 
 for pid in ${pids[@]+"${pids[@]}"}; do
-    wait "$pid" || fail=$((fail + 1))
+    wait "$pid" 2>/dev/null || fail=$((fail + 1))
 done
 _print_collect_progress
 

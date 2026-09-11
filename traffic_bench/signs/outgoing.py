@@ -44,6 +44,43 @@ def heading_delta_to_dir(approach_heading: float, outgoing_heading: float) -> st
     return "l" if delta > 0.0 else "r"
 
 
+def allow_forbid_outgoing(
+    all_outgoing,
+    by_dir: dict,
+    allowed_dirs,
+) -> tuple[set, set]:
+    """Split junction outgoings into allowed vs forbidden for a 4.1.x plate.
+
+    ``by_dir`` maps ``{l,r,s,t} -> set(edge_id)`` (preferably geometric).
+    Allowed = union of buckets listed in ``allowed_dirs``; forbidden = the rest.
+    """
+    all_out = set(all_outgoing or ())
+    allowed = set()
+    for d in allowed_dirs or ():
+        allowed |= set((by_dir or {}).get(d, ()) or ())
+    allowed &= all_out
+    return allowed, all_out - allowed
+
+
+def filter_same_edge_lane_ids(sign_lane_id, candidate_ids, edge_id_fn) -> list:
+    """Keep only lane ids on the same SUMO edge as ``sign_lane_id`` (one arm)."""
+    sign_edge = edge_id_fn(sign_lane_id)
+    if not sign_edge:
+        return [sign_lane_id] if sign_lane_id is not None else []
+    out = []
+    seen = set()
+    for lane_id in candidate_ids or ():
+        if lane_id is None or lane_id in seen:
+            continue
+        if is_internal_lane_id(lane_id):
+            continue
+        if edge_id_fn(lane_id) != sign_edge:
+            continue
+        out.append(lane_id)
+        seen.add(lane_id)
+    return out
+
+
 class SumoOutgoingMixin:
     """Requires BaseTrafficSign (``engine``, ``_sumo_edge_id_from_lane_index``, ``lane``)."""
 

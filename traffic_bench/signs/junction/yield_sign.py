@@ -895,16 +895,40 @@ class YieldSign(BaseTrafficSign):
             )
 
         zones: list[dict] = []
+        # Ego approach yield zone (where leaving while traffic is a violation).
+        try:
+            lane = getattr(self, "lane", None)
+            if lane is not None:
+                zones.append(
+                    {
+                        "lane": lane,
+                        "long_start": float(getattr(self, "zone_start", 0.0)),
+                        "long_end": float(
+                            getattr(self, "zone_end", getattr(lane, "length", 0.0))
+                        ),
+                        "kind": "yield",
+                    }
+                )
+        except Exception:
+            pass
         if hasattr(self, "get_top_down_aux_conflict_zones"):
             try:
-                zones = list(self.get_top_down_aux_conflict_zones() or [])
+                zones.extend(list(self.get_top_down_aux_conflict_zones() or []))
             except Exception:
-                zones = []
+                pass
+
+        entry_point = None
+        if hasattr(self, "_entry_conflict_point"):
+            try:
+                entry_point = self._entry_conflict_point()
+            except Exception:
+                entry_point = None
 
         return {
             "ego_path": ego_path,
             "foes": foes,
             "zones": zones,
+            "entry_point": entry_point,
         }
 
     def has_main_road_traffic(self, exclude_vehicle=None) -> tuple:

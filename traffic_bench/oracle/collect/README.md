@@ -67,11 +67,54 @@ SMOKE_EXTRA_SAMPLES=0 \
 ./collect.sh
 ```
 
-Several signs in one invocation (each writes its own `data/trajectories/<sign>/trajectories_<ts>/`):
+Several signs in one invocation:
 
 ```bash
 SIGN=yield,stop,direction/right SMOKE=1 ./collect.sh
 SIGN=all SMOKE=1 ./collect.sh
+```
+
+**Multi-sign scheduling** (not sequential full runs anymore):
+
+1. **GPU phase** — `carl*` / `plant2*` for all signs run in parallel across
+   `GPU_IDS` (round-robin, up to `#GPUs × JOBS_PER_GPU` concurrent jobs).
+2. **CPU phase** — `idm*` / `ppo*` run **one sign at a time** (within a sign,
+   `IDM_CHUNKS` / `N_WORKERS` still shard). Merge runs after each sign's CPU.
+
+```bash
+SIGN=yield,stop,crosswalk \
+GPU_IDS=0,1,2,3,4,5,6,7 JOBS_PER_GPU=1 \
+N_WORKERS=8 IDM_CHUNKS=8 \
+./collect.sh
+```
+
+Disable cross-sign GPU parallelism (old behavior: finish one sign
+completely, then the next):
+
+```bash
+MULTI_SIGN_PARALLEL=0 SIGN=yield,stop,crosswalk GPU_IDS=0,1 NN_CHUNKS=1 ./collect.sh
+```
+
+### Resuming `final/`
+
+If `data/trajectories/<sign>/final/` exists, collect uses it as `OUT_BASE` with
+`RESUME=1` instead of creating `trajectories_<ts>/`.
+
+Safety check before resume:
+
+- UIDs in `final/_manifests/real_manifest.jsonl` must be ⊆ current manifest
+  (same `scene_uid` formula as `run.py`)
+- any `*/by_scene/<uid>/` already on disk must also belong to the current manifest
+
+Mismatch → hard fail (won't write into the wrong folder). Disable with `USE_FINAL=0`.
+
+```bash
+# after a good run:
+mv data/trajectories/yield/trajectories_YYYYMMDD_HHMMSS \
+   data/trajectories/yield/final
+
+# later — continues missing episodes only:
+SIGN=yield ./collect.sh
 ```
 
 ## 2. Full collection
@@ -86,7 +129,7 @@ POLICIES_CARL="carl_rule" POLICIES_PLANT2="plant2_rule" \
 PLANT2_ACTION_MODE=pid \
 GPU_IDS=0,1,2,3,4,5,6,7 \
 GPUS_CARL=0,1,2,3 GPUS_PLANT2=4,5,6,7 \
-JOBS_PER_GPU=2 \
+JOBS_PER_GPU=1 NN_CHUNKS=0 \
 N_WORKERS=32 IDM_CHUNKS=8 \
 EXTRA_SAMPLES_COMPREHENSIVE=4 IDM_SEED_BASE=42 \
 MAX_STEPS=1500 RESUME=1 \
@@ -99,11 +142,31 @@ Notes:
 - **CPU parallelism:** `N_WORKERS` = max concurrent CPU processes (default 8).
 IDM-family policies (`idm_rule`, …) are sharded into
 `IDM_CHUNKS` workers (default 8) via `--start/--count/--worker-id`.
+Sharding is skipped only when `SAVE_GIFS=1` (Panda3D) or `IDM_CHUNKS=1`.
 Without sharding, `POLICIES_CPU="idm_rule ppo_rule"`
 would only use **2** CPU processes even if `N_WORKERS=8`.
+CPU workers get `CUDA_VISIBLE_DEVICES=` empty so they do not steal VRAM on
+GPU 0 (same pin as `eval/run/run_signs_parallel.sh`).
+- **GPU (single sign):** each NN policy (`carl_rule`, `plant2_rule`) is sharded
+  into `NN_CHUNKS` workers (default `0` = auto = `#GPUs × JOBS_PER_GPU` for that
+  pool) via `--start/--count/--worker-id`, round-robin across the pool's cards.
+  Default `GPU_IDS=0,1,2,3` auto-splits to `GPUS_CARL=0,1` and `GPUS_PLANT2=2,3`
+  (override with `GPUS_CARL=` / `GPUS_PLANT2=`). Cap concurrency with
+  `JOBS_PER_GPU` (default 1). `NN_CHUNKS=1` disables within-policy sharding;
+  `SAVE_GIFS=1` forces a single process.
+- **CPU + GPU overlap:** default `OVERLAP_CPU_GPU=1` starts `carl`/`plant2`
+  immediately, then queues CPU under `N_WORKERS` (they run together). Set
+  `OVERLAP_CPU_GPU=0` to finish all CPU workers before any GPU pool (less
+  MetaDrive contention on a busy node).
+- **CPU reserve for GPU sims:** MetaDrive for `carl`/`plant2` also needs host
+  CPU. With overlap, `RESERVE_CPU_FOR_GPU=auto` (default) shrinks `N_WORKERS`
+  by `(#GPUS_CARL + #GPUS_PLANT2) × JOBS_PER_GPU` — e.g. `N_WORKERS=32` and
+  4 GPU workers → effective `N_WORKERS=28`. Override with an integer, or
+  `RESERVE_CPU_FOR_GPU=0` to keep the requested `N_WORKERS`.
 - **Live progress:** every `PROGRESS_EVERY_S` seconds (default 30) the shell
 prints a per-policy bar (`done/target`) and the last `[i/N]` line from each
 worker log. Detail: `tail -f $OUT_BASE/_logs/.../<policy>.wXX.log`.
+  Cross-sign dashboard (ETA): `python tools/collect_progress.py --watch 30`.
 - Default ckpts (relative to repo root):
   - `CARL_CKPT=checkpoints/carl/nuplan_51479_1B/model_best.pth`
   - `PLANT2_CKPT=checkpoints/plant2_pretrain/epoch=029_final_3.ckpt`
@@ -117,22 +180,22 @@ A shared `MANIFEST=` path is ignored unless it contains `{sign}` or `{id}`.
 ## 3. Oracle selection
 
 ```bash
-# from repo root (or any cwd — paths resolve against the repo)
-OUT=data/trajectories/yield/trajectories_<ts>
+# from repo root — SIGN once, paths default to data/trajectories/<sign>/final
+SIGN=yield HORIZON=1500 ./../select/coverage.sh
+# → .../final/experts/
 
-python -m traffic_bench.oracle.select.coverage \
-    --root "$OUT" \
-    --catalog "$OUT/catalog.jsonl" \
-    --signs yield \
-    --horizon 1500 \
-    --out-dir "$OUT/experts"
+# custom tree:
+SIGN=yield ROOT=data/trajectories/yield/trajectories_<ts> \
+  HORIZON=1500 ./../select/coverage.sh
 ```
 
-`--signs` accepts eval ids (`yield`).
+`--signs` / catalog / out-dir are filled from `SIGN` (eval id like `yield`).
 
 ## 4. Metrics table
 
 ```bash
+SIGN=yield HORIZON=1500 ../report/table.sh
+# or with an explicit tree:
 SIGN=yield ../report/table.sh data/trajectories/yield/trajectories_<ts>
 # → .../oracle_metrics/oracle_metrics_summary_top2.md
 ```

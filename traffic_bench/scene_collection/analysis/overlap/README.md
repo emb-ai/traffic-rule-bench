@@ -1,6 +1,6 @@
 # Map overlap analysis (train / test)
 
-Cross-sign reuse moderate (7.7% of train places); global train∩test = 0 (0.0% of train union).
+Cross-sign reuse moderate (9.3% of train places); global train∩test = 16 (0.8% of train union).
 
 Audits **geographic map reuse** under the tiered assign policy
 (unique → same behavioral family → same semantic group; no cross-semantic).
@@ -18,30 +18,30 @@ Sources: `data/scenes/<sign>/moscow_pool.json`, enriched from `meta.json`.
 
 ## Verdict
 
-- Train cross-sign place reuse is **moderate**: 130/1684 places (7.7%) appear under ≥2 signs.
-- Train↔test leakage is **clean**: no place appears in both splits (neither within a sign nor globally).
-- Map inventory size: train union **1684** places, test union **424** places across all signs.
+- Train cross-sign place reuse is **moderate**: 180/1941 places (9.3%) appear under ≥2 signs.
+- Train↔test leakage is **present**: global train∩test = 16 places (0.8% of the train union); within-sign leaked place-instances = 0.
+- Map inventory size: train union **1941** places, test union **497** places across all signs.
 
 ### Interpretation
 
 - **Within behavioral family** reuse (e.g. `direction_control` 4.1.1–4.1.6) is **by design**:
-  same place, different ego rule. Avg shared-% in `direction_control` (train): **61.5%**.
+  same place, different ego rule. Avg shared-% in `direction_control` (train): **59.9%**.
 - **Across semantic groups** should be **0** under the new assign policy.
-- **Train↔test** place leak must be **0** (same-sign sum=0, cross-sign cell sum=0).
+- **Train↔test** place leak must be **0** (same-sign sum=0, cross-sign cell sum=19).
 
 ## Headline numbers
 
 | Metric | Value |
 | --- | ---: |
-| Signs | 25 |
-| Pool records | 2500 |
-| Train place union | 1684 |
-| Train places shared by ≥2 signs | 130 (7.7%) |
-| Test place union | 424 |
-| Test places shared by ≥2 signs | 35 (8.3%) |
-| Global train∩test places | 0 |
+| Signs | 29 |
+| Pool records | 2901 |
+| Train place union | 1941 |
+| Train places shared by ≥2 signs | 180 (9.3%) |
+| Test place union | 497 |
+| Test places shared by ≥2 signs | 39 (7.8%) |
+| Global train∩test places | 16 |
 | Within-sign train∩test places | 0 |
-| Mean off-diagonal train pairwise | 1.24 |
+| Mean off-diagonal train pairwise | 1.07 |
 
 ## Reuse buckets (policy taxonomy)
 
@@ -49,62 +49,66 @@ Sources: `data/scenes/<sign>/moscow_pool.json`, enriched from `meta.json`.
 
 | Bucket | # places | % |
 | --- | ---: | ---: |
-| unique | 1554 | 92.3% |
-| within_behavioral | 124 | 7.4% |
-| within_semantic_diff_family | 6 | 0.4% |
-| across_semantic | 0 | 0.0% |
+| unique | 1761 | 90.7% |
+| within_behavioral | 109 | 5.6% |
+| within_semantic_diff_family | 50 | 2.6% |
+| across_semantic | 21 | 1.1% |
 
 ### Test
 
 | Bucket | # places | % |
 | --- | ---: | ---: |
-| unique | 389 | 91.7% |
-| within_behavioral | 29 | 6.8% |
-| within_semantic_diff_family | 6 | 1.4% |
-| across_semantic | 0 | 0.0% |
+| unique | 458 | 92.2% |
+| within_behavioral | 27 | 5.4% |
+| within_semantic_diff_family | 11 | 2.2% |
+| across_semantic | 1 | 0.2% |
 
 ## Train place reuse histogram
 
 | # signs sharing place | # places |
 | --- | ---: |
-| 1 | 1554 |
-| 2 | 73 |
-| 3 | 33 |
-| 4 | 14 |
-| 5 | 7 |
-| 6 | 3 |
+| 1 | 1761 |
+| 2 | 125 |
+| 3 | 30 |
+| 4 | 13 |
+| 5 | 8 |
+| 6 | 4 |
 
 ### Test
 
 | # signs sharing place | # places |
 | --- | ---: |
-| 1 | 389 |
-| 2 | 23 |
-| 3 | 5 |
-| 4 | 3 |
-| 5 | 3 |
-| 6 | 1 |
+| 1 | 458 |
+| 2 | 26 |
+| 3 | 7 |
+| 4 | 2 |
+| 5 | 2 |
+| 6 | 2 |
 
 ## Per-sign pool sizes
 
 | Sign | Behavioral family | Train places | Test places | Train scenes | Test scenes |
 | --- | ---: | ---: | ---: | ---: | ---: |
+| `bike_lane` | restricted_lane | 80 | 20 | 80 | 20 |
+| `bike_lane_road` | restricted_lane | 80 | 20 | 80 | 20 |
 | `blocked_road` | access_road_direction | 80 | 20 | 80 | 20 |
+| `bus_lane` | restricted_lane | 80 | 20 | 80 | 20 |
+| `bus_lane_road` | restricted_lane | 80 | 20 | 80 | 20 |
 | `crosswalk` | pedestrian_crossing | 80 | 20 | 80 | 20 |
 | `detour_either` | obstacle_avoidance | 80 | 20 | 80 | 20 |
 | `detour_left` | obstacle_avoidance | 80 | 20 | 80 | 20 |
 | `detour_right` | obstacle_avoidance | 80 | 20 | 80 | 20 |
-| `direction_left` | direction_control | 77 | 20 | 80 | 20 |
+| `direction_left` | direction_control | 76 | 20 | 80 | 20 |
 | `direction_left_right` | direction_control | 75 | 20 | 80 | 20 |
-| `direction_right` | direction_control | 72 | 19 | 80 | 20 |
-| `direction_straight` | direction_control | 70 | 16 | 80 | 20 |
-| `direction_straight_left` | direction_control | 61 | 15 | 80 | 20 |
-| `direction_straight_right` | direction_control | 56 | 15 | 80 | 20 |
+| `direction_right` | direction_control | 73 | 20 | 80 | 20 |
+| `direction_straight` | direction_control | 68 | 16 | 80 | 21 |
+| `direction_straight_left` | direction_control | 59 | 15 | 80 | 20 |
+| `direction_straight_right` | direction_control | 50 | 13 | 80 | 20 |
 | `main_road` | junction_priority | 80 | 20 | 80 | 20 |
 | `min_speed` | speed_control | 80 | 20 | 80 | 20 |
 | `no_entry` | access_road_direction | 69 | 18 | 80 | 20 |
-| `no_turn_left` | turn_restriction | 76 | 20 | 80 | 20 |
-| `no_turn_right` | turn_restriction | 72 | 20 | 80 | 20 |
+| `no_turn_left` | turn_restriction | 73 | 20 | 80 | 20 |
+| `no_turn_right` | turn_restriction | 74 | 19 | 80 | 20 |
 | `one_way_left` | access_road_direction | 80 | 20 | 80 | 20 |
 | `one_way_right` | access_road_direction | 80 | 20 | 80 | 20 |
 | `residential_zone` | speed_control | 80 | 20 | 80 | 20 |
@@ -119,52 +123,60 @@ Sources: `data/scenes/<sign>/moscow_pool.json`, enriched from `meta.json`.
 
 | Sign | Behavioral family | Unique | Shared | Total | Shared % |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `direction_straight_right` | direction_control | 6 | 50 | 56 | 89.3% |
-| `direction_straight_left` | direction_control | 8 | 53 | 61 | 86.9% |
-| `direction_straight` | direction_control | 24 | 46 | 70 | 65.7% |
-| `direction_left` | direction_control | 41 | 36 | 77 | 46.8% |
-| `direction_left_right` | direction_control | 44 | 31 | 75 | 41.3% |
-| `direction_right` | direction_control | 44 | 28 | 72 | 38.9% |
+| `direction_straight_right` | direction_control | 4 | 46 | 50 | 92.0% |
+| `direction_straight_left` | direction_control | 12 | 47 | 59 | 79.7% |
+| `direction_straight` | direction_control | 25 | 43 | 68 | 63.2% |
+| `direction_right` | direction_control | 42 | 31 | 73 | 42.5% |
+| `direction_left` | direction_control | 44 | 32 | 76 | 42.1% |
+| `direction_left_right` | direction_control | 45 | 30 | 75 | 40.0% |
+| `one_way_right` | access_road_direction | 55 | 25 | 80 | 31.2% |
+| `detour_either` | obstacle_avoidance | 59 | 21 | 80 | 26.2% |
 | `one_way_left` | access_road_direction | 59 | 21 | 80 | 26.2% |
-| `no_turn_right` | turn_restriction | 55 | 17 | 72 | 23.6% |
-| `no_turn_left` | turn_restriction | 59 | 17 | 76 | 22.4% |
-| `one_way_right` | access_road_direction | 63 | 17 | 80 | 21.2% |
-| `detour_either` | obstacle_avoidance | 68 | 12 | 80 | 15.0% |
-| `no_entry` | access_road_direction | 61 | 8 | 69 | 11.6% |
-| `detour_right` | obstacle_avoidance | 71 | 9 | 80 | 11.2% |
-| `detour_left` | obstacle_avoidance | 73 | 7 | 80 | 8.8% |
-| `blocked_road` | access_road_direction | 78 | 2 | 80 | 2.5% |
-| `crosswalk` | pedestrian_crossing | 80 | 0 | 80 | 0.0% |
+| `no_turn_left` | turn_restriction | 54 | 19 | 73 | 26.0% |
+| `bus_lane_road` | restricted_lane | 60 | 20 | 80 | 25.0% |
+| `detour_right` | obstacle_avoidance | 61 | 19 | 80 | 23.8% |
+| `no_turn_right` | turn_restriction | 57 | 17 | 74 | 23.0% |
+| `detour_left` | obstacle_avoidance | 63 | 17 | 80 | 21.2% |
+| `bike_lane_road` | restricted_lane | 66 | 14 | 80 | 17.5% |
+| `no_entry` | access_road_direction | 57 | 12 | 69 | 17.4% |
+| `crosswalk` | pedestrian_crossing | 69 | 11 | 80 | 13.8% |
+| `bus_lane` | restricted_lane | 70 | 10 | 80 | 12.5% |
+| `bike_lane` | restricted_lane | 72 | 8 | 80 | 10.0% |
+| `min_speed` | speed_control | 75 | 5 | 80 | 6.2% |
+| `blocked_road` | access_road_direction | 77 | 3 | 80 | 3.8% |
+| `zone_speed_limit` | speed_control | 77 | 3 | 80 | 3.8% |
+| `speed_limit` | speed_control | 78 | 2 | 80 | 2.5% |
 | `main_road` | junction_priority | 80 | 0 | 80 | 0.0% |
-| `min_speed` | speed_control | 80 | 0 | 80 | 0.0% |
 | `residential_zone` | speed_control | 80 | 0 | 80 | 0.0% |
 | `roundabout` | roundabout | 80 | 0 | 80 | 0.0% |
 | `secondary_road` | junction_priority | 80 | 0 | 80 | 0.0% |
-| `speed_limit` | speed_control | 80 | 0 | 80 | 0.0% |
 | `stop` | junction_priority | 80 | 0 | 80 | 0.0% |
 | `yield` | junction_priority | 80 | 0 | 80 | 0.0% |
-| `zone_speed_limit` | speed_control | 80 | 0 | 80 | 0.0% |
 
 ## Per-sign unique vs shared (test)
 
 | Sign | Unique | Shared | Total | Shared % |
 | --- | ---: | ---: | ---: | ---: |
-| `direction_straight_left` | 1 | 14 | 15 | 93.3% |
-| `direction_straight_right` | 2 | 13 | 15 | 86.7% |
-| `direction_straight` | 4 | 12 | 16 | 75.0% |
-| `direction_right` | 12 | 7 | 19 | 36.8% |
-| `direction_left` | 13 | 7 | 20 | 35.0% |
+| `direction_straight_right` | 0 | 13 | 13 | 100.0% |
+| `direction_straight` | 3 | 13 | 16 | 81.2% |
+| `direction_straight_left` | 3 | 12 | 15 | 80.0% |
+| `no_entry` | 10 | 8 | 18 | 44.4% |
+| `direction_left` | 12 | 8 | 20 | 40.0% |
 | `direction_left_right` | 13 | 7 | 20 | 35.0% |
-| `no_entry` | 12 | 6 | 18 | 33.3% |
-| `one_way_left` | 15 | 5 | 20 | 25.0% |
+| `no_turn_left` | 13 | 7 | 20 | 35.0% |
+| `direction_right` | 14 | 6 | 20 | 30.0% |
+| `one_way_left` | 14 | 6 | 20 | 30.0% |
+| `one_way_right` | 14 | 6 | 20 | 30.0% |
+| `no_turn_right` | 15 | 4 | 19 | 21.1% |
 | `detour_right` | 16 | 4 | 20 | 20.0% |
-| `no_turn_left` | 16 | 4 | 20 | 20.0% |
-| `no_turn_right` | 16 | 4 | 20 | 20.0% |
-| `one_way_right` | 16 | 4 | 20 | 20.0% |
 | `detour_either` | 17 | 3 | 20 | 15.0% |
 | `detour_left` | 17 | 3 | 20 | 15.0% |
 | `blocked_road` | 19 | 1 | 20 | 5.0% |
-| `crosswalk` | 20 | 0 | 20 | 0.0% |
+| `bus_lane` | 19 | 1 | 20 | 5.0% |
+| `crosswalk` | 19 | 1 | 20 | 5.0% |
+| `bike_lane` | 20 | 0 | 20 | 0.0% |
+| `bike_lane_road` | 20 | 0 | 20 | 0.0% |
+| `bus_lane_road` | 20 | 0 | 20 | 0.0% |
 | `main_road` | 20 | 0 | 20 | 0.0% |
 | `min_speed` | 20 | 0 | 20 | 0.0% |
 | `residential_zone` | 20 | 0 | 20 | 0.0% |
@@ -180,46 +192,53 @@ Sources: `data/scenes/<sign>/moscow_pool.json`, enriched from `meta.json`.
 | Family | Unique | Shared across families | Total | Shared % |
 | --- | ---: | ---: | ---: | ---: |
 | `junction_priority` | 320 | 0 | 320 | 0.0% |
-| `speed_control` | 320 | 0 | 320 | 0.0% |
-| `access_road_direction` | 284 | 2 | 286 | 0.7% |
-| `direction_control` | 241 | 6 | 247 | 2.4% |
-| `obstacle_avoidance` | 225 | 0 | 225 | 0.0% |
-| `turn_restriction` | 128 | 4 | 132 | 3.0% |
-| `pedestrian_crossing` | 80 | 0 | 80 | 0.0% |
+| `restricted_lane` | 268 | 52 | 320 | 16.2% |
+| `speed_control` | 310 | 10 | 320 | 3.1% |
+| `access_road_direction` | 273 | 10 | 283 | 3.5% |
+| `direction_control` | 236 | 15 | 251 | 6.0% |
+| `obstacle_avoidance` | 194 | 31 | 225 | 13.8% |
+| `turn_restriction` | 120 | 13 | 133 | 9.8% |
+| `pedestrian_crossing` | 69 | 11 | 80 | 13.8% |
 | `roundabout` | 80 | 0 | 80 | 0.0% |
 
 ## Behavioral family place overlap (train)
 
 | Family A | Family B | # shared places |
 | --- | ---: | ---: |
-| `direction_control` | `turn_restriction` | 4 |
-| `access_road_direction` | `direction_control` | 2 |
+| `obstacle_avoidance` | `restricted_lane` | 31 |
+| `pedestrian_crossing` | `restricted_lane` | 11 |
+| `restricted_lane` | `speed_control` | 10 |
+| `direction_control` | `turn_restriction` | 9 |
+| `access_road_direction` | `direction_control` | 6 |
+| `access_road_direction` | `turn_restriction` | 4 |
 
 ## Semantic group place overlap (train)
 
 | Group A | Group B | # shared places |
 | --- | ---: | ---: |
-| `obstacle` | `reroute` | 2 |
+| `obstacle` | `priority` | 11 |
+| `obstacle` | `speed` | 10 |
+| `obstacle` | `reroute` | 3 |
 
 ## Top overlapping sign pairs (train)
 
 | # shared places | Sign A | Sign B |
 | --- | ---: | ---: |
-| 32 | `direction_straight_left` | `direction_straight_right` |
 | 29 | `direction_straight` | `direction_straight_left` |
-| 26 | `direction_left` | `direction_straight_left` |
-| 26 | `direction_straight` | `direction_straight_right` |
-| 24 | `direction_left` | `direction_straight_right` |
-| 22 | `direction_right` | `direction_straight_right` |
-| 20 | `direction_right` | `direction_straight_left` |
+| 26 | `direction_straight_left` | `direction_straight_right` |
+| 24 | `direction_straight` | `direction_straight_right` |
+| 23 | `direction_left` | `direction_straight_left` |
+| 22 | `direction_left` | `direction_straight_right` |
+| 20 | `direction_right` | `direction_straight_right` |
 | 19 | `direction_left_right` | `direction_straight` |
-| 19 | `direction_left_right` | `direction_straight_left` |
+| 19 | `direction_right` | `direction_straight_left` |
+| 18 | `direction_left_right` | `direction_straight_left` |
+| 18 | `one_way_left` | `one_way_right` |
 | 17 | `direction_left` | `direction_right` |
-| 17 | `one_way_left` | `one_way_right` |
-| 16 | `no_turn_left` | `no_turn_right` |
 | 15 | `direction_left` | `direction_straight` |
 | 14 | `direction_left` | `direction_left_right` |
 | 14 | `direction_left_right` | `direction_straight_right` |
+| 14 | `direction_right` | `direction_straight` |
 
 ## Train↔test leakage detail
 
@@ -229,7 +248,7 @@ _None._
 
 ### Global train∩test sample
 
-_empty_
+`way:125353952`, `way:130641823`, `way:131035804`, `way:1370317707`, `way:1536787928`, `way:16181854`, `way:182624938`, `way:25152718`, `way:28741271`, `way:289108100`, `way:40308143`, `way:428757205`, `way:45082597`, `way:699115626`, `way:783040941`, `way:85709235`
 
 ## Figures
 
